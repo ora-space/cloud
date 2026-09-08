@@ -1,3 +1,4 @@
+// Package router initializes and registers application routes.
 package router
 
 import (

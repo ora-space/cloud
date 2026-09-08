@@ -1,3 +1,4 @@
+// Package model defines data structures and domain entities.
 package model
 
 import (
@@ -8,7 +9,7 @@ import (
 
 // User represents user entity in the database
 type User struct {
-	ID        uint           `gorm:"0" json:"id"`
+	ID        uint           `gorm:"primaryKey" json:"id"`
 	Username  string         `gorm:"size:64;not null;uniqueIndex" json:"username"`
 	Nickname  string         `gorm:"size:64" json:"nickname"`
 	Email     string         `gorm:"size:128;uniqueIndex" json:"email"`
