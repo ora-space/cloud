@@ -1,0 +1,89 @@
+# golangci-lint configuration file (Industry standard linter aggregator)
+# Reference: https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  tests: true
+  concurrency: 4
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters-settings:
+  govet:
+    enable-all: false
+    disable-all: false
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+  staticcheck:
+    checks: ["all"]
+  revive:
+    min-confidence: 0.8
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: dot-imports
+      - name: error-naming
+      - name: error-strings
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - whyNoLint
+  gofumpt:
+    extra-rules: true
+  goimports:
+    local-prefixes: github.com/wanglongan587/cloud
+  misspell:
+    locale: US
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104 # Errors unhandled (handled by errcheck)
+
+linters:
+  disable-all: true
+  enable:
+    - govet         # Official Go vet tool
+    - errcheck      # Checks unhandled error returns
+    - staticcheck   # Advanced Go static analysis
+    - unused        # Checks unused constants, variables, functions, and types
+    - ineffassign   # Detects ineffectual assignments
+    - gosec         # Security auditing (SQL injection, unsafe permissions, etc.)
+    - revive        # Fast, configurable drop-in replacement for golint
+    - gocritic      # Opinionated code style, performance and diagnostics
+    - gofumpt       # Stricter gofmt enforcement
+    - goimports     # Fixes imports ordering and grouping
+    - misspell      # Detects spelling errors in comments and strings
+    - bodyclose     # Checks whether HTTP response body is closed
+    - sqlclosecheck # Checks sql.Rows and sql.Stmt are closed
+    - unconvert     # Removes unnecessary type conversions
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 3
+  exclude-rules:
+    # Exclude linter checks for test files
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - gocritic
