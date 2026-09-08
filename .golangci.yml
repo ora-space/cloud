@@ -22,7 +22,7 @@ linters-settings:
   staticcheck:
     checks: ["all"]
   revive:
-    min-confidence: 0.8
+    confidence: 0.8
     rules:
       - name: blank-imports
       - name: context-as-argument
