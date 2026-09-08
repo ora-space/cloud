@@ -1,3 +1,4 @@
+// Package logger provides structured logging functionality via Uber Zap and Lumberjack.
 package logger
 
 import (
@@ -8,9 +9,11 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// Log is the global logger instance
+// Global logger instances.
 var (
-	Log   *zap.Logger
+	// Log is the global zap logger.
+	Log *zap.Logger
+	// Sugar is the global sugared zap logger.
 	Sugar *zap.SugaredLogger
 )
 

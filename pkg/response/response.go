@@ -1,3 +1,4 @@
+// Package response provides standard HTTP response helpers.
 package response
 
 import (
@@ -13,10 +14,15 @@ type Response struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+// Common business response status codes.
 const (
-	CodeSuccess     = 0
-	CodeBadRequest  = 400
-	CodeNotFound    = 404
+	// CodeSuccess indicates operation succeeded.
+	CodeSuccess = 0
+	// CodeBadRequest indicates client request error.
+	CodeBadRequest = 400
+	// CodeNotFound indicates resource not found.
+	CodeNotFound = 404
+	// CodeServerError indicates internal server error.
 	CodeServerError = 500
 )
 
