@@ -1,0 +1,25 @@
+server:
+  port: 8080
+  mode: "debug" # debug | release | test
+  read_timeout: 10
+  write_timeout: 10
+
+logger:
+  level: "info" # debug | info | warn | error
+  filename: "logs/app.log"
+  max_size: 100 # MB
+  max_backups: 10
+  max_age: 30 # days
+  compress: true
+  enable_console: true
+
+database:
+  # 支持 sqlite 或 mysql
+  driver: "sqlite"
+  # sqlite 示例: cloud.db
+  # mysql 示例: "root:123456@tcp(127.0.0.1:3306)/cloud?charset=utf8mb4&parseTime=True&loc=Local"
+  dsn: "cloud.db"
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600 # 秒
+  auto_migrate: true
