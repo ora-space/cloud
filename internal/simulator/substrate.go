@@ -139,7 +139,7 @@ func (s *Substrate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) { _ = json.NewEncoder(w).Encode(v) }
 func jsonString(v any) string                { b, _ := json.Marshal(v); return string(b) }
 func readObject(path string) (core.Object, error) {
-	b, e := os.ReadFile(path)
+	b, e := os.ReadFile(filepath.Clean(path)) // #nosec G304,G703 -- simulator helper reading from isolated test root.
 	if e != nil {
 		return nil, e
 	}
@@ -153,11 +153,11 @@ func writeObject(path string, o core.Object) error {
 	if e != nil {
 		return e
 	}
-	temp := path + ".tmp"
-	if e := os.WriteFile(temp, b, 0o600); e != nil {
+	temp := filepath.Clean(path + ".tmp")
+	if e := os.WriteFile(temp, b, 0o600); e != nil { // #nosec G304,G703 -- simulator helper writing to isolated test root.
 		return e
 	}
-	f, e := os.OpenFile(temp, os.O_RDWR, 0o600)
+	f, e := os.OpenFile(temp, os.O_RDWR, 0o600) // #nosec G304,G703 -- simulator helper writing to isolated test root.
 	if e != nil {
 		return e
 	}
@@ -169,12 +169,12 @@ func writeObject(path string, o core.Object) error {
 	if ce != nil {
 		return ce
 	}
-	return os.Rename(temp, path)
+	return os.Rename(temp, filepath.Clean(path))
 }
 
 func git(ctx context.Context, args ...string) (string, error) {
 	args = append([]string{"-c", "core.longpaths=true"}, args...)
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204,G702 -- simulator helper executing git fixture operations.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1")
 	b, e := cmd.CombinedOutput()
 	if e != nil {

@@ -277,7 +277,7 @@ func TestProjectCreationDeletionSerializationAndStrictInputs(t *testing.T) {
 		_, deleteStatus, _ = f.client.Call(context.Background(), "DELETE", f.path("/projects/"+pid), "gateway", core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "gateway-a"}}, &f.user, "race-delete", core.Object{"version": p.N("version")})
 	}()
 	wg.Wait()
-	if !((createStatus == 202 && deleteStatus == 409) || (createStatus == 409 && deleteStatus == 202)) {
+	if (createStatus != 202 || deleteStatus != 409) && (createStatus != 409 || deleteStatus != 202) {
 		t.Fatalf("create=%d delete=%d", createStatus, deleteStatus)
 	}
 	f.drain()
