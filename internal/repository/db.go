@@ -93,19 +93,19 @@ func (l *GormZapLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface 
 	return &newLogger
 }
 
-func (l *GormZapLogger) Info(ctx context.Context, msg string, data ...interface{}) {
+func (l *GormZapLogger) Info(ctx context.Context, msg string, data ...any) {
 	if l.LogLevel >= gormlogger.Info {
 		l.ZapLogger.Sugar().Infof(msg, data...)
 	}
 }
 
-func (l *GormZapLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
+func (l *GormZapLogger) Warn(ctx context.Context, msg string, data ...any) {
 	if l.LogLevel >= gormlogger.Warn {
 		l.ZapLogger.Sugar().Warnf(msg, data...)
 	}
 }
 
-func (l *GormZapLogger) Error(ctx context.Context, msg string, data ...interface{}) {
+func (l *GormZapLogger) Error(ctx context.Context, msg string, data ...any) {
 	if l.LogLevel >= gormlogger.Error {
 		l.ZapLogger.Sugar().Errorf(msg, data...)
 	}

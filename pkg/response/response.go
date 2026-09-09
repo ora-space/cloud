@@ -9,9 +9,9 @@ import (
 
 // Response represents standard API JSON response body
 type Response struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // Common business response status codes.
@@ -27,7 +27,7 @@ const (
 )
 
 // Success sends a success response with code 0 and HTTP status 200
-func Success(c *gin.Context, data interface{}) {
+func Success(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, Response{
 		Code:    CodeSuccess,
 		Message: "success",
@@ -36,7 +36,7 @@ func Success(c *gin.Context, data interface{}) {
 }
 
 // SuccessWithMessage sends a success response with a custom message
-func SuccessWithMessage(c *gin.Context, message string, data interface{}) {
+func SuccessWithMessage(c *gin.Context, message string, data any) {
 	c.JSON(http.StatusOK, Response{
 		Code:    CodeSuccess,
 		Message: message,
