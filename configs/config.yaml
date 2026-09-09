@@ -1,8 +1,8 @@
 server:
   port: 8080
   mode: "debug" # debug | release | test
-  read_timeout: 10
-  write_timeout: 10
+  read_timeout: 10s
+  write_timeout: 10s
 
 logger:
   level: "info" # debug | info | warn | error
@@ -14,12 +14,11 @@ logger:
   enable_console: true
 
 database:
-  # 支持 sqlite 或 mysql
-  driver: "sqlite"
-  # sqlite 示例: cloud.db
-  # mysql 示例: "root:123456@tcp(127.0.0.1:3306)/cloud?charset=utf8mb4&parseTime=True&loc=Local"
-  dsn: "cloud.db"
+  driver: "postgres"
+  dsn: "host=127.0.0.1 port=55432 user=postgres dbname=ora_test sslmode=disable"
   max_idle_conns: 10
   max_open_conns: 100
-  conn_max_lifetime: 3600 # 秒
-  auto_migrate: true
+  conn_max_lifetime: 1h
+auth:
+  audience: "ora-cloud"
+  keys: [] # Required at server startup; see docs/authentication.md.

@@ -1,0 +1,6 @@
+.git
+specs
+.local
+bin
+logs
+coverage.out

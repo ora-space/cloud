@@ -1,72 +1,50 @@
-# https://taskfile.dev
-# Taskfile is the modern Go-native task runner (cross-platform, replaces Makefile on Windows/macOS/Linux)
 version: '3'
-
-vars:
-  MODULE_NAME: github.com/wanglongan587/cloud
-  BINARY_NAME: bin/server
-  MAIN_FILE: cmd/server/main.go
-
 tasks:
   default:
-    desc: 列出所有可用命令
-    cmds:
-      - task --list
-
+    cmds: [task --list]
   format:
-    desc: 执行代码格式化 (使用严格规范的 gofumpt 与自动组织 import 的 goimports)
     aliases: [fmt]
     cmds:
-      - go run mvdan.cc/gofumpt -w -extra .
-      - go run golang.org/x/tools/cmd/goimports -w -local {{.MODULE_NAME}} .
-    silent: false
-
+      - go tool gofumpt -w -extra .
+      - go tool goimports -w -local github.com/wanglongan587/cloud .
   format:check:
-    desc: 检查代码格式是否规范 (不修改文件，用于 CI 校验)
-    cmds:
-      - go run mvdan.cc/gofumpt -d -extra .
-
+    cmds: [go run ./cmd/checkformat]
   lint:
-    desc: 执行静态代码分析 (使用业界标杆 golangci-lint)
-    cmds:
-      - go run github.com/golangci/golangci-lint/cmd/golangci-lint run -c .golangci.yml
-
+    cmds: [go tool golangci-lint run -c .golangci.yml]
   lint:fix:
-    desc: 自动修复代码静态分析中可自动修复的问题
-    cmds:
-      - go run github.com/golangci/golangci-lint/cmd/golangci-lint run -c .golangci.yml --fix
-
+    cmds: [go tool golangci-lint run -c .golangci.yml --fix]
   test:
-    desc: 运行所有单元测试并生成覆盖率报告
-    cmds:
-      - go test -v -coverprofile=coverage.out ./...
-
+    desc: All tests; real PostgreSQL is mandatory
+    env:
+      REQUIRE_POSTGRES: '1'
+    cmds: [go test -count=1 -v -coverpkg=./internal/... -coverprofile=coverage.out ./...]
+  test:integration:
+    desc: Real HTTP + PostgreSQL + disk + Git acceptance tests
+    env:
+      REQUIRE_POSTGRES: '1'
+    cmds: [go test -count=1 -v ./integration]
+  test:unit:
+    cmds: [go test ./internal/... ./cmd/...]
   test:race:
-    desc: 运行数据竞态检测测试 (需要 CGO 支持)
-    cmds:
-      - go test -v -race -coverprofile=coverage.out ./...
-
+    desc: Full suite with race detector; Windows requires a C compiler
+    env:
+      REQUIRE_POSTGRES: '1'
+      CGO_ENABLED: '1'
+    cmds: [go test -race -count=1 -v ./...]
   check:
-    desc: 全量综合质量门禁 (format:check + lint + test)
     cmds:
       - task: format:check
       - task: lint
       - task: test
-
   build:
-    desc: 编译生成生产二进制可执行文件
     cmds:
-      - go build -ldflags="-s -w" -o {{.BINARY_NAME}} {{.MAIN_FILE}}
-
+      - go build -o bin/ ./cmd/server ./cmd/cloudctl ./cmd/simulator
   run:
-    desc: 本地直接运行服务
-    cmds:
-      - go run {{.MAIN_FILE}}
-
-  clean:
-    desc: 清理构建产物、本地数据库与日志
-    cmds:
-      - cmd: cmd /c "if exist bin rmdir /s /q bin & if exist logs rmdir /s /q logs & if exist coverage.out del coverage.out & if exist *.db del *.db"
-        platforms: [windows]
-      - cmd: rm -rf bin/ logs/ *.db coverage.out
-        platforms: [darwin, linux]
+    cmds: [go run ./cmd/server]
+  migrate:
+    cmds: [go run ./cmd/cloudctl -command migrate]
+  simulate:
+    desc: Demonstrate real HTTP/PG/Git lifecycle with simulated execution components
+    cmds: [go run ./cmd/simulator]
+  openapi:
+    cmds: [go run ./cmd/openapi]
