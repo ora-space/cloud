@@ -1,195 +1,102 @@
-# Cloud Go Backend Service
+# Ora Cloud
 
-基于 Go 语言构建的标准企业级微服务/后端工程骨架，遵循社区规范 [golang-standards/project-layout](https://github.com/golang-standards/project-layout) 与 Clean Architecture 分层设计模式。
+阶段一实现：Go/Gin cloud 核心、PostgreSQL 权威持久化、内部认证和有限控制契约，以及使用真实 HTTP、PG、磁盘和 Git 的模拟执行组件。此仓库尚未完成 Rust Controller/Workspace Node 拆分、Desktop 重构或 Kubernetes 部署。
 
----
+需要 Go 1.27.1、Git、PostgreSQL 17 和可选的 Task。数据库通过 GORM 初始化并注入，事务层执行参数化 PostgreSQL SQL；没有全局 DB、SQLite/MySQL 示例用户 CRUD，也没有生产启动 AutoMigrate。
 
-## 🛠 技术栈与核心特性
+## 本地验证
 
-- **Web 框架**: [Gin](https://github.com/gin-gonic/gin)（高性能 HTTP 路由与中间件处理）
-- **持久化 ORM**: [GORM](https://gorm.io/)（集成连接池管理、自动表结构迁移、支持 SQLite 与 MySQL 双驱动）
-- **日志框架**: [Uber Zap](https://github.com/uber-go/zap) + [Lumberjack](https://github.com/natefinch/lumberjack)（结构化输出、日志切割与归档、终端色彩输出与文件 JSON 输出双引擎）
-- **配置管理**: [Viper](https://github.com/spf13/viper)（YAML 配置文件与环境变量自动映射）
-- **高可用与生命周期**: HTTP 优雅停机（Graceful Shutdown，监听系统退出信号平滑关闭连接与释放资源）
-- **工程设计**: 统一 RESTful API JSON 响应封装、Zap 请求与 Panic Recovery 全局中间件、CORS 跨域支持
+Windows 可在项目 `.local/` 隔离安装并启动 PostgreSQL 17.11，不创建系统服务：
 
----
-
-## 📁 目录规范说明
-
-```text
-.
-├── cmd/
-│   └── server/
-│       └── main.go                 # 服务主入口：装配各层依赖、初始化基础设施、启动服务并监听停机信号
-├── configs/
-│   └── config.yaml                # 默认配置文件（服务器端口、数据库 DSN、日志级别及轮转策略）
-├── internal/                       # 应用核心私有代码 (内部包，外部项目无法直接 import)
-│   ├── api/
-│   │   ├── handler/               # 控制器层 (Handler)：解析与校验 HTTP 入参，组装返回响应
-│   │   ├── middleware/            # Gin 中间件：Zap 日志追踪、Panic 恢复、CORS
-│   │   └── router/                # 路由注册：装配全局中间件与 API 路由分组
-│   ├── config/                    # 配置结构体映射与加载逻辑
-│   ├── model/                     # 业务实体 (Entity / DTO / GORM 映射模型)
-│   ├── repository/                # 数据持久层 (DAO / Repository)：负责数据库 CRUD 与连接池维护
-│   └── service/                   # 业务逻辑层 (Service)：核心业务规则编排
-├── pkg/                            # 公共可复用包 (可供外部仓库或其它微服务共享)
-│   ├── logger/                    # 基于 Zap + Lumberjack 封装的通用日志工具
-│   └── response/                  # 统一 RESTful 响应格式封装
-├── scripts/                        # 构建与运维脚本
-│   ├── Dockerfile                 # 多阶段轻量级 Dockerfile
-│   └── Makefile                   # 常用开发脚本 (build/run/test/clean)
-├── go.mod                         # Go 依赖包管理文件
-├── go.sum                         # 依赖校验哈希
-└── README.md                      # 项目说明文档
-```
-
----
-
-## 🚀 快速开始
-
-### 1. 安装依赖
-
-确保本地已安装 Go (建议 1.20+)，在项目根目录下执行：
-
-```bash
-go mod tidy
-```
-
-### 2. 启动服务
-
-```bash
-# 方式一：直接运行
-go run cmd/server/main.go
-
-# 方式二：指定自定义配置文件
-go run cmd/server/main.go -config configs/config.yaml
-
-# 方式三：使用 Makefile
-make run
-```
-
-服务默认在 `http://localhost:8080` 启动，并自动创建本地 SQLite 数据库文件 `cloud.db`。
-
----
-
-## 📡 API 接口说明
-
-| 请求方法 | 接口路径 | 描述 |
-| :--- | :--- | :--- |
-| `GET` | `/api/v1/health` | 服务健康检查探针 |
-| `POST` | `/api/v1/users` | 创建用户 (JSON Body) |
-| `GET` | `/api/v1/users` | 分页获取用户列表 (`?page=1&page_size=10`) |
-| `GET` | `/api/v1/users/:id` | 根据用户 ID 查询用户详情 |
-
-### 请求示例
-
-#### 1. 健康检查
-```bash
-curl -X GET http://localhost:8080/api/v1/health
-```
-响应：
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "service": "cloud-backend",
-    "status": "UP",
-    "timestamp": "2026-09-08T17:28:00+08:00"
-  }
-}
-```
-
-#### 2. 创建用户
-```bash
-curl -X POST http://localhost:8080/api/v1/users \
-  -H "Content-Type: application/json" \
-  -d '{"username": "developer", "nickname": "Coder", "email": "dev@example.com"}'
-```
-
----
-
-## ⚙️ 配置说明 (`configs/config.yaml`)
-
-```yaml
-server:
-  port: 8080
-  mode: "debug"              # debug / release / test
-  read_timeout: 10           # 读超时 (秒)
-  write_timeout: 10          # 写超时 (秒)
-
-logger:
-  level: "info"              # 日志级别: debug / info / warn / error
-  filename: "logs/app.log"   # 日志持久化路径
-  max_size: 100              # 单个日志文件最大尺寸 (MB)
-  max_backups: 10            # 最多保留旧日志文件数
-  max_age: 30                # 保留天数
-  compress: true             # 是否 gzip 压缩旧日志
-  enable_console: true       # 是否同时输出至终端控制台
-
-database:
-  driver: "sqlite"           # 支持 sqlite 或 mysql
-  dsn: "cloud.db"            # 数据库连接串
-  max_idle_conns: 10         # 最大空闲连接数
-  max_open_conns: 100        # 最大打开连接数
-  conn_max_lifetime: 3600    # 连接可复用的最大时间 (秒)
-  auto_migrate: true         # 启动时是否自动迁移建表
-```
-
-> **提示**：若切换至 MySQL，仅需将 `driver` 改为 `mysql`，并将 `dsn` 修改为类似 `"user:password@tcp(127.0.0.1:3306)/cloud?charset=utf8mb4&parseTime=True&loc=Local"`。
-
----
-
-## 🔍 代码规范与质量工程 (Format & Lint)
-
-本项目引入了 Go 社区最严格、最高标准的工程化质量保证体系（对标 Rust 的 `cargo fmt` 与 `cargo clippy`）：
-
-| 维度 | Rust 工具生态 | Go 对应方案（本项目采用） | 说明 |
-| :--- | :--- | :--- | :--- |
-| **代码格式化** | `rustfmt` | **`gofumpt`** + **`goimports`** | 比默认 `gofmt` 更严格的语法与空行规范，自动排序与分组 package import |
-| **静态分析与代码检查** | `clippy` (`clippy.toml`) | **`golangci-lint`** (`.golangci.yml`) | 业界统治级多引擎 Linter（集成 govet、errcheck、staticcheck、revive、gocritic、gosec 等 10+ 款检查器） |
-| **任务命令编排** | `cargo` / `Taskfile` | **`go-task`** (`Taskfile.yml`) + `Makefile` | 跨平台 Task 命令，无缝适配 Windows / macOS / Linux |
-| **编辑器统一规范** | `.editorconfig` | **`.editorconfig`** | 强制 Go 统一使用 Hard Tabs，缩进宽度为 4，文件末尾换行 |
-| **CI 持续集成** | GitHub Actions | **`.github/workflows/ci.yml`** | 提交代码或 PR 时自动执行全量格式校验、静态检查与竞态测试 |
-
-### 常用质量命令 (通过 Task 或 Make)
-
-```bash
-# 1. 自动格式化代码 (对标 cargo fmt)
-task fmt
-# 或
-make fmt
-
-# 2. 静态代码分析与异味检查 (对标 cargo clippy)
-task lint
-# 或
-make lint
-
-# 3. 自动修复可修复的 lint 警告
-task lint:fix
-
-# 4. 全量质量门禁 (格式校验 + 静态分析 + 单元测试，推荐作为 pre-commit 检查)
+```powershell
+./scripts/postgres.ps1 start
+$env:TEST_DATABASE_URL='host=127.0.0.1 port=55432 user=postgres dbname=ora_test sslmode=disable'
 task check
-# 或
-make check
 ```
 
----
+脚本仅监听 `127.0.0.1:55432`，使用本地测试 trust 认证。二进制来自 [EDB PostgreSQL Windows 分发](https://www.enterprisedb.com/download-postgresql-binaries)，固定版本和 SHA256。停止用 `./scripts/postgres.ps1 stop`，数据保留。
 
-## 🧪 测试与构建
+也可使用 Docker：
 
-```bash
-# 执行单元测试
-task test
-# 或
-make test
-
-# 编译为生产二进制包
-task build
-# 或
-make build
-
-# 构建 Docker 容器镜像
-make docker-build
+```sh
+docker compose up -d --wait
+export TEST_DATABASE_URL='host=127.0.0.1 port=55432 user=ora password=ora-local dbname=ora sslmode=disable'
+task check
+task test:race
 ```
+
+测试为每个用例建立独立 PG schema 并自动清理，测试账号需要 CREATE SCHEMA 权限。`task check/test/test:integration/test:race` 会设置 `REQUIRE_POSTGRES=1`；缺少真实 PG 配置会失败，不能静默跳过。直接 `go test ./...` 未配置 PG 时会显式跳过 integration，用 `task test:unit` 可单独运行非 PG 测试。
+
+Windows race 需要可用 C 编译器：
+
+```powershell
+$env:CC='D:\tmp\ora-cloud-test-tools\llvm-mingw-20260908-ucrt-x86_64\bin\x86_64-w64-mingw32-gcc.exe'
+$env:PATH=(Split-Path $env:CC)+';'+$env:PATH
+task test:race
+```
+
+该路径是本次验证使用的隔离工具目录，其他机器设置自己的 MinGW/LLVM-MinGW `CC` 即可。Linux CI 使用系统 C 编译器。
+
+## 运行
+
+配置文件默认 `configs/config.yaml`，所有已有配置项可由 `CLOUD_` 环境变量覆盖，如 `CLOUD_DATABASE_DSN`。生产数据库使用 TLS、独立 DML 账号和部署迁移账号；不要使用示例本地 trust 配置。
+
+```powershell
+# 默认示例指向上面的本地 ora_test；真实部署请指定 -config。
+go run ./cmd/cloudctl -command migrate
+go run ./cmd/cloudctl -command bootstrap -name '研发组织' -source 'huawei-corp' -subject 'stable-account-id' -display-name '首位管理员'
+go run ./cmd/cloudctl -command credential-ref -tenant '<tenant UUID>' -owner '<user UUID>' -secret-ref 'infra-secret://git/team/account'
+```
+
+`bootstrap` 原子创建租户与首位管理员，是部署操作；重复执行会新建租户。`credential-ref` 只保存基础设施引用，不接收 Git 密钥值；引用受 tenant+owner 外键约束。普通成员须先经有效 gateway 身份访问 `/api/v1/me` 建立 user，再由管理员通过成员 API 显式添加。没有自助组织注册或外部组自动授权。
+
+生产启动前在配置中设置内部验证公钥，见 [认证配置与凭据](docs/authentication.md)。空 trust 配置会启动失败：
+
+```sh
+go run ./cmd/server -config /path/to/config.yaml
+```
+
+server 只检查已执行迁移及 checksum，不执行 DDL；数据库、迁移、trust 或监听失败会非零退出。`GET /healthz` 检查 PG 可达性。
+
+可直接运行完整创建演示（独立生成短期模拟签名密钥，仅限进程内测试）：
+
+```sh
+go run ./cmd/cloudctl -command migrate
+go run ./cmd/simulator
+```
+
+演示启动独立 loopback HTTP cloud/Substrate，创建测试租户、bare repo、main linked worktree、模拟 sandbox 和 Node，再输出 Ready Workspace。磁盘在 `.local/demo/`，PG 记录保留；再次运行创建新的演示租户。模拟器没有生产基础设施凭据，不部署 Kubernetes，不启动真实 Agent/Deno。
+
+## 契约与边界
+
+- [OpenAPI 3.0](api/openapi.json)：所有 19 个公开接口、15 个内部接口和 health。`task openapi` 重新生成，测试校验文档合法性、生成结果和实际 HTTP 响应结构。
+- [核心不变量与状态机](docs/core-contract.md)：身份、归属、幂等、准入、租约、恢复和清理。
+- [Substrate/Node 与阶段二边界](docs/execution-contract.md)：共享卷布局、维护 Job、容器挂载、Git 语义与迁移责任。
+- [需求—实现—验证清单](docs/acceptance.md)：本次实际证据与未完成的阶段二验证。
+
+## 模块架构与分层文档
+
+每个子系统、服务命令与工具均遵循与 Ora 桌面端同等严谨的架构设计，并配备独立的模块级规范文档：
+
+- **命令与运维入口 (`cmd/`)**：[入口总览 (`cmd/`)](cmd/README.md)
+  - [服务守护进程 (`cmd/server`)](cmd/server/README.md)：生产环境 HTTP Daemon 核心。
+  - [运维管理工具 (`cmd/cloudctl`)](cmd/cloudctl/README.md)：迁移执行、初始租户引导与凭据引用配置。
+  - [本地执行模拟器 (`cmd/simulator`)](cmd/simulator/README.md)：内存与磁盘执行双工演示。
+  - [OpenAPI 同步工具 (`cmd/openapi`)](cmd/openapi/README.md)：从 Go 契约自动编译导出 `api/openapi.json`。
+  - [代码格式严检门禁 (`cmd/checkformat`)](cmd/checkformat/README.md)：CI 格式静态门禁。
+- **内部核心子系统 (`internal/`)**：[子系统总览 (`internal/`)](internal/README.md)
+  - [领域状态机引擎 (`internal/core`)](internal/core/README.md)：聚合根、事务与全局锁、乐观版本控制、租约与幂等。
+  - [PostgreSQL 迁移目录 (`internal/core/migrations`)](internal/core/migrations/README.md)：0001~0004 线性 SQL 迁移与校验和防篡改校验。
+  - [HTTP 路由网关 (`internal/api/router`)](internal/api/router/README.md)：Gin 路由分流、双重 JWT 校验、白名单与 Fault 映射。
+  - [API 契约定义 (`internal/contract`)](internal/contract/README.md)：OpenAPI 3.0 数据模型与测试。
+  - [数据库连接池管理 (`internal/repository`)](internal/repository/README.md)：GORM 连接池、快速探活与安全约束。
+  - [配置解析与加载 (`internal/config`)](internal/config/README.md)：Viper 强类型配置与环境变量映射。
+  - [结构化日志 (`internal/logger`)](internal/logger/README.md)：Zap + Lumberjack 轮转与平台适配。
+  - [执行替身 (`internal/simulator`)](internal/simulator/README.md)：Substrate、Node 与 Controller 开发期替身。
+- **公共库与集成测试**：
+  - [公共导出边界 (`pkg/`)](pkg/README.md)：公共库导出策略与约束。
+  - [集成测试套件 (`integration/`)](integration/README.md)：基于独立真实 PG Schema 的全链路集成测试。
+
+阶段一采用数据库事务级全局 advisory lock 串行核心事务，并限制每 Project 一个未完成 operation。HTTP/Git/Substrate 调用从不持有数据库事务。此选择适用于首版单集群单活，牺牲写吞吐以降低并发不变量复杂度；后续可按租户/Project 细分锁，但必须保持现有并发测试。
+
+容器只打包 server/cloudctl，运行身份为非 root。构建用 `docker build -f scripts/Dockerfile -t ora-cloud:phase-one .`，挂载自有配置和公钥；迁移使用同镜像 `--entrypoint /app/cloudctl` 独立执行。仓库 CI 使用 PG service、格式/静态检查和 race 集成测试。Docker 镜像和真实部署不属于本地已验证结果。

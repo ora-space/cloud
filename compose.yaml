@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17.11
+    environment:
+      POSTGRES_USER: ora
+      POSTGRES_PASSWORD: ora-local
+      POSTGRES_DB: ora
+    ports: ['127.0.0.1:55432:5432']
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ora -d ora']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  pgdata:
