@@ -484,7 +484,7 @@ func TestStopAdmissionRaceAndIdleEvidence(t *testing.T) {
 		_, admitStatus, _ = f.client.Call(context.Background(), "POST", "/internal/v1/admissions", "controller", core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: f.client.Subject}}, &f.user, "", body)
 	}()
 	wg.Wait()
-	if !((stopStatus == 202 && admitStatus == 409) || (stopStatus == 409 && admitStatus == 200)) {
+	if (stopStatus != 202 || admitStatus != 409) && (stopStatus != 409 || admitStatus != 200) {
 		t.Fatalf("unsafe race outcomes stop=%d admission=%d", stopStatus, admitStatus)
 	}
 	if admitStatus == 200 {

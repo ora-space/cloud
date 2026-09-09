@@ -58,7 +58,7 @@ func resource(names, nullableNames string) obj {
 }
 
 // Document returns complete schemas and operations. cmd/openapi writes its reviewable JSON artifact.
-func Document() obj {
+func Document() map[string]any {
 	s := obj{}
 	s["Error"] = object(obj{"code": str(), "params": obj{"type": "object", "additionalProperties": true}, "requestId": uuid()}, "code", "params", "requestId")
 	s["User"] = resource("id displayName status version createdAt deletedAt", "deletedAt")
