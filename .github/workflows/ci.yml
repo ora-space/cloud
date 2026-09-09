@@ -31,6 +31,11 @@ jobs:
           cache: true
       - run: go mod download
       - run: go run ./cmd/checkformat
-      - run: go tool golangci-lint run -c .golangci.yml
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      - name: Run golangci-lint
+        run: |
+          golangci-lint migrate --skip-validation || true
+          golangci-lint run
       - run: go test -race -count=1 -v -coverpkg=./internal/... -coverprofile=coverage.out ./...
       - run: go build ./cmd/server ./cmd/cloudctl ./cmd/simulator
