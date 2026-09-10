@@ -1,25 +1,25 @@
-# cmd/simulator: End-to-End Local Execution Simulator
+# cmd/simulator: 端到端本地执行模拟器
 
-`cmd/simulator` provides a complete local demonstration harness for Ora Cloud's phase-one architecture. It spins up in-process execution doubles, an ephemeral Git repository fixture, and loopback HTTP services to validate the full project lifecycle without external cloud infrastructure.
+`cmd/simulator` 为 Ora Cloud 第一阶段架构提供完整的本地演示环境。它启动进程内执行替身、临时 Git 仓库夹具和回环 HTTP 服务，无需外部云基础设施即可验证完整的项目生命周期。
 
-## Responsibilities
+## 职责
 
-- **Durable demo fixture**: Initializes a real local Git repository fixture under `.local/demo/fixture` with initial commits and branches.
-- **In-process cloud server**: Launches an ephemeral `httptest.Server` serving the complete Gin router, backed by a real PostgreSQL database.
-- **Substrate simulation**: Launches a local HTTP server exposing Substrate storage and effect simulation under `.local/demo/substrate`.
-- **Ephemeral cryptography**: Generates in-memory Ed25519 keypairs for `gateway`, `controller`, `node`, and `user` roles to sign and verify short-lived JWT tokens without external IdP infrastructure.
-- **Controller execution loop**:
-  1. Bootstraps a demo tenant and user.
-  2. Acquires a controller lease via `/internal/v1/controller-lease/acquire`.
-  3. Dispatches a project creation request via the public API (`POST /api/v1/tenants/{tid}/projects`).
-  4. Simulates Controller queue draining: executes the effect plan (allocating project storage, provisioning Git worktrees, scheduling sandboxes, and registering nodes).
-  5. Verifies that the workspace reaches `ready` state and queries it through the public API.
-  6. Releases the controller lease cleanly.
-  7. Emits JSON summary to `stdout`.
+- **持久化演示夹具**：在 `.local/demo/fixture` 下初始化真实的本地 Git 仓库测试夹具，并包含初始提交与分支。
+- **进程内 Cloud 服务**：拉起基于真实 PostgreSQL 数据库的临时 `httptest.Server`，提供完整的 Gin 路由服务。
+- **Substrate 模拟**：在 `.local/demo/substrate` 下启动本地 HTTP 服务，提供 Substrate 存储和 Effect 模拟。
+- **临时密钥材料**：在内存中为 `gateway`、`controller`、`node` 和 `user` 四种角色生成 Ed25519 密钥对，以便在不依赖外部 IdP 基础设施的情况下签发和验证短期 JWT token。
+- **Controller 驱动执行主循环**：
+  1. 引导配置演示租户和用户。
+  2. 通过 `/internal/v1/controller-lease/acquire` 获取 Controller 独占租约。
+  3. 通过公开 API 发起项目创建请求（`POST /api/v1/tenants/{tid}/projects`）。
+  4. 模拟 Controller 清空队列：执行 Effect 计划（分配项目存储、创建 Git worktree、调度沙箱并注册节点）。
+  5. 验证 Workspace 成功达到 `ready` 就绪状态，并通过公开 API 查询校验。
+  6. 正常释放 Controller 租约。
+  7. 向 `stdout` 输出 JSON 摘要。
 
-## Boundaries and invariants
+## 边界与不变量
 
-- **Testing and demonstration only**: The simulator is an engineering double. It does not interface with Kubernetes, deploy real container sandboxes, or launch live Deno or agent runtimes.
-- **Real boundaries preserved**: Uses real HTTP framing, real PostgreSQL schema constraints, and real local Git CLI operations; it does not bypass the domain state machine.
+- **仅限测试和演示**：模拟器是工程执行替身。它不与 Kubernetes 交互、不部署真实容器沙箱，也不启动实际的 Deno 或 agent 运行时。
+- **保留真实边界**：使用真实的 HTTP 协议封装、PostgreSQL Schema 约束和本地 Git CLI 操作，不绕过领域状态机。
 
-See [cmd overview](../README.md), [Simulator internals](../../internal/simulator/README.md), and [Execution contract](../../docs/execution-contract.md).
+参见 [cmd 入口总览](../README.md)、[模拟器内部实现](../../internal/simulator/README.md) 与 [执行契约与边界](../../docs/execution-contract.md)。

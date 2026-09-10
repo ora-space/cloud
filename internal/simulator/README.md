@@ -1,33 +1,33 @@
-# internal/simulator: Execution Doubles for Development & Testing
+# internal/simulator: 开发与测试执行替身
 
-`internal/simulator` provides in-process and disk-backed execution doubles representing the Controller, Workspace Node, and Substrate storage systems for Ora Cloud's phase-one development and acceptance testing.
+`internal/simulator` 为 Ora Cloud 阶段一的开发与验收测试提供基于进程内与本地磁盘的执行替身（Execution Doubles），涵盖 Controller、Workspace Node 以及 Substrate 存储系统。
 
-## Responsibilities
+## 职责
 
-### Substrate double (`substrate.go`)
-- Simulates external storage and effect journal execution over local HTTP.
-- Manages effect journal JSON files on disk (`<root>/effects/<effect-id>.json`).
-- Executes mock infrastructure operations:
-  - **Storage**: Prepares local project directories (`<root>/projects/<project-id>`).
-  - **Worktree**: Performs real Git clone and worktree checkouts using local Git CLI.
-  - **Sandbox**: Simulates sandbox instance allocation and termination lifecycles.
-- Supports deterministic fault injection (`SetFault`) for testing error recovery and retry policies.
+### Substrate 执行替身 (`substrate.go`)
+- 通过本地 HTTP 模拟外部存储交互与 Effect 日志执行。
+- 在本地磁盘管理 Effect 执行日志 JSON 文件（`<root>/effects/<effect-id>.json`）。
+- 执行模拟基础设施操作：
+  - **存储管理（Storage）**：准备本地项目目录（`<root>/projects/<project-id>`）。
+  - **工作区检出（Worktree）**：调用本地 Git CLI 执行真实的 Git Clone 与 Worktree 检出操作。
+  - **沙箱模拟（Sandbox）**：模拟 Sandbox 实例的分配与终止生命周期。
+- 支持确定性故障注入（`SetFault`），用于验证错误恢复与重试策略。
 
-### Controller double (`controller.go`)
-- Simulates the external control plane worker:
-  - Periodically acquires and renews controller leases via `/internal/v1/controller-lease/acquire`.
-  - Claims pending operations via `/internal/v1/operations/claim`.
-  - Plans and executes required effects against Substrate.
-  - Reports effect execution outcomes via `/internal/v1/operations/{oid}/effects/{eid}/result`.
-  - Advances or defers operations with proper monotonic epoch fencing.
+### Controller 执行替身 (`controller.go`)
+- 模拟外部控制平面工作进程：
+  - 定期通过 `/internal/v1/controller-lease/acquire` 获取并续约 Controller 独占租约。
+  - 通过 `/internal/v1/operations/claim` 认领待处理的操作任务。
+  - 针对 Substrate 规划并执行所需的 Effect。
+  - 通过 `/internal/v1/operations/{oid}/effects/{eid}/result` 上报 Effect 执行结果。
+  - 在严格的单调递增 Epoch 栅栏保护下推进或延期操作。
 
-### Ephemeral credential issuer
-- `NewCredentials()` generates in-memory Ed25519 cryptographic keypairs for the four distinct actor roles: `gateway`, `controller`, `node`, and `user`.
-- Signs short-lived JWT tokens on demand for simulator test runs, matching production cryptographic token structures without requiring external authentication infrastructure.
+### 临时凭据签发器
+- `NewCredentials()` 在内存中为四种不同的角色（`gateway`、`controller`、`node`、`user`）生成 Ed25519 密码学密钥对。
+- 在模拟器测试运行期间按需签发短期 JWT token；其密码学 token 结构与生产环境一致，但不需要外部身份认证基础设施。
 
-## Boundaries and invariants
+## 边界与不变量
 
-- **Development and testing only**: This package is an execution double. It is never deployed to production environments or imported by production daemon binaries.
-- **Contract fidelity**: The simulator interacts with the core cloud server strictly over standard HTTP APIs and respects all leasing, fencing, and idempotency contracts.
+- **仅限开发与测试**：本包属于工程执行替身。绝对禁止部署到生产环境，生产环境守护进程二进制也绝不导入此包。
+- **契约保真度**：模拟器严格通过标准 HTTP API 与 Cloud 核心服务器交互，并遵守所有租约、栅栏和幂等契约。
 
-See [cmd/simulator](../../cmd/simulator/README.md), [Execution contract](../../docs/execution-contract.md), and [Integration tests](../../integration/README.md).
+参见 [cmd/simulator 工具](../../cmd/simulator/README.md)、[执行契约与边界](../../docs/execution-contract.md) 与 [集成测试套件](../../integration/README.md)。

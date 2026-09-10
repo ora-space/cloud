@@ -1,24 +1,24 @@
-# internal/contract: API Contract & OpenAPI Specification
+# internal/contract: API 契约与 OpenAPI 规范
 
-`internal/contract` programmatically defines the authoritative OpenAPI 3.0 data models and schemas for Ora Cloud. It serves as the single source of truth for all API requests, responses, and fault definitions.
+`internal/contract` 以代码化方式定义 Ora Cloud 的权威 OpenAPI 3.0 数据模型与 Schema 结构。它是全系统所有 API 请求、响应结构与 Fault 错误定义的单一事实来源（SSOT）。
 
-## Responsibilities
+## 职责
 
-- **Programmatic OpenAPI generation**: `contract.Document()` builds the complete OpenAPI 3.0 specification tree, defining metadata, security schemes (HTTP Bearer JWT), parameters, request bodies, status codes, and response schemas.
-- **Component schema modeling**: Defines strict JSON schemas for domain entities:
-  - Core resources: `Tenant`, `TenantMember`, `User`, `Project`, `Workspace`, `Task`, `Operation`, `Effect`, `WorkspaceNode`, `Ticket`.
-  - Error schema: Standardized `Fault` schema with error code, parameter mapping, and request ID.
-  - Parameter typing: Strong validation formats including `uuid`, `date-time`, `int64`, and string enumerations.
-- **Contract verification tests**:
-  - `TestRoutesCovered`: Verifies that every route defined in `router.Routes()` is explicitly represented in the generated OpenAPI paths.
-  - `TestDocumentValid`: Validates the structural correctness of the generated OpenAPI JSON against specification rules.
+- **编程式生成 OpenAPI 文档**：`contract.Document()` 构建完整的 OpenAPI 3.0 规范树，定义元数据、安全方案（HTTP Bearer JWT）、参数、请求体、状态码和响应 Schema。
+- **组件模式（Component Schema）建模**：为领域实体定义严格的 JSON Schema：
+  - 核心资源实体：`Tenant`、`TenantMember`、`User`、`Project`、`Workspace`、`Task`、`Operation`、`Effect`、`WorkspaceNode`、`Ticket`。
+  - 错误 Schema：包含错误码、参数映射和请求 ID 的标准 `Fault` Schema。
+  - 参数类型强校验：包含 `uuid`、`date-time`、`int64` 及字符串枚举等严谨的数据校验格式。
+- **契约完整性校验测试**：
+  - `TestRoutesCovered`：严格校验 `router.Routes()` 中注册的每一条路由均在生成的 OpenAPI 路径树中得到完整体现。
+  - `TestDocumentValid`：依据 OpenAPI 3.0 官方规范，验证生成的 JSON 文件的结构合法性。
 
-## Invariants and workflow
+## 不变量与工作流
 
-- **No manual JSON edits**: `api/openapi.json` is generated directly from this package via `cmd/openapi`. Developers modify Go definitions here, run `task openapi`, and commit both the code and the resulting JSON artifact.
-- **Three-way alignment**: Every API route change requires simultaneous updates to:
-  1. `internal/api/router` (`router.Routes()`).
-  2. `internal/contract` (`contract.Document()`).
-  3. `api/openapi.json` (regenerated via `task openapi`).
+- **禁止手动编辑 JSON**：`api/openapi.json` 由此包通过 `cmd/openapi` 直接生成。开发者在此处修改 Go 定义，运行 `task openapi`，并同时提交代码和生成的 JSON 制品。
+- **三方协同严格对齐**：任何 API 路由的改动都必须同步更新：
+  1. `internal/api/router`（`router.Routes()`）。
+  2. `internal/contract`（`contract.Document()`）。
+  3. `api/openapi.json`（通过 `task openapi` 重新生成）。
 
-See [OpenAPI JSON artifact](../../api/openapi.json), [HTTP router](../api/router/README.md), and [cmd/openapi](../../cmd/openapi/README.md).
+参见 [OpenAPI JSON 制品文件](../../api/openapi.json)、[HTTP 路由网关](../api/router/README.md) 与 [cmd/openapi 工具](../../cmd/openapi/README.md)。

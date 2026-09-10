@@ -1,11 +1,11 @@
-# pkg: Public & Reusable Libraries
+# pkg: 公共可复用库
 
-`pkg` is reserved for code that is intentionally reusable by external modules and whose API can be maintained and supported as a public surface.
+`pkg` 专用于存放明确供外部模块复用、且其 API 能够作为公共接口进行长期维护与支持的代码。
 
-## Architectural policy and boundaries
+## 架构策略与边界规范
 
-- **Private by default**: Per `AGENTS.md`, new implementation packages in Ora Cloud must be placed under `internal/`.
-- **Public API commitment**: Code is moved or added to `pkg/` only when there is an explicit requirement to expose it as an importable library for external consumers (e.g., client SDKs, shared types, or common utilities).
-- **Zero internal coupling**: Packages in `pkg/` must never import anything from `internal/` or `cmd/`. They must depend solely on the standard library and approved external dependencies.
+- **默认私有**：根据 `AGENTS.md`，Ora Cloud 的新实现包必须放在 `internal/` 下。
+- **公共 API 承诺**：只有在明确需要将代码作为可供外部使用者导入的库时（例如客户端 SDK、共享类型或通用工具），才会将代码添加或移动到 `pkg/`。
+- **零内部反向耦合**：`pkg/` 下的包绝对禁止导入 `internal/` 或 `cmd/` 中的任何内容。它们只能依赖 Go 标准库以及经过批准的第三方外部依赖。
 
-See [AGENTS.md](../AGENTS.md) and [Internal packages](../internal/README.md).
+参见 [AGENTS.md](../AGENTS.md) 与 [内部包规范](../internal/README.md)。
