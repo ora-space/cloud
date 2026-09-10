@@ -1,15 +1,15 @@
-# cmd/checkformat: Code Formatting Gate
+# cmd/checkformat: 代码格式检查门禁
 
-`cmd/checkformat` is a formatting validation tool used in local checks and CI pipelines to enforce strict Go code layout.
+`cmd/checkformat` 是用于本地检查和 CI 流水线的格式验证工具，用来强制执行严格的 Go 代码排版规范。
 
-## Responsibilities
+## 职责
 
-- **Non-mutating format inspection**: Executes `gofumpt -l -extra .` across the repository to list any files that violate formatting rules without altering them on disk.
-- **Strict gate enforcement**: Exits with code 0 if all Go source files adhere to formatting standards. If any improperly formatted file is detected, it prints the violating filenames to `stderr` and exits with code 1, prompting the developer to run `task format`.
+- **非修改式格式检查**：对整个仓库执行 `gofumpt -l -extra .`，列出违反格式规则的文件，但不修改磁盘上的文件。
+- **严格执行门禁**：如果所有 Go 源文件都符合格式规范，程序以状态码 0 退出。如果检测到格式错误，程序会将相应文件名输出到 `stderr`，以状态码 1 退出，并提示开发者运行 `task format`。
 
-## Boundaries and invariants
+## 边界与不变量
 
-- **Read-only**: `cmd/checkformat` never writes to or modifies any source files. Automated formatting is performed separately via `task format` (`gofumpt` and `goimports`).
-- **Standardized check**: Integrates directly with `task format:check` and `task check`.
+- **只读**：`cmd/checkformat` 从不写入或修改源文件。自动格式化由 `task format`（`gofumpt` 和 `goimports`）单独执行。
+- **标准化检查**：直接集成到 `task format:check` 和 `task check` 中。
 
-See [cmd overview](../README.md) and [Taskfile.yml](../../Taskfile.yml).
+参见 [cmd 入口总览](../README.md) 与 [Taskfile.yml](../../Taskfile.yml)。

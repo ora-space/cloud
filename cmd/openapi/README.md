@@ -1,19 +1,19 @@
-# cmd/openapi: OpenAPI Document Generator
+# cmd/openapi: OpenAPI 文档生成工具
 
-`cmd/openapi` is a code-generation and synchronization tool that outputs the canonical OpenAPI 3.0 specification from Go contract definitions.
+`cmd/openapi` 是一个代码生成和同步工具，用于根据 Go 契约定义输出权威 OpenAPI 3.0 规范。
 
-## Responsibilities
+## 职责
 
-- **Contract compilation**: Calls `internal/contract.Document()`, which constructs the authoritative OpenAPI 3.0 document representing all 19 public endpoints, 15 internal control endpoints, and the health check endpoint.
-- **Artifact synchronization**: Serializes the document into indented JSON and writes it to `api/openapi.json`.
-- **Single Source of Truth (SSOT)**: Guarantees that `api/openapi.json`, `router.Routes()`, and `internal/contract` stay strictly aligned.
+- **契约编译**：调用 `internal/contract.Document()`，构建覆盖全部 19 个公开端点、15 个内部控制端点以及健康检查端点的权威 OpenAPI 3.0 文档对象。
+- **制品同步**：将文档序列化为带缩进的 JSON，并写入 `api/openapi.json`。
+- **单一事实来源（SSOT）**：保证 `api/openapi.json`、`router.Routes()` 和 `internal/contract` 始终严格一致。
 
-## Invariants
+## 不变量
 
-- **No hand edits**: `api/openapi.json` must never be modified manually. All route, request body, query parameter, or status code changes must be made in `internal/contract` and `internal/api/router`, then regenerated using:
+- **禁止手动编辑**：不得手动修改 `api/openapi.json`。对路由、请求体、查询参数或状态码的任何修改都必须在 `internal/contract` 和 `internal/api/router` 中进行，然后执行以下命令重新生成：
   ```sh
   task openapi
   ```
-- **CI verification**: CI enforces that the committed `api/openapi.json` matches the output of `cmd/openapi` exactly, failing if there is any uncommitted schema drift.
+- **CI 验证**：CI 会检查已提交的 `api/openapi.json` 是否与 `cmd/openapi` 的输出完全一致；如果存在任何未提交的 Schema 漂移，检查将失败。
 
-See [cmd overview](../README.md), [Contract package](../../internal/contract/README.md), and [HTTP router](../../internal/api/router/README.md).
+参见 [cmd 入口总览](../README.md)、[契约定义包](../../internal/contract/README.md) 与 [HTTP 路由网关](../../internal/api/router/README.md)。
