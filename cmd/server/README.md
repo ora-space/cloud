@@ -1,5 +1,7 @@
 # cmd/server: Ora Cloud HTTP 守护进程
 
+[中文](README.md) | [English](README.en.md)
+
 `cmd/server` 是 Ora Cloud 权威服务的主要生产环境入口。它负责绑定 HTTP 端点、校验数据库迁移的校验和、验证 JWT 凭据，并根据操作系统信号管理守护进程生命周期。
 
 ## 职责

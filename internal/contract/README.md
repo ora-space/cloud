@@ -1,5 +1,7 @@
 # internal/contract: API 契约与 OpenAPI 规范
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/contract` 以代码化方式定义 Ora Cloud 的权威 OpenAPI 3.0 数据模型与 Schema 结构。它是全系统所有 API 请求、响应结构与 Fault 错误定义的单一事实来源（SSOT）。
 
 ## 职责

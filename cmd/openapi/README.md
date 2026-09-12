@@ -1,5 +1,7 @@
 # cmd/openapi: OpenAPI 文档生成工具
 
+[中文](README.md) | [English](README.en.md)
+
 `cmd/openapi` 是一个代码生成和同步工具，用于根据 Go 契约定义输出权威 OpenAPI 3.0 规范。
 
 ## 职责

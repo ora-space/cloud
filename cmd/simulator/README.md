@@ -1,5 +1,7 @@
 # cmd/simulator: 端到端本地执行模拟器
 
+[中文](README.md) | [English](README.en.md)
+
 `cmd/simulator` 为 Ora Cloud 第一阶段架构提供完整的本地演示环境。它启动进程内执行替身、临时 Git 仓库夹具和回环 HTTP 服务，无需外部云基础设施即可验证完整的项目生命周期。
 
 ## 职责

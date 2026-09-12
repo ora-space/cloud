@@ -1,5 +1,7 @@
 # internal/logger: 结构化日志子系统
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/logger` 为 Ora Cloud 提供全进程范围的结构化日志记录能力，底层封装了 Uber Zap 与 Lumberjack。
 
 ## 职责
