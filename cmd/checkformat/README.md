@@ -1,5 +1,7 @@
 # cmd/checkformat: 代码格式检查门禁
 
+[中文](README.md) | [English](README.en.md)
+
 `cmd/checkformat` 是用于本地检查和 CI 流水线的格式验证工具，用来强制执行严格的 Go 代码排版规范。
 
 ## 职责

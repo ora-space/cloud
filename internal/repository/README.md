@@ -1,5 +1,7 @@
 # internal/repository: PostgreSQL 连接与连接池管理
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/repository` 负责 Ora Cloud 的 PostgreSQL 数据库连接池初始化、参数配置与连通性校验。
 
 ## 职责

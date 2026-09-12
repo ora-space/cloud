@@ -1,5 +1,7 @@
 # internal/simulator: 开发与测试执行替身
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/simulator` 为 Ora Cloud 阶段一的开发与验收测试提供基于进程内与本地磁盘的执行替身（Execution Doubles），涵盖 Controller、Workspace Node 以及 Substrate 存储系统。
 
 ## 职责

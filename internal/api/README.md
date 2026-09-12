@@ -1,5 +1,7 @@
 # internal/api: HTTP 表现层与协议接入层
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/api` 包含 Ora Cloud 的 HTTP 协议转换和路由组件。它负责将入站 HTTP 请求转换为 `internal/core` 的领域请求，强制执行传输安全和载荷大小限制，并按照 OpenAPI 契约格式化响应和错误。
 
 ## 模块概览

@@ -1,5 +1,7 @@
 # internal/core: 权威领域状态机引擎
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/core` 是 Ora Cloud 的权威领域和状态机层。它负责所有业务聚合、状态转换、事务边界、密码学 token 验证和 PostgreSQL 持久化编排。
 
 ## 模块概览

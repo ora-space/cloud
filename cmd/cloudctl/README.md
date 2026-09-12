@@ -1,5 +1,7 @@
 # cmd/cloudctl: 运维与部署管理 CLI
 
+[中文](README.md) | [English](README.en.md)
+
 `cloudctl` 是 Ora Cloud 受限的运维管理工具。它在公共 API 调用路径之外运行，使用数据库操作员凭据管理数据库迁移、初始租户及其管理员的引导配置，以及基础设施机密信息引用的注册。
 
 ## 命令与职责

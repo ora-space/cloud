@@ -1,5 +1,7 @@
 # integration: PostgreSQL 集成测试套件
 
+[中文](README.md) | [English](README.en.md)
+
 `integration` 包含 Ora Cloud 的自动化集成测试套件。它跨越真实边界测试完整的服务器栈：真实 HTTP 请求、权威 PostgreSQL 数据库约束、真实 Git 仓库操作和文件系统 I/O。
 
 ## 测试分类与覆盖范围

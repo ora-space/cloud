@@ -1,5 +1,7 @@
 # internal/api/router: HTTP 路由与传输适配器
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/api/router` 建立 Ora Cloud 的 HTTP 表现层边界。它基于 Gin 构建，负责绑定 HTTP 路由、验证两层 JWT 身份、强制执行严格的请求体解析限制、规范化错误，并将请求分发到 `internal/core`。
 
 ## 职责

@@ -1,5 +1,7 @@
 # internal/config: 配置加载与校验
 
+[中文](README.md) | [English](README.en.md)
+
 `internal/config` 负责 Ora Cloud 的配置解析、Schema 校验和环境变量覆盖。
 
 ## 职责

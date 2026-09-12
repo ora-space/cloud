@@ -1,5 +1,7 @@
 # 数据库迁移模块
 
+[中文](README.md) | [English](README.en.md)
+
 本模块包含 Ora Cloud 线性、仅向前的 PostgreSQL Schema 迁移目录。迁移通过 `embed.FS` 直接嵌入 Go 应用程序二进制，并由 `cloudctl migrate` 以确定的方式应用。
 
 ## 迁移目录

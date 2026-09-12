@@ -1,5 +1,7 @@
 # internal: 权威云端子系统
 
+[中文](README.md) | [English](README.en.md)
+
 `internal` 存放 Ora Cloud 的私有内部实现包。遵循 `AGENTS.md` 中记录的架构边界规范，所有核心业务状态、策略逻辑、协议转换与基础设施适配器均保持在 `internal/` 作用域内私有化。
 
 ## 模块概览
