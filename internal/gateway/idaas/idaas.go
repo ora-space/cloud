@@ -1,6 +1,6 @@
-// Package idaas adapts Huawei IDaaS Authorization Code with PKCE to the Gateway's
-// provider-neutral Authenticator contract. Provider tokens and profile documents never leave this
-// package; callers receive only the stable corporate identity Cloud understands.
+// Package idaas adapts Huawei IDaaS Authorization Code to the Gateway's provider-neutral
+// Authenticator contract. Provider tokens and profile documents never leave this package; callers
+// receive only the stable corporate identity Cloud understands.
 package idaas
 
 import (
@@ -74,10 +74,12 @@ func New(o *Options) (*Authenticator, error) {
 	return &Authenticator{baseURL: u, clientID: o.ClientID, clientSecret: o.ClientSecret, displayNameField: o.DisplayNameField, http: o.HTTP}, nil
 }
 
-// AuthorizationURL builds the IDaaS authorize redirect and binds state, callback, and PKCE S256.
+// AuthorizationURL builds the IDaaS authorize redirect from the documented Authorization Code
+// parameters. PKCE and display are omitted: they are not in the IDaaS contract, and extra query
+// fields are classified as parameter errors.
 func (a *Authenticator) AuthorizationURL(request gateway.AuthorizationRequest) (string, error) {
-	if request.State == "" || request.CodeChallenge == "" || request.CallbackURL == "" {
-		return "", errors.New("state, code challenge and callback URL are required")
+	if request.State == "" || request.CallbackURL == "" {
+		return "", errors.New("state and callback URL are required")
 	}
 	u := *a.baseURL
 	u.Path = authorizePath
@@ -86,21 +88,19 @@ func (a *Authenticator) AuthorizationURL(request gateway.AuthorizationRequest) (
 	q.Set("response_type", "code")
 	q.Set("redirect_uri", request.CallbackURL)
 	q.Set("scope", Scope)
-	q.Set("display", "page")
 	q.Set("state", request.State)
-	q.Set("code_challenge", request.CodeChallenge)
-	q.Set("code_challenge_method", "S256")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
 
-// Exchange redeems one code with its PKCE verifier, reads the corporate profile, and discards all
-// provider credentials before returning the normalized identity fields.
-func (a *Authenticator) Exchange(ctx context.Context, code, codeVerifier, callbackURL string) (gateway.VerifiedIdentity, error) {
-	if code == "" || codeVerifier == "" || callbackURL == "" {
-		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: code, verifier and callback are required", gateway.ErrProviderRejected)
+// Exchange redeems one code, reads the corporate profile, and discards all provider credentials
+// before returning the normalized identity fields. The PKCE verifier argument exists because the
+// Authenticator interface is provider-neutral; IDaaS does not consume it.
+func (a *Authenticator) Exchange(ctx context.Context, code, _, callbackURL string) (gateway.VerifiedIdentity, error) {
+	if code == "" || callbackURL == "" {
+		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: code and callback are required", gateway.ErrProviderRejected)
 	}
-	token, e := a.exchangeCode(ctx, code, codeVerifier, callbackURL)
+	token, e := a.exchangeCode(ctx, code, callbackURL)
 	if e != nil {
 		return gateway.VerifiedIdentity{}, e
 	}
@@ -113,7 +113,6 @@ type tokenRequest struct {
 	RedirectURI  string `json:"redirect_uri"`
 	GrantType    string `json:"grant_type"`
 	Code         string `json:"code"`
-	CodeVerifier string `json:"code_verifier"`
 }
 
 type tokenResponse struct {
@@ -121,8 +120,8 @@ type tokenResponse struct {
 	ErrorCode   string `json:"errorCode"`
 }
 
-func (a *Authenticator) exchangeCode(ctx context.Context, code, verifier, callbackURL string) (string, error) {
-	in := tokenRequest{ClientID: a.clientID, ClientSecret: a.clientSecret, RedirectURI: callbackURL, GrantType: "authorization_code", Code: code, CodeVerifier: verifier}
+func (a *Authenticator) exchangeCode(ctx context.Context, code, callbackURL string) (string, error) {
+	in := tokenRequest{ClientID: a.clientID, ClientSecret: a.clientSecret, RedirectURI: callbackURL, GrantType: "authorization_code", Code: code}
 	var out tokenResponse
 	status, e := a.postJSON(ctx, tokenPath, in, &out)
 	if e != nil {
@@ -194,7 +193,7 @@ func (a *Authenticator) postJSON(ctx context.Context, path string, in, out any) 
 		return 0, fmt.Errorf("read IDaaS response: %w", e)
 	}
 	if len(responseBody) > maxResponse {
-		return 0, errors.New("IDaaS response exceeds size limit")
+		return 0, fmt.Errorf("%w: IDaaS response exceeds size limit", gateway.ErrProviderRejected)
 	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
 		return resp.StatusCode, fmt.Errorf("IDaaS unavailable with status %d", resp.StatusCode)
@@ -203,7 +202,7 @@ func (a *Authenticator) postJSON(ctx context.Context, path string, in, out any) 
 		if resp.StatusCode != http.StatusOK {
 			return resp.StatusCode, nil
 		}
-		return resp.StatusCode, errors.New("IDaaS returned malformed JSON")
+		return resp.StatusCode, fmt.Errorf("%w: IDaaS returned malformed JSON", gateway.ErrProviderRejected)
 	}
 	return resp.StatusCode, nil
 }

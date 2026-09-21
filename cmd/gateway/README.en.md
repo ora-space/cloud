@@ -18,6 +18,6 @@
 - Only `/api/v1/*` is relayed, and only to the single configured Cloud upstream; `/internal/v1/*` has no route.
 - Browser-supplied `Authorization`, `X-Ora-User-Token`, `Cookie`, and `X-Forwarded-*` never reach Cloud; every request gets freshly signed minute-scale service/user JWTs from this replica's keys.
 - At runtime it touches only `gateway_login_attempts`, `gateway_sessions`, and `schema_migrations`.
-- Huawei intranet deployments use Authorization Code with PKCE S256. W3 login creates only a local Cloud session, and logout does not end the W3/IDaaS SSO session.
+- Huawei intranet deployments use IDaaS's documented Authorization Code flow (confidential client). W3 login creates only a local Cloud session, and logout does not end the W3/IDaaS SSO session.
 
 See the [cmd overview](../README.en.md), [authentication boundary (`internal/gateway`)](../../internal/gateway/README.en.md), and the [Gateway document](../../docs/gateway.md).

@@ -49,7 +49,7 @@ type fakeProvider struct {
 
 type fakeIDaaS struct {
 	mu        sync.Mutex
-	codes     map[string]string
+	codes     map[string]struct{}
 	reusable  bool
 	server    *httptest.Server
 	userUUID  string
@@ -60,17 +60,25 @@ type fakeIDaaS struct {
 
 func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 	t.Helper()
-	p := &fakeIDaaS{codes: map[string]string{}, userUUID: "w00576782", userName: "Wang Longan"}
+	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: "w00576782", userName: "Wang Longan"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/saaslogin1/oauth2/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("response_type") != "code" || q.Get("scope") != idaas.Scope || q.Get("display") != "page" || q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("state") == "" {
+		if q.Get("client_id") != "idaas-client" || q.Get("response_type") != "code" || q.Get("scope") != idaas.Scope || q.Get("state") == "" || q.Get("redirect_uri") == "" {
 			http.Error(w, "missing IDaaS authorization parameters", http.StatusBadRequest)
 			return
 		}
+		for key := range q {
+			switch key {
+			case "client_id", "response_type", "redirect_uri", "scope", "state":
+			default:
+				http.Error(w, "undocumented IDaaS authorization parameter", http.StatusBadRequest)
+				return
+			}
+		}
 		code := "idaas-code-" + strings.ReplaceAll(q.Get("state")[:8], "/", "_")
 		p.mu.Lock()
-		p.codes[code] = q.Get("code_challenge")
+		p.codes[code] = struct{}{}
 		p.mu.Unlock()
 		target, e := url.Parse(q.Get("redirect_uri"))
 		if e != nil {
@@ -86,16 +94,15 @@ func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 	mux.HandleFunc("/saaslogin1/oauth2/accesstoken", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
 		must(t, json.NewDecoder(r.Body).Decode(&body))
-		sum := sha256.Sum256([]byte(body["code_verifier"]))
 		p.mu.Lock()
-		challenge, ok := p.codes[body["code"]]
+		_, ok := p.codes[body["code"]]
 		if ok && !p.reusable {
 			delete(p.codes, body["code"])
 		}
 		p.lastToken = maps.Clone(body)
 		p.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if !ok || challenge != base64.RawURLEncoding.EncodeToString(sum[:]) || body["client_secret"] != "idaas-secret" || body["grant_type"] != "authorization_code" {
+		if !ok || len(body) != 5 || body["client_id"] != "idaas-client" || body["client_secret"] != "idaas-secret" || body["grant_type"] != "authorization_code" || body["redirect_uri"] == "" || body["code"] == "" {
 			_, _ = w.Write([]byte(`{"errorCode":"E_10009","errorDesc":"code Parameter error"}`))
 			return
 		}
@@ -536,7 +543,7 @@ func TestGatewayLoginProxyLogoutAndCredentialBoundaries(t *testing.T) {
 // (#huawei-idaas-identity-uses-corporate-uuid-and-discards-extra-profile-data,
 // #provider-rejection-never-creates-a-session) and
 // browser-session.md#revocation-is-immediate-on-every-replica-and-idempotent.
-func TestGatewayIDaaSPKCELoginIdentityAndSessionLifetime(t *testing.T) {
+func TestGatewayIDaaSLoginIdentityAndSessionLifetime(t *testing.T) {
 	f := setupGateway(t)
 	provider := newFakeIDaaS(t)
 	gw := f.newIDaaSGateway(provider)
@@ -568,8 +575,8 @@ func TestGatewayIDaaSPKCELoginIdentityAndSessionLifetime(t *testing.T) {
 		t.Fatalf("IDaaS session lifetime = %ds", lifetime)
 	}
 	provider.mu.Lock()
-	if provider.lastToken["code_verifier"] == "" || provider.lastToken["redirect_uri"] == "" || provider.lastUser["access_token"] != "idaas-access-token" {
-		t.Fatal("IDaaS exchange did not bind PKCE, callback, and userinfo requests")
+	if len(provider.lastToken) != 5 || provider.lastToken["code_verifier"] != "" || provider.lastToken["code"] == "" || provider.lastToken["redirect_uri"] == "" || provider.lastToken["client_secret"] != "idaas-secret" || provider.lastUser["access_token"] != "idaas-access-token" {
+		t.Fatal("IDaaS exchange must bind the documented token fields, callback, and userinfo request")
 	}
 	provider.mu.Unlock()
 
@@ -605,20 +612,6 @@ func TestGatewayIDaaSPKCELoginIdentityAndSessionLifetime(t *testing.T) {
 	}
 	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore {
 		t.Fatalf("failed IDaaS callbacks created %d sessions", n-sessionsBefore)
-	}
-
-	// A callback completed with a different derivation key must be rejected by IDaaS and cannot
-	// create another session even though its cookie, state, and code are otherwise valid.
-	stranger := gw.browser()
-	location := gw.startLogin(stranger, "/")
-	f.pkceKey[0] ^= 0xff
-	failed := gw.callback(stranger, location)
-	f.pkceKey[0] ^= 0xff
-	if failed.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("IDaaS verifier mismatch must be login_failed: %d", failed.StatusCode)
-	}
-	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore {
-		t.Fatalf("verifier mismatch created %d sessions", n-sessionsBefore)
 	}
 
 	replayBrowser := gw.browser()
