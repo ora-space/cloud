@@ -1,10 +1,9 @@
-// Package idaas adapts Huawei IDaaS Authorization Code to the Gateway's provider-neutral
-// Authenticator contract. Provider tokens and profile documents never leave this package; callers
-// receive only the stable corporate identity Cloud understands.
+// Package idaas adapts Huawei IDaaS 2.0 Authorization Code (client_secret_post) to the Gateway's
+// provider-neutral Authenticator contract. Provider tokens and profile documents never leave this
+// package; callers receive only the stable corporate identity Cloud understands.
 package idaas
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,9 +25,9 @@ const (
 	DefaultBaseURL = "https://uniportal.huawei.com"
 	// Scope is the fixed minimum IDaaS profile permission used by both authorization and userinfo.
 	Scope         = "base.profile"
-	authorizePath = "/saaslogin1/oauth2/authorize"
-	tokenPath     = "/saaslogin1/oauth2/accesstoken" // #nosec G101 -- endpoint path, not a credential.
-	userInfoPath  = "/saaslogin1/oauth2/userinfo"
+	authorizePath = "/saaslogin1/oauth2/v1/authorize"
+	tokenPath     = "/saaslogin1/oauth2/v1/token" // #nosec G101 -- endpoint path, not a credential.
+	userInfoPath  = "/saaslogin1/oauth2/v1/userinfo"
 	maxResponse   = 64 << 10
 )
 
@@ -74,9 +73,9 @@ func New(o *Options) (*Authenticator, error) {
 	return &Authenticator{baseURL: u, clientID: o.ClientID, clientSecret: o.ClientSecret, displayNameField: o.DisplayNameField, http: o.HTTP}, nil
 }
 
-// AuthorizationURL builds the IDaaS authorize redirect from the documented Authorization Code
-// parameters. PKCE and display are omitted: they are not in the IDaaS contract, and extra query
-// fields are classified as parameter errors.
+// AuthorizationURL builds the IDaaS 2.0 authorize redirect. PKCE is omitted because that mode is
+// off by default and this adapter authenticates as a confidential client with client_secret_post.
+// display is omitted so IDaaS keeps its adaptive default.
 func (a *Authenticator) AuthorizationURL(request gateway.AuthorizationRequest) (string, error) {
 	if request.State == "" || request.CallbackURL == "" {
 		return "", errors.New("state and callback URL are required")
@@ -93,59 +92,58 @@ func (a *Authenticator) AuthorizationURL(request gateway.AuthorizationRequest) (
 	return u.String(), nil
 }
 
-// Exchange redeems one code, reads the corporate profile, and discards all provider credentials
-// before returning the normalized identity fields. The PKCE verifier argument exists because the
-// Authenticator interface is provider-neutral; IDaaS does not consume it.
+// Exchange redeems one code with client_secret_post, reads the corporate profile, and discards all
+// provider credentials. The PKCE verifier argument exists because the Authenticator interface is
+// provider-neutral; IDaaS 2.0 PKCE mode is not used here. callbackURL is required by that same
+// interface and was already bound at authorize; the documented client_secret_post token request
+// does not repeat it.
 func (a *Authenticator) Exchange(ctx context.Context, code, _, callbackURL string) (gateway.VerifiedIdentity, error) {
 	if code == "" || callbackURL == "" {
 		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: code and callback are required", gateway.ErrProviderRejected)
 	}
-	token, e := a.exchangeCode(ctx, code, callbackURL)
+	token, e := a.exchangeCode(ctx, code)
 	if e != nil {
 		return gateway.VerifiedIdentity{}, e
 	}
 	return a.readUser(ctx, token)
 }
 
-type tokenRequest struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	RedirectURI  string `json:"redirect_uri"`
-	GrantType    string `json:"grant_type"`
-	Code         string `json:"code"`
-}
-
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	Error       string `json:"error"`
 	ErrorCode   string `json:"errorCode"`
 }
 
-func (a *Authenticator) exchangeCode(ctx context.Context, code, callbackURL string) (string, error) {
-	in := tokenRequest{ClientID: a.clientID, ClientSecret: a.clientSecret, RedirectURI: callbackURL, GrantType: "authorization_code", Code: code}
+func (a *Authenticator) exchangeCode(ctx context.Context, code string) (string, error) {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", a.clientID)
+	form.Set("client_secret", a.clientSecret)
+	form.Set("code", code)
 	var out tokenResponse
-	status, e := a.postJSON(ctx, tokenPath, in, &out)
+	status, e := a.postForm(ctx, tokenPath, form, &out)
 	if e != nil {
 		return "", e
 	}
-	if status != http.StatusOK || out.ErrorCode != "" || out.AccessToken == "" {
+	if status != http.StatusOK || out.Error != "" || out.ErrorCode != "" || out.AccessToken == "" {
+		return "", fmt.Errorf("%w: token exchange rejected", gateway.ErrProviderRejected)
+	}
+	if out.TokenType != "" && !strings.EqualFold(out.TokenType, "bearer") {
 		return "", fmt.Errorf("%w: token exchange rejected", gateway.ErrProviderRejected)
 	}
 	return out.AccessToken, nil
 }
 
-type userInfoRequest struct {
-	ClientID    string `json:"client_id"`
-	AccessToken string `json:"access_token"`
-	Scope       string `json:"scope"`
-}
-
 func (a *Authenticator) readUser(ctx context.Context, token string) (gateway.VerifiedIdentity, error) {
+	form := url.Values{}
+	form.Set("access_token", token)
 	var out map[string]json.RawMessage
-	status, e := a.postJSON(ctx, userInfoPath, userInfoRequest{ClientID: a.clientID, AccessToken: token, Scope: Scope}, &out)
+	status, e := a.postForm(ctx, userInfoPath, form, &out)
 	if e != nil {
 		return gateway.VerifiedIdentity{}, e
 	}
-	if status != http.StatusOK || rawString(out["errorCode"]) != "" {
+	if status != http.StatusOK || rawString(out["error"]) != "" || rawString(out["errorCode"]) != "" {
 		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: userinfo rejected", gateway.ErrProviderRejected)
 	}
 	uuid := rawString(out["uuid"])
@@ -170,18 +168,16 @@ func rawString(raw json.RawMessage) string {
 	return value
 }
 
-func (a *Authenticator) postJSON(ctx context.Context, path string, in, out any) (int, error) {
-	body, e := json.Marshal(in)
-	if e != nil {
-		return 0, fmt.Errorf("encode IDaaS request: %w", e)
-	}
+func (a *Authenticator) postForm(ctx context.Context, path string, form url.Values, out any) (int, error) {
 	u := *a.baseURL
 	u.Path = path
-	req, e := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(form.Encode()))
 	if e != nil {
 		return 0, fmt.Errorf("build IDaaS request: %w", e)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	// IDaaS 2.0 examples put these fields on the query string; RFC 6749 §2.3.1 client_secret_post
+	// and the GitHub adapter put them in the entity-body so secrets never appear in URLs or logs.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, e := a.http.Do(req)
 	if e != nil {

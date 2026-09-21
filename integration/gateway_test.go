@@ -62,7 +62,7 @@ func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 	t.Helper()
 	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: "w00576782", userName: "Wang Longan"}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/saaslogin1/oauth2/authorize", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/saaslogin1/oauth2/v1/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("client_id") != "idaas-client" || q.Get("response_type") != "code" || q.Get("scope") != idaas.Scope || q.Get("state") == "" || q.Get("redirect_uri") == "" {
 			http.Error(w, "missing IDaaS authorization parameters", http.StatusBadRequest)
@@ -91,9 +91,8 @@ func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 		target.RawQuery = params.Encode()
 		http.Redirect(w, r, target.String(), http.StatusFound)
 	})
-	mux.HandleFunc("/saaslogin1/oauth2/accesstoken", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		must(t, json.NewDecoder(r.Body).Decode(&body))
+	mux.HandleFunc("/saaslogin1/oauth2/v1/token", func(w http.ResponseWriter, r *http.Request) {
+		body := readPostedForm(t, r)
 		p.mu.Lock()
 		_, ok := p.codes[body["code"]]
 		if ok && !p.reusable {
@@ -102,29 +101,43 @@ func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 		p.lastToken = maps.Clone(body)
 		p.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if !ok || len(body) != 5 || body["client_id"] != "idaas-client" || body["client_secret"] != "idaas-secret" || body["grant_type"] != "authorization_code" || body["redirect_uri"] == "" || body["code"] == "" {
-			_, _ = w.Write([]byte(`{"errorCode":"E_10009","errorDesc":"code Parameter error"}`))
+		if !ok || len(body) != 4 || body["client_id"] != "idaas-client" || body["client_secret"] != "idaas-secret" || body["grant_type"] != "authorization_code" || body["code"] == "" {
+			_, _ = w.Write([]byte(`{"error":"invalid_request","error_description":"code Parameter error"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"access_token":"idaas-access-token","refresh_token":"idaas-refresh-token","scope":"base.profile","expires_in":1650868657311}`))
+		_, _ = w.Write([]byte(`{"access_token":"idaas-access-token","token_type":"Bearer","refresh_token":"idaas-refresh-token","expires_in":"1800"}`))
 	})
-	mux.HandleFunc("/saaslogin1/oauth2/userinfo", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		must(t, json.NewDecoder(r.Body).Decode(&body))
+	mux.HandleFunc("/saaslogin1/oauth2/v1/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		body := readPostedForm(t, r)
 		p.mu.Lock()
 		p.lastUser = maps.Clone(body)
 		uuid, name := p.userUUID, p.userName
 		p.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if body["client_id"] != "idaas-client" || body["access_token"] != "idaas-access-token" || body["scope"] != idaas.Scope {
-			_, _ = w.Write([]byte(`{"errorCode":"E_10011"}`))
+		if len(body) != 1 || body["access_token"] != "idaas-access-token" {
+			_, _ = w.Write([]byte(`{"error":"invalid_request"}`))
 			return
 		}
-		must(t, json.NewEncoder(w).Encode(map[string]any{"uuid": uuid, "userName": name, "employeeNumber": "30000000", "email": "private@example.com"}))
+		must(t, json.NewEncoder(w).Encode(map[string]any{"uuid": uuid, "userName": name, "globalUserID": "174022309561388", "tenantId": "111", "employeeNumber": "30000000", "email": "private@example.com"}))
 	})
 	p.server = httptest.NewServer(mux)
 	t.Cleanup(p.server.Close)
 	return p
+}
+
+func readPostedForm(t *testing.T, r *http.Request) map[string]string {
+	t.Helper()
+	if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" || r.Header.Get("Authorization") != "" || r.URL.RawQuery != "" {
+		t.Errorf("client_secret_post request was %s %q Authorization=%q query=%q", r.Method, r.Header.Get("Content-Type"), r.Header.Get("Authorization"), r.URL.RawQuery)
+	}
+	must(t, r.ParseForm())
+	out := map[string]string{}
+	for key, values := range r.PostForm {
+		if len(values) > 0 {
+			out[key] = values[0]
+		}
+	}
+	return out
 }
 
 func newFakeProvider(t *testing.T) *fakeProvider {
@@ -575,8 +588,8 @@ func TestGatewayIDaaSLoginIdentityAndSessionLifetime(t *testing.T) {
 		t.Fatalf("IDaaS session lifetime = %ds", lifetime)
 	}
 	provider.mu.Lock()
-	if len(provider.lastToken) != 5 || provider.lastToken["code_verifier"] != "" || provider.lastToken["code"] == "" || provider.lastToken["redirect_uri"] == "" || provider.lastToken["client_secret"] != "idaas-secret" || provider.lastUser["access_token"] != "idaas-access-token" {
-		t.Fatal("IDaaS exchange must bind the documented token fields, callback, and userinfo request")
+	if len(provider.lastToken) != 4 || provider.lastToken["grant_type"] != "authorization_code" || provider.lastToken["client_id"] != "idaas-client" || provider.lastToken["client_secret"] != "idaas-secret" || provider.lastToken["code"] == "" || provider.lastToken["code_verifier"] != "" || provider.lastToken["redirect_uri"] != "" || len(provider.lastUser) != 1 || provider.lastUser["access_token"] != "idaas-access-token" {
+		t.Fatal("IDaaS exchange must bind the documented client_secret_post fields and userinfo access_token")
 	}
 	provider.mu.Unlock()
 

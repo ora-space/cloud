@@ -2,7 +2,6 @@ package idaas
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -18,7 +17,31 @@ import (
 
 type recordedRequests struct {
 	token map[string]string
-	user  userInfoRequest
+	user  map[string]string
+}
+
+func readForm(t *testing.T, r *http.Request) map[string]string {
+	t.Helper()
+	if r.Header.Get("Authorization") != "" {
+		t.Errorf("client_secret_post must not send an Authorization header, got %q", r.Header.Get("Authorization"))
+	}
+	if r.URL.RawQuery != "" {
+		t.Errorf("client_secret_post must not put credentials in the query, got %q", r.URL.RawQuery)
+	}
+	if e := r.ParseForm(); e != nil {
+		t.Error(e)
+		return nil
+	}
+	out := map[string]string{}
+	for key, values := range r.PostForm {
+		if len(values) != 1 {
+			t.Errorf("%s has %d values", key, len(values))
+		}
+		if len(values) > 0 {
+			out[key] = values[0]
+		}
+	}
+	return out
 }
 
 func testAdapter(t *testing.T, tokenStatus int, tokenBody string, userStatus int, userBody string) (*Authenticator, *recordedRequests) {
@@ -26,19 +49,18 @@ func testAdapter(t *testing.T, tokenStatus int, tokenBody string, userStatus int
 	recorded := &recordedRequests{}
 	mux := http.NewServeMux()
 	mux.HandleFunc(tokenPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "application/json" {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" || r.Header.Get("Accept") != "application/json" {
 			t.Errorf("unexpected token request: %s %q %q", r.Method, r.Header.Get("Content-Type"), r.Header.Get("Accept"))
 		}
-		if e := json.NewDecoder(r.Body).Decode(&recorded.token); e != nil {
-			t.Error(e)
-		}
+		recorded.token = readForm(t, r)
 		w.WriteHeader(tokenStatus)
 		_, _ = w.Write([]byte(tokenBody))
 	})
 	mux.HandleFunc(userInfoPath, func(w http.ResponseWriter, r *http.Request) {
-		if e := json.NewDecoder(r.Body).Decode(&recorded.user); e != nil {
-			t.Error(e)
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			t.Errorf("unexpected userinfo request: %s %q", r.Method, r.Header.Get("Content-Type"))
 		}
+		recorded.user = readForm(t, r)
 		w.WriteHeader(userStatus)
 		_, _ = w.Write([]byte(userBody))
 	})
@@ -60,6 +82,9 @@ func TestAuthorizationURLBindsDocumentedIDaaSParameters(t *testing.T) {
 	u, e := url.Parse(raw)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if u.Path != authorizePath {
+		t.Fatalf("authorize path = %q want %q", u.Path, authorizePath)
 	}
 	want := map[string]string{
 		"client_id": "client", "response_type": "code", "redirect_uri": "https://cloud.huawei.com/auth/callback/huawei-idaas",
@@ -86,8 +111,8 @@ func TestAuthorizationURLBindsDocumentedIDaaSParameters(t *testing.T) {
 	}
 }
 
-func TestExchangeUsesDocumentedJSONAndReturnsCorporateIdentity(t *testing.T) {
-	a, recorded := testAdapter(t, 200, `{"access_token":"provider-token","refresh_token":"discard-me","expires_in":1650868657311}`, 200, `{"uuid":"w00576782","userName":"  Wang Longan  ","employeeNumber":"30000000","email":"private@example.com"}`)
+func TestExchangeUsesClientSecretPostAndReturnsCorporateIdentity(t *testing.T) {
+	a, recorded := testAdapter(t, 200, `{"access_token":"provider-token","token_type":"Bearer","refresh_token":"discard-me","expires_in":"1800"}`, 200, `{"uuid":"w00576782","userName":"  Wang Longan  ","globalUserID":"174022309561388","tenantId":"111","employeeNumber":"30000000","email":"private@example.com"}`)
 	identity, e := a.Exchange(context.Background(), "authorization-code", "pkce-verifier", "https://cloud.huawei.com/auth/callback/huawei-idaas")
 	if e != nil {
 		t.Fatal(e)
@@ -97,15 +122,15 @@ func TestExchangeUsesDocumentedJSONAndReturnsCorporateIdentity(t *testing.T) {
 		t.Fatalf("identity = %+v want %+v", identity, want)
 	}
 	wantToken := map[string]string{
-		"client_id": "client", "client_secret": "secret-value", "redirect_uri": "https://cloud.huawei.com/auth/callback/huawei-idaas",
+		"client_id": "client", "client_secret": "secret-value",
 		"grant_type": "authorization_code", "code": "authorization-code",
 	}
 	if !maps.Equal(recorded.token, wantToken) {
-		t.Fatalf("token request = %v want documented fields only", recorded.token)
+		t.Fatalf("token request = %v want client_secret_post fields", recorded.token)
 	}
-	wantUser := userInfoRequest{ClientID: "client", AccessToken: "provider-token", Scope: Scope}
-	if recorded.user != wantUser {
-		t.Fatal("userinfo request did not bind client, access token, and scope")
+	wantUser := map[string]string{"access_token": "provider-token"}
+	if !maps.Equal(recorded.user, wantUser) {
+		t.Fatalf("userinfo request = %v want access_token only", recorded.user)
 	}
 }
 
@@ -117,9 +142,12 @@ func TestExchangeFallsBackToUUIDAndRejectsProviderAnswers(t *testing.T) {
 		want                          gateway.VerifiedIdentity
 		providerRejected, unavailable bool
 	}{
-		{"display field absent", 200, 200, `{"access_token":"tok"}`, `{"uuid":"w1","email":"ignored@example.com"}`, gateway.VerifiedIdentity{Source: Source, Subject: "w1", DisplayName: "w1"}, false, false},
+		{"display field absent", 200, 200, `{"access_token":"tok","token_type":"Bearer"}`, `{"uuid":"w1","email":"ignored@example.com"}`, gateway.VerifiedIdentity{Source: Source, Subject: "w1", DisplayName: "w1"}, false, false},
 		{"display field wrong type", 200, 200, `{"access_token":"tok"}`, `{"uuid":"w2","userName":42}`, gateway.VerifiedIdentity{Source: Source, Subject: "w2", DisplayName: "w2"}, false, false},
+		{"token oauth error", 200, 200, `{"error":"invalid_request","error_description":"secret provider detail"}`, `{}`, gateway.VerifiedIdentity{}, true, false},
 		{"token error code", 200, 200, `{"errorCode":"E_10009","errorDesc":"secret provider detail"}`, `{}`, gateway.VerifiedIdentity{}, true, false},
+		{"non-bearer token", 200, 200, `{"access_token":"tok","token_type":"mac"}`, `{}`, gateway.VerifiedIdentity{}, true, false},
+		{"userinfo oauth error", 200, 200, `{"access_token":"tok"}`, `{"error":"invalid_request"}`, gateway.VerifiedIdentity{}, true, false},
 		{"userinfo error code", 200, 200, `{"access_token":"tok"}`, `{"errorCode":"E_10012"}`, gateway.VerifiedIdentity{}, true, false},
 		{"missing uuid", 200, 200, `{"access_token":"tok"}`, `{"userName":"Name"}`, gateway.VerifiedIdentity{}, true, false},
 		{"whitespace uuid", 200, 200, `{"access_token":"tok"}`, `{"uuid":" w3 "}`, gateway.VerifiedIdentity{}, true, false},

@@ -18,6 +18,6 @@
 - 只向固定配置的 Cloud upstream 转发 `/api/v1/*`；`/internal/v1/*` 无路由。
 - 浏览器提交的 `Authorization`、`X-Ora-User-Token`、`Cookie` 与 `X-Forwarded-*` 不会到达 Cloud；每个请求使用本副本私钥重新签发分钟级 service/user JWT。
 - 运行时只访问 `gateway_login_attempts`、`gateway_sessions` 与 `schema_migrations`。
-- 华为内网部署使用 IDaaS 官方 Authorization Code（机密客户端）；W3 登录只建立 Cloud 本地会话，退出不影响 W3/IDaaS SSO。
+- 华为内网部署使用 IDaaS 2.0 Authorization Code（`client_secret_post` 机密客户端）；W3 登录只建立 Cloud 本地会话，退出不影响 W3/IDaaS SSO。
 
 参见 [cmd 入口总览](../README.md)、[认证边界 (`internal/gateway`)](../../internal/gateway/README.md) 与 [Gateway 文档](../../docs/gateway.md)。

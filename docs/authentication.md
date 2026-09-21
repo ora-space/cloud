@@ -1,6 +1,6 @@
 # 内部认证
 
-Gateway 独占外部登录集成。Cloud 核心不接入密码、SAML、OAuth 客户端或华为 SDK，也不根据姓名/email 合并账号。Gateway 通过华为 IDaaS Authorization Code（机密客户端）或 GitHub OAuth（Authorization Code + PKCE S256）规范化出 `{source, subject, displayName?}`；`source` 是长期稳定的账号命名空间，`(source,subject)` 联合唯一。华为员工身份固定为 `source=huawei-corp`、`subject=<IDaaS uuid>`，姓名只在首次 JIT 创建 Cloud 用户时形成快照，工号和邮箱不进入 Cloud。生产入口是 `cmd/gateway`（PostgreSQL 浏览器会话、`/api/v1` 代理），见 `docs/gateway.md`。
+Gateway 独占外部登录集成。Cloud 核心不接入密码、SAML、OAuth 客户端或华为 SDK，也不根据姓名/email 合并账号。Gateway 通过华为 IDaaS 2.0 Authorization Code（`client_secret_post` 机密客户端）或 GitHub OAuth（Authorization Code + PKCE S256）规范化出 `{source, subject, displayName?}`；`source` 是长期稳定的账号命名空间，`(source,subject)` 联合唯一。华为员工身份固定为 `source=huawei-corp`、`subject=<IDaaS uuid>`，姓名只在首次 JIT 创建 Cloud 用户时形成快照，工号和邮箱不进入 Cloud。生产入口是 `cmd/gateway`（PostgreSQL 浏览器会话、`/api/v1` 代理），见 `docs/gateway.md`。
 
 HTTP 使用两种独立签名凭据：`Authorization: Bearer <service JWT>` 证明调用服务，`X-Ora-User-Token: <user JWT>` 证明最终用户。公开 API 要求 gateway 服务；访问检查/执行准入要求 controller 服务及用户凭据；后台控制 API 只要求 controller 服务；Node 接口只要求带资源范围的 node 服务凭据。普通 header 不能替代任何一类签名。
 
