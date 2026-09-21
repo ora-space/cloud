@@ -50,7 +50,7 @@ go run ./cmd/cloudctl -command bootstrap -name '研发组织' -source 'huawei-co
 go run ./cmd/cloudctl -command credential-ref -tenant '<tenant UUID>' -owner '<user UUID>' -secret-ref 'infra-secret://git/team/account'
 ```
 
-`bootstrap` 原子创建租户与首位管理员，是部署操作；重复执行会新建租户。`credential-ref` 只保存基础设施引用，不接收 Git 密钥值；引用受 tenant+owner 外键约束。普通成员须先经有效 gateway 身份访问 `/api/v1/me` 建立 user，再由管理员通过成员 API 显式添加。没有自助组织注册或外部组自动授权。
+`bootstrap` 原子创建租户与首位管理员，是部署操作；重复执行会新建租户（当 `-source` 为 `huawei-corp` 时，`-subject` 需传入 IDaaS 返回的稳定 `uuid`，勿填工号）。`credential-ref` 只保存基础设施引用，不接收 Git 密钥值；引用受 tenant+owner 外键约束。普通成员须先经有效 gateway 身份访问 `/api/v1/me` 建立 user，再由管理员通过成员 API 显式添加。没有自助组织注册或外部组自动授权。
 
 生产启动前在配置中设置内部验证公钥，见 [认证配置与凭据](docs/authentication.md)。空 trust 配置会启动失败：
 

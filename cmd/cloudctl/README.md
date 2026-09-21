@@ -21,6 +21,7 @@ cloudctl -config <path> -command bootstrap -name '<tenant-name>' -source '<idp-s
 ```
 - 在单个数据库事务中原子化地创建一个处于活动状态的初始租户及其第一个管理员用户。
 - 将外部 IdP（身份提供商）的身份断言（`source` 与 `subject`）绑定至内部用户记录。
+- **注意（华为 IDaaS）**：当 `-source` 为 `huawei-corp` 时，`-subject` 必须是 IDaaS 返回的内部 `uuid`（形如 `uuid~...`），**绝不能填写员工工号或 W3 账号**，否则用户通过 IDaaS 登录时将因 subject 不匹配而生成未授权的新用户。
 - 在 `tenant_memberships` 表中为该用户授予 `admin` 角色。
 - 返回包含 `tenantId` 和 `userId` 的 JSON 数据载荷。
 

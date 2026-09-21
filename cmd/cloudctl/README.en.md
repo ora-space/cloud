@@ -21,6 +21,7 @@ cloudctl -config <path> -command bootstrap -name '<tenant-name>' -source '<idp-s
 ```
 - Atomically provisions an initial active tenant and its first administrator user in a single database transaction.
 - Binds external IdP identity claims (`source` and `subject`) to an internal user record.
+- **Note (Huawei IDaaS)**: When `-source` is `huawei-corp`, `-subject` must be the internal `uuid` returned by IDaaS (e.g. `uuid~...`), **never the employee number or W3 username**, or the user will create an unprivileged new user on login due to a subject mismatch.
 - Assigns the user the `admin` role in `tenant_memberships`.
 - Returns a JSON payload containing `tenantId` and `userId`.
 

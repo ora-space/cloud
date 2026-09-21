@@ -12,10 +12,12 @@ provider error classification, and response bounds; callers receive only
 | `idaas.go` | Fixes endpoints and scope, builds redirects, exchanges codes, and minimizes profiles. |
 | `idaas_test.go` | Covers client_secret_post form requests, identity mapping, fallback, error classes, cancellation, and secret redaction. |
 
-`uuid` is the sole identity key and is trimmed of leading/trailing whitespace (the documented success
+`uuid` is the sole identity key (corresponding to the corporate employee number rather than the raw
+employee ID or W3 account) and is trimmed of leading/trailing whitespace (the documented success
 example includes a trailing space); a blank value after trim is rejected. An optional top-level
-display field is used only for initial JIT presentation and falls back to `uuid`; email, employee
-number, refresh tokens, and the full response never leave the module. Authorize sends only the 2.0
+display field is used only for initial JIT presentation and falls back to `uuid` (configuring a real
+display name field is recommended for human-friendly UI presentation); email, employee number,
+refresh tokens, and the full response never leave the module. Authorize sends only the 2.0
 required fields: no PKCE and no `display`. Token exchange posts `grant_type`, `client_id`,
 `client_secret`, and `code` in the `application/x-www-form-urlencoded` entity-body (no Basic header,
 no credentials on the query string, no PKCE-NULL `code_verifier`); userinfo posts only

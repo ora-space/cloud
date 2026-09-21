@@ -60,7 +60,7 @@ type fakeIDaaS struct {
 
 func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 	t.Helper()
-	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: " w00576782 ", userName: "Wang Longan"}
+	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: " uuid~dGVzdDE = ", userName: "Wang Longan"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/saaslogin1/oauth2/v1/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -570,13 +570,13 @@ func TestGatewayIDaaSLoginIdentityAndSessionLifetime(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || me.S("displayName") != "Wang Longan" {
 		t.Fatalf("IDaaS /me: %d %v", resp.StatusCode, me)
 	}
-	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='w00576782'"); n != 1 {
+	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='uuid~dGVzdDE ='"); n != 1 {
 		t.Fatalf("IDaaS identity must use huawei-corp + uuid, found %d", n)
 	}
 	if n := f.count("SELECT count(*) FROM tenant_memberships"); n != 0 {
 		t.Fatalf("external login must not grant membership, found %d", n)
 	}
-	if n := f.count("SELECT count(*) FROM gateway_sessions WHERE source='huawei-corp' AND subject='w00576782' AND display_name='Wang Longan'"); n != 1 {
+	if n := f.count("SELECT count(*) FROM gateway_sessions WHERE source='huawei-corp' AND subject='uuid~dGVzdDE =' AND display_name='Wang Longan'"); n != 1 {
 		t.Fatalf("session must retain only minimized identity fields, found %d", n)
 	}
 	if n := f.count("SELECT count(*) FROM gateway_sessions WHERE token_hash IN ($1,$2)", gateway.Digest("idaas-access-token"), gateway.Digest("idaas-refresh-token")); n != 0 {
@@ -603,7 +603,7 @@ func TestGatewayIDaaSLoginIdentityAndSessionLifetime(t *testing.T) {
 	if second, repeatedMe := gw.do(secondBrowser, http.MethodGet, "/api/v1/me", nil, nil); second.StatusCode != http.StatusOK || repeatedMe.S("displayName") != "Wang Longan" {
 		t.Fatalf("repeat login must preserve the JIT display-name snapshot: %d %v", second.StatusCode, repeatedMe)
 	}
-	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='w00576782'"); n != 1 {
+	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='uuid~dGVzdDE ='"); n != 1 {
 		t.Fatalf("repeat IDaaS login must reuse one identity, found %d", n)
 	}
 	sessionsBefore := f.count("SELECT count(*) FROM gateway_sessions")

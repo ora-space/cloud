@@ -112,12 +112,12 @@ func TestAuthorizationURLBindsDocumentedIDaaSParameters(t *testing.T) {
 }
 
 func TestExchangeUsesClientSecretPostAndReturnsCorporateIdentity(t *testing.T) {
-	a, recorded := testAdapter(t, 200, `{"access_token":"provider-token","token_type":"Bearer","refresh_token":"discard-me","expires_in":"1800"}`, 200, `{"uuid":"w00576782","userName":"  Wang Longan  ","globalUserID":"174022309561388","tenantId":"111","employeeNumber":"30000000","email":"private@example.com"}`)
+	a, recorded := testAdapter(t, 200, `{"access_token":"provider-token","token_type":"Bearer","refresh_token":"discard-me","expires_in":"1800"}`, 200, `{"uuid":" uuid~dGVzdDE = ","userName":"  Wang Longan  ","globalUserID":"174022309561388","tenantId":"111","employeeNumber":"30000000","email":"private@example.com"}`)
 	identity, e := a.Exchange(context.Background(), "authorization-code", "pkce-verifier", "https://cloud.huawei.com/auth/callback/huawei-idaas")
 	if e != nil {
 		t.Fatal(e)
 	}
-	want := gateway.VerifiedIdentity{Source: Source, Subject: "w00576782", DisplayName: "Wang Longan"}
+	want := gateway.VerifiedIdentity{Source: Source, Subject: "uuid~dGVzdDE =", DisplayName: "Wang Longan"}
 	if identity != want {
 		t.Fatalf("identity = %+v want %+v", identity, want)
 	}

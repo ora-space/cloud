@@ -50,7 +50,7 @@ go run ./cmd/cloudctl -command bootstrap -name 'Engineering Organization' -sourc
 go run ./cmd/cloudctl -command credential-ref -tenant '<tenant UUID>' -owner '<user UUID>' -secret-ref 'infra-secret://git/team/account'
 ```
 
-`bootstrap` atomically creates a tenant and its first administrator and is a deployment operation; running it again creates another tenant. `credential-ref` stores only an infrastructure reference and never accepts a Git credential value; tenant and owner foreign keys scope the reference. A regular member must first access `/api/v1/me` through an authenticated gateway to create the user, and an administrator must then add that user explicitly through the membership API. There is no self-service organization registration or automatic authorization from external groups.
+`bootstrap` atomically creates a tenant and its first administrator and is a deployment operation; running it again creates another tenant (when `-source` is `huawei-corp`, `-subject` must be the stable `uuid` returned by IDaaS rather than the employee number). `credential-ref` stores only an infrastructure reference and never accepts a Git credential value; tenant and owner foreign keys scope the reference. A regular member must first access `/api/v1/me` through an authenticated gateway to create the user, and an administrator must then add that user explicitly through the membership API. There is no self-service organization registration or automatic authorization from external groups.
 
 Before starting production, configure internal verification public keys as described in [Authentication and credentials](docs/authentication.md). Startup fails when the trust configuration is empty:
 
