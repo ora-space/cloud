@@ -146,8 +146,11 @@ func (a *Authenticator) readUser(ctx context.Context, token string) (gateway.Ver
 	if status != http.StatusOK || rawString(out["error"]) != "" || rawString(out["errorCode"]) != "" {
 		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: userinfo rejected", gateway.ErrProviderRejected)
 	}
-	uuid := rawString(out["uuid"])
-	if uuid == "" || strings.TrimSpace(uuid) != uuid {
+	// IDaaS 2.0 userinfo examples pad uuid with trailing spaces. Leading/trailing
+	// whitespace is not identity-bearing; trim it like display names. Internal
+	// spaces stay so the opaque key is otherwise unchanged.
+	uuid := strings.TrimSpace(rawString(out["uuid"]))
+	if uuid == "" {
 		return gateway.VerifiedIdentity{}, fmt.Errorf("%w: missing stable uuid", gateway.ErrProviderRejected)
 	}
 	name := uuid
@@ -175,8 +178,13 @@ func (a *Authenticator) postForm(ctx context.Context, path string, form url.Valu
 	if e != nil {
 		return 0, fmt.Errorf("build IDaaS request: %w", e)
 	}
-	// IDaaS 2.0 examples put these fields on the query string; RFC 6749 §2.3.1 client_secret_post
-	// and the GitHub adapter put them in the entity-body so secrets never appear in URLs or logs.
+	// IDaaS 2.0 examples render the same fields on the query string, but they also
+	// require Content-Type: application/x-www-form-urlencoded, which only describes
+	// the entity-body. RFC 6749 §2.3.1 / §4.1.3 client_secret_post and the GitHub
+	// adapter put credentials in the body so client_secret and access_token never
+	// appear in URLs or access logs. Query placement and client_secret_basic are
+	// rejected alternatives: the former leaks secrets, the latter fails when the
+	// registered app expects client_secret_post (error=invalid_request).
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, e := a.http.Do(req)

@@ -60,7 +60,7 @@ type fakeIDaaS struct {
 
 func newFakeIDaaS(t *testing.T) *fakeIDaaS {
 	t.Helper()
-	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: "w00576782", userName: "Wang Longan"}
+	p := &fakeIDaaS{codes: map[string]struct{}{}, userUUID: " w00576782 ", userName: "Wang Longan"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/saaslogin1/oauth2/v1/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()

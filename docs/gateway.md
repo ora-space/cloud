@@ -57,17 +57,17 @@ head -c 32 /dev/urandom > gateway-pkce.key
 
 `internal/gateway/idaas` 使用 IDaaS 2.0 Authorization Code 的 `client_secret_post` 契约。PKCE 模式默认关闭，Gateway 作为机密客户端也不启用它；不发送已废弃的 `display`。authorize 地址固定为 `<idaas.base_url>/saaslogin1/oauth2/v1/authorize`，只携带 `client_id`、`response_type=code`、`scope=base.profile`、随机 `state` 和固定 callback `<public.base_url>/auth/callback/huawei-idaas`；callback 的协议、域名和端口必须与 IDaaS 应用登记值逐字一致。生产显式配置 `https://uniportal.huawei.com`，测试显式配置 `https://uniportal-beta.huawei.com`，Gateway 不自动猜测环境。
 
-Gateway 以 `application/x-www-form-urlencoded` `POST` 调用 `/saaslogin1/oauth2/v1/token` 交换 code，请求体仅包含 `grant_type=authorization_code`、`client_id`、`client_secret` 和 `code`（不发送 `Authorization: Basic`，也不发送 PKCE-NULL 的 `code_verifier`/`redirect_uri`）。IDaaS 2.0 示例把同一组字段写在 query；Gateway 按 RFC 6749 `client_secret_post` 与 GitHub 适配器把它们放在请求体，避免 secret 进入 URL 或访问日志。随后以同样的表单 `POST` 调用 `/saaslogin1/oauth2/v1/userinfo`，只携带 `access_token`。只保留 `uuid` 与 `idaas.display_name_field` 指定的顶层字符串：规范化身份固定为 `source=huawei-corp, subject=<uuid>`，显示名缺失或无效时回退 uuid。access token、refresh token、code、verifier 和完整 userinfo 只存在于单次请求内存；不解析 `expires_in`，不持久化、不签入 JWT、不记录邮箱或工号。
+Gateway 以 `application/x-www-form-urlencoded` `POST` 调用 `/saaslogin1/oauth2/v1/token` 交换 code，请求体仅包含 `grant_type=authorization_code`、`client_id`、`client_secret` 和 `code`（不发送 `Authorization: Basic`，也不发送 PKCE-NULL 的 `code_verifier`/`redirect_uri`）。IDaaS 2.0 示例把同一组字段写在 query，但把 `Content-Type: application/x-www-form-urlencoded` 列为必填，该头只约束 entity-body。Gateway 按 RFC 6749 §2.3.1 `client_secret_post` 与 GitHub 适配器把字段放在请求体，避免 `client_secret`/`access_token` 进入 URL 或访问日志；不改用 `client_secret_basic`，因为认证方法不匹配时 IDaaS 返回 `error=invalid_request`。随后以同样的表单 `POST` 调用 `/saaslogin1/oauth2/v1/userinfo`，只携带 `access_token`。只保留 `uuid` 与 `idaas.display_name_field` 指定的顶层字符串：规范化身份固定为 `source=huawei-corp, subject=<trim 后的 uuid>`。`uuid` 只去掉首尾空白（文档成功示例含尾部空格，空白不承载身份区分度）；去掉后为空视为缺失。显示名缺失或无效时回退 uuid。access token、refresh token、code、verifier 和完整 userinfo 只存在于单次请求内存；不解析 `expires_in`，不持久化、不签入 JWT、不记录邮箱或工号。
 
 token/userinfo 客户端有独立总超时、64 KiB 响应上限、传播请求取消且禁止跟随重定向。provider 拒绝、OAuth `error`（以及遗留 `errorCode`）、超大或非法 JSON 响应和缺少 uuid 对外收敛为 `login_failed`；网络、超时、429 和 5xx 为 `login_unavailable`。多个 Gateway 副本必须共享 PostgreSQL、PKCE key、IDaaS client 配置和 client secret。
 
 IDaaS 应用登记与上线检查：
 
-1. 为每个环境单独登记精确 callback 的 Authorization Code 应用，并申请 `base.profile` 及所需姓名字段；不要复用 beta 与生产 origin。IDaaS 2.0 的 PKCE 模式默认关闭；Gateway 使用 `client_secret_post`，不向 IDaaS 发送 PKCE 参数。
+1. 为每个环境单独登记精确 callback 的 Authorization Code 应用，并申请 `base.profile`、`uuid` 及所需姓名字段；不要复用 beta 与生产 origin。IDaaS 2.0 §2.1 默认返回列表写的是 tenantid/UID/globalUserID，与 §2.4 把 `uuid` 标为必填互相矛盾。`uuid` 是唯一身份键：若默认 userinfo 不含该字段，必须先在控制台申请，不能改用 `globalUserID`/`UID`。IDaaS 2.0 的 PKCE 模式默认关闭；Gateway 使用 `client_secret_post`，不向 IDaaS 发送 PKCE 参数。
 2. 将实际顶层姓名 JSON 键配置为 `idaas.display_name_field`；未获批或返回缺失时系统安全回退 uuid，不尝试邮箱/工号匹配。
 3. 以只读 secret 文件挂载 client secret 与至少 32 字节 PKCE key；所有 Gateway 副本挂载相同内容，并使用同一 client ID/base URL。
-4. 确认现有管理员 identity 已按 `huawei-corp + IDaaS uuid` 预置；系统不会模糊合并旧账号，也不会从 IDaaS 群组自动授予 tenant membership。
-5. 先以 beta IDaaS 验证 callback、原路径恢复、停用用户和本地退出，再切换生产 base URL、client 配置与精确生产 callback。上线后不得把 code、token、userinfo、邮箱或工号加入日志采样。
+4. 确认现有管理员 identity 已按 `huawei-corp + IDaaS uuid`（trim 后的值）预置；系统不会模糊合并旧账号，也不会从 IDaaS 群组自动授予 tenant membership。
+5. 先以 beta IDaaS 验证：token/userinfo 接受请求体中的 `client_secret_post` 字段（query 为空）、脱敏 userinfo 含已申请的 `uuid`、callback、原路径恢复、停用用户和本地退出，再切换生产 base URL、client 配置与精确生产 callback。上线后不得把 code、token、userinfo、邮箱或工号加入日志采样。
 
 ## GitHub 适配器
 
