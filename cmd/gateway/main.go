@@ -21,6 +21,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/gateway"
 	"github.com/wanglongan587/cloud/internal/gateway/github"
+	"github.com/wanglongan587/cloud/internal/gateway/idaas"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/repository"
 )
@@ -119,15 +120,11 @@ func buildHandler(cfg *gateway.Config, store *gateway.Store, log *zap.Logger) (h
 	if e != nil {
 		return nil, fmt.Errorf("read PKCE key: %w", e)
 	}
-	clientSecret, e := os.ReadFile(cfg.GitHub.ClientSecretFile)
-	if e != nil {
-		return nil, fmt.Errorf("read github client secret: %w", e)
-	}
-	provider, e := github.New(&github.Options{ClientID: cfg.GitHub.ClientID, ClientSecret: strings.TrimSpace(string(clientSecret)), AuthorizeURL: cfg.GitHub.AuthorizeURL, TokenURL: cfg.GitHub.TokenURL, UserURL: cfg.GitHub.UserURL, Source: cfg.GitHub.Source, HTTP: github.NewHTTPClient(cfg.Cloud.Timeout)})
+	provider, e := buildProvider(cfg)
 	if e != nil {
 		return nil, e
 	}
-	login, e := gateway.NewLogin(store, map[string]gateway.Authenticator{"github": provider}, pkceKey, origin+gateway.CallbackPath, cfg.Login.AttemptTTL, cfg.Session.TTL)
+	login, e := gateway.NewLogin(store, map[string]gateway.Authenticator{cfg.Login.Provider: provider}, pkceKey, origin+gateway.CallbackPath, cfg.Login.AttemptTTL, cfg.Session.TTL)
 	if e != nil {
 		return nil, e
 	}
@@ -147,4 +144,35 @@ func buildHandler(cfg *gateway.Config, store *gateway.Store, log *zap.Logger) (h
 		Log:             log,
 		Now:             time.Now,
 	})
+}
+
+func buildProvider(cfg *gateway.Config) (gateway.Authenticator, error) {
+	switch cfg.Login.Provider {
+	case gateway.ProviderGitHub:
+		secret, e := readSecret(cfg.GitHub.ClientSecretFile, "github client secret")
+		if e != nil {
+			return nil, e
+		}
+		return github.New(&github.Options{ClientID: cfg.GitHub.ClientID, ClientSecret: secret, AuthorizeURL: cfg.GitHub.AuthorizeURL, TokenURL: cfg.GitHub.TokenURL, UserURL: cfg.GitHub.UserURL, Source: cfg.GitHub.Source, HTTP: github.NewHTTPClient(cfg.Cloud.Timeout)})
+	case gateway.ProviderHuaweiIDaaS:
+		secret, e := readSecret(cfg.IDaaS.ClientSecretFile, "IDaaS client secret")
+		if e != nil {
+			return nil, e
+		}
+		return idaas.New(&idaas.Options{BaseURL: cfg.IDaaS.BaseURL, ClientID: cfg.IDaaS.ClientID, ClientSecret: secret, DisplayNameField: cfg.IDaaS.DisplayNameField, HTTP: idaas.NewHTTPClient(cfg.IDaaS.Timeout)})
+	default:
+		return nil, fmt.Errorf("unsupported login provider %q", cfg.Login.Provider)
+	}
+}
+
+func readSecret(path, name string) (string, error) {
+	value, e := os.ReadFile(path)
+	if e != nil {
+		return "", fmt.Errorf("read %s: %w", name, e)
+	}
+	secret := strings.TrimSpace(string(value))
+	if secret == "" {
+		return "", fmt.Errorf("%s is empty", name)
+	}
+	return secret, nil
 }

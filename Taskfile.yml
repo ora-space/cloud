@@ -46,8 +46,8 @@ tasks:
     desc: Authentication gateway on :8081, proxying /api/v1 to the Go server; see docs/gateway.md
     cmds: [go run ./cmd/gateway]
   dev:
-    desc: Go API server and Vite dev server together; open http://localhost:5173
-    deps: [run, frontend:dev]
+    desc: Cloud, authentication gateway, and Vite together; open http://localhost:5173
+    deps: [run, run:gateway, frontend:dev]
   migrate:
     cmds: [go run ./cmd/cloudctl -command migrate]
   simulate:
@@ -59,7 +59,7 @@ tasks:
     desc: Install frontend dependencies from package-lock.json
     cmds: [npm --prefix frontend ci]
   frontend:dev:
-    desc: Vite dev server on :5173, proxying /api, /internal and /healthz to the Go server on :8080
+    desc: Vite on :5173, proxying /auth, /api and /healthz to the authentication gateway on :8081
     deps: [frontend:install]
     cmds: [npm --prefix frontend run dev]
   frontend:generate:

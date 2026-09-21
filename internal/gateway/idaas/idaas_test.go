@@ -1,0 +1,202 @@
+package idaas
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/wanglongan587/cloud/internal/gateway"
+)
+
+type recordedRequests struct {
+	token tokenRequest
+	user  userInfoRequest
+}
+
+func testAdapter(t *testing.T, tokenStatus int, tokenBody string, userStatus int, userBody string) (*Authenticator, *recordedRequests) {
+	t.Helper()
+	recorded := &recordedRequests{}
+	mux := http.NewServeMux()
+	mux.HandleFunc(tokenPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "application/json" {
+			t.Errorf("unexpected token request: %s %q %q", r.Method, r.Header.Get("Content-Type"), r.Header.Get("Accept"))
+		}
+		if e := json.NewDecoder(r.Body).Decode(&recorded.token); e != nil {
+			t.Error(e)
+		}
+		w.WriteHeader(tokenStatus)
+		_, _ = w.Write([]byte(tokenBody))
+	})
+	mux.HandleFunc(userInfoPath, func(w http.ResponseWriter, r *http.Request) {
+		if e := json.NewDecoder(r.Body).Decode(&recorded.user); e != nil {
+			t.Error(e)
+		}
+		w.WriteHeader(userStatus)
+		_, _ = w.Write([]byte(userBody))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	a, e := New(&Options{BaseURL: server.URL, ClientID: "client", ClientSecret: "secret-value", DisplayNameField: "userName", HTTP: NewHTTPClient(2 * time.Second)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return a, recorded
+}
+
+func TestAuthorizationURLBindsIDaaSAndPKCEParameters(t *testing.T) {
+	a, _ := testAdapter(t, 200, `{}`, 200, `{}`)
+	raw, e := a.AuthorizationURL(gateway.AuthorizationRequest{State: "state-1", CodeChallenge: "challenge-1", CallbackURL: "https://cloud.huawei.com/auth/callback/huawei-idaas"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	u, e := url.Parse(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := map[string]string{
+		"client_id": "client", "response_type": "code", "redirect_uri": "https://cloud.huawei.com/auth/callback/huawei-idaas",
+		"scope": Scope, "display": "page", "state": "state-1", "code_challenge": "challenge-1", "code_challenge_method": "S256",
+	}
+	for key, value := range want {
+		if got := u.Query().Get(key); got != value {
+			t.Errorf("%s = %q want %q", key, got, value)
+		}
+	}
+	if strings.Contains(raw, "secret-value") {
+		t.Fatal("authorize URL must not contain the client secret")
+	}
+	if _, e = a.AuthorizationURL(gateway.AuthorizationRequest{State: "state-1"}); e == nil {
+		t.Fatal("missing callback or challenge must be rejected")
+	}
+}
+
+func TestExchangeUsesJSONPKCEAndReturnsCorporateIdentity(t *testing.T) {
+	a, recorded := testAdapter(t, 200, `{"access_token":"provider-token","refresh_token":"discard-me","expires_in":1650868657311}`, 200, `{"uuid":"w00576782","userName":"  Wang Longan  ","employeeNumber":"30000000","email":"private@example.com"}`)
+	identity, e := a.Exchange(context.Background(), "authorization-code", "pkce-verifier", "https://cloud.huawei.com/auth/callback/huawei-idaas")
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := gateway.VerifiedIdentity{Source: Source, Subject: "w00576782", DisplayName: "Wang Longan"}
+	if identity != want {
+		t.Fatalf("identity = %+v want %+v", identity, want)
+	}
+	wantToken := tokenRequest{ClientID: "client", ClientSecret: "secret-value", RedirectURI: "https://cloud.huawei.com/auth/callback/huawei-idaas", GrantType: "authorization_code", Code: "authorization-code", CodeVerifier: "pkce-verifier"}
+	if recorded.token != wantToken {
+		t.Fatal("token request did not bind client, callback, code, and PKCE verifier")
+	}
+	wantUser := userInfoRequest{ClientID: "client", AccessToken: "provider-token", Scope: Scope}
+	if recorded.user != wantUser {
+		t.Fatal("userinfo request did not bind client, access token, and scope")
+	}
+}
+
+func TestExchangeFallsBackToUUIDAndRejectsProviderAnswers(t *testing.T) {
+	cases := []struct {
+		name                          string
+		tokenStatus, userStatus       int
+		tokenBody, userBody           string
+		want                          gateway.VerifiedIdentity
+		providerRejected, unavailable bool
+	}{
+		{"display field absent", 200, 200, `{"access_token":"tok"}`, `{"uuid":"w1","email":"ignored@example.com"}`, gateway.VerifiedIdentity{Source: Source, Subject: "w1", DisplayName: "w1"}, false, false},
+		{"display field wrong type", 200, 200, `{"access_token":"tok"}`, `{"uuid":"w2","userName":42}`, gateway.VerifiedIdentity{Source: Source, Subject: "w2", DisplayName: "w2"}, false, false},
+		{"token error code", 200, 200, `{"errorCode":"E_10009","errorDesc":"secret provider detail"}`, `{}`, gateway.VerifiedIdentity{}, true, false},
+		{"userinfo error code", 200, 200, `{"access_token":"tok"}`, `{"errorCode":"E_10012"}`, gateway.VerifiedIdentity{}, true, false},
+		{"missing uuid", 200, 200, `{"access_token":"tok"}`, `{"userName":"Name"}`, gateway.VerifiedIdentity{}, true, false},
+		{"whitespace uuid", 200, 200, `{"access_token":"tok"}`, `{"uuid":" w3 "}`, gateway.VerifiedIdentity{}, true, false},
+		{"token 401", 401, 200, `{}`, `{}`, gateway.VerifiedIdentity{}, true, false},
+		{"provider 429", 429, 200, `{}`, `{}`, gateway.VerifiedIdentity{}, false, true},
+		{"provider 500", 500, 200, `{}`, `{}`, gateway.VerifiedIdentity{}, false, true},
+		{"malformed success", 200, 200, `not-json`, `{}`, gateway.VerifiedIdentity{}, false, true},
+	}
+	for _, tc := range cases {
+		a, _ := testAdapter(t, tc.tokenStatus, tc.tokenBody, tc.userStatus, tc.userBody)
+		got, e := a.Exchange(context.Background(), "sensitive-authorization-code", "sensitive-pkce-verifier", "https://cloud.huawei.com/auth/callback/huawei-idaas")
+		switch {
+		case tc.providerRejected && !errors.Is(e, gateway.ErrProviderRejected):
+			t.Errorf("%s: expected provider rejection, got %v", tc.name, e)
+		case tc.unavailable && (e == nil || errors.Is(e, gateway.ErrProviderRejected)):
+			t.Errorf("%s: expected infrastructure failure, got %v", tc.name, e)
+		case !tc.providerRejected && !tc.unavailable && (e != nil || got != tc.want):
+			t.Errorf("%s: got (%+v,%v), want %+v", tc.name, got, e, tc.want)
+		}
+		if e != nil && (strings.Contains(e.Error(), "secret provider detail") || strings.Contains(e.Error(), "secret-value") || strings.Contains(e.Error(), "sensitive-authorization-code") || strings.Contains(e.Error(), "sensitive-pkce-verifier")) {
+			t.Errorf("%s: error leaked provider detail: %v", tc.name, e)
+		}
+	}
+}
+
+func TestExchangeBoundsResponsesAndPropagatesCancellation(t *testing.T) {
+	a, _ := testAdapter(t, 200, `{"access_token":"`+strings.Repeat("x", maxResponse)+`"}`, 200, `{}`)
+	if _, e := a.Exchange(context.Background(), "code", "verifier", "https://cloud.huawei.com/cb"); e == nil || errors.Is(e, gateway.ErrProviderRejected) {
+		t.Fatalf("oversized response must be an infrastructure failure: %v", e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, e := a.Exchange(ctx, "code", "verifier", "https://cloud.huawei.com/cb"); !errors.Is(e, context.Canceled) {
+		t.Fatalf("cancellation must propagate: %v", e)
+	}
+}
+
+func TestHTTPClientTimesOutAndRefusesProviderRedirects(t *testing.T) {
+	var redirected atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected.Add(1)
+	}))
+	t.Cleanup(target.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+	a, e := New(&Options{BaseURL: redirector.URL, ClientID: "client", ClientSecret: "secret", HTTP: NewHTTPClient(time.Second)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = a.Exchange(context.Background(), "code", "verifier", "https://cloud.huawei.com/cb"); !errors.Is(e, gateway.ErrProviderRejected) {
+		t.Fatalf("redirect response must be rejected, got %v", e)
+	}
+	if redirected.Load() != 0 {
+		t.Fatal("provider client followed a redirect")
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocking := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	}))
+	t.Cleanup(blocking.Close)
+	a, e = New(&Options{BaseURL: blocking.URL, ClientID: "client", ClientSecret: "secret", HTTP: NewHTTPClient(20 * time.Millisecond)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = a.Exchange(context.Background(), "code", "verifier", "https://cloud.huawei.com/cb")
+	<-started
+	close(release)
+	if e == nil || errors.Is(e, gateway.ErrProviderRejected) {
+		t.Fatalf("provider timeout must be an infrastructure failure, got %v", e)
+	}
+}
+
+func TestNewRejectsUnsafeOrIncompleteOptions(t *testing.T) {
+	cases := []Options{
+		{ClientSecret: "secret", HTTP: NewHTTPClient(time.Second)},
+		{ClientID: "client", HTTP: NewHTTPClient(time.Second)},
+		{ClientID: "client", ClientSecret: "secret", HTTP: &http.Client{}},
+		{BaseURL: "https://user:password@example.com", ClientID: "client", ClientSecret: "secret", HTTP: NewHTTPClient(time.Second)},
+		{BaseURL: "https://example.com/path", ClientID: "client", ClientSecret: "secret", HTTP: NewHTTPClient(time.Second)},
+		{ClientID: "client", ClientSecret: "secret", DisplayNameField: " userName ", HTTP: NewHTTPClient(time.Second)},
+	}
+	for i := range cases {
+		if _, e := New(&cases[i]); e == nil {
+			t.Errorf("case %d: expected validation error", i)
+		}
+	}
+}

@@ -48,22 +48,4 @@ describe('mock API handlers', () => {
     const list = await listRes.json()
     expect(list.some((i: { id: string }) => i.id === issue.id)).toBe(true)
   })
-
-  it('logs in and authorizes the session with the returned token', async () => {
-    const loginRes = await fetch(`${BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: 'demo@example.com' }),
-    })
-    const { token } = await loginRes.json()
-    expect(token).toBeTruthy()
-
-    const unauthorized = await fetch(`${BASE}/auth/session`)
-    expect(unauthorized.status).toBe(401)
-
-    const authorized = await fetch(`${BASE}/auth/session`, {
-      headers: { authorization: `Bearer ${token}` },
-    })
-    expect(authorized.status).toBe(200)
-  })
 })

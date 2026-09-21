@@ -27,16 +27,17 @@ public:
   # The origin browsers see; the OAuth callback is <base_url>/auth/callback/<provider>.
   # Production requires https. development: true permits http on localhost/127.0.0.1 only and
   # drops the Secure cookie attributes.
-  base_url: "http://localhost:8081"
+  base_url: "http://localhost:5173"
   development: true
 
 session:
-  ttl: 720h            # absolute browser session lifetime; default 30 days, hard maximum 90 days
+  ttl: 12h             # IDaaS browser session; absolute and non-sliding
   cleanup_interval: 10m
   retention: 168h      # audit window before expired/revoked rows are deleted
   cleanup_batch: 500
 
 login:
+  provider: "huawei-idaas" # huawei-idaas | github
   attempt_ttl: 10m     # 1m..1h
   rate_limit_per_minute: 30
   rate_limit_burst: 30
@@ -64,3 +65,12 @@ github:
   # token_url: "https://github.example.com/login/oauth/access_token"
   # user_url: "https://github.example.com/api/v3/user"
   # source: "github.example.com"
+
+idaas:
+  # Test environment: https://uniportal-beta.huawei.com
+  base_url: "https://uniportal.huawei.com"
+  client_id: "your-idaas-client-id"
+  client_secret_file: "/run/ora-keys/idaas-client-secret"
+  # Optional top-level userinfo field. Missing/empty/non-string values fall back to uuid.
+  display_name_field: "userName"
+  timeout: 10s

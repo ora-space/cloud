@@ -1,73 +1,117 @@
+import { http, HttpResponse } from 'msw'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { Route, Routes } from 'react-router-dom'
+import { LoginPage } from '@/features/auth/login-page'
+import { server } from '@/test/msw-server'
 import { renderWithProviders } from '@/test/render'
-import { useAuthStore } from '@/state/auth-store'
-import { LoginPage } from './login-page'
 
-const CLOUD_CREDENTIALS = {
-  serviceToken: 'svc-token',
-  userToken: 'usr-token',
-  expiresAt: '2026-09-20T12:00:00+08:00',
+const fault = { code: 'unauthenticated', params: {}, requestId: 'request-1' }
+const currentUser = {
+  id: '00000000-0000-4000-8000-000000000001',
+  displayName: 'Wang Longan',
+  status: 'active',
+  version: 1,
+  createdAt: '2026-09-21T00:00:00Z',
+  deletedAt: null,
+}
+
+function installCurrentUserFailure(status: number, code: string): () => number {
+  let starts = 0
+  server.use(
+    http.get('/api/v1/me', () => HttpResponse.json({ ...fault, code }, { status })),
+    http.post('/auth/login', () => {
+      starts += 1
+      return HttpResponse.json({ authorizationUrl: 'https://example.com' })
+    }),
+  )
+  return () => starts
 }
 
 describe('LoginPage', () => {
-  beforeEach(() => {
-    useAuthStore.getState().clear()
-  })
+  it('automatically starts IDaaS login and preserves the safe target', async () => {
+    let requestedReturnTo = ''
+    server.use(
+      http.get('/api/v1/me', () => HttpResponse.json(fault, { status: 401 })),
+      http.post('/auth/login', async ({ request }) => {
+        const body: unknown = await request.json()
+        if (typeof body !== 'object' || body === null || !('returnTo' in body)) {
+          return HttpResponse.json({ code: 'invalid_request' }, { status: 400 })
+        }
+        requestedReturnTo = String(body.returnTo)
+        return HttpResponse.json({ authorizationUrl: 'https://uniportal.huawei.com/authorize' })
+      }),
+    )
+    const replaceLocation = vi.fn<(target: string) => void>()
 
-  afterEach(() => {
-    sessionStorage.clear()
-    vi.restoreAllMocks()
-  })
-
-  it('renders the sign-in form with both flows', () => {
-    renderWithProviders(<LoginPage />, { route: '/login' })
-    expect(screen.getByRole('heading', { name: '登录 Ora' })).toBeInTheDocument()
-    // The cloud flow is the default tab; the demo flow is one click away.
-    expect(screen.getByLabelText('账号标识（subject）')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '演示账号' })).toBeInTheDocument()
-  })
-
-  it('signs the demo user in and stores the session on submit', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<LoginPage />, { route: '/login' })
-
-    await user.click(screen.getByRole('tab', { name: '演示账号' }))
-    await user.click(screen.getByRole('button', { name: '继续' }))
-
-    await waitFor(() => {
-      expect(useAuthStore.getState().token).toBeTruthy()
-      expect(useAuthStore.getState().user?.email).toBeTruthy()
+    renderWithProviders(<LoginPage replaceLocation={replaceLocation} />, {
+      route: '/login?returnTo=%2Fora%2Fissues%3Ftab%3Dmine',
     })
+
+    expect(await screen.findByText('正在跳转华为统一登录…')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(replaceLocation).toHaveBeenCalledWith('https://uniportal.huawei.com/authorize')
+    })
+    expect(requestedReturnTo).toBe('/ora/issues?tab=mine')
   })
 
-  it('signs the cloud user in through devgateway and stores dual credentials', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, json: async () => CLOUD_CREDENTIALS }),
+  it('stops after a login-start failure and retries only on user action', async () => {
+    let starts = 0
+    server.use(
+      http.get('/api/v1/me', () => HttpResponse.json(fault, { status: 401 })),
+      http.post('/auth/login', () => {
+        starts += 1
+        return HttpResponse.json({ code: 'login_unavailable' }, { status: 503 })
+      }),
     )
     const user = userEvent.setup()
-    renderWithProviders(<LoginPage />, { route: '/login' })
-
-    await user.click(screen.getByRole('button', { name: '连接后端登录' }))
-
-    await waitFor(() => {
-      expect(sessionStorage.getItem('ora-cloud-session')).toBeTruthy()
+    renderWithProviders(<LoginPage replaceLocation={vi.fn<(target: string) => void>()} />, {
+      route: '/login',
     })
-    expect(JSON.parse(sessionStorage.getItem('ora-cloud-session') ?? '{}')).toEqual(
-      CLOUD_CREDENTIALS,
-    )
+
+    const retry = await screen.findByRole('button', { name: '重新登录' })
+    expect(starts).toBe(1)
+    await user.click(retry)
+    await waitFor(() => expect(starts).toBe(2))
   })
 
-  it('surfaces a devgateway failure without storing a session', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502 }))
-    const user = userEvent.setup()
-    renderWithProviders(<LoginPage />, { route: '/login' })
+  it('shows a disabled account without starting another login', async () => {
+    const loginStarts = installCurrentUserFailure(403, 'user_disabled')
 
-    await user.click(screen.getByRole('button', { name: '连接后端登录' }))
+    renderWithProviders(<LoginPage replaceLocation={vi.fn<(target: string) => void>()} />, {
+      route: '/login',
+    })
 
-    expect(await screen.findByText(/登录失败/)).toBeInTheDocument()
-    expect(sessionStorage.getItem('ora-cloud-session')).toBeNull()
+    expect(await screen.findByText('账号已被停用')).toBeInTheDocument()
+    expect(loginStarts()).toBe(0)
+  })
+
+  it('returns an already authenticated user to the requested target', async () => {
+    server.use(http.get('/api/v1/me', () => HttpResponse.json(currentUser)))
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/login"
+          element={<LoginPage replaceLocation={vi.fn<(target: string) => void>()} />}
+        />
+        <Route path="/ora/issues" element={<div>Target page</div>} />
+      </Routes>,
+      { route: '/login?returnTo=%2Fora%2Fissues' },
+    )
+
+    expect(await screen.findByText('Target page')).toBeInTheDocument()
+  })
+
+  it('does not start login while current-user lookup is unavailable', async () => {
+    const loginStarts = installCurrentUserFailure(503, 'unavailable')
+
+    renderWithProviders(<LoginPage replaceLocation={vi.fn<(target: string) => void>()} />, {
+      route: '/login',
+    })
+
+    expect(await screen.findByRole('button', { name: '重新检查' })).toBeInTheDocument()
+    expect(loginStarts()).toBe(0)
   })
 })

@@ -1,6 +1,6 @@
 # 内部认证
 
-Gateway 独占外部登录集成。Cloud 不接入密码、SAML、OAuth 客户端或华为 SDK，也不根据姓名/email 合并账号。Gateway 规范化出 `{source, subject, displayName?}`；`source` 是长期稳定的账号命名空间，`(source,subject)` 联合唯一。本仓库的生产 Gateway 是 `cmd/gateway`（GitHub OAuth、PostgreSQL 浏览器会话、`/api/v1` 代理），见 `docs/gateway.md`。
+Gateway 独占外部登录集成。Cloud 核心不接入密码、SAML、OAuth 客户端或华为 SDK，也不根据姓名/email 合并账号。Gateway 通过华为 IDaaS Authorization Code + PKCE S256 或 GitHub OAuth 规范化出 `{source, subject, displayName?}`；`source` 是长期稳定的账号命名空间，`(source,subject)` 联合唯一。华为员工身份固定为 `source=huawei-corp`、`subject=<IDaaS uuid>`，姓名只在首次 JIT 创建 Cloud 用户时形成快照，工号和邮箱不进入 Cloud。生产入口是 `cmd/gateway`（PostgreSQL 浏览器会话、`/api/v1` 代理），见 `docs/gateway.md`。
 
 HTTP 使用两种独立签名凭据：`Authorization: Bearer <service JWT>` 证明调用服务，`X-Ora-User-Token: <user JWT>` 证明最终用户。公开 API 要求 gateway 服务；访问检查/执行准入要求 controller 服务及用户凭据；后台控制 API 只要求 controller 服务；Node 接口只要求带资源范围的 node 服务凭据。普通 header 不能替代任何一类签名。
 
@@ -51,4 +51,6 @@ Controller 代表用户准入时，Gateway/内部受控转发路径必须签发 
 
 Node 服务凭据的 `sub` 是每次进程启动新建的 Node UUID，并增加 `workspaceId`、`sandboxId`（cloud sandbox instance UUID）和 `generation`。基础设施签发端必须从获准的 sandbox plan 建立这个绑定，不能接受调用者自行选择资源。Cloud 检查当前 Workspace generation、已登记 Substrate ID、未确认终止 sandbox 和 Node 唯一性；旧 Node/旧 generation 拒绝回写。Node 进程更换前必须终止或 fence 旧实例，不能凭新的 Node UUID覆盖存活节点。
 
-首次登录、伪造/过期/错 aud、错服务角色、caller 不匹配、命名空间分离、用户停用均有真实 HTTP+PG 回归测试。模拟器的临时私钥仅供本地演示和测试，不作为部署密钥。
+外部 provider token 不进入内部 JWT；user JWT 只携带稳定 subject、固定 source 和首次 JIT 所需的显示名。Cloud session 默认在 IDaaS 部署中 12 小时绝对过期，退出或管理员吊销可立即失效；W3 员工状态不会主动推送到已建立的 session。
+
+首次登录、PKCE 绑定、回调重放/并发、伪造/过期/错 aud、错服务角色、caller 不匹配、命名空间分离、用户停用均有真实 HTTP+PG 回归测试。模拟器的临时私钥仅供本地演示和测试，不作为部署密钥。

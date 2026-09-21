@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/gateway` 实现 Gateway 的认证编排、PostgreSQL 会话存储、内部凭据签发、浏览器安全策略与 Cloud 代理。它是 provider-neutral 的：只有 `Authenticator` 适配器（如 [github](github/README.md)）理解外部协议，其余部分只消费 `VerifiedIdentity` 与已解析的 `Session`。
+`internal/gateway` 实现 Gateway 的认证编排、PostgreSQL 会话存储、内部凭据签发、浏览器安全策略与 Cloud 代理。它是 provider-neutral 的：只有 `Authenticator` 适配器（[华为 IDaaS](idaas/README.md)、[GitHub](github/README.md)）理解外部协议，其余部分只消费 `VerifiedIdentity` 与已解析的 `Session`。
 
 ## 文件与职责
 
@@ -10,7 +10,7 @@
 |---|---|
 | `identity.go` | `VerifiedIdentity`、`Authenticator` 接口、`Normalize`（按 Cloud 的 128/512/200 字节上限校验 source/subject，按 rune 边界截断 displayName）。 |
 | `store.go` | `Store`：`CreateAttempt`、`LookupAttempt`（无锁预检）、`ConsumeAttempt`（`FOR UPDATE` 锁定 + `consumed_at` + session 同事务提交）、`Resolve`、`Revoke`、`RevokeIdentity`、`Cleanup`。只保存 SHA-256 digest，有效性由 `clock_timestamp()` 判定。 |
-| `login.go` | `Login`：`Start` 生成 attempt secret、`state`，派生 PKCE verifier（HMAC，密钥仅 Gateway 可读）；`Callback` 先查 attempt，在事务外调用 provider，再消费 attempt 创建 session。所有失败收敛为 `ErrLoginFailed`。 |
+| `login.go` | `Login`：`Start` 生成 attempt secret、`state`，派生 PKCE verifier（HMAC，密钥仅 Gateway 可读）；省略 provider 时采用唯一已装配的默认 provider；`Callback` 先查 attempt，在事务外调用 provider，再消费 attempt 创建 session。所有失败收敛为 `ErrLoginFailed`。 |
 | `tokens.go` | `Issuer`：用两把用途分离的 Ed25519 私钥签发 `kind=service,role=gateway` 与 `kind=user`（`caller` 绑定 service `sub`）凭据，期限不超过 Cloud 的 5 分钟上限。`LoadPrivateKey` 读取 PKCS#8 PEM。 |
 | `security.go` | `NormalizeReturnTo`（拒绝绝对、`//`、`/\`、反斜杠、控制字符）、`SameOrigin`（`Origin` 精确匹配或 `Sec-Fetch-Site: same-origin`）、`CookiePolicy`（`__Host-` session Cookie、限定 callback 路径的 `SameSite=Lax` attempt Cookie）。 |
 | `handler.go` | Gin 路由：`POST /auth/login`、`GET /auth/callback/:provider`、`POST /auth/logout`、`ANY /api/v1/*`、`GET /healthz`；稳定错误形状 `{code, params, requestId}`。 |
@@ -31,4 +31,4 @@
 
 单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界与限流；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障与数据库约束。
 
-参见 [内部子系统总览](../README.md)、[GitHub 适配器](github/README.md) 与 [Gateway 文档](../../docs/gateway.md)。
+参见 [内部子系统总览](../README.md)、[华为 IDaaS 适配器](idaas/README.md)、[GitHub 适配器](github/README.md) 与 [Gateway 文档](../../docs/gateway.md)。

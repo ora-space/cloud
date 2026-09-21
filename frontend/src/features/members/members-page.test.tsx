@@ -1,16 +1,10 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { MembersPage } from '@/features/members/members-page'
-import { setCloudCredentials } from '@/lib/cloud-session'
 import { db } from '@/mocks/data/store'
-import {
-  installCloudSpaceHandlers,
-  TEST_CLOUD_CREDENTIALS,
-  TEST_SPACE_ID,
-  TEST_TENANT_ID,
-} from '@/test/cloud-handlers'
+import { installCloudSpaceHandlers, TEST_SPACE_ID, TEST_TENANT_ID } from '@/test/cloud-handlers'
 import { renderWithProviders } from '@/test/render'
 import { server } from '@/test/msw-server'
 
@@ -39,18 +33,16 @@ function installMembersHandler(members: unknown[]) {
 }
 
 describe('MembersPage cloud mode', () => {
-  afterEach(() => {
-    sessionStorage.clear()
-  })
-
   it('renders real members and hides management controls from members', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installCloudSpaceHandlers('member')
     installMembersHandler([
       memberRow(ALICE_ID, 'Alice', 'owner'),
       memberRow(BOB_ID, 'Bob', 'member'),
     ])
-    renderWithProviders(<MembersPage slug="cloud-dev" />, { slug: 'cloud-dev' })
+    renderWithProviders(<MembersPage slug="cloud-dev" />, {
+      slug: 'cloud-dev',
+      authenticated: true,
+    })
 
     expect(await screen.findByText('Alice')).toBeInTheDocument()
     expect(await screen.findByText('Bob')).toBeInTheDocument()
@@ -62,7 +54,6 @@ describe('MembersPage cloud mode', () => {
   })
 
   it('lets an owner add a member through the upsert API', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installCloudSpaceHandlers('owner')
     installMembersHandler([memberRow(ALICE_ID, 'Alice', 'owner')])
     let putBody: unknown = null
@@ -75,7 +66,10 @@ describe('MembersPage cloud mode', () => {
         },
       ),
     )
-    renderWithProviders(<MembersPage slug="cloud-dev" />, { slug: 'cloud-dev' })
+    renderWithProviders(<MembersPage slug="cloud-dev" />, {
+      slug: 'cloud-dev',
+      authenticated: true,
+    })
     const user = userEvent.setup()
 
     expect(await screen.findByText('Alice')).toBeInTheDocument()

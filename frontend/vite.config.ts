@@ -14,21 +14,13 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Development traffic goes through devgateway (cmd/devgateway), which
-      // signs dual JWTs and proxies cloud verbatim; the browser never holds keys.
-      '/api': 'http://localhost:8090',
-      '/internal': 'http://localhost:8090',
-      '/healthz': 'http://localhost:8090',
-      '/devgateway': 'http://localhost:8090',
+      '/auth': 'http://localhost:8081',
+      '/api': 'http://localhost:8081',
+      '/healthz': 'http://localhost:8081',
     },
   },
   test: {
     environment: 'jsdom',
-    // Each test file builds its own jsdom environment; on many-core machines
-    // the default worker count oversubscribes CPU and timing-sensitive
-    // findBy assertions flake. GitHub runners expose 2-4 cores, so capping
-    // keeps local gates deterministic without slowing CI down.
-    maxWorkers: 4,
     setupFiles: ['src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {

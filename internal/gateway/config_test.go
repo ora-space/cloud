@@ -42,7 +42,7 @@ func validConfig() Config {
 		Server:   config.ServerConfig{Port: 8081, Mode: "test", ReadTimeout: time.Second, WriteTimeout: time.Second},
 		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x", ConnMaxLifetime: time.Hour},
 		Public:   PublicConfig{BaseURL: "https://app.example.com"},
-		Login:    LoginConfig{PKCEKeyFile: "/run/pkce"},
+		Login:    LoginConfig{Provider: ProviderGitHub, PKCEKeyFile: "/run/pkce"},
 		Cloud:    CloudConfig{Upstream: "http://127.0.0.1:8080"},
 		Tokens:   TokenConfig{Issuer: "iss", Audience: "aud", ServiceSubject: "gw", ServiceKeyID: "s", UserKeyID: "u", ServicePrivateKeyFile: "/run/s", UserPrivateKeyFile: "/run/u"},
 		GitHub:   GitHubConfig{ClientID: "id", ClientSecretFile: "/run/secret"},
@@ -54,7 +54,7 @@ func TestConfigDefaultsAndSessionLifetimeBounds(t *testing.T) {
 	if e := cfg.applyDefaults(); e != nil {
 		t.Fatal(e)
 	}
-	if cfg.Session.TTL != DefaultSessionLifetime || cfg.Login.AttemptTTL != 10*time.Minute || cfg.Tokens.Lifetime != time.Minute || cfg.GitHub.Source != "github.com" || cfg.Login.RateLimitBurst != cfg.Login.RateLimitPerMinute {
+	if cfg.Session.TTL != DefaultSessionLifetime || cfg.Login.Provider != ProviderGitHub || cfg.Login.AttemptTTL != 10*time.Minute || cfg.Tokens.Lifetime != time.Minute || cfg.GitHub.Source != "github.com" || cfg.IDaaS.Timeout != 10*time.Second || cfg.Login.RateLimitBurst != cfg.Login.RateLimitPerMinute {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
 	cases := []struct {
@@ -71,6 +71,7 @@ func TestConfigDefaultsAndSessionLifetimeBounds(t *testing.T) {
 		{"upstream without scheme", func(c *Config) { c.Cloud.Upstream = "127.0.0.1:8080" }},
 		{"missing pkce key", func(c *Config) { c.Login.PKCEKeyFile = "" }},
 		{"missing github client id", func(c *Config) { c.GitHub.ClientID = "" }},
+		{"unknown provider", func(c *Config) { c.Login.Provider = "ldap" }},
 		{"missing user key id", func(c *Config) { c.Tokens.UserKeyID = "" }},
 		{"non-positive rate limit", func(c *Config) { c.Login.RateLimitPerMinute = -1 }},
 		{"zero cleanup batch", func(c *Config) { c.Session.CleanupBatch = -5 }},
@@ -83,6 +84,34 @@ func TestConfigDefaultsAndSessionLifetimeBounds(t *testing.T) {
 		tc.mutate(&c)
 		if e := c.Validate(); e == nil {
 			t.Errorf("%s: expected validation failure", tc.name)
+		}
+	}
+}
+
+func TestIDaaSConfigIsSelectedIndependentlyAndDefaultsToTwelveHours(t *testing.T) {
+	cfg := validConfig()
+	cfg.Login.Provider = ProviderHuaweiIDaaS
+	cfg.Session.TTL = 0
+	cfg.GitHub = GitHubConfig{}
+	cfg.IDaaS = IDaaSConfig{BaseURL: "https://uniportal.huawei.com", ClientID: "client", ClientSecretFile: "/run/idaas-secret", DisplayNameField: "userName"}
+	if e := cfg.applyDefaults(); e != nil {
+		t.Fatal(e)
+	}
+	if cfg.Session.TTL != DefaultIDaaSSessionLifetime || cfg.IDaaS.Timeout != 10*time.Second {
+		t.Fatalf("IDaaS defaults not applied: %+v", cfg)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"http origin":          func(c *Config) { c.IDaaS.BaseURL = "http://uniportal.huawei.com" },
+		"origin with path":     func(c *Config) { c.IDaaS.BaseURL = "https://uniportal.huawei.com/oauth" },
+		"missing client id":    func(c *Config) { c.IDaaS.ClientID = "" },
+		"missing secret file":  func(c *Config) { c.IDaaS.ClientSecretFile = "" },
+		"bad display field":    func(c *Config) { c.IDaaS.DisplayNameField = " userName " },
+		"non-positive timeout": func(c *Config) { c.IDaaS.Timeout = -time.Second },
+	} {
+		copy := cfg
+		mutate(&copy)
+		if e := copy.Validate(); e == nil {
+			t.Errorf("%s: expected validation failure", name)
 		}
 	}
 }

@@ -1,21 +1,18 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { CurrentSpaceProvider, useCurrentSpace } from '@/features/spaces/current-space'
 import { parseSSEFrames } from '@/features/spaces/use-space-events'
-import { setCloudCredentials } from '@/lib/cloud-session'
-import {
-  installCloudSpaceHandlers,
-  TEST_CLOUD_CREDENTIALS,
-  TEST_TENANT_ID,
-} from '@/test/cloud-handlers'
+import { installCloudSpaceHandlers, TEST_TENANT_ID } from '@/test/cloud-handlers'
 
 function wrapper({ children }: { children: ReactNode }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return (
     <QueryClientProvider client={queryClient}>
-      <CurrentSpaceProvider slug="cloud-dev">{children}</CurrentSpaceProvider>
+      <CurrentSpaceProvider slug="cloud-dev" authenticated>
+        {children}
+      </CurrentSpaceProvider>
     </QueryClientProvider>
   )
 }
@@ -47,19 +44,7 @@ describe('CurrentSpaceProvider', () => {
     installCloudSpaceHandlers('owner')
   })
 
-  afterEach(() => {
-    sessionStorage.clear()
-  })
-
-  it('stays in mock mode without cloud credentials', async () => {
-    const { result } = renderHook(() => useCurrentSpace(), { wrapper })
-    expect(result.current.cloudMode).toBe(false)
-    expect(result.current.space).toBeUndefined()
-    expect(result.current.tenantId).toBeUndefined()
-  })
-
-  it('resolves the route slug against the real spaces list in cloud mode', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
+  it('uses the Gateway-authenticated Cloud context without browser tokens', async () => {
     const { result } = renderHook(() => useCurrentSpace(), { wrapper })
     await waitFor(() => {
       expect(result.current.tenantId).toBe(TEST_TENANT_ID)
@@ -69,13 +54,14 @@ describe('CurrentSpaceProvider', () => {
   })
 
   it('leaves the space unresolved for a slug the member did not join', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     const { result } = renderHook(() => useCurrentSpace(), {
       wrapper: ({ children }: { children: ReactNode }) => {
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
         return (
           <QueryClientProvider client={queryClient}>
-            <CurrentSpaceProvider slug="not-joined">{children}</CurrentSpaceProvider>
+            <CurrentSpaceProvider slug="not-joined" authenticated>
+              {children}
+            </CurrentSpaceProvider>
           </QueryClientProvider>
         )
       },

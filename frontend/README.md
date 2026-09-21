@@ -11,9 +11,9 @@ React 19 + TypeScript + Vite 8 + Tailwind CSS 4（shadcn/ui 组件）。API 层�
 | `src/api/<tag>/<tag>.ts` | **生成物**，按 OpenAPI tag（`me`、`projects`、`workspaces`、`internal` …）分目录，每个 operation 一组 `useXxx` / `getXxxQueryKey` / `getXxxQueryOptions`；禁止手改 |
 | `src/api/generated.schemas.ts` | **生成物**，全部请求/响应/参数 TypeScript 类型；禁止手改 |
 | `src/api/index.ts` | **生成物**，re-export 所有 tag 目录 |
-| `src/lib/api-client.ts` | 所有生成 hook 共用的 axios 实例（`AXIOS_INSTANCE`）与 mutator；鉴权头、拦截器、`baseURL` 在这里配 |
+| `src/lib/api-client.ts` | 所有生成 hook 共用的 axios 实例（`AXIOS_INSTANCE`）与 mutator；浏览器只携带 HttpOnly 会话 Cookie，不保存或注入 token |
 | `orval.config.ts` | 生成配置：输入 `../api/openapi.json`，`client: 'react-query'`，`clean: true` |
-| `vite.config.ts` | `@` → `src` 别名；dev 代理 `/api`、`/internal`、`/healthz` 到 `http://localhost:8080`；vitest 与覆盖率阈值 |
+| `vite.config.ts` | `@` → `src` 别名；dev 代理 `/auth`、`/api`、`/healthz` 到 Gateway `http://localhost:8081`；vitest 与覆盖率阈值 |
 | `scripts/` | 门禁脚本：强制模块 README、测试与导出符号文档，见 [`scripts/README.md`](scripts/README.md) |
 | `AGENTS.md` | 本目录的工程规则（内聚、体量上限、文档、测试）；`CLAUDE.md` 引用它 |
 
@@ -42,8 +42,8 @@ npm run check           # 以上全部（不含 --base 差异检查），顺序�
 仓库根目录的 Task 封装：
 
 - `task frontend:install`：`npm ci`。
-- `task frontend:dev`：只起 Vite dev server（需要另开终端 `task run` 起后端）。
-- `task dev`：同时起 Go 后端（:8080）和 Vite（:5173），日常开发的统一入口。
+- `task frontend:dev`：只起 Vite dev server（需要另起 Cloud `task run` 与 Gateway `task run:gateway`）。
+- `task dev`：同时启动 Cloud（:8080）、认证 Gateway（:8081）和 Vite（:5173），日常开发的统一入口。
 - `task frontend:generate`：先 `task openapi`（Go 契约 → `api/openapi.json`），再 `npm run api:generate`。改了后端接口就跑这个，并把 `api/openapi.json` 和 `frontend/src/api` 一起提交。
 - `task frontend:format` / `task frontend:test`：即 `npm run format` / `npm run test`。
 - `task frontend:check`：与 CI `frontend` job 相同的门禁：重新生成并检测 `frontend/src/api` 漂移，再跑 `npm run check`。
@@ -58,4 +58,4 @@ npm run check           # 以上全部（不含 --base 差异检查），顺序�
 
 ## 本地联调
 
-后端需要真实 PostgreSQL，按根目录 [README](../README.md) 起库并 `task run`（监听 `:8080`），再 `npm run dev`。dev 代理只在 Vite 下生效；生产部署需自行让前端与 API 同源或在 `src/lib/api-client.ts` 设置 `baseURL`。
+后端需要真实 PostgreSQL 与已登记的 Gateway 密钥，按根目录 [README](../README.md) 起库、迁移并配置 `configs/gateway.yaml`。运行 `task dev` 后只打开 `http://localhost:5173`；该 origin 同源代理登录与 API 请求，配置中的 `public.base_url` 也必须是这个浏览器可见 origin。生产部署同样必须让前端与 Gateway 对浏览器表现为同一公开 origin。

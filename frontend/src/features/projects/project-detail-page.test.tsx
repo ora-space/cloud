@@ -1,16 +1,10 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { ProjectDetailPage } from '@/features/projects/project-detail-page'
-import { setCloudCredentials } from '@/lib/cloud-session'
 import { db } from '@/mocks/data/store'
-import {
-  installCloudSpaceHandlers,
-  TEST_CLOUD_CREDENTIALS,
-  TEST_SPACE_ID,
-  TEST_TENANT_ID,
-} from '@/test/cloud-handlers'
+import { installCloudSpaceHandlers, TEST_SPACE_ID, TEST_TENANT_ID } from '@/test/cloud-handlers'
 import { renderAtRoute } from '@/test/render'
 import { server } from '@/test/msw-server'
 
@@ -50,6 +44,7 @@ function renderDetail() {
     '/:workspaceSlug/projects/:projectId',
     <ProjectDetailPage slug="cloud-dev" />,
     `/cloud-dev/projects/${PROJECT_ID}`,
+    { authenticated: true },
   )
 }
 
@@ -72,12 +67,7 @@ describe('ProjectDetailPage', () => {
 })
 
 describe('ProjectDetailPage cloud mode', () => {
-  afterEach(() => {
-    sessionStorage.clear()
-  })
-
   it('renames the project with the optimistic version', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installProjectHandlers('owner')
     let patchBody: Record<string, unknown> | null = null
     server.use(
@@ -105,7 +95,6 @@ describe('ProjectDetailPage cloud mode', () => {
   })
 
   it('deletes the project through the lifecycle state machine', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installProjectHandlers('owner')
     let deleted = false
     server.use(
@@ -128,7 +117,6 @@ describe('ProjectDetailPage cloud mode', () => {
   })
 
   it('hides the delete action from members', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installProjectHandlers('member')
     renderDetail()
     await screen.findAllByText('Demo')

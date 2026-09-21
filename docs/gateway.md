@@ -6,9 +6,9 @@ Gateway（`cmd/gateway`）是浏览器可访问的公开认证与反向代理边
 
 | 路由 | 说明 |
 |---|---|
-| `POST /auth/login` | 同源 JSON：`{"provider":"github","returnTo":"/path"}`。校验 `Origin`（或 `Sec-Fetch-Site: same-origin`）、限流后写入 Login Attempt，返回 `{"authorizationUrl"}` 并设置 attempt Cookie。`returnTo` 只接受以单个 `/` 开头且第二个字符不是 `/` 或 `\` 的相对路径；不存在 `GET` 形式。 |
+| `POST /auth/login` | 同源 JSON：`{"returnTo":"/path"}`；兼容显式 `provider`，省略时采用 `login.provider`。校验 `Origin`（或 `Sec-Fetch-Site: same-origin`）、限流后写入 Login Attempt，返回 `{"authorizationUrl"}` 并设置 attempt Cookie。`returnTo` 只接受以单个 `/` 开头且第二个字符不是 `/` 或 `\` 的相对路径；不存在 `GET` 形式。 |
 | `GET /auth/callback/{provider}` | provider 回跳。同时匹配 attempt Cookie、`state`、provider、未过期、未消费；在事务外向 provider 交换 code 与 PKCE verifier；再在一个短事务里锁定 attempt、写入 `consumed_at` 并创建 session。成功 `303` 到 attempt 中保存的 `returnTo`，失败统一 `401 login_failed`。无论成败都清除 attempt Cookie。 |
-| `POST /auth/logout` | 同源校验后吊销当前 session（`revoked_reason=logout`）并清除 Cookie；幂等，返回 `204`。 |
+| `POST /auth/logout` | 同源校验后吊销当前 session（`revoked_reason=logout`）并清除 Cookie；幂等，返回 `204`。不会调用 IDaaS/W3 logout。 |
 | `ANY /api/v1/*` | 解析 session Cookie，失败返回 `401 unauthenticated`。修改状态的方法要求同源证明（`403 origin_forbidden`）。丢弃浏览器提供的 `Authorization`、`X-Ora-User-Token`、`Cookie`、`Forwarded`/`X-Forwarded-*`，用本副本的两把私钥签发 service/user JWT 后转发。Cloud 不可达返回 `502 upstream_unavailable`，session 不受影响。 |
 | `GET /healthz` | PostgreSQL 探活。 |
 
@@ -32,9 +32,10 @@ PKCE verifier 不落库：由 attempt secret 和 `login.pkce_key_file` 通过带
 参见 `configs/gateway.yaml`。环境变量前缀为 `GATEWAY_`。启动时校验：
 
 - `public.base_url` 必须是 `https` origin（不含路径/查询）；只有 `public.development: true` 且 host 为 `localhost`/`127.0.0.1`/`::1` 时允许 `http`。callback URL 固定为 `<base_url>/auth/callback/<provider>`，不从请求 header 推导。
-- `session.ttl` 为正且不超过 90 天，缺省 30 天；`login.attempt_ttl` 在 1 分钟到 1 小时之间；`tokens.lifetime` 不超过 5 分钟（Cloud 验证器上限）。
+- `login.provider` 只能是 `huawei-idaas` 或 `github`；只校验和读取所选 provider 的 secret。`huawei-idaas` 未显式配置 `session.ttl` 时默认为 12 小时，GitHub 缺省仍为 30 天；所有 session TTL 为绝对期限、不会滑动，且不超过 90 天。
+- `login.attempt_ttl` 在 1 分钟到 1 小时之间；`tokens.lifetime` 不超过 5 分钟（Cloud 验证器上限）。
 - `tokens.service_private_key_file` 与 `tokens.user_private_key_file` 是两把不同的 PKCS#8 Ed25519 私钥，分别对应 Cloud `auth.keys` 中 `kind: service, role: gateway` 与 `kind: user` 的公钥条目；一把私钥不能同时承担两个用途。
-- `login.pkce_key_file` 至少 32 字节随机数据；`github.client_secret_file` 是 OAuth App client secret。这些文件只读入进程内存，从不写日志或数据库。
+- `login.pkce_key_file` 至少 32 字节随机数据，两种 provider 都必须配置。`idaas.client_secret_file` 或 `github.client_secret_file` 只在对应 provider 被选择时读取；这些文件只进入进程内存，从不写日志或数据库。
 
 生成密钥示例：
 
@@ -52,9 +53,31 @@ head -c 32 /dev/urandom > gateway-pkce.key
 
 `.key` 交给 Gateway，`.pem`（PKIX PUBLIC KEY）交给 Cloud 的 `auth.keys`。
 
+## 华为 IDaaS 适配器
+
+`internal/gateway/idaas` 使用 Authorization Code + PKCE S256。authorize 地址固定为 `<idaas.base_url>/saaslogin1/oauth2/authorize`，scope 为 `base.profile`，callback 固定为 `<public.base_url>/auth/callback/huawei-idaas`；callback 的协议、域名和端口必须与 IDaaS 应用登记值逐字一致。生产显式配置 `https://uniportal.huawei.com`，测试显式配置 `https://uniportal-beta.huawei.com`，Gateway 不自动猜测环境。
+
+Gateway 以 JSON `POST` 交换 code（包含同一 callback 和 `code_verifier`），再以 JSON `POST` 读取 userinfo。只保留 `uuid` 与 `idaas.display_name_field` 指定的顶层字符串：规范化身份固定为 `source=huawei-corp, subject=<uuid>`，显示名缺失或无效时回退 uuid。access token、refresh token、code、verifier 和完整 userinfo 只存在于单次请求内存；不解析 `expires_in`，不持久化、不签入 JWT、不记录邮箱或工号。
+
+token/userinfo 客户端有独立总超时、64 KiB 响应上限、传播请求取消且禁止跟随重定向。provider 拒绝、`errorCode` 和缺少 uuid 对外收敛为 `login_failed`；网络、超时、429 和 5xx 为 `login_unavailable`。多个 Gateway 副本必须共享 PostgreSQL、PKCE key、IDaaS client 配置和 client secret。
+
+IDaaS 应用登记与上线检查：
+
+1. 为每个环境单独登记精确 callback，启用 Authorization Code 和 PKCE S256，并申请 `base.profile` 及所需姓名字段；不要复用 beta 与生产 origin。
+2. 将实际顶层姓名 JSON 键配置为 `idaas.display_name_field`；未获批或返回缺失时系统安全回退 uuid，不尝试邮箱/工号匹配。
+3. 以只读 secret 文件挂载 client secret 与至少 32 字节 PKCE key；所有 Gateway 副本挂载相同内容，并使用同一 client ID/base URL。
+4. 确认现有管理员 identity 已按 `huawei-corp + IDaaS uuid` 预置；系统不会模糊合并旧账号，也不会从 IDaaS 群组自动授予 tenant membership。
+5. 先以 beta IDaaS 验证 callback、原路径恢复、停用用户和本地退出，再切换生产 base URL、client 配置与精确生产 callback。上线后不得把 code、token、userinfo、邮箱或工号加入日志采样。
+
 ## GitHub 适配器
 
 `internal/gateway/github` 使用 OAuth App Authorization Code Flow，不请求任何 scope，authorize 请求携带 `state`、`code_challenge`（S256）与固定 `redirect_uri`；GitHub 在收到 challenge 后要求 token exchange 携带 `code_verifier`。适配器读取 `GET /user` 后立即丢弃 access token，只返回 `VerifiedIdentity{source: "github.com", subject: 数字 id 的十进制字符串, displayName: name 或 login}`。`displayName` 在离开编排层前按字节截断到 200，与 Cloud `identity()` 的上限一致。配置 `authorize_url`/`token_url`/`user_url`/`source` 可指向 GitHub Enterprise Server，此时 `source` 是该 host。
+
+## 浏览器自动登录
+
+前端以 HttpOnly session Cookie 和 `GET /api/v1/me` 为唯一认证事实。目标页面得到 401 后把当前站内相对路径放入 `returnTo` 并进入登录过渡页；该页自动 `POST /auth/login`，再用 `location.replace(authorizationUrl)` 进入 IDaaS/W3，成功后由 callback 根据 Login Attempt 中保存的 `returnTo` 以 303 返回原页面。callback 不接受新的跳转参数。
+
+403 表示 Cloud 用户已停用，不再次登录；5xx 或登录启动失败会停止自动重试并展示显式重试入口。有效 session 访问登录页时直接返回目标页面。退出成功后清除当前用户查询缓存，再进入同一自动登录流程。前端与 Gateway 在开发和生产中必须对浏览器表现为同一 origin；Vite 仅把 `/auth`、`/api`、`/healthz` 代理至 `:8081`，从不暴露 `/internal`。
 
 ## 运行时数据库角色
 
@@ -66,4 +89,4 @@ head -c 32 /dev/urandom > gateway-pkce.key
 task run:gateway
 ```
 
-需要 Cloud（`task run`）已启动、`configs/gateway.yaml` 指向可用的密钥文件，且 Cloud `auth.keys` 登记了 Gateway 的两把公钥。前端页面与登录入口不在本文范围。
+需要 Cloud（`task run`）已启动、数据库已迁移、`configs/gateway.yaml` 指向可用的密钥文件，且 Cloud `auth.keys` 登记了 Gateway 的两把公钥。完整本地联调可用 `task dev` 同时启动 Cloud、Gateway 与 Vite，并从 `http://localhost:5173` 访问。

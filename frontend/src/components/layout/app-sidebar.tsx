@@ -16,7 +16,8 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { ActorAvatar } from '@/components/common/actor-avatar'
+import type { User } from '@/api/generated.schemas'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,13 +41,12 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar'
 import type { SpaceListItem } from '@/api/generated.schemas'
+import { useLogout } from '@/features/auth/api'
 import { useInboxItems } from '@/features/inbox/api'
 import { CreateSpaceDialog } from '@/features/spaces/create-space-dialog'
 import { useCurrentSpace } from '@/features/spaces/current-space'
-import { clearCloudCredentials } from '@/lib/cloud-session'
 import { workspacePaths } from '@/lib/paths'
 import { db, workspaceBySlug } from '@/mocks/data/store'
-import { useAuthStore } from '@/state/auth-store'
 
 const workNav = [
   { to: (p: ReturnType<typeof workspacePaths>) => p.issues, label: '任务', icon: Layers },
@@ -71,25 +71,22 @@ function switchableSpaces(cloudMode: boolean, spaces: SpaceListItem[] | undefine
 }
 
 // oxlint-disable-next-line max-lines-per-function -- this composition root owns the complete sidebar navigation tree.
-export function AppSidebar({ slug }: { slug: string }) {
+export function AppSidebar({ slug, user }: { slug: string; user: User }) {
   const p = workspacePaths(slug)
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const user = useAuthStore((s) => s.user)
-  const clear = useAuthStore((s) => s.clear)
-  const { cloudMode, spaces, tenantId } = useCurrentSpace()
+  const logout = useLogout()
+  const { cloudMode, spaces, tenantId, space } = useCurrentSpace()
   const { data: inboxItems = [] } = useInboxItems(slug)
   const unreadCount = inboxItems.filter((i) => !i.read).length
-  const activeWorkspace = workspaceBySlug(slug) ?? db.workspace
+  const activeWorkspace = space ?? workspaceBySlug(slug) ?? db.workspace
   // Cloud sessions switch between real spaces (collaboration pages), mock
   // sessions between the demo store workspaces.
   const switchable = switchableSpaces(cloudMode, spaces)
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false)
 
   function handleLogout() {
-    clear()
-    clearCloudCredentials()
-    void navigate('/login')
+    logout.mutate(undefined, { onSuccess: () => void navigate('/login') })
   }
 
   return (
@@ -109,7 +106,12 @@ export function AppSidebar({ slug }: { slug: string }) {
                   <SidebarMenuButton>
                     <span
                       className="flex size-5 items-center justify-center rounded-sm text-[11px] font-semibold text-white"
-                      style={{ backgroundColor: activeWorkspace.avatarColor }}
+                      style={{
+                        backgroundColor:
+                          'avatarColor' in activeWorkspace
+                            ? activeWorkspace.avatarColor
+                            : '#3b82f6',
+                      }}
                     >
                       {activeWorkspace.name.charAt(0)}
                     </span>
@@ -120,11 +122,17 @@ export function AppSidebar({ slug }: { slug: string }) {
               />
               <DropdownMenuContent className="w-56" align="start" side="bottom" sideOffset={4}>
                 <div className="flex items-center gap-2.5 px-2 py-1.5">
-                  <ActorAvatar actor={user ?? undefined} size="lg" />
+                  <Avatar className="size-10 text-sm">
+                    <AvatarFallback className="bg-primary font-medium text-primary-foreground">
+                      {(user.displayName || user.id).charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium leading-tight">{user?.name}</p>
+                    <p className="truncate text-sm font-medium leading-tight">
+                      {user.displayName || user.id}
+                    </p>
                     <p className="truncate text-xs text-muted-foreground leading-tight">
-                      {user?.email}
+                      已通过统一身份认证
                     </p>
                   </div>
                 </div>
@@ -162,10 +170,17 @@ export function AppSidebar({ slug }: { slug: string }) {
                   )}
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={handleLogout}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={logout.isPending}
+                  onClick={handleLogout}
+                >
                   <LogOut className="size-3.5" />
-                  退出登录
+                  {logout.isPending ? '正在退出…' : '退出登录'}
                 </DropdownMenuItem>
+                {logout.isError && (
+                  <p className="px-2 py-1 text-xs text-destructive">退出失败，请重试</p>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarMenuItem>

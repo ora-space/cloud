@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -30,6 +31,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/gateway"
 	"github.com/wanglongan587/cloud/internal/gateway/github"
+	"github.com/wanglongan587/cloud/internal/gateway/idaas"
 )
 
 // fakeProvider is a GitHub-shaped OAuth server that really verifies PKCE: the authorize step records
@@ -43,6 +45,79 @@ type fakeProvider struct {
 	userName  string
 	userLogin string
 	server    *httptest.Server
+}
+
+type fakeIDaaS struct {
+	mu        sync.Mutex
+	codes     map[string]string
+	reusable  bool
+	server    *httptest.Server
+	userUUID  string
+	userName  string
+	lastToken map[string]string
+	lastUser  map[string]string
+}
+
+func newFakeIDaaS(t *testing.T) *fakeIDaaS {
+	t.Helper()
+	p := &fakeIDaaS{codes: map[string]string{}, userUUID: "w00576782", userName: "Wang Longan"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/saaslogin1/oauth2/authorize", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("response_type") != "code" || q.Get("scope") != idaas.Scope || q.Get("display") != "page" || q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("state") == "" {
+			http.Error(w, "missing IDaaS authorization parameters", http.StatusBadRequest)
+			return
+		}
+		code := "idaas-code-" + strings.ReplaceAll(q.Get("state")[:8], "/", "_")
+		p.mu.Lock()
+		p.codes[code] = q.Get("code_challenge")
+		p.mu.Unlock()
+		target, e := url.Parse(q.Get("redirect_uri"))
+		if e != nil {
+			http.Error(w, "bad redirect", http.StatusBadRequest)
+			return
+		}
+		params := target.Query()
+		params.Set("code", code)
+		params.Set("state", q.Get("state"))
+		target.RawQuery = params.Encode()
+		http.Redirect(w, r, target.String(), http.StatusFound)
+	})
+	mux.HandleFunc("/saaslogin1/oauth2/accesstoken", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		must(t, json.NewDecoder(r.Body).Decode(&body))
+		sum := sha256.Sum256([]byte(body["code_verifier"]))
+		p.mu.Lock()
+		challenge, ok := p.codes[body["code"]]
+		if ok && !p.reusable {
+			delete(p.codes, body["code"])
+		}
+		p.lastToken = maps.Clone(body)
+		p.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if !ok || challenge != base64.RawURLEncoding.EncodeToString(sum[:]) || body["client_secret"] != "idaas-secret" || body["grant_type"] != "authorization_code" {
+			_, _ = w.Write([]byte(`{"errorCode":"E_10009","errorDesc":"code Parameter error"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"access_token":"idaas-access-token","refresh_token":"idaas-refresh-token","scope":"base.profile","expires_in":1650868657311}`))
+	})
+	mux.HandleFunc("/saaslogin1/oauth2/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		must(t, json.NewDecoder(r.Body).Decode(&body))
+		p.mu.Lock()
+		p.lastUser = maps.Clone(body)
+		uuid, name := p.userUUID, p.userName
+		p.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if body["client_id"] != "idaas-client" || body["access_token"] != "idaas-access-token" || body["scope"] != idaas.Scope {
+			_, _ = w.Write([]byte(`{"errorCode":"E_10011"}`))
+			return
+		}
+		must(t, json.NewEncoder(w).Encode(map[string]any{"uuid": uuid, "userName": name, "employeeNumber": "30000000", "email": "private@example.com"}))
+	})
+	p.server = httptest.NewServer(mux)
+	t.Cleanup(p.server.Close)
+	return p
 }
 
 func newFakeProvider(t *testing.T) *fakeProvider {
@@ -165,6 +240,20 @@ type gatewayInstance struct {
 // real HTTP. An empty upstream targets the fixture's Cloud.
 func (f *gatewayFixture) newGateway(upstream string, burst int) *gatewayInstance {
 	f.t.Helper()
+	provider, e := github.New(&github.Options{ClientID: "client-id", ClientSecret: "provider-secret", AuthorizeURL: f.provider.server.URL + "/login/oauth/authorize", TokenURL: f.provider.server.URL + "/login/oauth/access_token", UserURL: f.provider.server.URL + "/user", HTTP: github.NewHTTPClient(5 * time.Second)})
+	must(f.t, e)
+	return f.newGatewayWithProvider(upstream, burst, gateway.ProviderGitHub, provider, 48*time.Hour)
+}
+
+func (f *gatewayFixture) newIDaaSGateway(provider *fakeIDaaS) *gatewayInstance {
+	f.t.Helper()
+	adapter, e := idaas.New(&idaas.Options{BaseURL: provider.server.URL, ClientID: "idaas-client", ClientSecret: "idaas-secret", DisplayNameField: "userName", HTTP: idaas.NewHTTPClient(5 * time.Second)})
+	must(f.t, e)
+	return f.newGatewayWithProvider("", 100, gateway.ProviderHuaweiIDaaS, adapter, gateway.DefaultIDaaSSessionLifetime)
+}
+
+func (f *gatewayFixture) newGatewayWithProvider(upstream string, burst int, providerName string, provider gateway.Authenticator, sessionTTL time.Duration) *gatewayInstance {
+	f.t.Helper()
 	if len(f.replicas) == 0 {
 		f.t.Fatal("no replica identities left; extend the trusted set in setupGateway")
 	}
@@ -176,12 +265,10 @@ func (f *gatewayFixture) newGateway(upstream string, burst int) *gatewayInstance
 	}
 	issuer, e := gateway.NewIssuer("ora-internal-issuer", "ora-cloud", keys.subject, gateway.SigningKey{ID: keys.subject + "-service", Key: keys.service}, gateway.SigningKey{ID: keys.subject + "-user", Key: keys.user}, time.Minute, time.Now)
 	must(f.t, e)
-	provider, e := github.New(&github.Options{ClientID: "client-id", ClientSecret: "provider-secret", AuthorizeURL: f.provider.server.URL + "/login/oauth/authorize", TokenURL: f.provider.server.URL + "/login/oauth/access_token", UserURL: f.provider.server.URL + "/user", HTTP: github.NewHTTPClient(5 * time.Second)})
-	must(f.t, e)
 	listener, e := net.Listen("tcp", "127.0.0.1:0")
 	must(f.t, e)
 	origin := "http://" + listener.Addr().String()
-	login, e := gateway.NewLogin(f.store, map[string]gateway.Authenticator{"github": provider}, f.pkceKey, origin+gateway.CallbackPath, 5*time.Minute, 48*time.Hour)
+	login, e := gateway.NewLogin(f.store, map[string]gateway.Authenticator{providerName: provider}, f.pkceKey, origin+gateway.CallbackPath, 5*time.Minute, sessionTTL)
 	must(f.t, e)
 	upstreamURL, e := url.Parse(upstream)
 	must(f.t, e)
@@ -258,7 +345,7 @@ func (g *gatewayInstance) origin() map[string]string {
 // redirects the browser to.
 func (g *gatewayInstance) startLogin(client *http.Client, returnTo string) string {
 	g.f.t.Helper()
-	resp, out := g.do(client, http.MethodPost, gateway.LoginPath, map[string]string{"provider": "github", "returnTo": returnTo}, g.origin())
+	resp, out := g.do(client, http.MethodPost, gateway.LoginPath, map[string]string{"returnTo": returnTo}, g.origin())
 	if resp.StatusCode != http.StatusOK || out.S("authorizationUrl") == "" {
 		g.f.t.Fatalf("login start: %d %v", resp.StatusCode, out)
 	}
@@ -285,6 +372,43 @@ func (g *gatewayInstance) callback(client *http.Client, location string) reply {
 	resp, e := client.Do(req)
 	must(g.f.t, e)
 	return consume(g.f.t, resp)
+}
+
+func callbackRace(t *testing.T, client *http.Client, location string) []int {
+	t.Helper()
+	callbackURL, e := url.Parse(location)
+	must(t, e)
+	cookies := client.Jar.Cookies(callbackURL)
+	requests := make([]*http.Request, 2)
+	for i := range requests {
+		requests[i], e = http.NewRequestWithContext(context.Background(), http.MethodGet, location, http.NoBody)
+		must(t, e)
+		for _, cookie := range cookies {
+			requests[i].AddCookie(cookie)
+		}
+	}
+	raceClient := *client
+	raceClient.Jar = nil
+	var wg sync.WaitGroup
+	results := make([]int, 2)
+	start := make(chan struct{})
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			resp, e := raceClient.Do(requests[i])
+			if e != nil {
+				results[i] = -1
+				return
+			}
+			results[i] = consume(t, resp).StatusCode
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	slices.Sort(results)
+	return results
 }
 
 func (g *gatewayInstance) login(client *http.Client, returnTo string) reply {
@@ -409,6 +533,120 @@ func TestGatewayLoginProxyLogoutAndCredentialBoundaries(t *testing.T) {
 }
 
 // Evidence for specs/test-cases/cloud/identity-access/login-attempt.md
+// (#huawei-idaas-identity-uses-corporate-uuid-and-discards-extra-profile-data,
+// #provider-rejection-never-creates-a-session) and
+// browser-session.md#revocation-is-immediate-on-every-replica-and-idempotent.
+func TestGatewayIDaaSPKCELoginIdentityAndSessionLifetime(t *testing.T) {
+	f := setupGateway(t)
+	provider := newFakeIDaaS(t)
+	gw := f.newIDaaSGateway(provider)
+	browser := gw.browser()
+
+	resp := gw.login(browser, "/projects?tab=internal")
+	if resp.Header.Get("Location") != "/projects?tab=internal" {
+		t.Fatalf("IDaaS callback must restore the target, got %q", resp.Header.Get("Location"))
+	}
+	resp, me := gw.do(browser, http.MethodGet, "/api/v1/me", nil, nil)
+	if resp.StatusCode != http.StatusOK || me.S("displayName") != "Wang Longan" {
+		t.Fatalf("IDaaS /me: %d %v", resp.StatusCode, me)
+	}
+	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='w00576782'"); n != 1 {
+		t.Fatalf("IDaaS identity must use huawei-corp + uuid, found %d", n)
+	}
+	if n := f.count("SELECT count(*) FROM tenant_memberships"); n != 0 {
+		t.Fatalf("external login must not grant membership, found %d", n)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions WHERE source='huawei-corp' AND subject='w00576782' AND display_name='Wang Longan'"); n != 1 {
+		t.Fatalf("session must retain only minimized identity fields, found %d", n)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions WHERE token_hash IN ($1,$2)", gateway.Digest("idaas-access-token"), gateway.Digest("idaas-refresh-token")); n != 0 {
+		t.Fatal("provider tokens must not become browser session tokens")
+	}
+	var lifetime int
+	must(t, f.pool.QueryRow("SELECT EXTRACT(EPOCH FROM (expires_at-created_at))::int FROM gateway_sessions WHERE source='huawei-corp'").Scan(&lifetime))
+	if lifetime != int(gateway.DefaultIDaaSSessionLifetime/time.Second) {
+		t.Fatalf("IDaaS session lifetime = %ds", lifetime)
+	}
+	provider.mu.Lock()
+	if provider.lastToken["code_verifier"] == "" || provider.lastToken["redirect_uri"] == "" || provider.lastUser["access_token"] != "idaas-access-token" {
+		t.Fatal("IDaaS exchange did not bind PKCE, callback, and userinfo requests")
+	}
+	provider.mu.Unlock()
+
+	provider.mu.Lock()
+	provider.userName = "Changed Provider Name"
+	provider.mu.Unlock()
+	secondBrowser := gw.browser()
+	if second := gw.login(secondBrowser, "/"); second.StatusCode != http.StatusSeeOther {
+		t.Fatalf("repeat IDaaS login: %d", second.StatusCode)
+	}
+	if second, repeatedMe := gw.do(secondBrowser, http.MethodGet, "/api/v1/me", nil, nil); second.StatusCode != http.StatusOK || repeatedMe.S("displayName") != "Wang Longan" {
+		t.Fatalf("repeat login must preserve the JIT display-name snapshot: %d %v", second.StatusCode, repeatedMe)
+	}
+	if n := f.count("SELECT count(*) FROM user_identities WHERE source='huawei-corp' AND subject='w00576782'"); n != 1 {
+		t.Fatalf("repeat IDaaS login must reuse one identity, found %d", n)
+	}
+	sessionsBefore := f.count("SELECT count(*) FROM gateway_sessions")
+
+	withoutCookie := gw.browser()
+	withoutCookieLocation := gw.startLogin(withoutCookie, "/")
+	if failed := gw.callback(gw.browser(), withoutCookieLocation); failed.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("IDaaS callback without attempt cookie must fail: %d", failed.StatusCode)
+	}
+	wrongStateBrowser := gw.browser()
+	wrongStateLocation := gw.startLogin(wrongStateBrowser, "/")
+	tampered, e := url.Parse(wrongStateLocation)
+	must(t, e)
+	query := tampered.Query()
+	query.Set("state", "wrong-state")
+	tampered.RawQuery = query.Encode()
+	if failed := gw.callback(wrongStateBrowser, tampered.String()); failed.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("IDaaS callback with wrong state must fail: %d", failed.StatusCode)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore {
+		t.Fatalf("failed IDaaS callbacks created %d sessions", n-sessionsBefore)
+	}
+
+	// A callback completed with a different derivation key must be rejected by IDaaS and cannot
+	// create another session even though its cookie, state, and code are otherwise valid.
+	stranger := gw.browser()
+	location := gw.startLogin(stranger, "/")
+	f.pkceKey[0] ^= 0xff
+	failed := gw.callback(stranger, location)
+	f.pkceKey[0] ^= 0xff
+	if failed.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("IDaaS verifier mismatch must be login_failed: %d", failed.StatusCode)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore {
+		t.Fatalf("verifier mismatch created %d sessions", n-sessionsBefore)
+	}
+
+	replayBrowser := gw.browser()
+	replayLocation := gw.startLogin(replayBrowser, "/")
+	if first := gw.callback(replayBrowser, replayLocation); first.StatusCode != http.StatusSeeOther {
+		t.Fatalf("first IDaaS callback failed: %d", first.StatusCode)
+	}
+	if replayed := gw.callback(replayBrowser, replayLocation); replayed.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replayed IDaaS callback must fail: %d", replayed.StatusCode)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore+1 {
+		t.Fatalf("IDaaS replay created an unexpected session count: %d", n)
+	}
+
+	provider.mu.Lock()
+	provider.reusable = true
+	provider.mu.Unlock()
+	racer := gw.browser()
+	raceLocation := gw.startLogin(racer, "/")
+	if results := callbackRace(t, racer, raceLocation); results[0] != http.StatusSeeOther || results[1] != http.StatusUnauthorized {
+		t.Fatalf("exactly one concurrent IDaaS callback may win: %v", results)
+	}
+	if n := f.count("SELECT count(*) FROM gateway_sessions"); n != sessionsBefore+2 {
+		t.Fatalf("concurrent IDaaS callback created an unexpected session count: %d", n)
+	}
+}
+
+// Evidence for specs/test-cases/cloud/identity-access/login-attempt.md
 // (#login-start-requires-same-origin-proof-and-writes-one-bound-attempt,
 // #callback-consumes-an-attempt-at-most-once).
 func TestGatewayLoginAttemptReplayStateAndConcurrentConsume(t *testing.T) {
@@ -485,30 +723,7 @@ func TestGatewayLoginAttemptReplayStateAndConcurrentConsume(t *testing.T) {
 	f.provider.mu.Unlock()
 	racer := gw.browser()
 	location = gw.startLogin(racer, "/")
-	var wg sync.WaitGroup
-	results := make([]int, 2)
-	start := make(chan struct{})
-	for i := range results {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			req, e := http.NewRequestWithContext(context.Background(), http.MethodGet, location, http.NoBody)
-			if e != nil {
-				results[i] = -1
-				return
-			}
-			resp, e := racer.Do(req)
-			if e != nil {
-				results[i] = -1
-				return
-			}
-			results[i] = consume(t, resp).StatusCode
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	slices.Sort(results)
+	results := callbackRace(t, racer, location)
 	if results[0] != http.StatusSeeOther || results[1] != http.StatusUnauthorized {
 		t.Fatalf("exactly one concurrent callback may win: %v", results)
 	}

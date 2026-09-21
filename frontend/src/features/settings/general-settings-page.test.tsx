@@ -2,19 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import { GeneralSettingsPage } from '@/features/settings/general-settings-page'
 import { SettingsLayout } from '@/features/settings/settings-layout'
 import { CurrentSpaceProvider } from '@/features/spaces/current-space'
-import { setCloudCredentials } from '@/lib/cloud-session'
-import {
-  installCloudSpaceHandlers,
-  TEST_CLOUD_CREDENTIALS,
-  TEST_SPACE_ID,
-  TEST_TENANT_ID,
-} from '@/test/cloud-handlers'
+import { installCloudSpaceHandlers, TEST_SPACE_ID, TEST_TENANT_ID } from '@/test/cloud-handlers'
 import { server } from '@/test/msw-server'
 
 function renderSettingsPage() {
@@ -32,7 +26,7 @@ function renderSettingsPage() {
   return render(
     <QueryClientProvider client={queryClient}>
       <SidebarProvider>
-        <CurrentSpaceProvider slug="cloud-dev">
+        <CurrentSpaceProvider slug="cloud-dev" authenticated>
           <RouterProvider router={router} />
         </CurrentSpaceProvider>
       </SidebarProvider>
@@ -41,12 +35,7 @@ function renderSettingsPage() {
 }
 
 describe('GeneralSettingsPage cloud mode', () => {
-  afterEach(() => {
-    sessionStorage.clear()
-  })
-
   it('shows the archive danger zone to owners and archives on confirmation', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installCloudSpaceHandlers('owner')
     let deleted = false
     server.use(
@@ -79,7 +68,6 @@ describe('GeneralSettingsPage cloud mode', () => {
   })
 
   it('hides the danger zone from non-owners', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
     installCloudSpaceHandlers('member')
     renderSettingsPage()
 

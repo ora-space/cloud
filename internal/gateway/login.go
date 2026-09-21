@@ -72,6 +72,11 @@ func (l *Login) CallbackURL(provider string) string { return l.callbackBase + "/
 
 // Start creates a login attempt and the provider redirect. Nothing external is called.
 func (l *Login) Start(ctx context.Context, provider, returnTo string) (Started, error) {
+	if provider == "" && len(l.providers) == 1 {
+		for configured := range l.providers {
+			provider = configured
+		}
+	}
 	adapter, ok := l.providers[provider]
 	if !ok {
 		return Started{}, ErrUnknownProvider

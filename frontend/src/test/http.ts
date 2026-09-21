@@ -7,6 +7,9 @@ export type RecordedRequest = {
   url: string | undefined
   method: string | undefined
   signal: AbortSignal | undefined
+  idempotencyKey: string | undefined
+  authorization: string | undefined
+  userToken: string | undefined
 }
 
 /** Handle returned by {@link installFakeHttp} for asserting on traffic. */
@@ -30,7 +33,14 @@ const toAbortSignal = (signal: InternalAxiosRequestConfig['signal']): AbortSigna
 export function installFakeHttp(body: unknown, status = 200): FakeHttp {
   const requests: RecordedRequest[] = []
   const adapter: AxiosAdapter = (config) => {
-    requests.push({ url: config.url, method: config.method, signal: toAbortSignal(config.signal) })
+    requests.push({
+      url: config.url,
+      method: config.method,
+      signal: toAbortSignal(config.signal),
+      idempotencyKey: config.headers.get('Idempotency-Key')?.toString(),
+      authorization: config.headers.get('Authorization')?.toString(),
+      userToken: config.headers.get('X-Ora-User-Token')?.toString(),
+    })
     const response: AxiosResponse = { data: body, status, statusText: '', headers: {}, config }
     return status < 400 ? Promise.resolve(response) : Promise.reject(response)
   }

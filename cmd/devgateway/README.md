@@ -17,4 +17,4 @@
 go run ./cmd/devgateway -addr 127.0.0.1:8090 -cloud http://127.0.0.1:8080
 ```
 
-前端 Vite dev server 将 `/api`、`/internal`、`/healthz`、`/devgateway` 代理到本服务。生产环境由真实网关承担签发与转发，本命令不参与。
+该命令只保留给底层双 JWT 协议排查，不属于默认前端链路。当前 Vite 将 `/auth`、`/api`、`/healthz` 代理到认证 Gateway（`:8081`）；浏览器不再调用 `/devgateway`、访问 `/internal` 或保存返回的 JWT。生产环境同样由真实 Gateway 承担登录、签发与转发。

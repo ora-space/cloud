@@ -1,24 +1,39 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createMemoryRouter, RouterProvider } from 'react-router-dom'
-import { setCloudCredentials } from '@/lib/cloud-session'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom'
 import { db } from '@/mocks/data/store'
-import { useAuthStore } from '@/state/auth-store'
-import { TEST_CLOUD_CREDENTIALS, TEST_TENANT_ID } from '@/test/cloud-handlers'
+import { installCloudSpaceHandlers, TEST_TENANT_ID } from '@/test/cloud-handlers'
 import { server } from '@/test/msw-server'
 import { DashboardLayout } from './dashboard-layout'
+
+const currentUser = {
+  id: '00000000-0000-4000-8000-000000000001',
+  displayName: 'Wang Longan',
+  status: 'active',
+  version: 1,
+  createdAt: '2026-09-21T00:00:00Z',
+  deletedAt: null,
+}
+
+function LoginScreen() {
+  const location = useLocation()
+  return <div>Login screen {location.search}</div>
+}
 
 function renderRouter(initialPath: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
-      { path: '/login', element: <div>Login screen</div> },
+      { path: '/login', element: <LoginScreen /> },
       {
         path: '/:workspaceSlug',
         element: <DashboardLayout />,
-        children: [{ path: 'issues', element: <div>Issues screen</div> }],
+        children: [
+          { path: 'issues', element: <div>Issues screen</div> },
+          { path: 'projects', element: <div>Projects screen</div> },
+        ],
       },
     ],
     { initialEntries: [initialPath] },
@@ -32,38 +47,51 @@ function renderRouter(initialPath: string) {
 
 describe('DashboardLayout', () => {
   beforeEach(() => {
-    useAuthStore.getState().clear()
+    server.use(http.get('/api/v1/me', () => HttpResponse.json(currentUser)))
+    installCloudSpaceHandlers('owner')
   })
 
-  afterEach(() => {
-    sessionStorage.clear()
+  it('redirects to /login with the complete target when there is no session', async () => {
+    server.use(
+      http.get('/api/v1/me', () =>
+        HttpResponse.json(
+          { code: 'unauthenticated', params: {}, requestId: 'request-1' },
+          { status: 401 },
+        ),
+      ),
+    )
+    renderRouter(`/${db.workspace.slug}/issues?tab=mine#today`)
+    expect(
+      await screen.findByText(
+        `Login screen ?returnTo=%2F${db.workspace.slug}%2Fissues%3Ftab%3Dmine%23today`,
+      ),
+    ).toBeInTheDocument()
   })
 
-  it('redirects to /login when there is no session', async () => {
-    renderRouter(`/${db.workspace.slug}/issues`)
-    expect(await screen.findByText('Login screen')).toBeInTheDocument()
-  })
-
-  it('redirects an unknown workspace slug back to the real workspace', async () => {
-    useAuthStore.getState().setSession('token', db.users[0])
+  it('redirects an unknown space slug to the first joined real space', async () => {
     renderRouter('/some-other-workspace/issues')
-    expect(await screen.findByText('Issues screen')).toBeInTheDocument()
+    expect(await screen.findByText('Projects screen')).toBeInTheDocument()
   })
 
   it('renders the matched child route once authenticated', async () => {
-    useAuthStore.getState().setSession('token', db.users[0])
-    renderRouter(`/${db.workspace.slug}/issues`)
+    renderRouter('/cloud-dev/issues')
     expect(await screen.findByText('Issues screen')).toBeInTheDocument()
   })
-})
 
-describe('DashboardLayout cloud mode', () => {
-  afterEach(() => {
-    sessionStorage.clear()
+  it('shows a disabled account without redirecting to login', async () => {
+    server.use(
+      http.get('/api/v1/me', () =>
+        HttpResponse.json(
+          { code: 'user_disabled', params: {}, requestId: 'request-2' },
+          { status: 403 },
+        ),
+      ),
+    )
+    renderRouter('/cloud-dev/issues')
+    expect(await screen.findByText('账号已被停用')).toBeInTheDocument()
   })
 
-  it('shows an empty state instead of demo data for a session with no joined space', async () => {
-    setCloudCredentials(TEST_CLOUD_CREDENTIALS)
+  it('shows an empty state instead of demo data when the user joined no space', async () => {
     server.use(
       http.get('/api/v1/me/tenants', () =>
         HttpResponse.json({

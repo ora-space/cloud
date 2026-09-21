@@ -1,5 +1,4 @@
-import { create, isAxiosError, type AxiosError, type AxiosRequestConfig } from 'axios'
-import { clearCloudCredentials, getCloudCredentials } from '@/lib/cloud-session'
+import { create, type AxiosError, type AxiosRequestConfig } from 'axios'
 
 /**
  * Shared axios instance behind every generated hook in `src/api`.
@@ -9,20 +8,12 @@ import { clearCloudCredentials, getCloudCredentials } from '@/lib/cloud-session'
  */
 export const AXIOS_INSTANCE = create({ baseURL: '' })
 
-// Attach the dual gateway credentials (service + caller-bound user JWT) to
-// every request once the tab has signed in through devgateway. The signing
-// keys never enter frontend code; this only replays tokens the gateway issued.
-// POST and DELETE additionally receive a fresh idempotency key when the caller
-// did not supply one: the cloud core rejects them without it. The interceptor
-// is synchronous so axios keeps dispatching to the adapter immediately — an
-// abort must still win the race the way it does without interceptors.
+// The browser carries only the Gateway's HttpOnly Cookie. POST and DELETE
+// additionally receive a fresh idempotency key when the caller did not supply
+// one: the Cloud core rejects them without it. The interceptor is synchronous
+// so an AbortSignal can still win the dispatch race.
 AXIOS_INSTANCE.interceptors.request.use(
   (config) => {
-    const credentials = getCloudCredentials()
-    if (credentials) {
-      config.headers.set('Authorization', `Bearer ${credentials.serviceToken}`)
-      config.headers.set('X-Ora-User-Token', credentials.userToken)
-    }
     if (
       (config.method === 'post' || config.method === 'delete') &&
       !config.headers.get('Idempotency-Key')
@@ -34,15 +25,6 @@ AXIOS_INSTANCE.interceptors.request.use(
   undefined,
   { synchronous: true },
 )
-
-// An expired or rejected credential ends the session so the sign-in flow can
-// re-run instead of every subsequent query failing with the same 401.
-AXIOS_INSTANCE.interceptors.response.use(undefined, (error) => {
-  if (isAxiosError(error) && error.response?.status === 401 && getCloudCredentials()) {
-    clearCloudCredentials()
-  }
-  throw error
-})
 
 /**
  * Request shape the orval-generated client passes to {@link customInstance}.

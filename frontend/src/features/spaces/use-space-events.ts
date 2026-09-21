@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { SpaceEvent } from '@/api/generated.schemas'
 import { getGetApiV1TenantsTidSpacesQueryKey } from '@/api/spaces/spaces'
-import { getCloudCredentials } from '@/lib/cloud-session'
 
 /**
  * Narrows an unknown value to a property bag; JSON.parse and network payloads
@@ -74,22 +73,17 @@ function invalidateForEvent(
  * Subscribes the tab to the space event stream and invalidates the affected
  * queries on every notice. Events are lightweight: they only trigger
  * refetches against the authoritative REST state, never carry it. The
- * subscription ends with the component or when credentials disappear.
+ * subscription ends with the component. Authentication is supplied by the
+ * same-origin HttpOnly Gateway session cookie rather than JavaScript headers.
  */
 export function useSpaceEvents(tenantId: string | undefined, spaceId: string | undefined): void {
   const queryClient = useQueryClient()
   useEffect(() => {
     if (!tenantId || !spaceId) return undefined
-    const credentials = getCloudCredentials()
-    if (!credentials) return undefined
     const controller = new AbortController()
     void (async () => {
       try {
         const response = await fetch(`/api/v1/tenants/${tenantId}/spaces/${spaceId}/events`, {
-          headers: {
-            Authorization: `Bearer ${credentials.serviceToken}`,
-            'X-Ora-User-Token': credentials.userToken,
-          },
           signal: controller.signal,
         })
         if (response.ok && response.body) {

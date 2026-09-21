@@ -9,7 +9,16 @@ describe('installFakeHttp', () => {
     const response = await AXIOS_INSTANCE.get('/x')
 
     expect(response.data).toEqual({ ok: true })
-    expect(http.requests).toEqual([{ url: '/x', method: 'get', signal: undefined }])
+    expect(http.requests).toEqual([
+      {
+        url: '/x',
+        method: 'get',
+        signal: undefined,
+        idempotencyKey: undefined,
+        authorization: undefined,
+        userToken: undefined,
+      },
+    ])
   })
 
   it('rejects like axios for error statuses', async () => {
