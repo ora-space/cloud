@@ -84,7 +84,7 @@ func Document() map[string]any {
 	s["SpaceMember"] = resource("workspaceId userId role status version createdBy joinedAt", "createdBy")
 	s["SpaceMemberListItem"] = resource("id workspaceId userId role status version displayName joinedAt", "")
 	properties(s, "SpaceMember")["role"] = enumeration("owner", "admin", "member")
-	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number()}, "type", "spaceId")
+	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number()}, "type", "spaceId")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "spaceId credentialRefId deletedAt")
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt", "deletedAt")
 	s["WorkspaceListItem"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt branchName baseCommitId title", "deletedAt baseCommitId title")
@@ -146,14 +146,44 @@ func Document() map[string]any {
 	s["TimelineEntry"] = object(obj{"kind": enumeration("comment", "activity"), "id": uuid(), "seq": number(), "createdAt": timestamp(), "authorType": enumeration("user", "agent", "team", "system"), "authorId": optional(uuid()), "authorUserId": optional(uuid()), "body": optional(str()), "parentId": optional(uuid()), "action": optional(str()), "details": optional(obj{"type": "object", "additionalProperties": true})}, "kind", "id", "seq", "createdAt", "authorType", "authorId", "authorUserId", "body", "parentId", "action", "details")
 	s["AdminResource"] = resource("id projectId ownerUserId kind desiredState observedState runtimeGeneration version", "")
 	s["AdminOperation"] = resource("id tenantId projectId workspaceId kind state step version createdAt updatedAt", "workspaceId")
-	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}})
+	// Plugin marketplace catalog snapshot: cloud-authoritative listing rows the
+	// UI renders without ever touching the network. id is the canonical
+	// namespace/identifier pair the install API addresses.
+	s["PluginCatalogEntry"] = resource("id sourceNamespace identifier title kind version description homepage license logo url sha256 targets packMembers readme marketplaceVisible sourceUrl indexedAt", "homepage license logo url sha256 targets packMembers readme")
+	pluginEntryProps := properties(s, "PluginCatalogEntry")
+	// Plugin versions are semver strings, not the optimistic integer `version`
+	// of mutable resources; fields() typed it as a number by name.
+	pluginEntryProps["version"] = str()
+	pluginEntryProps["kind"] = enumeration("workbench", "agent", "webview", "skill", "mcp", "hook", "pack", "workflow")
+	pluginEntryProps["marketplaceVisible"] = boolean()
+	pluginEntryProps["indexedAt"] = timestamp()
+	// Nullable oneOf must be inline: OpenAPI 3.0 ignores siblings of $ref, so
+	// optional(ref(...)) would drop the nullable flag and reject null logos.
+	pluginEntryProps["logo"] = obj{"oneOf": []any{
+		object(obj{"universal": ref("PluginLogoCandidate")}, "universal"),
+		object(obj{"light": ref("PluginLogoCandidate"), "dark": ref("PluginLogoCandidate")}, "light", "dark"),
+	}, "nullable": true}
+	pluginEntryProps["targets"] = optional(array(ref("PluginReleaseTarget")))
+	pluginEntryProps["packMembers"] = optional(array(str()))
+	s["PluginCatalog"] = object(obj{"items": array(ref("PluginCatalogEntry")), "syncedAt": optional(timestamp())}, "items")
+	s["SpacePlugin"] = resource("id spaceId tenantId sourceNamespace identifier desiredState desiredVersion observedState observedVersion installError version createdAt updatedAt", "observedVersion installError")
+	spacePluginProps := properties(s, "SpacePlugin")
+	spacePluginProps["desiredState"] = enumeration("installed", "removed")
+	spacePluginProps["observedState"] = enumeration("pending", "installing", "installed", "failed", "removing", "removed")
+	spacePluginProps["observedVersion"] = optional(str())
+	spacePluginProps["installError"] = optional(str())
+	s["SpacePluginList"] = object(obj{"items": array(ref("SpacePlugin"))}, "items")
+	s["PluginUniversalRelease"] = object(obj{"url": str(), "sha256": str()}, "url", "sha256")
+	s["PluginReleaseTarget"] = object(obj{"target": str(), "url": str(), "sha256": str()}, "target", "url", "sha256")
+	s["PluginLogoCandidate"] = object(obj{"role": enumeration("universal", "light", "dark"), "extension": enumeration("svg", "png", "webp", "jpg", "jpeg")}, "role", "extension")
+	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}, "pluginId": str(), "version": str()})
 	s["OperationResult"] = object(obj{"resourceId": uuid()})
 	s["Operation"] = resource("id tenantId actorUserId projectId workspaceId kind state step request result errorCode idempotencyKey requestHash controllerEpoch retryAt version createdAt updatedAt", "workspaceId errorCode controllerEpoch retryAt")
 	opProps := properties(s, "Operation")
 	opProps["request"] = ref("OperationRequest")
 	opProps["result"] = ref("OperationResult")
 	opProps["state"] = enumeration("queued", "running", "retry_wait", "blocked", "succeeded", "failed")
-	opProps["step"] = enumeration("storage", "worktree", "sandbox", "node", "ready", "quiesce", "terminate", "cleanup", "storage_delete", "done")
+	opProps["step"] = enumeration("storage", "worktree", "sandbox", "node", "ready", "quiesce", "terminate", "cleanup", "storage_delete", "plugin", "done")
 	for _, name := range []string{"Workspace", "WorkspaceListItem", "AdminResource"} {
 		p := properties(s, name)
 		p["kind"] = enumeration("main", "isolated")
@@ -169,8 +199,8 @@ func Document() map[string]any {
 	properties(s, "Sandbox")["substrateSandboxId"] = optional(str())
 	s["Node"] = resource("id sandboxInstanceId serviceSubject connectionState protocolVersion initialized lastSeenAt endedAt idleAdmissionEpoch version workspaceId", "endedAt idleAdmissionEpoch")
 	s["Ticket"] = resource("id tenantId workspaceId nodeInstanceId actorUserId admissionEpoch kind state createdAt finishedAt version", "finishedAt")
-	s["EffectRequest"] = object(obj{"kind": enumeration("storage_ensure", "worktree_ensure", "sandbox_ensure", "sandbox_terminate", "worktree_delete", "storage_delete"), "projectId": uuid(), "workspaceId": uuid(), "repositoryUrl": str(), "requestedRef": str(), "sandboxInstanceId": uuid()}, "kind", "projectId")
-	s["EffectResult"] = object(obj{"layoutVersion": number(), "commitId": obj{"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"}, "jobTerminated": boolean(), "removed": boolean(), "terminated": boolean(), "sandboxInstanceId": uuid(), "nodeId": uuid()})
+	s["EffectRequest"] = object(obj{"kind": enumeration("storage_ensure", "worktree_ensure", "sandbox_ensure", "sandbox_terminate", "worktree_delete", "storage_delete", "plugin_ensure", "plugin_delete"), "projectId": uuid(), "workspaceId": uuid(), "repositoryUrl": str(), "requestedRef": str(), "sandboxInstanceId": uuid(), "pluginId": str(), "version": str(), "universal": ref("PluginUniversalRelease"), "targets": array(ref("PluginReleaseTarget"))}, "kind", "projectId")
+	s["EffectResult"] = object(obj{"layoutVersion": number(), "commitId": obj{"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"}, "jobTerminated": boolean(), "removed": boolean(), "terminated": boolean(), "installed": boolean(), "sandboxInstanceId": uuid(), "nodeId": uuid(), "version": str(), "error": str(), "diagnostic": str()})
 	s["Effect"] = resource("id operationId projectId workspaceId kind state externalId request result reconciledEpoch createdAt version", "workspaceId externalId")
 	ep := properties(s, "Effect")
 	ep["externalId"] = optional(str())
@@ -328,6 +358,14 @@ func responseSchema(r router.Route) (schema obj, status string) {
 	switch {
 	case strings.Contains(r.Path, "/spaces"):
 		switch {
+		case strings.Contains(r.Path, "/plugins"):
+			if r.Method == "GET" && strings.HasSuffix(r.Path, "/plugins/catalog") {
+				return ref("PluginCatalog"), "200"
+			}
+			if r.Method == "GET" {
+				return ref("SpacePluginList"), "200"
+			}
+			return object(obj{"resource": ref("SpacePlugin")}, "resource"), "200"
 		case strings.Contains(r.Path, "/members"):
 			if r.Method == "GET" {
 				return object(obj{"items": array(ref("SpaceMemberListItem")), "nextCursor": str()}, "items", "nextCursor"), "200"
@@ -501,6 +539,9 @@ func optionalField(name string, r router.Route) bool {
 	}
 	switch name {
 	case "description", "category", "color", "icon", "filter", "position", "parentId", "input", "targets", "contextRefs":
+		return true
+	case "pluginVersion":
+		// Omitted install pins the catalog's current version.
 		return true
 	case "values":
 		// Confirm must state what it is confirming; assist may be asked with a still-empty form.

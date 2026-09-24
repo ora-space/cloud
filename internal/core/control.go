@@ -17,8 +17,11 @@ type ControlRequest struct {
 }
 
 // Control is the finite internal command API. Controllers have no table-write or SQL interface.
+// Committed plugin instance writebacks broadcast space invalidation notices exactly like public
+// mutations, so live subscribers see fan-out progress without polling.
 func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) {
-	return s.transact(ctx, func(t *transaction) Object {
+	var events []SpaceEvent
+	out, err := s.transact(ctx, func(t *transaction) Object {
 		if r.Action == "access" || r.Action == "admit" {
 			require(r.Service.Role == "controller", 403, "service_forbidden")
 			if r.Action == "admit" || r.Body.S("action") == "execute" {
@@ -51,11 +54,11 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		case "snapshot":
 			return snapshot(t, o)
 		case "plan":
-			return planEffect(t, r, o)
+			return planEffect(t, r, o, &events)
 		case "effect_result":
-			return effectResult(t, r, o)
+			return effectResult(t, r, o, &events)
 		case "advance":
-			return advance(t, r, o)
+			return advance(t, r, o, &events)
 		case "defer":
 			state := r.Body.S("state")
 			code := r.Body.S("errorCode")
@@ -70,6 +73,12 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		}
 		return nil
 	})
+	if err == nil && s.Events != nil {
+		for _, ev := range events {
+			s.Events.Publish(ev)
+		}
+	}
+	return out, err
 }
 
 func lease(t *transaction, r *ControlRequest) Object {
@@ -150,11 +159,9 @@ func nullable(s string) any {
 	return s
 }
 
-func planEffect(t *transaction, r *ControlRequest, o Object) Object {
+func planEffect(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEvent) Object {
 	reconciled(t, o)
 	kind, wid := r.Body.S("kind"), r.Body.S("workspaceId")
-	allowed := map[string]string{"storage": "storage_ensure", "worktree": "worktree_ensure", "sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "worktree_delete", "storage_delete": "storage_delete"}
-	require(allowed[o.S("step")] == kind, 409, "invalid_step")
 	if kind == "storage_ensure" || kind == "storage_delete" {
 		require(wid == "", 400, "invalid_effect_scope")
 	} else {
@@ -170,40 +177,92 @@ func planEffect(t *transaction, r *ControlRequest, o Object) Object {
 	if existing := effectFor(t, o.S("id"), kind, wid); existing != nil {
 		return Object{"effect": existing, "operation": o}
 	}
+	// The effect id doubles as the preallocated sandbox instance id, so it is
+	// drawn before the step-specific request building below.
 	id := newID()
-	request := Object{"kind": kind, "projectId": o.S("projectId")}
-	if wid != "" {
-		request["workspaceId"] = wid
-	}
-	if kind == "worktree_ensure" {
-		project := t.one("SELECT repository_url FROM projects WHERE id=$1", o.S("projectId"))
-		worktree := t.one("SELECT requested_ref FROM workspace_worktrees WHERE workspace_id=$1", wid)
-		request["repositoryUrl"] = project.S("repositoryUrl")
-		request["requestedRef"] = worktree.S("requestedRef")
-	}
-	if kind == "sandbox_ensure" {
-		w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
-		require(w.S("desiredState") == "running", 409, "resource_unavailable")
-		require(t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", wid) == nil, 409, "termination_unconfirmed")
-		t.exec("UPDATE workspaces SET runtime_generation=runtime_generation+1,observed_state='starting',version=version+1 WHERE id=$1", wid)
-		t.exec("INSERT INTO sandbox_instances(id,workspace_id,generation,observed_state) SELECT $1,id,runtime_generation,'allocating' FROM workspaces WHERE id=$2", id, wid)
-	}
-	if kind == "sandbox_terminate" {
-		s := t.one("SELECT * FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", wid)
-		require(s != nil, 409, "no_current_sandbox")
-		request["sandboxInstanceId"] = s.S("id")
-		t.exec("UPDATE sandbox_instances SET observed_state='terminating' WHERE id=$1", s.S("id"))
-	}
-	if kind == "storage_delete" {
-		require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")
-		require(t.one("SELECT id FROM external_effects WHERE project_id=$1 AND state IN ('planned','running')", o.S("projectId")) == nil, 409, "maintenance_unconfirmed")
+	var request Object
+	switch o.S("step") {
+	case "plugin":
+		request = planPluginEffect(t, o, kind, wid, spaceEvents)
+	default:
+		allowed := map[string]string{"storage": "storage_ensure", "worktree": "worktree_ensure", "sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "worktree_delete", "storage_delete": "storage_delete"}
+		require(allowed[o.S("step")] == kind, 409, "invalid_step")
+		request = Object{"kind": kind, "projectId": o.S("projectId")}
+		if wid != "" {
+			request["workspaceId"] = wid
+		}
+		if kind == "worktree_ensure" {
+			project := t.one("SELECT repository_url FROM projects WHERE id=$1", o.S("projectId"))
+			worktree := t.one("SELECT requested_ref FROM workspace_worktrees WHERE workspace_id=$1", wid)
+			request["repositoryUrl"] = project.S("repositoryUrl")
+			request["requestedRef"] = worktree.S("requestedRef")
+		}
+		if kind == "sandbox_ensure" {
+			w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
+			require(w.S("desiredState") == "running", 409, "resource_unavailable")
+			require(t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", wid) == nil, 409, "termination_unconfirmed")
+			t.exec("UPDATE workspaces SET runtime_generation=runtime_generation+1,observed_state='starting',version=version+1 WHERE id=$1", wid)
+			t.exec("INSERT INTO sandbox_instances(id,workspace_id,generation,observed_state) SELECT $1,id,runtime_generation,'allocating' FROM workspaces WHERE id=$2", id, wid)
+		}
+		if kind == "sandbox_terminate" {
+			s := t.one("SELECT * FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", wid)
+			require(s != nil, 409, "no_current_sandbox")
+			request["sandboxInstanceId"] = s.S("id")
+			t.exec("UPDATE sandbox_instances SET observed_state='terminating' WHERE id=$1", s.S("id"))
+		}
+		if kind == "storage_delete" {
+			require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")
+			require(t.one("SELECT id FROM external_effects WHERE project_id=$1 AND state IN ('planned','running')", o.S("projectId")) == nil, 409, "maintenance_unconfirmed")
+		}
 	}
 	t.exec("INSERT INTO external_effects(id,operation_id,project_id,workspace_id,kind,state,request,reconciled_epoch) VALUES($1,$2,$3,$4,$5,'planned',$6,$7)", id, o.S("id"), o.S("projectId"), nullable(wid), kind, jsonText(request), o.N("controllerEpoch"))
 	t.exec("UPDATE operations SET version=version+1,updated_at=now() WHERE id=$1", o.S("id"))
 	return Object{"effect": t.one("SELECT * FROM external_effects WHERE id=$1", id), "operation": t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))}
 }
 
-func effectResult(t *transaction, r *ControlRequest, o Object) Object {
+// planPluginEffect builds the self-contained plugin effect payload and admits
+// the dispatch. The payload carries the release info (url/sha256/targets)
+// straight from the catalog snapshot, so the Node execution plane never needs
+// a registry index or marketplace sync of its own; field names match the
+// desktop plugin-manager DownloadRequest capabilities.
+func planPluginEffect(t *transaction, o Object, kind, wid string, spaceEvents *[]SpaceEvent) Object {
+	switch {
+	case o.S("kind") == "install_plugin":
+		require(kind == "plugin_ensure", 409, "invalid_step")
+	case o.S("kind") == "remove_plugin":
+		require(kind == "plugin_delete", 409, "invalid_step")
+	default:
+		reject(409, "invalid_step")
+	}
+	require(wid == o.S("workspaceId"), 403, "invalid_effect_scope")
+	pluginID := o.O("request").S("pluginId")
+	version := o.O("request").S("version")
+	require(pluginID != "", 409, "invalid_plugin_request")
+	request := Object{"kind": kind, "projectId": o.S("projectId"), "workspaceId": wid, "pluginId": pluginID}
+	if kind == "plugin_delete" {
+		request["version"] = version
+		pluginInstanceWriteback(t, o, "removing", "", nil, spaceEvents)
+		return request
+	}
+	entry := t.pluginCatalogEntry(pluginID)
+	require(entry != nil, 409, "plugin_not_found")
+	// Admission: plugin_ensure dispatches only to a ready workspace, mirroring
+	// the node step gate — a provisioning or stopped workspace is not a valid
+	// download target.
+	w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
+	require(w.S("observedState") == "ready", 409, "workspace_not_ready")
+	request["version"] = entry.S("version")
+	if entry.S("url") != "" {
+		request["universal"] = Object{"url": entry.S("url"), "sha256": entry.S("sha256")}
+	}
+	if entry["targets"] != nil {
+		request["targets"] = entry["targets"]
+	}
+	pluginInstanceWriteback(t, o, "installing", entry.S("version"), nil, spaceEvents)
+	return request
+}
+
+func effectResult(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEvent) Object {
 	require(validID(r.EffectID), 404, "not_found")
 	e := t.one("SELECT * FROM external_effects WHERE id=$1 AND operation_id=$2", r.EffectID, o.S("id"))
 	require(e != nil, 404, "not_found")
@@ -237,7 +296,22 @@ func effectResult(t *transaction, r *ControlRequest, o Object) Object {
 			require(result.N("layoutVersion") == 1, 400, "invalid_storage_layout")
 		case "sandbox_ensure":
 			require(result.S("sandboxInstanceId") == e.S("id"), 400, "invalid_sandbox_evidence")
+		case "plugin_ensure":
+			// Success evidence must name the exact version the effect was
+			// planned with: a Node may not substitute its own resolution.
+			require(result.B("installed") && result.S("version") == e.O("request").S("version"), 400, "invalid_plugin_evidence")
+		case "plugin_delete":
+			require(result.B("removed"), 400, "invalid_cleanup_evidence")
 		}
+	}
+	if state == "failed" && (e.S("kind") == "plugin_ensure" || e.S("kind") == "plugin_delete") {
+		// A failed install/remove surfaces on the space row immediately so the
+		// UI can render the failure while the operation waits for retry.
+		message := result.S("error")
+		if message == "" {
+			message = "external_failure"
+		}
+		pluginInstanceWriteback(t, o, "failed", "", &message, spaceEvents)
 	}
 	t.exec("UPDATE external_effects SET state=$2,external_id=COALESCE($3,external_id),result=$4,reconciled_epoch=$5 WHERE id=$1", e.S("id"), state, nullable(external), jsonText(result), o.N("controllerEpoch"))
 	t.exec("UPDATE operations SET version=version+1,updated_at=now() WHERE id=$1", o.S("id"))
@@ -262,7 +336,7 @@ func completedEffect(t *transaction, o Object, kind, wid string) Object {
 	return e
 }
 
-func advance(t *transaction, r *ControlRequest, o Object) Object {
+func advance(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEvent) Object {
 	reconciled(t, o)
 	next := ""
 	wid := o.S("workspaceId")
@@ -326,6 +400,18 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			deleteWorkspace(t, wid)
 			next = "done"
 		}
+	case "plugin":
+		// The plugin step completes the install/remove for exactly the
+		// operation's bound workspace; the space-level aggregate is recomputed
+		// from the fan-out rows in the same transaction.
+		kind := "plugin_ensure"
+		state, version := "installed", o.O("request").S("version")
+		if o.S("kind") == "remove_plugin" {
+			kind, state, version = "plugin_delete", "removed", ""
+		}
+		completedEffect(t, o, kind, wid)
+		pluginInstanceWriteback(t, o, state, version, nil, spaceEvents)
+		next = "done"
 	case "storage_delete":
 		completedEffect(t, o, "storage_delete", "")
 		require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")

@@ -69,10 +69,61 @@ func TestTemplateIsCompleteWithGitHubLeftForTheDeveloper(t *testing.T) {
 	if !strings.Contains(cfg.Database.DSN, "port=55432") {
 		t.Fatalf("template DSN must match compose.yaml, got %q", cfg.Database.DSN)
 	}
+	if cfg.Plugins == nil || cfg.Plugins.MarketplaceURL == "" || cfg.Plugins.MarketplaceBranch != "main" || cfg.Plugins.SyncInterval != "5m" || !cfg.Plugins.SyncEnabled {
+		t.Fatalf("template [plugins] must carry the marketplace defaults, got %+v", cfg.Plugins)
+	}
+}
+
+func TestPluginsSectionDecodesStrictlyAndBackfillsDefaults(t *testing.T) {
+	// A misspelled key inside [plugins] must fail like any other unknown key.
+	_, e := loadConfig(writeConfig(t, "[database]\ndsn='x'\n[plugins]\nmarketplace_urlx='https://example.invalid/m.git'\n"))
+	if e == nil || !strings.Contains(e.Error(), "marketplace_urlx") {
+		t.Fatalf("unknown plugin key must be rejected, got %v", e)
+	}
+	// A present section is kept exactly as written, including a disabled sync.
+	cfg, e := loadConfig(writeConfig(t, "[database]\ndsn='x'\n[plugins]\nmarketplace_url='https://example.invalid/m.git'\nmarketplace_branch='dev'\nsync_interval='10m'\nsync_enabled=false\n"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if cfg.Plugins.MarketplaceURL != "https://example.invalid/m.git" || cfg.Plugins.MarketplaceBranch != "dev" || cfg.Plugins.SyncInterval != "10m" || cfg.Plugins.SyncEnabled {
+		t.Fatalf("explicit [plugins] must decode verbatim, got %+v", cfg.Plugins)
+	}
+	// An old config.toml without [plugins] falls back to the template defaults.
+	cfg, e = loadConfig(writeConfig(t, "[database]\ndsn='x'\n"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if cfg.Plugins == nil || cfg.Plugins.MarketplaceURL != "https://github.com/ora-space/marketplace" || cfg.Plugins.MarketplaceBranch != "main" || cfg.Plugins.SyncInterval != "5m" || !cfg.Plugins.SyncEnabled {
+		t.Fatalf("absent [plugins] must backfill the defaults, got %+v", cfg.Plugins)
+	}
+	// Sync enabled without a marketplace address fails early.
+	_, e = loadConfig(writeConfig(t, "[database]\ndsn='x'\n[plugins]\nsync_enabled=true\n"))
+	if e == nil || !strings.Contains(e.Error(), "plugins.marketplace_url") {
+		t.Fatalf("enabled sync without url must be rejected, got %v", e)
+	}
+}
+
+func TestRenderEnvEmitsPluginOverrides(t *testing.T) {
+	cfg, e := loadConfig(writeConfig(t, "[database]\ndsn='x'\n[plugins]\nmarketplace_url='https://example.invalid/m.git'\nmarketplace_branch='dev'\nsync_interval='10m'\nsync_enabled=false\n"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	got := renderEnv(&cfg)
+	for _, line := range []string{
+		`CLOUD_PLUGINS_MARKETPLACE_URL="https://example.invalid/m.git"`,
+		`CLOUD_PLUGINS_MARKETPLACE_BRANCH="dev"`,
+		`CLOUD_PLUGINS_SYNC_INTERVAL="10m"`,
+		`CLOUD_PLUGINS_SYNC_ENABLED="false"`,
+	} {
+		if !strings.Contains(got, line+"\n") {
+			t.Fatalf("env file missing %s:\n%s", line, got)
+		}
+	}
 }
 
 func TestRenderEnvQuotesValuesForTask(t *testing.T) {
 	var cfg devConfig
+	cfg.Plugins = defaultPluginsConfig()
 	cfg.Database.DSN = `host=127.0.0.1 password=p"a\ss dbname=ora`
 	cfg.GitHub.ClientID = "Iv1.abc"
 	got := renderEnv(&cfg)
@@ -96,6 +147,7 @@ func TestMaterializeKeepsKeysAndRewritesDerivedFiles(t *testing.T) {
 	dir := filepath.Join(root, "gateway")
 	envPath := filepath.Join(root, "dev.env")
 	var cfg devConfig
+	cfg.Plugins = defaultPluginsConfig()
 	cfg.Database.DSN = "host=h dbname=d"
 	cfg.GitHub.ClientID = "id"
 	cfg.GitHub.ClientSecret = "first-secret"

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/controlgrpc"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/logger"
+	"github.com/wanglongan587/cloud/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/internal/repository"
 )
 
@@ -77,6 +80,20 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	// The marketplace sync loop is owned by this process like gateway.RunCleanup:
+	// the ctx cancellation on shutdown stops it and the WaitGroup below waits
+	// for the in-flight sync (network + scan only; no database transaction
+	// spans them) before the process exits.
+	var syncGroup sync.WaitGroup
+	if cfg.Plugins.SyncEnabled {
+		source := pluginmarket.Source{Namespace: "official", URL: cfg.Plugins.MarketplaceURL, Branch: cfg.Plugins.MarketplaceBranch}
+		syncer := pluginmarket.NewSyncer(source, filepath.Join(os.TempDir(), "ora-cloud-plugins", "official"), store, log)
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, syncer.Sync, cfg.Plugins.SyncInterval, pluginmarket.ContextSleep, log)
+		}()
+	}
 	gin.SetMode(cfg.Server.Mode)
 	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router.New(store, auth, log), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
 	// The control listener is bound before serving so a taken port fails startup, not a Controller.
@@ -96,6 +113,8 @@ func run() (runErr error) {
 	}()
 	select {
 	case e = <-failed:
+		cancel()
+		syncGroup.Wait()
 		if errors.Is(e, http.ErrServerClosed) || errors.Is(e, grpc.ErrServerStopped) {
 			return nil
 		}
@@ -118,6 +137,8 @@ func run() (runErr error) {
 		case <-shutdown.Done():
 			grpcServer.Stop()
 		}
-		return server.Shutdown(shutdown)
+		e = server.Shutdown(shutdown)
+		syncGroup.Wait()
+		return e
 	}
 }

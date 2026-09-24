@@ -283,26 +283,47 @@ export const EffectRequestKind = {
   sandbox_terminate: 'sandbox_terminate',
   worktree_delete: 'worktree_delete',
   storage_delete: 'storage_delete',
+  plugin_ensure: 'plugin_ensure',
+  plugin_delete: 'plugin_delete',
 } as const;
+
+export interface PluginReleaseTarget {
+  sha256: string;
+  target: string;
+  url: string;
+}
+
+export interface PluginUniversalRelease {
+  sha256: string;
+  url: string;
+}
 
 export interface EffectRequest {
   kind: EffectRequestKind;
+  pluginId?: string;
   projectId: string;
   repositoryUrl?: string;
   requestedRef?: string;
   sandboxInstanceId?: string;
+  targets?: PluginReleaseTarget[];
+  universal?: PluginUniversalRelease;
+  version?: string;
   workspaceId?: string;
 }
 
 export interface EffectResult {
   /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
   commitId?: string;
+  diagnostic?: string;
+  error?: string;
+  installed?: boolean;
   jobTerminated?: boolean;
   layoutVersion?: number;
   nodeId?: string;
   removed?: boolean;
   sandboxInstanceId?: string;
   terminated?: boolean;
+  version?: string;
 }
 
 export interface Effect {
@@ -684,6 +705,7 @@ export const OperationStep = {
   terminate: 'terminate',
   cleanup: 'cleanup',
   storage_delete: 'storage_delete',
+  plugin: 'plugin',
   done: 'done',
 } as const;
 
@@ -738,7 +760,9 @@ export interface Workspace {
 export type OperationRequestPrevious = {[key: string]: Workspace};
 
 export interface OperationRequest {
+  pluginId?: string;
   previous?: OperationRequestPrevious;
+  version?: string;
 }
 
 export interface OperationResult {
@@ -768,6 +792,86 @@ export interface Operation {
   version: number;
   /** @nullable */
   workspaceId: string | null;
+}
+
+export type PluginCatalogEntryKind = typeof PluginCatalogEntryKind[keyof typeof PluginCatalogEntryKind];
+
+
+export const PluginCatalogEntryKind = {
+  workbench: 'workbench',
+  agent: 'agent',
+  webview: 'webview',
+  skill: 'skill',
+  mcp: 'mcp',
+  hook: 'hook',
+  pack: 'pack',
+  workflow: 'workflow',
+} as const;
+
+export type PluginLogoCandidateExtension = typeof PluginLogoCandidateExtension[keyof typeof PluginLogoCandidateExtension];
+
+
+export const PluginLogoCandidateExtension = {
+  svg: 'svg',
+  png: 'png',
+  webp: 'webp',
+  jpg: 'jpg',
+  jpeg: 'jpeg',
+} as const;
+
+export type PluginLogoCandidateRole = typeof PluginLogoCandidateRole[keyof typeof PluginLogoCandidateRole];
+
+
+export const PluginLogoCandidateRole = {
+  universal: 'universal',
+  light: 'light',
+  dark: 'dark',
+} as const;
+
+export interface PluginLogoCandidate {
+  extension: PluginLogoCandidateExtension;
+  role: PluginLogoCandidateRole;
+}
+
+export type PluginCatalogEntryLogo = {
+  universal: PluginLogoCandidate;
+} | {
+  dark: PluginLogoCandidate;
+  light: PluginLogoCandidate;
+} | null;
+
+export interface PluginCatalogEntry {
+  description: string;
+  /** @nullable */
+  homepage: string | null;
+  id: string;
+  identifier: string;
+  indexedAt: string;
+  kind: PluginCatalogEntryKind;
+  /** @nullable */
+  license: string | null;
+  logo: PluginCatalogEntryLogo;
+  marketplaceVisible: boolean;
+  /** @nullable */
+  packMembers: string[] | null;
+  /** @nullable */
+  readme: string | null;
+  /** @nullable */
+  sha256: string | null;
+  sourceNamespace: string;
+  sourceUrl: string;
+  /** @nullable */
+  targets: PluginReleaseTarget[] | null;
+  title: string;
+  /** @nullable */
+  url: string | null;
+  version: string;
+}
+
+export interface PluginCatalog {
+  items: PluginCatalogEntry[];
+  /** @nullable */
+  syncedAt?: string | null;
 }
 
 export interface Project {
@@ -844,6 +948,8 @@ export const SpaceEventType = {
   projectcreated: 'project.created',
   projectupdated: 'project.updated',
   projectarchived: 'project.archived',
+  spaceplugins_updated: 'space.plugins_updated',
+  pluginscatalog_updated: 'plugins.catalog_updated',
 } as const;
 
 export interface SpaceEvent {
@@ -898,6 +1004,48 @@ export interface SpaceMemberListItem {
   userId: string;
   version: number;
   workspaceId: string;
+}
+
+export type SpacePluginDesiredState = typeof SpacePluginDesiredState[keyof typeof SpacePluginDesiredState];
+
+
+export const SpacePluginDesiredState = {
+  installed: 'installed',
+  removed: 'removed',
+} as const;
+
+export type SpacePluginObservedState = typeof SpacePluginObservedState[keyof typeof SpacePluginObservedState];
+
+
+export const SpacePluginObservedState = {
+  pending: 'pending',
+  installing: 'installing',
+  installed: 'installed',
+  failed: 'failed',
+  removing: 'removing',
+  removed: 'removed',
+} as const;
+
+export interface SpacePlugin {
+  createdAt: string;
+  desiredState: SpacePluginDesiredState;
+  desiredVersion: string;
+  id: string;
+  identifier: string;
+  /** @nullable */
+  installError: string | null;
+  observedState: SpacePluginObservedState;
+  /** @nullable */
+  observedVersion: string | null;
+  sourceNamespace: string;
+  spaceId: string;
+  tenantId: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface SpacePluginList {
+  items: SpacePlugin[];
 }
 
 export interface Tenant {
@@ -1789,6 +1937,25 @@ export type PutApiV1TenantsTidSpacesSpaceIdMembersUidBody = {
   status: PutApiV1TenantsTidSpacesSpaceIdMembersUidBodyStatus;
   /** @minimum 0 */
   version?: number;
+};
+
+export type DeleteApiV1TenantsTidSpacesSpaceIdPluginsBody = {
+  identifier: string;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1TenantsTidSpacesSpaceIdPlugins200 = {
+  resource: SpacePlugin;
+};
+
+export type PostApiV1TenantsTidSpacesSpaceIdPluginsBody = {
+  identifier: string;
+  pluginVersion?: string;
+};
+
+export type PostApiV1TenantsTidSpacesSpaceIdPlugins200 = {
+  resource: SpacePlugin;
 };
 
 export type GetApiV1TenantsTidSpacesSpaceIdProjectsParams = {

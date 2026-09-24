@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +21,21 @@ type Config struct {
 	Auth          AuthConfig          `mapstructure:"auth"`
 	Collaboration CollaborationConfig `mapstructure:"collaboration"`
 	Control       ControlConfig       `mapstructure:"control"`
+	Plugins       PluginConfig        `mapstructure:"plugins"`
+}
+
+// PluginConfig is the cloud-side plugin marketplace configuration. Leaf keys
+// are bound to CLOUD_PLUGINS_* environment overrides like every other section.
+type PluginConfig struct {
+	// MarketplaceURL is the git repository the marketplace catalog is synced from.
+	MarketplaceURL string `mapstructure:"marketplace_url"`
+	// MarketplaceBranch is the branch checked out and fast-forwarded on every sync.
+	MarketplaceBranch string `mapstructure:"marketplace_branch"`
+	// SyncInterval is the period between catalog syncs; the first sync runs at startup.
+	SyncInterval time.Duration `mapstructure:"sync_interval"`
+	// SyncEnabled turns the catalog sync loop on. When false the config section may
+	// stay empty: no marketplace source is seeded and no sync loop runs.
+	SyncEnabled bool `mapstructure:"sync_enabled"`
 }
 
 // CollaborationConfig gates optional collaboration-capability wiring on the Store.
@@ -97,6 +113,48 @@ func Load(configPath string) (*Config, error) {
 	if cfg.Control.GRPCAddr == "" {
 		return nil, fmt.Errorf("control.grpc_addr is required")
 	}
+	if err := validatePlugins(cfg.Plugins); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
+}
+
+// validatePlugins enforces the plugin marketplace configuration contract. An
+// empty section is legal while sync is disabled; once sync is enabled the
+// marketplace address and branch must be present and well-formed so a typo
+// fails at startup instead of surfacing as a silently empty catalog.
+func validatePlugins(p PluginConfig) error {
+	if !p.SyncEnabled {
+		return nil
+	}
+	if p.MarketplaceURL == "" {
+		return fmt.Errorf("plugins.marketplace_url is required when plugins.sync_enabled is true")
+	}
+	parsed, err := url.Parse(p.MarketplaceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("plugins.marketplace_url must be an https git URL without query or fragment")
+	}
+	if p.MarketplaceBranch == "" {
+		return fmt.Errorf("plugins.marketplace_branch must not be empty when plugins.sync_enabled is true")
+	}
+	if !validBranch(p.MarketplaceBranch) {
+		return fmt.Errorf("plugins.marketplace_branch %q is not a valid git branch name", p.MarketplaceBranch)
+	}
+	if p.SyncInterval <= 0 {
+		return fmt.Errorf("plugins.sync_interval must be a positive duration when plugins.sync_enabled is true")
+	}
+	return nil
+}
+
+// validBranch rejects branch names that a clone/checkout could mistake for
+// something else: path separators, parent traversal, leading dashes (option
+// injection), whitespace and control characters. It is deliberately stricter
+// than git's own ref rules because the value comes from deployment
+// configuration and is passed to a shelled-out git process.
+func validBranch(s string) bool {
+	if s == "" || len(s) > 200 || strings.HasPrefix(s, "-") || strings.Contains(s, "..") {
+		return false
+	}
+	return !strings.ContainsAny(s, "/\\ \t\r\n\x00~^:?*[")
 }

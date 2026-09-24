@@ -13,6 +13,7 @@ import { IssuesPage } from '@/features/issues/issues-page'
 import { MembersPage } from '@/features/members/members-page'
 import { MyIssuesPage } from '@/features/my-issues/my-issues-page'
 import { OnboardingPage } from '@/features/onboarding/onboarding-page'
+import { PluginsPage } from '@/features/plugins/plugins-page'
 import { ProjectDetailPage } from '@/features/projects/project-detail-page'
 import { ProjectsPage } from '@/features/projects/projects-page'
 import { RepositoriesPage } from '@/features/clones/repositories-page'
@@ -88,6 +89,7 @@ export const router = createBrowserRouter([
       { path: 'agents', element: <WithSlug component={AgentsPage} /> },
       { path: 'agents/:agentId', element: <WithSlug component={AgentDetailPage} /> },
       { path: 'skills', element: <WithSlug component={SkillsPage} /> },
+      { path: 'plugins', element: <CloudScope component={PluginsPage} /> },
       { path: 'runtimes', element: <WithSlug component={RuntimesPage} /> },
       { path: 'chat', element: <WithSlug component={ChatPage} /> },
       { path: 'chat/:sessionId', element: <WithSlug component={ChatPage} /> },

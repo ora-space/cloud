@@ -62,6 +62,16 @@ function invalidateForEvent(
     void queryClient.invalidateQueries({
       queryKey: [`/api/v1/tenants/${tenantId}/spaces/${spaceId}/members`],
     })
+  } else if (event.type === 'space.plugins_updated') {
+    void queryClient.invalidateQueries({
+      queryKey: [`/api/v1/tenants/${tenantId}/spaces/${spaceId}/plugins`],
+    })
+  } else if (event.type === 'plugins.catalog_updated') {
+    // The catalog is shared across spaces; this stream's subscriber refetches
+    // its own copy, which is enough until a broker fans the notice out.
+    void queryClient.invalidateQueries({
+      queryKey: [`/api/v1/tenants/${tenantId}/spaces/${spaceId}/plugins/catalog`],
+    })
   } else {
     void queryClient.invalidateQueries({
       queryKey: getGetApiV1TenantsTidSpacesQueryKey(tenantId),

@@ -102,6 +102,10 @@ func Routes() []Route {
 		{"DELETE", "/api/v1/tenants/:tid/spaces/:spaceId/members/:uid", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/projects", "", nil},
 		{"POST", "/api/v1/tenants/:tid/spaces/:spaceId/projects", "", []string{"name", "repositoryUrl", "defaultBranch", "credentialRefId"}},
+		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/plugins/catalog", "", nil},
+		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", nil},
+		{"POST", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", []string{"identifier", "pluginVersion"}},
+		{"DELETE", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", []string{"identifier", "version"}},
 		{"POST", "/internal/v1/access", "access", []string{"tenantId", "workspaceId", "action", "epoch"}},
 		{"POST", "/internal/v1/admissions", "admit", []string{"tenantId", "workspaceId", "action", "ticketId", "kind", "epoch"}},
 		{"POST", "/internal/v1/controller-lease/acquire", "lease_acquire", []string{}},
@@ -391,7 +395,7 @@ func validField(name string, value any) bool {
 		}
 		for k, v := range o {
 			switch k {
-			case "jobTerminated", "removed", "terminated":
+			case "jobTerminated", "removed", "terminated", "installed":
 				if _, ok := v.(bool); !ok {
 					return false
 				}
@@ -399,7 +403,7 @@ func validField(name string, value any) bool {
 				if _, ok := v.(json.Number); !ok {
 					return false
 				}
-			case "commitId", "sandboxInstanceId", "nodeId":
+			case "commitId", "sandboxInstanceId", "nodeId", "version", "error", "diagnostic":
 				if _, ok := v.(string); !ok {
 					return false
 				}

@@ -56,3 +56,19 @@ claim 会领取 queued、到期 retry_wait 或任意 running operation；同一 
 停止先在同一锁下检查票据并关闭 `admission_open`、递增 admission_epoch。活跃票据让公开请求返回 resource_in_use 并回滚所有变更。关闭后 Controller 请求每个目标 Node 原子检查自身活动并报告 `idle`，证据绑定 operationId+Workspace+Node+admissionEpoch+Node version；同 Project 的其他 Node 无权影响本次 stop。idle=true 时 cloud 再确认零活动票据；没有 Node/旧 heartbeat/未知状态均不能推进。idle=false 在 quiesce 阶段失败该 operation 并恢复所有原准入，不取消工作。
 
 Node 本地原子 idle 与实际开始执行之间的进程锁由阶段二 Node 实现；阶段一用真实 PG/HTTP 票据并发测试验证云端竞争，且测试了 Node 拒绝与错误 Workspace 的 idle 证据，未声称运行真实 Agent。
+
+## 插件市场与工作区插件
+
+插件是 cloud 工作区(collab workspace,即产品"工作区")级别的资源,与技能、智能体同级:cloud 保存
+`space_plugins` 的选择状态(desired 意图 + observed 聚合,乐观 version),执行经
+`workspace_plugin_instances` fan-out 到该空间下每个 live 运行时 workspace,每个实例对应一条
+`install_plugin`/`remove_plugin` operation(workspace 绑定、step=plugin)。canonical plugin identity 是
+显式 `(source_namespace, identifier)` 列对,不是 `operations.result` 里的 JSON 大杂烩。
+
+市场目录由 cloud server 自己维护:`internal/pluginmarket` 每 5 分钟(可配)git fetch + 扫描
+`registry/**/orax.toml`,单事务整源替换 `plugin_catalog_entries`;目录读取永远不出网。effect 载荷
+(`plugin_ensure`)从目录快照自包含拼装 url/sha256/targets,与 desktop `DownloadRequest` 字段对应,
+Node 无需 registry index 或自行同步市场;sha256 校验为必选项(与 `docs/desktop-runtime.md` 同款要求)。
+
+安装/移除的公开路由走 space 成员门控与严格解码;重复安装幂等、版本冲突 409、缺版本 428。
+完整契约见 [docs/plugins.md](plugins.md)。

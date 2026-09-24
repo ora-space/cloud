@@ -40,3 +40,12 @@ client_id = ""
 client_secret = ""
 # Top-level userinfo field shown as the display name; leave empty to fall back to the uuid.
 display_name_field = "userName"
+
+[plugins]
+# Plugin marketplace the cloud server keeps a catalog snapshot of. `task setup` turns these
+# values into CLOUD_PLUGINS_* overrides in .local/dev.env, which configs/config.yaml already
+# accepts. Leave the section unchanged to use the default marketplace.
+marketplace_url = "https://github.com/ora-space/marketplace"
+marketplace_branch = "main"
+sync_interval = "5m"
+sync_enabled = true

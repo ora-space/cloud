@@ -65,7 +65,10 @@ function renderDashboard(initialPath: string) {
             <DashboardLayout />
           </RequireSession>
         ),
-        children: [{ path: 'issues', element: <div>Issues screen</div> }],
+        children: [
+          { path: 'issues', element: <div>Issues screen</div> },
+          { path: 'plugins', element: <div>Plugins screen</div> },
+        ],
       },
     ],
     initialPath,
@@ -100,6 +103,21 @@ describe('AppSidebar workspace switcher', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Ops/ })).toBeInTheDocument()
     })
+  })
+
+  it('offers the plugin entry beside skills and routes to the plugin page', async () => {
+    installTwoSpaces()
+    const user = userEvent.setup()
+    renderDashboard('/w/cloud-dev/issues')
+    await screen.findByText('Issues screen')
+
+    const skills = screen.getByRole('link', { name: /技能/ })
+    const plugins = screen.getByRole('link', { name: /插件/ })
+    expect(plugins).toHaveAttribute('href', '/w/cloud-dev/plugins')
+    expect(plugins.closest('[data-sidebar="group"]')).toBe(skills.closest('[data-sidebar="group"]'))
+
+    await user.click(plugins)
+    expect(await screen.findByText('Plugins screen')).toBeInTheDocument()
   })
 
   it('signs out through the gateway and returns to the login screen', async () => {

@@ -12,6 +12,8 @@ Entry point for anyone (human or agent) picking up this codebase. Two reading pa
 ```
 docs/
   INDEX.md                      ← you are here (map + pointers)
+  plugins.md                    ← 插件市场:选择状态权威、catalog 快照、同步、effect 链路
+
   development/
     agent/                      ← for AI agents: dense, precise, convention-focused
       architecture.md           ← request path, core conventions, invariants, traps

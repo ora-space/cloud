@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,30 @@ type devConfig struct {
 		ClientSecret     string `toml:"client_secret"`
 		DisplayNameField string `toml:"display_name_field"`
 	} `toml:"idaas"`
+	// Plugins stays a pointer so an absent [plugins] section (an older config.toml)
+	// is distinguishable from a present-but-empty one: the former is backfilled
+	// with the template defaults, the latter is kept exactly as written.
+	Plugins *devPluginsConfig `toml:"plugins"`
+}
+
+// devPluginsConfig mirrors the service's config.PluginConfig; the interval is a
+// string here because TOML durations are spelled "5m" and the service parses it.
+type devPluginsConfig struct {
+	MarketplaceURL    string `toml:"marketplace_url"`
+	MarketplaceBranch string `toml:"marketplace_branch"`
+	SyncInterval      string `toml:"sync_interval"`
+	SyncEnabled       bool   `toml:"sync_enabled"`
+}
+
+// defaultPluginsConfig is the backfill for config.toml files predating the
+// [plugins] section; it matches config.toml.template and configs/config.yaml.
+func defaultPluginsConfig() *devPluginsConfig {
+	return &devPluginsConfig{
+		MarketplaceURL:    "https://github.com/ora-space/marketplace",
+		MarketplaceBranch: "main",
+		SyncInterval:      "5m",
+		SyncEnabled:       true,
+	}
 }
 
 func main() {
@@ -109,6 +134,21 @@ func loadConfig(path string) (devConfig, error) {
 	cfg.IDaaS.ClientID = strings.TrimSpace(cfg.IDaaS.ClientID)
 	cfg.IDaaS.ClientSecret = strings.TrimSpace(cfg.IDaaS.ClientSecret)
 	cfg.IDaaS.DisplayNameField = strings.TrimSpace(cfg.IDaaS.DisplayNameField)
+	if cfg.Plugins == nil {
+		cfg.Plugins = defaultPluginsConfig()
+	} else {
+		cfg.Plugins.MarketplaceURL = strings.TrimSpace(cfg.Plugins.MarketplaceURL)
+		cfg.Plugins.MarketplaceBranch = strings.TrimSpace(cfg.Plugins.MarketplaceBranch)
+		cfg.Plugins.SyncInterval = strings.TrimSpace(cfg.Plugins.SyncInterval)
+		if cfg.Plugins.SyncEnabled && cfg.Plugins.MarketplaceURL == "" {
+			return cfg, fmt.Errorf("%s: plugins.marketplace_url must be set when plugins.sync_enabled is true (see config.toml.template)", path)
+		}
+		if cfg.Plugins.SyncEnabled {
+			if _, e := time.ParseDuration(cfg.Plugins.SyncInterval); e != nil {
+				return cfg, fmt.Errorf("%s: plugins.sync_interval must be a duration like 5m: %w", path, e)
+			}
+		}
+	}
 	if cfg.Database.DSN == "" {
 		return cfg, fmt.Errorf("%s: database.dsn must be set (see config.toml.template)", path)
 	}
@@ -206,6 +246,10 @@ func renderEnv(cfg *devConfig) string {
 		{"GATEWAY_IDAAS_BASE_URL", cfg.IDaaS.BaseURL},
 		{"GATEWAY_IDAAS_CLIENT_ID", cfg.IDaaS.ClientID},
 		{"GATEWAY_IDAAS_DISPLAY_NAME_FIELD", cfg.IDaaS.DisplayNameField},
+		{"CLOUD_PLUGINS_MARKETPLACE_URL", cfg.Plugins.MarketplaceURL},
+		{"CLOUD_PLUGINS_MARKETPLACE_BRANCH", cfg.Plugins.MarketplaceBranch},
+		{"CLOUD_PLUGINS_SYNC_INTERVAL", cfg.Plugins.SyncInterval},
+		{"CLOUD_PLUGINS_SYNC_ENABLED", strconv.FormatBool(cfg.Plugins.SyncEnabled)},
 	} {
 		fmt.Fprintf(&b, "%s=%s\n", kv[0], quoteEnv(kv[1]))
 	}

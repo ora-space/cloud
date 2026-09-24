@@ -73,6 +73,12 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		case r.SpaceID != "" && r.UserID == "" && strings.HasSuffix(r.Path, "/members") && r.Method == "POST":
 			out = enrollSpaceMemberByEmail(t, r, uid)
 			events = append(events, SpaceEvent{Type: "space.member_updated", SpaceID: r.SpaceID})
+		case r.SpaceID != "" && strings.HasSuffix(r.Path, "/plugins") && r.Method == "POST":
+			out = installSpacePlugin(t, r, uid)
+			events = append(events, SpaceEvent{Type: "space.plugins_updated", SpaceID: r.SpaceID})
+		case r.SpaceID != "" && strings.HasSuffix(r.Path, "/plugins") && r.Method == "DELETE":
+			out = removeSpacePlugin(t, r, uid)
+			events = append(events, SpaceEvent{Type: "space.plugins_updated", SpaceID: r.SpaceID})
 		case r.SpaceID == "" && strings.HasSuffix(r.Path, "/spaces") && r.Method == "POST":
 			out = createSpace(t, r, uid)
 		case r.SpaceID != "" && r.Method == "PATCH":
@@ -334,6 +340,14 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 			// (project workspace-sharing migration). Unscoped projects have no space_id
 			// and never appear here.
 			return page(t, "SELECT p.* FROM projects p WHERE p.space_id=$1 AND p.deleted_at IS NULL", []any{r.SpaceID}, "p.id", r)
+		case strings.HasSuffix(r.Path, "/plugins/catalog"):
+			// The catalog snapshot is shared by every space of the deployment; space
+			// membership gates the read exactly like any other space-scoped list.
+			spaceMember(t, r.SpaceID, uid)
+			return pluginCatalog(t)
+		case strings.HasSuffix(r.Path, "/plugins"):
+			spaceMember(t, r.SpaceID, uid)
+			return spacePluginList(t, r.SpaceID)
 		default:
 			spaceMember(t, r.SpaceID, uid)
 			return t.one("SELECT * FROM collab_workspaces WHERE id=$1", r.SpaceID)

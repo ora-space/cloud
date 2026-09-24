@@ -8,7 +8,7 @@
 
 ### 路由白名单与分发
 - `Routes()` 显式声明系统支持的端点白名单：
-  - **公开 API (`/api/v1/...`)**：共 78 个端点，涵盖用户、租户、成员关系、协作空间及其成员、项目、工作区、操作、状态查询、Issue 协作（Issue、状态、标签、视图、评论、订阅、运行、上下文引用、交互与协作目标），以及作为独立工作项的 clone 请求（`/tenants/:tid/clones`、`/clones/:cloneId`：提交、列表、单条查询，与 Project/Workspace 的 operation 模型无关）。
+  - **公开 API (`/api/v1/...`)**：共 82 个端点，涵盖用户、租户、成员关系、协作空间及其成员、项目、工作区、操作、状态查询、Issue 协作（Issue、状态、标签、视图、评论、订阅、运行、上下文引用、交互与协作目标），以及工作区插件（`/tenants/:tid/spaces/:spaceId/plugins`：目录快照、选择列表、安装、移除）与作为独立工作项的 clone 请求（`/tenants/:tid/clones`、`/clones/:cloneId`：提交、列表、单条查询，与 Project/Workspace 的 operation 模型无关）。
   - **内部控制 API (`/internal/v1/...`)**：共 15 个端点，涵盖 Controller 租约、操作认领/推进、节点注册和 Ticket 准入。
   - **健康检查 (`/healthz`)**：通过 `store.Pool.PingContext` 检查数据库连通性。
 - 任何未注册的端点均会被 `r.NoRoute` 捕获并返回 `404 not_found`。

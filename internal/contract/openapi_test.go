@@ -64,3 +64,37 @@ func TestRequiredIsOmittedWhenEmpty(t *testing.T) {
 	}
 	walk("", tree)
 }
+
+// TestPluginRoutesInDocument pins the four marketplace routes into the
+// generated contract: path shape, request body fields, and response schemas.
+func TestPluginRoutesInDocument(t *testing.T) {
+	doc := Document()
+	paths := doc["paths"].(map[string]any)
+	for _, route := range []struct{ method, path string }{
+		{"get", "/api/v1/tenants/{tid}/spaces/{spaceId}/plugins/catalog"},
+		{"get", "/api/v1/tenants/{tid}/spaces/{spaceId}/plugins"},
+		{"post", "/api/v1/tenants/{tid}/spaces/{spaceId}/plugins"},
+		{"delete", "/api/v1/tenants/{tid}/spaces/{spaceId}/plugins"},
+	} {
+		entry, ok := paths[route.path].(map[string]any)[route.method]
+		if !ok {
+			t.Fatalf("%s %s missing from Document()", route.method, route.path)
+		}
+		_ = entry
+	}
+	post := paths["/api/v1/tenants/{tid}/spaces/{spaceId}/plugins"].(map[string]any)["post"].(map[string]any)
+	body := post["requestBody"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	required := body["required"].([]string)
+	if len(required) != 1 || required[0] != "identifier" {
+		t.Fatalf("POST plugins required fields = %v", required)
+	}
+	if _, ok := body["properties"].(map[string]any)["pluginVersion"]; !ok {
+		t.Fatal("POST plugins must accept an optional pluginVersion")
+	}
+	deleteOp := paths["/api/v1/tenants/{tid}/spaces/{spaceId}/plugins"].(map[string]any)["delete"].(map[string]any)
+	deleteBody := deleteOp["requestBody"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	deleteRequired := deleteBody["required"].([]string)
+	if len(deleteRequired) != 2 {
+		t.Fatalf("DELETE plugins required fields = %v", deleteRequired)
+	}
+}

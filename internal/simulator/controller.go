@@ -323,6 +323,14 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 	default:
 		kinds := map[string]string{"storage": "storage_ensure", "worktree": "worktree_ensure", "sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "worktree_delete", "storage_delete": "storage_delete"}
 		kind := kinds[step]
+		if step == "plugin" {
+			// The plugin step's effect follows the operation intent: an
+			// install fans out plugin_ensure, a removal plugin_delete.
+			kind = "plugin_ensure"
+			if c.Operation.S("kind") == "remove_plugin" {
+				kind = "plugin_delete"
+			}
+		}
 		if kind == "" {
 			return false, fmt.Errorf("unknown step %s", step)
 		}

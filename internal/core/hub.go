@@ -55,3 +55,21 @@ func (h *SpaceHub) Publish(e SpaceEvent) {
 		}
 	}
 }
+
+// PublishAll fans a space-agnostic event (the plugin catalog refreshed) out to
+// every live subscriber regardless of which space stream they hold, with the
+// same non-blocking delivery as Publish. MVP single-instance facility; a
+// multi-instance deployment replaces it with a broker behind the same
+// PublishAll/Subscribe boundary.
+func (h *SpaceHub) PublishAll(e SpaceEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, subs := range h.subs {
+		for ch := range subs {
+			select {
+			case ch <- e:
+			default:
+			}
+		}
+	}
+}

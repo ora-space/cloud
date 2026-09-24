@@ -11,6 +11,7 @@ import {
   LogOut,
   MessageCircle,
   Plus,
+  Puzzle,
   Server,
   Sparkles,
   Users,
@@ -56,6 +57,7 @@ const aiTeamNav = [
   { to: (p: ReturnType<typeof workspacePaths>) => p.agents, label: '智能体', icon: Bot },
   { to: (p: ReturnType<typeof workspacePaths>) => p.squads, label: '小队', icon: Users },
   { to: (p: ReturnType<typeof workspacePaths>) => p.skills, label: '技能', icon: Sparkles },
+  { to: (p: ReturnType<typeof workspacePaths>) => p.plugins, label: '插件', icon: Puzzle },
   { to: (p: ReturnType<typeof workspacePaths>) => p.runtimes, label: '运行时', icon: Server },
 ]
 

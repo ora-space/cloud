@@ -4,6 +4,8 @@ package simulator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +25,12 @@ import (
 type Substrate struct {
 	Root         string
 	Repositories map[string]string
-	mu           sync.Mutex
-	faults       map[string]string
+	// Artifacts maps plugin release URLs to local fixture files so the
+	// simulated Node "downloads" real bytes and verifies real digests without
+	// network access. An unmapped URL fails the install, mirroring production.
+	Artifacts map[string]string
+	mu        sync.Mutex
+	faults    map[string]string
 }
 
 func NewSubstrate(root string, repos map[string]string) (*Substrate, error) {
@@ -35,7 +41,15 @@ func NewSubstrate(root string, repos map[string]string) (*Substrate, error) {
 	if e := os.MkdirAll(filepath.Join(absolute, "effects"), 0o700); e != nil {
 		return nil, e
 	}
-	return &Substrate{Root: absolute, Repositories: repos, faults: map[string]string{}}, nil
+	return &Substrate{Root: absolute, Repositories: repos, Artifacts: map[string]string{}, faults: map[string]string{}}, nil
+}
+
+// MapArtifact binds a plugin release URL to a local fixture file, mirroring
+// the repository mapping the worktree effects already use.
+func (s *Substrate) MapArtifact(url, localPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Artifacts[url] = localPath
 }
 
 // SetFault injects explicit simulator failures; never used by cloud core.
@@ -297,8 +311,74 @@ func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core
 			return nil, e
 		}
 		out["removed"] = true
+	case "plugin_ensure":
+		// Simulated Node install: resolve the release bytes locally, verify the
+		// mandatory SHA-256, and atomically place the archive under the
+		// desktop layout plugins/installed/<ns>/<name>/<version>/. Real Node
+		// wiring (target selection, zip extraction, Deno runtime) is a later
+		// phase; the digest check is real and never optional.
+		if wid == "" {
+			return nil, fmt.Errorf("workspace required")
+		}
+		artifactURL, expected := s.selectArtifact(b)
+		if artifactURL == "" {
+			return nil, fmt.Errorf("no release artifact in effect payload")
+		}
+		local, ok := s.Artifacts[artifactURL]
+		if !ok {
+			return nil, fmt.Errorf("artifact must be explicitly mapped for simulator")
+		}
+		data, e := os.ReadFile(local)
+		if e != nil {
+			return nil, e
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != strings.ToLower(expected) {
+			return nil, fmt.Errorf("sha256 mismatch")
+		}
+		parts := strings.SplitN(b.S("pluginId"), "/", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid plugin id")
+		}
+		installDir := filepath.Join(root, "workspaces", wid, "plugins", "installed", parts[0], parts[1], b.S("version"))
+		if e := os.MkdirAll(installDir, 0o700); e != nil {
+			return nil, e
+		}
+		if e := writeObject(filepath.Join(installDir, "artifact.json"), core.Object{"url": artifactURL, "sha256": expected, "bytes": len(data)}); e != nil {
+			return nil, e
+		}
+		out["installed"] = true
+		out["version"] = b.S("version")
+	case "plugin_delete":
+		if wid == "" {
+			return nil, fmt.Errorf("workspace required")
+		}
+		parts := strings.SplitN(b.S("pluginId"), "/", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid plugin id")
+		}
+		// Uninstall is idempotent: an absent install dir still reports removed.
+		if e := os.RemoveAll(filepath.Join(root, "workspaces", wid, "plugins", "installed", parts[0], parts[1])); e != nil {
+			return nil, e
+		}
+		out["removed"] = true
 	default:
 		return nil, fmt.Errorf("unknown effect kind")
 	}
 	return out, nil
+}
+
+// selectArtifact picks the release the simulated Node installs: a universal
+// release when the payload carries one, otherwise the first targeted artifact.
+// The real Node selects by its own host target; the simulator has no host
+// profile, so the first target stands in and the selection policy stays on the
+// execution plane.
+func (s *Substrate) selectArtifact(b core.Object) (url, sha string) {
+	if u := b.O("universal"); u.S("url") != "" {
+		return u.S("url"), u.S("sha256")
+	}
+	if targets, e := objects(b, "targets"); e == nil && len(targets) > 0 {
+		return targets[0].S("url"), targets[0].S("sha256")
+	}
+	return "", ""
 }

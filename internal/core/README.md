@@ -7,6 +7,8 @@
 ## 模块概览
 
 - [migrations](migrations/README.md)：定义按顺序执行、仅向前的 PostgreSQL Schema 迁移脚本和校验和验证。
+- [plugins.go](plugins.go)：插件市场目录快照的落库与读取（`pluginmarket.CatalogSink` 实现）、
+  工作区插件选择状态机（安装/移除 fan-out、聚合规则、SSE 失效广播）。
 
 ## 架构与运行时模型
 

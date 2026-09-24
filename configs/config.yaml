@@ -42,3 +42,12 @@ auth:
       issuer: ora-internal-issuer
       kind: user
       public_key_file: .local/gateway/user-identity.pem
+plugins:
+  # Plugin marketplace the cloud server syncs into its own catalog snapshot (git fetch + scan of
+  # registry/**/orax.toml). The catalog API always reads the PostgreSQL snapshot and never the
+  # network; the first sync runs at startup, then every sync_interval. Override:
+  # CLOUD_PLUGINS_MARKETPLACE_URL / _BRANCH / _SYNC_INTERVAL / _SYNC_ENABLED.
+  marketplace_url: "https://github.com/ora-space/marketplace"
+  marketplace_branch: "main"
+  sync_interval: 5m
+  sync_enabled: true

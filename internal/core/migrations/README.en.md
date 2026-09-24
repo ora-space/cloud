@@ -58,3 +58,6 @@ Migrations are executed in ascending numerical sequence. The sequence is **appen
 - **No AutoMigrate**: The production server daemon **never** executes DDL or modifies table structures at startup. Migrations must be applied using `cloudctl migrate` under dedicated database administrator credentials.
 
 See [core overview](../README.en.md), [cloudctl CLI](../../../cmd/cloudctl/README.en.md), and [Core contract](../../../docs/core-contract.md).
+- **`0015_plugins.sql`** (append-only): the plugin marketplace's three tables plus enum widening:
+  - `plugin_sources` (deployment-global source, default `official` namespace), `plugin_catalog_entries` (catalog snapshot; reads never leave the database), `space_plugins` (authoritative per-space selection, `UNIQUE(space_id, source_namespace, identifier)`), `workspace_plugin_instances` (fan-out execution facts with tenant/owner/project/workspace composite foreign keys).
+  - Widens `operations.kind` (+install_plugin/remove_plugin), `operations.step` (+plugin), `external_effects.kind` (+plugin_ensure/plugin_delete); the original CHECKs live in 0001 (PG names them table_column_check), dropped and rebuilt with the extended sets.
