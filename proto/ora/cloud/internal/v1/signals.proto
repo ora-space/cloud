@@ -6,6 +6,9 @@ package ora.cloud.internal.v1;
 // accelerators: Cloud neither persists nor replays them, and none of them changes ownership or
 // state. A Controller that loses the stream falls back to periodic ClaimWork and reopens it.
 service ControlSignalService {
+  // Ends with OK only when the serving instance drains, after it has tried to send Drain; every other
+  // end, including a refused subscription, carries an error status. A holder may therefore treat a
+  // clean end as Drain even when the Drain message itself was dropped.
   rpc Watch(WatchRequest) returns (stream WatchResponse);
 }
 
@@ -29,8 +32,9 @@ message WorkAvailable {
   optional string operation_id = 1;
 }
 
-// Asks the holder to stop claiming and drain in-flight coordination, then release its lease. It
-// never cancels user work or destroys sandboxes.
+// The instance that sends it is about to stop. The holder stops claiming from it until a new Watch
+// is established; Drain does not ask the holder to release its lease, and it never cancels user work
+// or destroys sandboxes.
 message Drain {}
 
 // Reserved for control ownership changes of a Node; first-version Controllers only log it.

@@ -211,8 +211,9 @@ func (x *WorkAvailable) GetOperationId() string {
 	return ""
 }
 
-// Asks the holder to stop claiming and drain in-flight coordination, then release its lease. It
-// never cancels user work or destroys sandboxes.
+// The instance that sends it is about to stop. The holder stops claiming from it until a new Watch
+// is established; Drain does not ask the holder to release its lease, and it never cancels user work
+// or destroys sandboxes.
 type Drain struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields

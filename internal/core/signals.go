@@ -17,7 +17,8 @@ type ControlSignalKind string
 const (
 	// SignalWorkAvailable follows a committed clone request; OperationID names it.
 	SignalWorkAvailable ControlSignalKind = "work_available"
-	// SignalDrain precedes shutdown: stop claiming, finish or hand over in-flight coordination.
+	// SignalDrain precedes this instance's shutdown: the holder stops claiming from it until a new
+	// Watch is established, keeps its lease, and leaves in-flight coordination and user work alone.
 	SignalDrain ControlSignalKind = "drain"
 )
 
