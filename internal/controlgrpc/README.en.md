@@ -49,5 +49,10 @@ The status code is the primary classification and `ErrorDetail{ErrorCode}` is at
   `lease_check` (read-only, no renewal); afterwards it forwards signals from the in-process
   `core.ControlHub`: `WorkAvailable{operation_id}` after a `clone_requests` row commits, `Drain` before
   the server stops. At-most-once, not persisted, a slow subscriber loses signals; after `Drain` the
-  stream ends cleanly (EOF) and new `Watch` calls during shutdown return `UNAVAILABLE`. The listen address comes
+  stream ends cleanly (EOF) and new `Watch` calls during shutdown return `UNAVAILABLE`. The stream ends with
+  OK only while draining and with an error status otherwise, so a holder may treat a clean end as `Drain`;
+  `Drain` only says this instance is about to stop and does not ask the holder to release its lease. The
+  listener accepts client HTTP/2 PINGs spaced at least 5 seconds apart, also while the connection has no
+  active stream, so the Controller's keepalive is never cut by `GOAWAY(too_many_pings)`; the server sends
+  no PINGs of its own. The listen address comes
 from `control.grpc_addr` and must stay on a loopback or private network until TLS lands.

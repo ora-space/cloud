@@ -41,5 +41,8 @@
 - `ControlSignalService.Watch`：Controller 发起的服务端流。打开时以 `lease_check` 校验 epoch（只读，不续期）；
   之后从进程内 `core.ControlHub` 转发信号：`clone_requests` 提交后的 `WorkAvailable{operation_id}`、
   服务关停前的 `Drain`。至多一次、不持久化、慢订阅者丢信号；`Drain` 后流干净结束（EOF），
-  关停期间新的 `Watch` 返回 `UNAVAILABLE`。监听地址由 `control.grpc_addr` 配置，
+  关停期间新的 `Watch` 返回 `UNAVAILABLE`。流只在排空时以 OK 结束，其他结束都带错误状态，持有者可以把
+  干净结束当作 `Drain`；`Drain` 只表示本实例即将停止，不要求持有者释放租约。监听接受间隔不短于 5 秒的
+  客户端 HTTP/2 PING（连接上没有活动流时也接受），使 Controller 的保活不会被 `GOAWAY(too_many_pings)`
+  断开；服务端自身不发起 PING。监听地址由 `control.grpc_addr` 配置，
 在 TLS 落地前只应绑定回环或私网地址。

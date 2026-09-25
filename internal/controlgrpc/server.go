@@ -8,10 +8,12 @@ package controlgrpc
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -26,12 +28,27 @@ const HolderMetadata = "x-ora-controller-id"
 // maxHolder bounds the self-declared identity like any other untrusted identifier.
 const maxHolder = 256
 
+// keepaliveMinTime is the shortest client PING interval the listener accepts without counting a
+// strike. grpc-go's default policy (5 minutes, no PINGs without an active stream) sends
+// GOAWAY(too_many_pings) after three strikes, which would cut the Controller's 30-second keepalive on
+// an idle Watch together with every unary call on that connection. 5 seconds sits below any sane
+// client interval (grpc-go clients cannot go under 10 seconds) with room for jitter, yet still
+// refuses a PING flood. The listener never PINGs on its own: TCP keepalive eventually closes a lost
+// Controller's connection, and a bounded subscriber buffer keeps it from blocking anyone meanwhile.
+const keepaliveMinTime = 5 * time.Second
+
 type claimsKey struct{}
 
-// New builds the gRPC server that names the calling Controller on every unary and stream call. The
-// caller owns the listener and the stop sequence.
+// New builds the gRPC server that names the calling Controller on every unary and stream call and
+// accepts its keepalive PINGs, including while no stream is active so a Controller that has lost its
+// Watch can still detect a dead connection before its next call. The caller owns the listener and
+// the stop sequence.
 func New(store *core.Store) *grpc.Server {
-	server := grpc.NewServer(grpc.ChainUnaryInterceptor(unaryHolder), grpc.ChainStreamInterceptor(streamHolder))
+	server := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryHolder),
+		grpc.ChainStreamInterceptor(streamHolder),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: keepaliveMinTime, PermitWithoutStream: true}),
+	)
 	controlpb.RegisterControllerLeaseServiceServer(server, &leaseService{store: store})
 	controlpb.RegisterExecutionServiceServer(server, &executionService{store: store})
 	controlpb.RegisterControlSignalServiceServer(server, &signalService{store: store})
