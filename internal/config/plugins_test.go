@@ -27,7 +27,24 @@ func writePluginConfig(t *testing.T, plugins string) string {
 	return path
 }
 
+// clearPluginEnv blanks the CLOUD_PLUGINS_* overrides for the test. Environment values win over
+// the file, and `task setup` writes all four into .local/dev.env, which Taskfile.yml loads for
+// every task; left in place they would replace the plugins section each fixture is testing.
+// Viper treats an empty variable as unset, and t.Setenv restores the original afterwards.
+func clearPluginEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"CLOUD_PLUGINS_MARKETPLACE_URL",
+		"CLOUD_PLUGINS_MARKETPLACE_BRANCH",
+		"CLOUD_PLUGINS_SYNC_INTERVAL",
+		"CLOUD_PLUGINS_SYNC_ENABLED",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestPluginConfigDecodingMatrix(t *testing.T) {
+	clearPluginEnv(t)
 	cases := []struct {
 		name    string
 		plugins string
@@ -77,6 +94,7 @@ func TestPluginConfigDecodingMatrix(t *testing.T) {
 }
 
 func TestPluginConfigRejectsMalformedValues(t *testing.T) {
+	clearPluginEnv(t)
 	cases := []struct {
 		name    string
 		plugins string
