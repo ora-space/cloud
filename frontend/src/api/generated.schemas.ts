@@ -127,6 +127,7 @@ export const CloneStateReason = {
   branchNotFound: 'branchNotFound',
   destinationConflict: 'destinationConflict',
   operationFailed: 'operationFailed',
+  interrupted: 'interrupted',
   unspecified: 'unspecified',
 } as const;
 

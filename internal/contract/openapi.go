@@ -217,7 +217,7 @@ func Document() map[string]any {
 	s["IdleRefusal"] = object(obj{"accepted": boolean(), "errorCode": enumeration("resource_in_use")}, "accepted", "errorCode")
 	// Clone requests mirror the transitional Controller DTO: the tagged state carries the terminal
 	// fact, and identities assigned at dispatch are null until a Controller records it.
-	s["CloneState"] = object(obj{"kind": enumeration("pending", "succeeded", "failed"), "path": str(), "commit": str(), "reason": enumeration("sourceUnavailable", "branchNotFound", "destinationConflict", "operationFailed", "unspecified"), "retainedPath": str()}, "kind")
+	s["CloneState"] = object(obj{"kind": enumeration("pending", "succeeded", "failed"), "path": str(), "commit": str(), "reason": enumeration("sourceUnavailable", "branchNotFound", "destinationConflict", "operationFailed", "interrupted", "unspecified"), "retainedPath": str()}, "kind")
 	cloneProps := fields("operationId createdAt updatedAt")
 	for _, name := range []string{"requestId", "repository", "branch"} {
 		cloneProps[name] = str()

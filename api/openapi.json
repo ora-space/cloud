@@ -258,6 +258,7 @@
               "branchNotFound",
               "destinationConflict",
               "operationFailed",
+              "interrupted",
               "unspecified"
             ],
             "type": "string"

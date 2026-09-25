@@ -29,6 +29,9 @@ const (
 	CloneFailureReason_CLONE_FAILURE_REASON_BRANCH_NOT_FOUND     CloneFailureReason = 2
 	CloneFailureReason_CLONE_FAILURE_REASON_DESTINATION_CONFLICT CloneFailureReason = 3
 	CloneFailureReason_CLONE_FAILURE_REASON_OPERATION_FAILED     CloneFailureReason = 4
+	// The attempt was terminated before Git reached its own verdict (Node stop, command deadline,
+	// or an external signal) and its cleanup was confirmed; a new execution may simply retry.
+	CloneFailureReason_CLONE_FAILURE_REASON_INTERRUPTED CloneFailureReason = 5
 )
 
 // Enum value maps for CloneFailureReason.
@@ -39,6 +42,7 @@ var (
 		2: "CLONE_FAILURE_REASON_BRANCH_NOT_FOUND",
 		3: "CLONE_FAILURE_REASON_DESTINATION_CONFLICT",
 		4: "CLONE_FAILURE_REASON_OPERATION_FAILED",
+		5: "CLONE_FAILURE_REASON_INTERRUPTED",
 	}
 	CloneFailureReason_value = map[string]int32{
 		"CLONE_FAILURE_REASON_UNSPECIFIED":          0,
@@ -46,6 +50,7 @@ var (
 		"CLONE_FAILURE_REASON_BRANCH_NOT_FOUND":     2,
 		"CLONE_FAILURE_REASON_DESTINATION_CONFLICT": 3,
 		"CLONE_FAILURE_REASON_OPERATION_FAILED":     4,
+		"CLONE_FAILURE_REASON_INTERRUPTED":          5,
 	}
 )
 
@@ -1319,13 +1324,14 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"\x1cListPendingDispatchesRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"a\n" +
 	"\x1dListPendingDispatchesResponse\x12@\n" +
-	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\xec\x01\n" +
+	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\x92\x02\n" +
 	"\x12CloneFailureReason\x12$\n" +
 	" CLONE_FAILURE_REASON_UNSPECIFIED\x10\x00\x12+\n" +
 	"'CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE\x10\x01\x12)\n" +
 	"%CLONE_FAILURE_REASON_BRANCH_NOT_FOUND\x10\x02\x12-\n" +
 	")CLONE_FAILURE_REASON_DESTINATION_CONFLICT\x10\x03\x12)\n" +
-	"%CLONE_FAILURE_REASON_OPERATION_FAILED\x10\x042\xc2\x05\n" +
+	"%CLONE_FAILURE_REASON_OPERATION_FAILED\x10\x04\x12$\n" +
+	" CLONE_FAILURE_REASON_INTERRUPTED\x10\x052\xc2\x05\n" +
 	"\x10ExecutionService\x12^\n" +
 	"\tClaimWork\x12'.ora.cloud.internal.v1.ClaimWorkRequest\x1a(.ora.cloud.internal.v1.ClaimWorkResponse\x12m\n" +
 	"\x0eRecordDispatch\x12,.ora.cloud.internal.v1.RecordDispatchRequest\x1a-.ora.cloud.internal.v1.RecordDispatchResponse\x12v\n" +

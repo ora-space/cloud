@@ -140,7 +140,15 @@ func TestPublicClonesAcceptOnceAndReflectExecutionFacts(t *testing.T) {
 	if failed := f.clone(fid); text(failed.O("state")) != text(core.Object{"kind": "failed", "reason": "branchNotFound", "retainedPath": "/srv/retained"}) {
 		t.Fatal("failed view", failed)
 	}
-	if both := f.call("GET", f.path("/clones?limit=10"), nil, "", 200); len(both["items"].([]any)) != 2 {
-		t.Fatal("listing after completion", both)
+	// An attempt terminated before Git's own verdict surfaces as interrupted, keeping its directory.
+	cut := f.call("POST", f.path("/clones"), core.Object{"requestId": uuid.NewString(), "repository": body.S("repository"), "branch": "main"}, "clone-5", 202)
+	cid := cut.S("operationId")
+	f.control("clone_dispatch", uuid.NewString(), core.Object{"operationId": cid, "executionId": "exec-3", "nodeId": "node-a", "input": input})
+	f.control("clone_takeover", uuid.NewString(), core.Object{"operationId": cid, "executionId": "exec-3", "sequence": 0, "event": "e30=", "result": core.Object{"node": node, "outcome": "clone_failed", "reason": "CLONE_FAILURE_REASON_INTERRUPTED", "retainedPath": "/srv/cut"}})
+	if interrupted := f.clone(cid); text(interrupted.O("state")) != text(core.Object{"kind": "failed", "reason": "interrupted", "retainedPath": "/srv/cut"}) {
+		t.Fatal("interrupted view", interrupted)
+	}
+	if all := f.call("GET", f.path("/clones?limit=10"), nil, "", 200); len(all["items"].([]any)) != 3 {
+		t.Fatal("listing after completion", all)
 	}
 }

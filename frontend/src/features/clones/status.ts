@@ -41,5 +41,6 @@ export const CLONE_FAILURE_LABELS: Record<CloneStateReason, string> = {
   branchNotFound: '找不到指定分支',
   destinationConflict: '目标目录冲突',
   operationFailed: 'Git 操作失败',
+  interrupted: '执行被中断，可重新提交',
   unspecified: '未说明原因',
 }

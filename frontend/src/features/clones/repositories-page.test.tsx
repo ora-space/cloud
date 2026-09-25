@@ -119,6 +119,12 @@ describe('RepositoriesPage', () => {
           executionId: 'exec-p',
           nodeId: 'node-a',
         }),
+        operation('interrupted', {
+          createdAt: '2026-09-23T07:00:00Z',
+          executionId: 'exec-i',
+          nodeId: 'node-a',
+          state: { kind: 'failed', reason: 'interrupted', retainedPath: '/srv/cut' },
+        }),
       ],
       'more',
     )
@@ -131,6 +137,7 @@ describe('RepositoriesPage', () => {
       '已完成',
       '已派发',
       '排队中',
+      '失败',
     ])
     const outcomes = rows.map((row) => within(row).getAllByRole('cell')[2]?.textContent)
     expect(outcomes).toEqual([
@@ -138,6 +145,7 @@ describe('RepositoriesPage', () => {
       `${COMMIT.slice(0, 12)}/srv/repositories/done`,
       '已交给 Node node-a，等待结果',
       '等待 Controller 领取',
+      '执行被中断，可重新提交残留已保留：/srv/cut',
     ])
     expect(screen.getByText('仅显示其中 100 条记录。')).toBeInTheDocument()
   })
