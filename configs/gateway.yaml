@@ -72,6 +72,12 @@ tokens:
   user_private_key_file: ".local/gateway/user-identity.key"      # PKCS#8 Ed25519 PEM
   lifetime: 60s        # at most 5m; Cloud rejects longer credentials
 
+web:
+  # Built frontend (`npm --prefix frontend run build` output) served on this origin, next to /auth
+  # and /api, so no separate web server is needed. Empty serves no frontend (development uses Vite).
+  # Override: GATEWAY_WEB_DIST_DIR.
+  dist_dir: ""
+
 github:
   # Read only when login.provider is github. Locally `task setup` supplies GATEWAY_GITHUB_CLIENT_ID
   # and writes the secret file from config.toml; the secret file holds only the secret value.

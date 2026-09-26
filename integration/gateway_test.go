@@ -16,6 +16,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -291,6 +293,7 @@ type gatewaySpec struct {
 	sessionTTL      time.Duration
 	upstreamTimeout time.Duration
 	writeTimeout    time.Duration
+	web             *gateway.Web
 }
 
 func (f *gatewayFixture) newGatewayWithProvider(spec gatewaySpec) *gatewayInstance {
@@ -323,6 +326,7 @@ func (f *gatewayFixture) newGatewayWithProvider(spec gatewaySpec) *gatewayInstan
 		Store: f.store, Login: login, Issuer: issuer, Limiter: gateway.NewRateLimiter(600, spec.burst, 1000, time.Now),
 		Upstream: upstreamURL, UpstreamTimeout: spec.upstreamTimeout, PublicOrigin: origin,
 		Cookies: gateway.CookiePolicy{Secure: false, CallbackPath: gateway.CallbackPath}, Log: log, Now: time.Now,
+		Web: spec.web,
 	})
 	must(f.t, e)
 	dev.Routes(handler)
@@ -1157,4 +1161,49 @@ func anyStrings(v any) []string {
 		}
 	}
 	return out
+}
+
+// A Gateway with a built frontend serves it on its own origin, next to /auth and /api, without
+// turning a miss on its API paths into the HTML shell.
+func TestGatewayServesBuiltFrontendOnItsOrigin(t *testing.T) {
+	f := setupGateway(t)
+	dist := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(dist, "assets"), 0o755))
+	must(t, os.WriteFile(filepath.Join(dist, "index.html"), []byte("<shell>"), 0o644))
+	must(t, os.WriteFile(filepath.Join(dist, "assets", "app.js"), []byte("js"), 0o644))
+	web, e := gateway.OpenWeb(dist)
+	must(t, e)
+	t.Cleanup(func() { must(t, web.Close()) })
+	provider, e := github.New(&github.Options{ClientID: "client-id", ClientSecret: "provider-secret", AuthorizeURL: f.provider.server.URL + "/login/oauth/authorize", TokenURL: f.provider.server.URL + "/login/oauth/access_token", UserURL: f.provider.server.URL + "/user", HTTP: github.NewHTTPClient(5 * time.Second)})
+	must(t, e)
+	gw := f.newGatewayWithProvider(gatewaySpec{burst: 100, providerName: gateway.ProviderGitHub, provider: provider, sessionTTL: time.Hour, upstreamTimeout: 2 * time.Second, web: web})
+	browser := gw.browser()
+
+	text := func(path string) (int, string, string) {
+		resp, e := browser.Get(gw.server.URL + path)
+		must(t, e)
+		defer resp.Body.Close()
+		b, e := io.ReadAll(resp.Body)
+		must(t, e)
+		return resp.StatusCode, resp.Header.Get("Content-Type"), string(b)
+	}
+	for path, want := range map[string]string{"/": "<shell>", "/w/acme/issues": "<shell>", "/assets/app.js": "js"} {
+		if status, _, body := text(path); status != http.StatusOK || body != want {
+			t.Fatalf("GET %s = %d %q, want 200 %q", path, status, body, want)
+		}
+	}
+	for _, path := range []string{"/internal/v1/nodes", "/auth/unknown"} {
+		if resp, out := gw.do(browser, http.MethodGet, path, nil, nil); resp.StatusCode != http.StatusNotFound || out.S("code") != "not_found" {
+			t.Fatalf("GET %s must stay a JSON 404, got %d %v", path, resp.StatusCode, out)
+		}
+	}
+	if resp, out := gw.do(browser, http.MethodPost, "/w/acme", nil, gw.origin()); resp.StatusCode != http.StatusNotFound || out.S("code") != "not_found" {
+		t.Fatalf("POST to a frontend path must stay a JSON 404, got %d %v", resp.StatusCode, out)
+	}
+	if resp, out := gw.do(browser, http.MethodGet, gateway.ProvidersPath, nil, nil); resp.StatusCode != http.StatusOK || out.S("default") != "github" {
+		t.Fatalf("Gateway routes must win over the frontend: %d %v", resp.StatusCode, out)
+	}
+	if resp, _ := gw.do(browser, http.MethodGet, "/api/v1/me", nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("API without a session must still be refused, got %d", resp.StatusCode)
+	}
 }

@@ -12,6 +12,7 @@ Gateway（`cmd/gateway`）是浏览器可访问的公开认证与反向代理边
 | `POST /auth/logout` | 同源校验后吊销当前 session（`revoked_reason=logout`）并清除 Cookie；幂等，返回 `204`。不会调用 IDaaS/W3 或 GitHub 的 logout。 |
 | `ANY /api/v1/*` | 解析 session Cookie，失败返回 `401 unauthenticated`。修改状态的方法要求同源证明（`403 origin_forbidden`）。丢弃浏览器提供的 `Authorization`、`X-Ora-User-Token`、`Cookie`、`Forwarded`/`X-Forwarded-*`，用本副本的两把私钥签发 service/user JWT 后转发。Cloud 不可达或在 `cloud.timeout` 内未完成响应返回 `502 upstream_unavailable`，session 不受影响。Cloud 以 `text/event-stream` 应答时（空间事件流），该连接不再受 `cloud.timeout`、`server.write_timeout` 与 8 MB 响应体上限约束，逐帧转发直到任一方关闭；限制只对已授权的这一个连接放开。 |
 | `GET /healthz` | PostgreSQL 探活。 |
+| `GET`/`HEAD` 其他路径 | 仅当配置了 `web.dist_dir`：返回前端构建产物中的文件，不存在的路径返回 `index.html`（`Cache-Control: no-cache`）供前端路由处理。`/api/`、`/auth/`、`/internal/` 下的未命中与其他方法仍是 `404 not_found` JSON。未配置时所有未命中都是 JSON 404。 |
 | `GET`/`POST /auth/dev/authorize` | 仅当 `login.development_provider` 开启时存在：本地开发登录表单，见下文。 |
 
 `/internal/v1/*` 没有路由，落到 `404 not_found`。所有错误使用 `{"code","params","requestId"}`，与 Cloud 一致；唯一例外是 `dev` 表单路由面向人的纯文本/HTML 响应（见下文）。
@@ -85,7 +86,7 @@ IDaaS 应用登记与上线检查：
 
 前端以 HttpOnly session Cookie 和 `GET /api/v1/me` 为唯一认证事实。目标页面得到 401 后把当前站内相对路径放入 `returnTo` 并进入登录过渡页；当 `GET /auth/providers` 只列出一个外部 provider（没有 `dev`）时，该页自动 `POST /auth/login`，再用 `location.replace(authorizationUrl)` 进入 IDaaS/W3；否则显示每个 provider 一个按钮，成功后由 callback 根据 Login Attempt 中保存的 `returnTo` 以 303 返回原页面。callback 不接受新的跳转参数。
 
-403 表示 Cloud 用户已停用，不再次登录；5xx 或登录启动失败会停止自动重试并展示显式重试入口。有效 session 访问登录页时直接返回目标页面。退出成功后清除当前用户查询缓存，再进入同一自动登录流程。前端与 Gateway 在开发和生产中必须对浏览器表现为同一 origin；Vite 仅把 `/auth`、`/api`、`/healthz` 代理至 `:8081`，从不暴露 `/internal`。
+403 表示 Cloud 用户已停用，不再次登录；5xx 或登录启动失败会停止自动重试并展示显式重试入口。有效 session 访问登录页时直接返回目标页面。退出成功后清除当前用户查询缓存，再进入同一自动登录流程。前端与 Gateway 在开发和生产中必须对浏览器表现为同一 origin：部署时由 Gateway 通过 `web.dist_dir` 直接提供 `frontend/dist`；开发时 Vite 仅把 `/auth`、`/api`、`/healthz` 代理至 `:8081`，从不暴露 `/internal`。
 
 ## 运行时数据库角色
 

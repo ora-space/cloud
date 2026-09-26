@@ -4,3 +4,5 @@ specs
 bin
 logs
 coverage.out
+frontend/node_modules
+frontend/dist

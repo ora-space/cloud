@@ -17,6 +17,7 @@
 | `proxy.go` | 到固定 upstream 的 `httputil.ReverseProxy`：连接/响应头超时、响应体 8 MiB 上限、错误回调经 context 传递。upstream 以 `text/event-stream` 应答时跳过体积上限并触发流回调，由 handler 解除该连接的 upstream 超时与写超时，事件流才能长期存活。 |
 | `ratelimit.go` | 按客户端地址的令牌桶，键表有界；start/callback 在写入任何 attempt 前限流。 |
 | `cleanup.go` | `RunCleanup`：生命周期拥有的有界批量清理循环。 |
+| `web.go` | `Web`/`OpenWeb`：可选地从 `web.dist_dir` 提供前端构建产物。启动时要求 `index.html` 存在；只处理无路由命中的 `GET`/`HEAD`，文件经 `os.Root` 打开（`..` 与符号链接无法逃出目录），未命中的客户端路由返回 `index.html`（`Cache-Control: no-cache`）；`/api/`、`/auth/`、`/internal/` 与 `/healthz` 仍是 JSON 404。 |
 | `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`：默认值与所有安全边界的启动期校验，包括至少配置一个 provider，以及 `login.development_provider` 只能与 `public.development` 同时开启。 |
 
 ## 不变量
@@ -29,6 +30,6 @@
 
 ## 测试
 
-单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界与限流；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障与数据库约束。
+单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界、限流与前端静态文件（文件、SPA 回退、越界与保留路径）；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障、数据库约束，以及前端与 `/auth`、`/api` 同源提供。
 
 参见 [内部子系统总览](../README.md)、[华为 IDaaS 适配器](idaas/README.md)、[GitHub 适配器](github/README.md)、[本地开发 provider](devlogin/README.md) 与 [Gateway 文档](../../docs/gateway.md)。
