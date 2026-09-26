@@ -30,6 +30,8 @@ type Options struct {
 	Cookies         CookiePolicy
 	Log             *zap.Logger
 	Now             func() time.Time
+	// Web, when set, serves the built frontend for GET/HEAD requests no route matches.
+	Web *Web
 }
 
 // Route paths of the authentication boundary. Everything under /api/v1 is proxied; /internal/v1
@@ -75,7 +77,12 @@ func NewHandler(o *Options) (*gin.Engine, error) {
 	r.GET(o.Cookies.CallbackPath+"/:provider", h.callback)
 	r.POST(LogoutPath, h.logout)
 	r.Any(ProxyPath, h.relay)
-	r.NoRoute(func(c *gin.Context) { h.fail(c, fault{"not_found", http.StatusNotFound}) })
+	r.NoRoute(func(c *gin.Context) {
+		if h.Web != nil && h.Web.serve(c.Writer, c.Request) {
+			return
+		}
+		h.fail(c, fault{"not_found", http.StatusNotFound})
+	})
 	r.NoMethod(func(c *gin.Context) { h.fail(c, fault{"method_not_allowed", http.StatusMethodNotAllowed}) })
 	r.HandleMethodNotAllowed = true
 	return r, nil

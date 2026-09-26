@@ -42,6 +42,7 @@ type Config struct {
 	Tokens   TokenConfig           `mapstructure:"tokens"`
 	GitHub   GitHubConfig          `mapstructure:"github"`
 	IDaaS    IDaaSConfig           `mapstructure:"idaas"`
+	Web      WebConfig             `mapstructure:"web"`
 }
 
 // PublicConfig fixes the origin browsers see. The callback URL is derived from it, never from

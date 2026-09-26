@@ -1,8 +1,8 @@
-# Ora Cloud images. The default (last) target is the service image with server, gateway and
-# cloudctl; two more targets serve local stacks such as the ora-space/cluster Compose file:
+# Ora Cloud images. The default (last) target is the service image: server, gateway, cloudctl and
+# the built frontend, which the Gateway serves when GATEWAY_WEB_DIST_DIR=/app/web. The devsetup
+# target serves local stacks such as the ora-space/cluster Compose file:
 #
-#   docker build -f scripts/Dockerfile -t ora-cloud:phase-one .                  # server/gateway/cloudctl
-#   docker build -f scripts/Dockerfile --target web -t ora-cloud-web:local .     # frontend behind nginx
+#   docker build -f scripts/Dockerfile -t ora-cloud:phase-one .
 #   docker build -f scripts/Dockerfile --target devsetup -t ora-cloud-devsetup:local .
 FROM golang:1.27.1-alpine AS build
 WORKDIR /src
@@ -23,14 +23,6 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Production frontend build behind nginx, which proxies /auth, /api and /healthz to the Gateway so
-# the browser sees one origin, the same way the Vite dev server does. GATEWAY_UPSTREAM names it.
-FROM nginx:1.29-alpine AS web
-ENV GATEWAY_UPSTREAM=http://gateway:8081
-COPY scripts/web.nginx.conf /etc/nginx/templates/default.conf.template
-COPY --from=web-build /src/frontend/dist /usr/share/nginx/html
-EXPOSE 80
-
 # Local-development key and migration setup (cmd/devsetup): generates the Gateway/Cloud key pairs
 # into .local/gateway and applies migrations. Never part of the service image.
 FROM alpine:3.22 AS devsetup
@@ -46,6 +38,7 @@ RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 ora && \
 WORKDIR /app
 COPY --from=build /out/server /out/gateway /out/cloudctl /app/
 COPY configs/config.yaml configs/gateway.yaml /app/configs/
+COPY --from=web-build /src/frontend/dist /app/web
 USER ora
 EXPOSE 8080
 ENTRYPOINT ["/app/server"]

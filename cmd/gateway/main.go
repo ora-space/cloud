@@ -65,7 +65,14 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
-	handler, e := buildHandler(cfg, store, log)
+	var web *gateway.Web
+	if cfg.Web.DistDir != "" {
+		if web, e = gateway.OpenWeb(cfg.Web.DistDir); e != nil {
+			return e
+		}
+		defer func() { runErr = errors.Join(runErr, web.Close()) }()
+	}
+	handler, e := buildHandler(cfg, store, web, log)
 	if e != nil {
 		return e
 	}
@@ -99,8 +106,8 @@ func run() (runErr error) {
 }
 
 // buildHandler loads key material and assembles the authentication boundary. Secrets are read from
-// files into process memory only and are never logged.
-func buildHandler(cfg *gateway.Config, store *gateway.Store, log *zap.Logger) (http.Handler, error) {
+// files into process memory only and are never logged. A nil web serves no frontend.
+func buildHandler(cfg *gateway.Config, store *gateway.Store, web *gateway.Web, log *zap.Logger) (http.Handler, error) {
 	origin, e := gateway.PublicOrigin(cfg.Public.BaseURL, cfg.Public.Development)
 	if e != nil {
 		return nil, e
@@ -156,6 +163,7 @@ func buildHandler(cfg *gateway.Config, store *gateway.Store, log *zap.Logger) (h
 		Cookies:         gateway.CookiePolicy{Secure: strings.HasPrefix(origin, "https://"), CallbackPath: gateway.CallbackPath},
 		Log:             log,
 		Now:             time.Now,
+		Web:             web,
 	})
 	if e != nil {
 		return nil, e

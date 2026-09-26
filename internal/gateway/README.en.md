@@ -17,6 +17,7 @@
 | `proxy.go` | `httputil.ReverseProxy` to the fixed upstream: dial/response-header timeouts, 8 MiB response cap, per-request error callback carried in the context. A `text/event-stream` upstream answer skips the cap and fires the stream callback, through which the handler lifts that connection's upstream and write timeouts so event streams can live long. |
 | `ratelimit.go` | Per-client token bucket with a bounded key table; start/callback are limited before any attempt row is written. |
 | `cleanup.go` | `RunCleanup`: lifecycle-owned bounded batch cleanup loop. |
+| `web.go` | `Web`/`OpenWeb`: optionally serves the built frontend from `web.dist_dir`. Startup requires `index.html`; only `GET`/`HEAD` requests no route matches are handled, files are opened through an `os.Root` (neither `..` nor a symbolic link escapes the directory), and an unmatched client-side route gets `index.html` (`Cache-Control: no-cache`); `/api/`, `/auth/`, `/internal/` and `/healthz` stay JSON 404s. |
 | `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`: defaults and startup validation of every security bound, including that at least one provider is configured and that `login.development_provider` is only accepted with `public.development`. |
 
 ## Invariants
@@ -29,6 +30,6 @@
 
 ## Tests
 
-Unit tests cover `return_to`/origin/cookie policy, identity normalization, credential issuance verified by Cloud's authenticator, configuration bounds, and rate limiting. `integration/gateway_test.go` uses real HTTP, PostgreSQL, the real Cloud router, and a PKCE-verifying fake provider to cover login, proxying, forged headers, cross-site mutations, replay, concurrent consumption, multiple replicas, expiry, revocation, cleanup, provider/Cloud failures, and database constraints.
+Unit tests cover `return_to`/origin/cookie policy, identity normalization, credential issuance verified by Cloud's authenticator, configuration bounds, rate limiting, and static frontend serving (files, SPA fallback, escapes, reserved paths). `integration/gateway_test.go` uses real HTTP, PostgreSQL, the real Cloud router, and a PKCE-verifying fake provider to cover login, proxying, forged headers, cross-site mutations, replay, concurrent consumption, multiple replicas, expiry, revocation, cleanup, provider/Cloud failures, database constraints, and serving the frontend on the same origin as `/auth` and `/api`.
 
 See the [internal overview](../README.en.md), the [Huawei IDaaS adapter](idaas/README.en.md), the [GitHub adapter](github/README.en.md), the [development provider](devlogin/README.en.md), and the [Gateway document](../../docs/gateway.md).
