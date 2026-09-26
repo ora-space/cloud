@@ -24,6 +24,7 @@ const (
 	WorkspaceOperationService_RecordEffectResult_FullMethodName = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordEffectResult"
 	WorkspaceOperationService_AdvanceOperation_FullMethodName   = "/ora.cloud.internal.v1.WorkspaceOperationService/AdvanceOperation"
 	WorkspaceOperationService_DeferOperation_FullMethodName     = "/ora.cloud.internal.v1.WorkspaceOperationService/DeferOperation"
+	WorkspaceOperationService_ListLiveSandboxes_FullMethodName  = "/ora.cloud.internal.v1.WorkspaceOperationService/ListLiveSandboxes"
 )
 
 // WorkspaceOperationServiceClient is the client API for WorkspaceOperationService service.
@@ -51,6 +52,12 @@ type WorkspaceOperationServiceClient interface {
 	AdvanceOperation(ctx context.Context, in *AdvanceOperationRequest, opts ...grpc.CallOption) (*AdvanceOperationResponse, error)
 	// Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
 	DeferOperation(ctx context.Context, in *DeferOperationRequest, opts ...grpc.CallOption) (*DeferOperationResponse, error)
+	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
+	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
+	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
+	// rebuild its sessions without waiting for each Workspace's next operation. Refused with
+	// FAILED_PRECONDITION (STALE_CONTROLLER) unless `epoch` is the caller's valid lease.
+	ListLiveSandboxes(ctx context.Context, in *ListLiveSandboxesRequest, opts ...grpc.CallOption) (*ListLiveSandboxesResponse, error)
 }
 
 type workspaceOperationServiceClient struct {
@@ -111,6 +118,16 @@ func (c *workspaceOperationServiceClient) DeferOperation(ctx context.Context, in
 	return out, nil
 }
 
+func (c *workspaceOperationServiceClient) ListLiveSandboxes(ctx context.Context, in *ListLiveSandboxesRequest, opts ...grpc.CallOption) (*ListLiveSandboxesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListLiveSandboxesResponse)
+	err := c.cc.Invoke(ctx, WorkspaceOperationService_ListLiveSandboxes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkspaceOperationServiceServer is the server API for WorkspaceOperationService service.
 // All implementations must embed UnimplementedWorkspaceOperationServiceServer
 // for forward compatibility.
@@ -136,6 +153,12 @@ type WorkspaceOperationServiceServer interface {
 	AdvanceOperation(context.Context, *AdvanceOperationRequest) (*AdvanceOperationResponse, error)
 	// Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
 	DeferOperation(context.Context, *DeferOperationRequest) (*DeferOperationResponse, error)
+	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
+	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
+	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
+	// rebuild its sessions without waiting for each Workspace's next operation. Refused with
+	// FAILED_PRECONDITION (STALE_CONTROLLER) unless `epoch` is the caller's valid lease.
+	ListLiveSandboxes(context.Context, *ListLiveSandboxesRequest) (*ListLiveSandboxesResponse, error)
 	mustEmbedUnimplementedWorkspaceOperationServiceServer()
 }
 
@@ -160,6 +183,9 @@ func (UnimplementedWorkspaceOperationServiceServer) AdvanceOperation(context.Con
 }
 func (UnimplementedWorkspaceOperationServiceServer) DeferOperation(context.Context, *DeferOperationRequest) (*DeferOperationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeferOperation not implemented")
+}
+func (UnimplementedWorkspaceOperationServiceServer) ListLiveSandboxes(context.Context, *ListLiveSandboxesRequest) (*ListLiveSandboxesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListLiveSandboxes not implemented")
 }
 func (UnimplementedWorkspaceOperationServiceServer) mustEmbedUnimplementedWorkspaceOperationServiceServer() {
 }
@@ -273,6 +299,24 @@ func _WorkspaceOperationService_DeferOperation_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkspaceOperationService_ListLiveSandboxes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListLiveSandboxesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkspaceOperationServiceServer).ListLiveSandboxes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkspaceOperationService_ListLiveSandboxes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkspaceOperationServiceServer).ListLiveSandboxes(ctx, req.(*ListLiveSandboxesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkspaceOperationService_ServiceDesc is the grpc.ServiceDesc for WorkspaceOperationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -299,6 +343,10 @@ var WorkspaceOperationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeferOperation",
 			Handler:    _WorkspaceOperationService_DeferOperation_Handler,
+		},
+		{
+			MethodName: "ListLiveSandboxes",
+			Handler:    _WorkspaceOperationService_ListLiveSandboxes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

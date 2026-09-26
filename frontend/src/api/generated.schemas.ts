@@ -1805,7 +1805,7 @@ export type GetApiV1TenantsTidProjects200 = {
 
 export type PostApiV1TenantsTidProjectsBody = {
   credentialRefId?: string;
-  defaultBranch?: string;
+  defaultBranch: string;
   name: string;
   repositoryUrl: string;
 };
@@ -2003,7 +2003,7 @@ export type GetApiV1TenantsTidSpacesSpaceIdProjects200 = {
 
 export type PostApiV1TenantsTidSpacesSpaceIdProjectsBody = {
   credentialRefId?: string;
-  defaultBranch?: string;
+  defaultBranch: string;
   name: string;
   repositoryUrl: string;
 };

@@ -560,7 +560,7 @@ func optionalField(name string, r router.Route) bool {
 		// Confirm must state what it is confirming; assist may be asked with a still-empty form.
 		return strings.HasSuffix(r.Path, "/assist")
 	}
-	return name == "defaultBranch" || name == "credentialRefId" || name == "version" && r.Method == "PUT" || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
+	return name == "credentialRefId" || name == "version" && r.Method == "PUT" || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
 }
 
 func inputSchema(name string, r router.Route) obj {
@@ -712,10 +712,10 @@ func description(r router.Route) string {
 		base += "Requires matching resource version and no active project operation. Atomically closes new execution admission. Active tickets return 409 resource_in_use without changing admission. Unknown Node activity requires later proof and remains pending/blocked. main Workspace cannot be independently deleted. "
 	}
 	if strings.HasSuffix(r.Path, "/projects") && r.Method == "POST" {
-		base += "Creates Project/main Workspace/operation atomically. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch defaults to HEAD; credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous. A project created at the tenant level defaults into the tenant's default collaboration space; the schema keeps space_id nullable for pre-existing unscoped projects, which stay owner-only. "
+		base += "Creates Project/main Workspace/operation atomically. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must name a branch, not HEAD (Cloud never reads the remote repository); credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous. A project created at the tenant level defaults into the tenant's default collaboration space; the schema keeps space_id nullable for pre-existing unscoped projects, which stay owner-only. "
 	}
 	if strings.HasSuffix(r.Path, "/workspaces") && r.Method == "POST" {
-		base += "Creates one isolated Workspace and Task display identity. title/baseRef required; baseRef becomes the Workspace's requestedRef, which its Node clones. "
+		base += "Creates one isolated Workspace and Task display identity. title/baseRef required; baseRef becomes the Workspace's requestedRef, which its Node clones; HEAD means the Project's defaultBranch. "
 	}
 	pagination := "Lists use ascending UUID pagination."
 	if r.Path == "/api/v1/me/tenants" {

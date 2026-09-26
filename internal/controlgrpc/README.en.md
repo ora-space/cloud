@@ -51,7 +51,11 @@ The status code is the primary classification and `ErrorDetail{ErrorCode}` is at
   to the same control actions as the `/internal/v1/operations` JSON routes, so both surfaces share
   lease, operation-version and step fencing. `ClaimOperation` claims (bumping the version on a
   re-claim), it is not a pure read. The snapshot carries the operation's clone executions; retired
-  storage/worktree effects are left out.
+  storage/worktree effects are left out. `ListLiveSandboxes` has no JSON route: it is the lease
+  holder's read-only list of sandboxes to hold Node sessions with (not terminating or terminated,
+  current generation, ensure succeeded), with the ensured NodeId, Substrate identity and unended
+  Node records, so a restarted Controller reconnects without waiting for each Workspace's next
+  operation.
 
 - `NodeReportService`: the Controller reports the desktop Nodes it holds sessions with.
   `RegisterNode` is idempotent per (sandbox instance, `node_incarnation_id`) and rejects a `node_id`

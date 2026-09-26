@@ -20,7 +20,7 @@ Node 不能自选路径、分支或仓库；克隆的 Git 凭据仍是基础设�
 | PUT `/effects/{effectId}` | kind、projectId、workspaceId、sandboxInstanceId? | 首次先落 journal 再执行；同 ID 同 payload 幂等，同 ID 不同 payload 409；成功后原结果保留 |
 | PUT/GET `/clones/{executionId}` | 仅模拟器：模拟 Node 执行 clone；workspaceId、repositoryUrl、branch | 同 execution 只执行一次并落 journal；返回 clone_ready+commitId 或 clone_failed+reason |
 
-kind 支持 sandbox_ensure（返回 sandboxInstanceId 与 nodeId）、sandbox_terminate（返回 terminated）、workspace_data_delete（返回 removed）以及插件 effect。storage/worktree 系列 kind 已退役，Cloud 拒绝再计划。模拟器只接受显式 repository URL→本地 fixture 映射，不接入真实私有 Git 凭据。cloud 内部的 snapshot 才向受控 Controller 提供本 Project 的 credential reference；基础设施负责解析引用、注入 Git 凭据、审计和轮换，Cloud 从不保存密钥值。
+kind 支持 sandbox_ensure（返回 sandboxInstanceId 与 nodeId）、sandbox_terminate（返回 terminated）、workspace_data_delete（返回 removed）以及插件 effect。storage/worktree 系列 kind 已退役，Cloud 拒绝再计划。模拟器只接受显式 repository URL→本地 fixture 映射，不接入真实私有 Git 凭据。cloud 内部的 snapshot 才向受控 Controller 提供本 Project 的 credential reference；基础设施负责解析引用、注入 Git 凭据、审计和轮换，Cloud 从不保存密钥值。Cloud 不读取远端仓库：创建 Project 必须给出具体的 `defaultBranch`（不接受 `HEAD`），isolated Workspace 的 `baseRef` 为 `HEAD` 时取 Project 的默认分支，因此下发的 `requestedRef` 总是 desktop Node 接受的具体分支名。
 
 生产 Substrate 应用独立服务身份与受控网络保护这些接口，并验证 Project/Workspace/effect scope；模拟 HTTP handler 仅供 loopback 测试，不能作为生产公共端点发布。幂等 ensure 必须能查询“执行成功但响应丢失”的实际对象，不能以调用方超时判定不存在。terminate 返回确认旧进程不会再访问存储的证据；不确定就 blocked，不分配新 generation。
 
@@ -28,7 +28,7 @@ kind 支持 sandbox_ensure（返回 sandboxInstanceId 与 nodeId）、sandbox_te
 
 ## 阶段二必须实际验证
 
-- 每个 Workspace 数据卷在 sandbox 替换时的挂载与跨宿主迁移；desktop Node 的 clone 策略（例如对 `HEAD` 的处理）与 Cloud `requestedRef` 的对齐。
+- 每个 Workspace 数据卷在 sandbox 替换时的挂载与跨宿主迁移。
 - 旧 sandbox 的终止或 storage fence，在网络分区与 Controller 接管下仍阻止旧文件写入。
 - 真实 Node 本地准入/idle 原子性、全部执行类型覆盖、Node 重启和 token 刷新、Agent/Deno/PTY 子进程归属。
 - 长 Job 期间每 10 秒续租和失租立即停止后续调度；未知 prompt 结果不自动重放。

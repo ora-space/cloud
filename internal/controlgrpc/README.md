@@ -43,7 +43,10 @@
   `ClaimOperation`／`PlanEffect`／`RecordEffectResult`／`AdvanceOperation`／`DeferOperation` 与
   `/internal/v1/operations` JSON 路由使用相同的 control 动作，两个入口共享租约、operation version 与步骤
   fencing。`ClaimOperation` 会领取（重新领取递增 version），不是纯读。快照携带该 operation 的 clone
-  execution，已退役的 storage/worktree effect 不出现在其中。
+  execution，已退役的 storage/worktree effect 不出现在其中。`ListLiveSandboxes` 没有 JSON 路由：它是租约
+  持有者的只读列表，列出应当持有 Node 会话的 sandbox（未在终止、未终止、当前 generation、ensure 已成功），
+  附带 ensure 报告的 NodeId、Substrate 标识与未结束的 Node 记录，使重启后的 Controller 无需等待各
+  Workspace 的下一个 operation 即可重连。
 
 - `NodeReportService`：Controller 报告它持有会话的 desktop Node。`RegisterNode` 按（sandbox 实例、
   `node_incarnation_id`）幂等，`node_id` 必须等于 sandbox_ensure 返回值；上一个 incarnation 结束后才接受新的。

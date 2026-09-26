@@ -26,6 +26,12 @@ service WorkspaceOperationService {
   rpc AdvanceOperation(AdvanceOperationRequest) returns (AdvanceOperationResponse);
   // Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
   rpc DeferOperation(DeferOperationRequest) returns (DeferOperationResponse);
+  // Lists every sandbox a lease holder should hold a Node session with: not terminating or
+  // terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
+  // it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
+  // rebuild its sessions without waiting for each Workspace's next operation. Refused with
+  // FAILED_PRECONDITION (STALE_CONTROLLER) unless `epoch` is the caller's valid lease.
+  rpc ListLiveSandboxes(ListLiveSandboxesRequest) returns (ListLiveSandboxesResponse);
 }
 
 enum OperationKind {
@@ -328,4 +334,24 @@ message DeferOperationRequest {
 
 message DeferOperationResponse {
   Operation operation = 1;
+}
+
+message ListLiveSandboxesRequest {
+  int64 epoch = 1;
+}
+
+// One sandbox a Controller should hold a session with, and everything needed to reach its Node.
+message LiveSandbox {
+  // substrate_sandbox_id is always set: the ensure effect's external identity when the sandbox
+  // step has not advanced yet.
+  SandboxRecord sandbox = 1;
+  // The NodeId the ensure effect reported; the Node's handshake must present it.
+  string node_id = 2;
+  // Node incarnations of this sandbox that have not ended.
+  repeated NodeRecord nodes = 3;
+}
+
+message ListLiveSandboxesResponse {
+  // Ordered by sandbox ID.
+  repeated LiveSandbox sandboxes = 1;
 }
