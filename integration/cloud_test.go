@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,12 +26,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
 	"github.com/wanglongan587/cloud/internal/api/router"
 	"github.com/wanglongan587/cloud/internal/collab"
+	"github.com/wanglongan587/cloud/internal/controlgrpc"
+	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/simulator"
 )
@@ -46,6 +52,8 @@ type fixture struct {
 	cloud                  *httptest.Server
 	external               *httptest.Server
 	pgConfig               *pgx.ConnConfig
+	executions             controlpb.ExecutionServiceClient
+	controlConn            *grpc.ClientConn
 }
 
 // testSchema creates an isolated PostgreSQL schema for one test and returns a pool bound to it.
@@ -132,11 +140,27 @@ func setup(t *testing.T) *fixture {
 	bootstrap, e := store.Bootstrap(context.Background(), "Test tenant", "corp", "alice", "Alice")
 	must(t, e)
 	f.tid, f.uid = bootstrap.S("tenantId"), bootstrap.S("userId")
-	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL}
+	f.controlConn = controlConn(t, store)
+	f.executions = controlpb.NewExecutionServiceClient(f.controlConn)
+	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: f.executions}
 	f.external, f.pgConfig = external, config
 	validateHTTP(t, f)
 	must(t, f.controller.Acquire(context.Background()))
 	return f
+}
+
+// controlConn serves the gRPC control surface for store over bufconn; the simulator Controller
+// uses it for the clone step, whose executions only that contract carries.
+func controlConn(t *testing.T, store *core.Store) *grpc.ClientConn {
+	t.Helper()
+	listener := bufconn.Listen(1 << 20)
+	server := controlgrpc.New(store)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, e := grpc.NewClient("passthrough:///control", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	must(t, e)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }
 
 func TestMigrateUpgradesPreviousSchemaAndData(t *testing.T) {
@@ -279,30 +303,31 @@ func TestHTTPProjectLifecycleAndDurableRecovery(t *testing.T) {
 		t.Fatal("idempotency created another project")
 	}
 	f.call("POST", f.path("/projects"), core.Object{"name": "Different", "repositoryUrl": "https://example.invalid/repo.git"}, "create", 409)
-	f.substrate.SetFault("worktree_ensure", "lose_response")
+	f.substrate.SetFault("sandbox_ensure", "lose_response")
 	if e := f.controller.Drain(context.Background()); e == nil {
 		t.Fatal("expected lost external response")
 	}
-	if f.scalar("SELECT count(*) FROM external_effects WHERE operation_id=$1", oid) != 2 {
-		t.Fatal("write-ahead effects missing")
+	if f.scalar("SELECT count(*) FROM external_effects WHERE operation_id=$1", oid) != 1 {
+		t.Fatal("write-ahead effect missing")
 	}
-	f.substrate.SetFault("worktree_ensure", "")
+	f.substrate.SetFault("sandbox_ensure", "")
 	deferred := f.call("GET", f.path("/operations/"+oid), nil, "", 200)
 	if deferred.S("state") != "retry_wait" || deferred.S("errorCode") != "substrate_timeout" {
 		t.Fatal("response loss was not deferred", deferred)
 	}
-	f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": deferred.N("version")}, "worktree-retry", 202)
+	f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": deferred.N("version")}, "sandbox-retry", 202)
 	f.drain()
 	ready := f.ws(wid)
-	if ready.S("observedState") != "ready" {
+	if ready.S("observedState") != "ready" || ready.S("baseCommitId") != f.commit || ready.S("requestedRef") != "main" {
 		t.Fatal(ready)
 	}
-	checkout := filepath.Join(f.substrate.Root, "projects", pid, "workspaces", wid, "checkout")
+	// The Workspace's own Node cloned into the Workspace's data; nothing is shared per Project.
+	checkout := filepath.Join(f.substrate.WorkspaceData(wid), "home", "checkout")
 	if runGit(t, "-C", checkout, "rev-parse", "HEAD") != f.commit {
 		t.Fatal("real commit not resolved")
 	}
-	if !strings.Contains(runGit(t, "--git-dir", filepath.Join(f.substrate.Root, "projects", pid, "repository.git"), "worktree", "list", "--porcelain"), wid) {
-		t.Fatal("main is not linked worktree")
+	if f.scalar("SELECT count(*) FROM project_storage WHERE project_id=$1", pid)+f.scalar("SELECT count(*) FROM workspace_worktrees WHERE workspace_id=$1", wid) != 0 {
+		t.Fatal("retired storage or worktree rows written for a new project")
 	}
 	isolated := f.call("POST", f.path("/projects/"+pid+"/workspaces"), core.Object{"title": "Task", "baseRef": "main"}, "isolated", 202)
 	iwid := isolated.O("resource").S("id")
@@ -311,7 +336,7 @@ func TestHTTPProjectLifecycleAndDurableRecovery(t *testing.T) {
 		t.Fatal("task display identity missing")
 	}
 	f.call("DELETE", f.path("/workspaces/"+wid), core.Object{"version": f.ws(wid).N("version")}, "main-delete", 409)
-	data := filepath.Join(f.substrate.Root, "projects", pid, "workspaces", iwid, "runtime", "state.txt")
+	data := filepath.Join(f.substrate.WorkspaceData(iwid), "home", "state.txt")
 	must(t, os.WriteFile(data, []byte("persistent"), 0o600))
 	oldNode := f.node(iwid)
 	stop := f.call("POST", f.path("/workspaces/"+iwid+"/stop"), core.Object{"version": f.ws(iwid).N("version")}, "stop", 202)
@@ -336,24 +361,27 @@ func TestHTTPProjectLifecycleAndDurableRecovery(t *testing.T) {
 	if _, e := os.Stat(data); e != nil {
 		t.Fatal("replacement lost data")
 	}
+	if f.scalar("SELECT count(*) FROM clone_executions WHERE workspace_id=$1", iwid) != 1 {
+		t.Fatal("start cloned again instead of reusing the Workspace's data")
+	}
 	_, status, e := f.client.Call(context.Background(), "POST", "/internal/v1/nodes/status", "node", oldNode, nil, "", core.Object{"version": 1, "connectionState": "connected", "initialized": true})
 	must(t, e)
 	if status != 409 {
 		t.Fatal("late old Node accepted", status)
 	}
 	del := f.call("DELETE", f.path("/workspaces/"+iwid), core.Object{"version": f.ws(iwid).N("version")}, "delete-isolated", 202)
-	f.substrate.SetFault("worktree_delete", "fail")
+	f.substrate.SetFault("workspace_data_delete", "fail")
 	if e = f.controller.Drain(context.Background()); e == nil {
 		t.Fatal("expected cleanup failure")
 	}
 	op := f.call("GET", f.path("/operations/"+del.O("operation").S("id")), nil, "", 200)
-	if op.S("state") != "retry_wait" || op.S("errorCode") != "git_cleanup_failed" {
+	if op.S("state") != "retry_wait" || op.S("errorCode") != "substrate_timeout" {
 		t.Fatal("cleanup failure was not deferred", op)
 	}
 	if _, e = os.Stat(data); e != nil {
 		t.Fatal("failed cleanup lost tracking/data")
 	}
-	f.substrate.SetFault("worktree_delete", "")
+	f.substrate.SetFault("workspace_data_delete", "")
 	f.call("POST", f.path("/operations/"+op.S("id")+"/retry"), core.Object{"version": op.N("version")}, "isolated-cleanup-retry", 202)
 	f.drain()
 	f.call("GET", f.path("/workspaces/"+iwid), nil, "", 404)
@@ -361,8 +389,10 @@ func TestHTTPProjectLifecycleAndDurableRecovery(t *testing.T) {
 	f.call("DELETE", f.path("/projects/"+pid), core.Object{"version": p.N("version")}, "delete-project", 202)
 	f.drain()
 	f.call("GET", f.path("/projects/"+pid), nil, "", 404)
-	if _, e = os.Stat(filepath.Join(f.substrate.Root, "projects", pid)); !os.IsNotExist(e) {
-		t.Fatal("project storage survived delete", e)
+	for _, id := range []string{wid, iwid} {
+		if _, e = os.Stat(f.substrate.WorkspaceData(id)); !os.IsNotExist(e) {
+			t.Fatal("workspace data survived delete", id, e)
+		}
 	}
 }
 

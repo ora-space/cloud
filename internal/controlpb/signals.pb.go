@@ -74,6 +74,7 @@ type WatchResponse struct {
 	//	*WatchResponse_WorkAvailable
 	//	*WatchResponse_Drain
 	//	*WatchResponse_NodeAssignment
+	//	*WatchResponse_OperationAvailable
 	Signal        isWatchResponse_Signal `protobuf_oneof:"signal"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -143,6 +144,15 @@ func (x *WatchResponse) GetNodeAssignment() *NodeAssignment {
 	return nil
 }
 
+func (x *WatchResponse) GetOperationAvailable() *OperationAvailable {
+	if x != nil {
+		if x, ok := x.Signal.(*WatchResponse_OperationAvailable); ok {
+			return x.OperationAvailable
+		}
+	}
+	return nil
+}
+
 type isWatchResponse_Signal interface {
 	isWatchResponse_Signal()
 }
@@ -159,11 +169,17 @@ type WatchResponse_NodeAssignment struct {
 	NodeAssignment *NodeAssignment `protobuf:"bytes,3,opt,name=node_assignment,json=nodeAssignment,proto3,oneof"`
 }
 
+type WatchResponse_OperationAvailable struct {
+	OperationAvailable *OperationAvailable `protobuf:"bytes,4,opt,name=operation_available,json=operationAvailable,proto3,oneof"`
+}
+
 func (*WatchResponse_WorkAvailable) isWatchResponse_Signal() {}
 
 func (*WatchResponse_Drain) isWatchResponse_Signal() {}
 
 func (*WatchResponse_NodeAssignment) isWatchResponse_Signal() {}
+
+func (*WatchResponse_OperationAvailable) isWatchResponse_Signal() {}
 
 // Hints that work can be claimed; ownership is still decided by ClaimWork.
 type WorkAvailable struct {
@@ -211,6 +227,53 @@ func (x *WorkAvailable) GetOperationId() string {
 	return ""
 }
 
+// Hints that a runtime Workspace operation became claimable after the transaction that queued it
+// committed; ownership is still decided by ClaimOperation. An operation whose retry delay elapses
+// has no such commit and is found by the periodic claim instead.
+type OperationAvailable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OperationAvailable) Reset() {
+	*x = OperationAvailable{}
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OperationAvailable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OperationAvailable) ProtoMessage() {}
+
+func (x *OperationAvailable) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OperationAvailable.ProtoReflect.Descriptor instead.
+func (*OperationAvailable) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_signals_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *OperationAvailable) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 // The instance that sends it is about to stop. The holder stops claiming from it until a new Watch
 // is established; Drain does not ask the holder to release its lease, and it never cancels user work
 // or destroys sandboxes.
@@ -222,7 +285,7 @@ type Drain struct {
 
 func (x *Drain) Reset() {
 	*x = Drain{}
-	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -234,7 +297,7 @@ func (x *Drain) String() string {
 func (*Drain) ProtoMessage() {}
 
 func (x *Drain) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -247,7 +310,7 @@ func (x *Drain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Drain.ProtoReflect.Descriptor instead.
 func (*Drain) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_signals_proto_rawDescGZIP(), []int{3}
+	return file_ora_cloud_internal_v1_signals_proto_rawDescGZIP(), []int{4}
 }
 
 // Reserved for control ownership changes of a Node; first-version Controllers only log it.
@@ -260,7 +323,7 @@ type NodeAssignment struct {
 
 func (x *NodeAssignment) Reset() {
 	*x = NodeAssignment{}
-	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -272,7 +335,7 @@ func (x *NodeAssignment) String() string {
 func (*NodeAssignment) ProtoMessage() {}
 
 func (x *NodeAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_signals_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -285,7 +348,7 @@ func (x *NodeAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeAssignment.ProtoReflect.Descriptor instead.
 func (*NodeAssignment) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_signals_proto_rawDescGZIP(), []int{4}
+	return file_ora_cloud_internal_v1_signals_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *NodeAssignment) GetNodeId() string {
@@ -301,15 +364,18 @@ const file_ora_cloud_internal_v1_signals_proto_rawDesc = "" +
 	"\n" +
 	"#ora/cloud/internal/v1/signals.proto\x12\x15ora.cloud.internal.v1\"$\n" +
 	"\fWatchRequest\x12\x14\n" +
-	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\"\xf0\x01\n" +
+	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\"\xce\x02\n" +
 	"\rWatchResponse\x12M\n" +
 	"\x0ework_available\x18\x01 \x01(\v2$.ora.cloud.internal.v1.WorkAvailableH\x00R\rworkAvailable\x124\n" +
 	"\x05drain\x18\x02 \x01(\v2\x1c.ora.cloud.internal.v1.DrainH\x00R\x05drain\x12P\n" +
-	"\x0fnode_assignment\x18\x03 \x01(\v2%.ora.cloud.internal.v1.NodeAssignmentH\x00R\x0enodeAssignmentB\b\n" +
+	"\x0fnode_assignment\x18\x03 \x01(\v2%.ora.cloud.internal.v1.NodeAssignmentH\x00R\x0enodeAssignment\x12\\\n" +
+	"\x13operation_available\x18\x04 \x01(\v2).ora.cloud.internal.v1.OperationAvailableH\x00R\x12operationAvailableB\b\n" +
 	"\x06signal\"H\n" +
 	"\rWorkAvailable\x12&\n" +
 	"\foperation_id\x18\x01 \x01(\tH\x00R\voperationId\x88\x01\x01B\x0f\n" +
-	"\r_operation_id\"\a\n" +
+	"\r_operation_id\"7\n" +
+	"\x12OperationAvailable\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\"\a\n" +
 	"\x05Drain\")\n" +
 	"\x0eNodeAssignment\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId2l\n" +
@@ -329,25 +395,27 @@ func file_ora_cloud_internal_v1_signals_proto_rawDescGZIP() []byte {
 	return file_ora_cloud_internal_v1_signals_proto_rawDescData
 }
 
-var file_ora_cloud_internal_v1_signals_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_ora_cloud_internal_v1_signals_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_ora_cloud_internal_v1_signals_proto_goTypes = []any{
-	(*WatchRequest)(nil),   // 0: ora.cloud.internal.v1.WatchRequest
-	(*WatchResponse)(nil),  // 1: ora.cloud.internal.v1.WatchResponse
-	(*WorkAvailable)(nil),  // 2: ora.cloud.internal.v1.WorkAvailable
-	(*Drain)(nil),          // 3: ora.cloud.internal.v1.Drain
-	(*NodeAssignment)(nil), // 4: ora.cloud.internal.v1.NodeAssignment
+	(*WatchRequest)(nil),       // 0: ora.cloud.internal.v1.WatchRequest
+	(*WatchResponse)(nil),      // 1: ora.cloud.internal.v1.WatchResponse
+	(*WorkAvailable)(nil),      // 2: ora.cloud.internal.v1.WorkAvailable
+	(*OperationAvailable)(nil), // 3: ora.cloud.internal.v1.OperationAvailable
+	(*Drain)(nil),              // 4: ora.cloud.internal.v1.Drain
+	(*NodeAssignment)(nil),     // 5: ora.cloud.internal.v1.NodeAssignment
 }
 var file_ora_cloud_internal_v1_signals_proto_depIdxs = []int32{
 	2, // 0: ora.cloud.internal.v1.WatchResponse.work_available:type_name -> ora.cloud.internal.v1.WorkAvailable
-	3, // 1: ora.cloud.internal.v1.WatchResponse.drain:type_name -> ora.cloud.internal.v1.Drain
-	4, // 2: ora.cloud.internal.v1.WatchResponse.node_assignment:type_name -> ora.cloud.internal.v1.NodeAssignment
-	0, // 3: ora.cloud.internal.v1.ControlSignalService.Watch:input_type -> ora.cloud.internal.v1.WatchRequest
-	1, // 4: ora.cloud.internal.v1.ControlSignalService.Watch:output_type -> ora.cloud.internal.v1.WatchResponse
-	4, // [4:5] is the sub-list for method output_type
-	3, // [3:4] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 1: ora.cloud.internal.v1.WatchResponse.drain:type_name -> ora.cloud.internal.v1.Drain
+	5, // 2: ora.cloud.internal.v1.WatchResponse.node_assignment:type_name -> ora.cloud.internal.v1.NodeAssignment
+	3, // 3: ora.cloud.internal.v1.WatchResponse.operation_available:type_name -> ora.cloud.internal.v1.OperationAvailable
+	0, // 4: ora.cloud.internal.v1.ControlSignalService.Watch:input_type -> ora.cloud.internal.v1.WatchRequest
+	1, // 5: ora.cloud.internal.v1.ControlSignalService.Watch:output_type -> ora.cloud.internal.v1.WatchResponse
+	5, // [5:6] is the sub-list for method output_type
+	4, // [4:5] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_signals_proto_init() }
@@ -359,6 +427,7 @@ func file_ora_cloud_internal_v1_signals_proto_init() {
 		(*WatchResponse_WorkAvailable)(nil),
 		(*WatchResponse_Drain)(nil),
 		(*WatchResponse_NodeAssignment)(nil),
+		(*WatchResponse_OperationAvailable)(nil),
 	}
 	file_ora_cloud_internal_v1_signals_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
@@ -367,7 +436,7 @@ func file_ora_cloud_internal_v1_signals_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_signals_proto_rawDesc), len(file_ora_cloud_internal_v1_signals_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

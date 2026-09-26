@@ -18,6 +18,12 @@ managed:
     - file_option: go_package
       path: ora/cloud/internal/v1/signals.proto
       value: github.com/wanglongan587/cloud/internal/controlpb;controlpb
+    - file_option: go_package
+      path: ora/cloud/internal/v1/nodes.proto
+      value: github.com/wanglongan587/cloud/internal/controlpb;controlpb
+    - file_option: go_package
+      path: ora/cloud/internal/v1/operations.proto
+      value: github.com/wanglongan587/cloud/internal/controlpb;controlpb
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: ..

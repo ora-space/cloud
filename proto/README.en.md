@@ -13,7 +13,9 @@ their own clients; they never copy the `.proto` files.
 | `errors.proto` | `ErrorDetail{ErrorCode}` attached as a `google.rpc.Status` detail; the gRPC status code is the primary classification, the enum refines it |
 | `lease.proto` | `ControllerLeaseService`: the global coordination lease whose `epoch` fences every write |
 | `executions.proto` | `ExecutionService`: claim work, register before dispatch, take over Node events, store queried results, recovery reads; the first version covers the clone closed loop only |
-| `signals.proto` | `ControlSignalService.Watch`: a Controller-opened server stream carrying `WorkAvailable` / `Drain` / `NodeAssignment` |
+| `operations.proto` | `WorkspaceOperationService`: claim, plan effects, record effect results, advance and defer Workspace lifecycle operations |
+| `nodes.proto` | `NodeReportService`: the Controller registers the desktop Nodes it holds sessions with (`node_id` + `node_incarnation_id`) and reports their status, end and idle |
+| `signals.proto` | `ControlSignalService.Watch`: a Controller-opened server stream carrying `WorkAvailable` / `OperationAvailable` / `Drain` / `NodeAssignment` |
 
 ## Semantics
 

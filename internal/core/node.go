@@ -31,13 +31,13 @@ func access(t *transaction, r *ControlRequest) Object {
 	return t.one("SELECT * FROM execution_tickets WHERE id=$1", ticketID)
 }
 
+// nodeCommand serves the Node-credential actions. desktop Nodes never call them (their Controller
+// reports them instead, see nodeReport); the Go simulator's Node keeps this path until the Rust
+// Controller replaces it. The credential's workspace, sandbox and generation bind every action.
 func nodeCommand(t *transaction, r *ControlRequest) Object {
 	c := r.Service
 	require(validID(c.Subject) && validID(c.WorkspaceID) && validID(c.SandboxID) && c.Generation > 0, 403, "node_scope_required")
-	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND runtime_generation=$2 AND deleted_at IS NULL", c.WorkspaceID, c.Generation)
-	require(w != nil, 409, "stale_node")
-	sandbox := t.one("SELECT * FROM sandbox_instances WHERE id=$1 AND workspace_id=$2 AND generation=$3 AND terminated_at IS NULL AND substrate_sandbox_id IS NOT NULL", c.SandboxID, c.WorkspaceID, c.Generation)
-	require(sandbox != nil && sandbox.S("observedState") != "terminating", 409, "stale_sandbox")
+	w := nodeScope(t, c.WorkspaceID, c.SandboxID, c.Generation)
 	if r.Action == "node_register" {
 		require(r.Body.N("protocolVersion") == 1, 400, "unsupported_protocol")
 		require(w.S("desiredState") == "running", 409, "execution_closed")
@@ -46,22 +46,18 @@ func nodeCommand(t *transaction, r *ControlRequest) Object {
 			require(existing.S("sandboxInstanceId") == c.SandboxID && existing["endedAt"] == nil, 409, "stale_node")
 			return existing
 		}
+		ensuredNode(t, c.SandboxID, c.Subject)
 		require(t.one("SELECT id FROM node_instances WHERE sandbox_instance_id=$1 AND ended_at IS NULL", c.SandboxID) == nil, 409, "node_already_registered")
-		t.exec("INSERT INTO node_instances(id,sandbox_instance_id,workspace_id,service_subject,connection_state,protocol_version) VALUES($1,$2,$3,$4,'connected',1)", c.Subject, c.SandboxID, c.WorkspaceID, c.Subject)
+		// The credential subject is both the row and the Node identity: this path has one
+		// incarnation per Node identity, so it doubles as the incarnation too.
+		t.exec("INSERT INTO node_instances(id,sandbox_instance_id,workspace_id,service_subject,connection_state,protocol_version,node_id,node_incarnation_id) VALUES($1,$2,$3,$4,'connected',1,$4,$4)", c.Subject, c.SandboxID, c.WorkspaceID, c.Subject)
 		return t.one("SELECT * FROM node_instances WHERE id=$1", c.Subject)
 	}
 	n := t.one("SELECT * FROM node_instances WHERE id=$1 AND sandbox_instance_id=$2 AND ended_at IS NULL AND service_subject=$3", c.Subject, c.SandboxID, c.Subject)
 	require(n != nil, 409, "stale_node")
 	switch r.Action {
 	case "node_status":
-		version(n, r.Body.N("version"))
-		state := r.Body.S("connectionState")
-		require(state == "connected" || state == "disconnected", 400, "invalid_node_state")
-		require(!n.B("initialized") || r.Body.B("initialized"), 409, "initialization_regression")
-		t.exec("UPDATE node_instances SET connection_state=$2,initialized=$3,last_seen_at=clock_timestamp(),idle_admission_epoch=NULL,version=version+1 WHERE id=$1", c.Subject, state, r.Body.B("initialized"))
-		if state == "disconnected" && w.S("observedState") == "ready" {
-			t.exec("UPDATE workspaces SET admission_open=false,observed_state='unavailable',version=version+1 WHERE id=$1", w.S("id"))
-		}
+		nodeStatus(t, r, n, w)
 	case "node_finish":
 		require(validID(r.TicketID), 404, "not_found")
 		ticket := t.one("SELECT * FROM execution_tickets WHERE id=$1 AND node_instance_id=$2 AND workspace_id=$3", r.TicketID, c.Subject, c.WorkspaceID)
@@ -73,22 +69,69 @@ func nodeCommand(t *transaction, r *ControlRequest) Object {
 		t.exec("UPDATE execution_tickets SET state='finished',finished_at=COALESCE(finished_at,now()) WHERE id=$1", r.TicketID)
 		return t.one("SELECT * FROM execution_tickets WHERE id=$1", r.TicketID)
 	case "node_idle":
-		version(n, r.Body.N("version"))
-		require(!w.B("admissionOpen") && r.Body.N("admissionEpoch") == w.N("admissionEpoch"), 409, "stale_admission")
-		require(validID(r.Body.S("operationId")), 400, "operation_required")
-		o := t.one("SELECT * FROM operations WHERE id=$1 AND project_id=$2 AND (workspace_id IS NULL OR workspace_id=$3) AND step='quiesce' AND state IN ('queued','running','retry_wait','blocked')", r.Body.S("operationId"), w.S("projectId"), w.S("id"))
-		require(o != nil, 409, "idle_not_requested")
-		if !r.Body.B("idle") {
-			restoreAdmission(t, o)
-			return Object{"accepted": false, "errorCode": "resource_in_use"}
+		if refused := nodeIdle(t, r, n, w); refused != nil {
+			return refused
 		}
-		checkActivities(t, w)
-		require(n.B("initialized") && n.S("connectionState") == "connected", 409, "idle_unconfirmed")
-		t.exec("UPDATE node_instances SET idle_admission_epoch=$2,last_seen_at=clock_timestamp(),version=version+1 WHERE id=$1", c.Subject, w.N("admissionEpoch"))
 	default:
 		reject(404, "not_found")
 	}
 	return t.one("SELECT * FROM node_instances WHERE id=$1", c.Subject)
+}
+
+// nodeScope fences every Node write to the Workspace's current generation and its live, already
+// allocated sandbox: a late report from an earlier generation or a terminating sandbox is refused.
+func nodeScope(t *transaction, wid, sid string, generation int64) Object {
+	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND runtime_generation=$2 AND deleted_at IS NULL", wid, generation)
+	require(w != nil, 409, "stale_node")
+	sandbox := t.one("SELECT * FROM sandbox_instances WHERE id=$1 AND workspace_id=$2 AND generation=$3 AND terminated_at IS NULL AND substrate_sandbox_id IS NOT NULL", sid, wid, generation)
+	require(sandbox != nil && sandbox.S("observedState") != "terminating", 409, "stale_sandbox")
+	return w
+}
+
+// ensuredNode requires the Node identity to be the one the sandbox's own ensure effect reported:
+// a Node that is not the sandbox's Node cannot become its node-step evidence.
+func ensuredNode(t *transaction, sid, nodeID string) {
+	e := t.one("SELECT result FROM external_effects WHERE id=$1 AND kind='sandbox_ensure' AND state='succeeded'", sid)
+	require(e != nil && e.O("result").S("nodeId") == nodeID, 409, "node_identity_mismatch")
+}
+
+// nodeStatus records one connection report and refreshes the heartbeat. A disconnect closes
+// admission on a ready Workspace; any report also drops earlier idle evidence, which must be
+// given again for the admission epoch it applies to.
+func nodeStatus(t *transaction, r *ControlRequest, n, w Object) {
+	version(n, r.Body.N("version"))
+	state := r.Body.S("connectionState")
+	require(state == "connected" || state == "disconnected", 400, "invalid_node_state")
+	require(!n.B("initialized") || r.Body.B("initialized"), 409, "initialization_regression")
+	t.exec("UPDATE node_instances SET connection_state=$2,initialized=$3,last_seen_at=clock_timestamp(),idle_admission_epoch=NULL,version=version+1 WHERE id=$1", n.S("id"), state, r.Body.B("initialized"))
+	if state == "disconnected" {
+		closeUnavailable(t, w)
+	}
+}
+
+// closeUnavailable closes admission on a ready Workspace whose Node is gone.
+func closeUnavailable(t *transaction, w Object) {
+	if w.S("observedState") == "ready" {
+		t.exec("UPDATE workspaces SET admission_open=false,observed_state='unavailable',version=version+1 WHERE id=$1", w.S("id"))
+	}
+}
+
+// nodeIdle records idle evidence for one quiesce request, bound to operation, Workspace, Node and
+// admission epoch. A refusal restores admission and fails the operation; its response is returned.
+func nodeIdle(t *transaction, r *ControlRequest, n, w Object) Object {
+	version(n, r.Body.N("version"))
+	require(!w.B("admissionOpen") && r.Body.N("admissionEpoch") == w.N("admissionEpoch"), 409, "stale_admission")
+	require(validID(r.Body.S("operationId")), 400, "operation_required")
+	o := t.one("SELECT * FROM operations WHERE id=$1 AND project_id=$2 AND (workspace_id IS NULL OR workspace_id=$3) AND step='quiesce' AND state IN ('queued','running','retry_wait','blocked')", r.Body.S("operationId"), w.S("projectId"), w.S("id"))
+	require(o != nil, 409, "idle_not_requested")
+	if !r.Body.B("idle") {
+		restoreAdmission(t, o)
+		return Object{"accepted": false, "errorCode": "resource_in_use"}
+	}
+	checkActivities(t, w)
+	require(n.B("initialized") && n.S("connectionState") == "connected", 409, "idle_unconfirmed")
+	t.exec("UPDATE node_instances SET idle_admission_epoch=$2,last_seen_at=clock_timestamp(),version=version+1 WHERE id=$1", n.S("id"), w.N("admissionEpoch"))
+	return nil
 }
 
 func restoreAdmission(t *transaction, o Object) {

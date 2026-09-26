@@ -20,6 +20,7 @@ import (
 
 	"github.com/wanglongan587/cloud/internal/api/router"
 	"github.com/wanglongan587/cloud/internal/contract"
+	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/simulator"
 )
@@ -99,10 +100,10 @@ func TestRestartRecreatesCloudSubstrateAndController(t *testing.T) {
 	must(t, e)
 	_, e = f.store.Pool.Exec("UPDATE operations SET retry_at=clock_timestamp()-interval '1 second' WHERE id=$1", created.O("operation").S("id"))
 	must(t, e)
-	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL}
+	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(controlConn(t, reopened))}
 	must(t, controller.Acquire(context.Background()))
 	must(t, controller.Drain(context.Background()))
-	if f.ws(wid).S("observedState") != "ready" || f.scalar("SELECT count(*) FROM sandbox_instances WHERE workspace_id=$1", wid) != 1 || f.scalar("SELECT count(*) FROM external_effects WHERE workspace_id=$1 AND kind='worktree_ensure'", wid) != 1 {
+	if f.ws(wid).S("observedState") != "ready" || f.scalar("SELECT count(*) FROM sandbox_instances WHERE workspace_id=$1", wid) != 1 || f.scalar("SELECT count(*) FROM external_effects WHERE workspace_id=$1 AND kind='sandbox_ensure'", wid) != 1 {
 		t.Fatal("restart depended on discarded service memory")
 	}
 	replay := f.create("durable-create")
@@ -116,13 +117,13 @@ func TestSameHolderRestartsRunningOperationFromPersistedEffectIntent(t *testing.
 	created := f.create("same-holder-restart")
 	operationID := created.O("operation").S("id")
 	claimed := f.internal("/internal/v1/operations/claim", core.Object{"epoch": f.controller.Epoch}, 200).O("operation")
-	planned := f.internal("/internal/v1/operations/"+operationID+"/effects", core.Object{"epoch": f.controller.Epoch, "version": claimed.N("version"), "kind": "storage_ensure"}, 200)
+	planned := f.internal("/internal/v1/operations/"+operationID+"/effects", core.Object{"epoch": f.controller.Epoch, "version": claimed.N("version"), "kind": "sandbox_ensure", "workspaceId": created.O("workspace").S("id")}, 200)
 	request := planned.O("effect").O("request")
-	if request.S("kind") != "storage_ensure" || request.S("projectId") != created.O("resource").S("id") {
+	if request.S("kind") != "sandbox_ensure" || request.S("projectId") != created.O("resource").S("id") || request.S("workspaceId") != created.O("workspace").S("id") {
 		t.Fatal("effect intent was not persisted", request)
 	}
 
-	restarted := &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL}
+	restarted := &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL, Executions: f.executions}
 	must(t, restarted.Acquire(context.Background()))
 	if restarted.Epoch != f.controller.Epoch {
 		t.Fatal("same holder unexpectedly changed lease epoch")

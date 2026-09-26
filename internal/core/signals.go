@@ -17,6 +17,10 @@ type ControlSignalKind string
 const (
 	// SignalWorkAvailable follows a committed clone request; OperationID names it.
 	SignalWorkAvailable ControlSignalKind = "work_available"
+	// SignalOperationAvailable follows a committed transaction that queued a runtime Workspace
+	// operation (created or retried); OperationID names it. A retry_wait operation becoming due has no
+	// commit to follow, so the holder's periodic claim covers it.
+	SignalOperationAvailable ControlSignalKind = "operation_available"
 	// SignalDrain precedes this instance's shutdown: the holder stops claiming from it until a new
 	// Watch is established, keeps its lease, and leaves in-flight coordination and user work alone.
 	SignalDrain ControlSignalKind = "drain"

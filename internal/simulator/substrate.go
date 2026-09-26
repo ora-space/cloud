@@ -38,14 +38,16 @@ func NewSubstrate(root string, repos map[string]string) (*Substrate, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e := os.MkdirAll(filepath.Join(absolute, "effects"), 0o700); e != nil {
-		return nil, e
+	for _, journal := range []string{"effects", "clones"} {
+		if e := os.MkdirAll(filepath.Join(absolute, journal), 0o700); e != nil {
+			return nil, e
+		}
 	}
 	return &Substrate{Root: absolute, Repositories: repos, Artifacts: map[string]string{}, faults: map[string]string{}}, nil
 }
 
 // MapArtifact binds a plugin release URL to a local fixture file, mirroring
-// the repository mapping the worktree effects already use.
+// the repository mapping the simulated Node's clone uses.
 func (s *Substrate) MapArtifact(url, localPath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -63,6 +65,10 @@ func (s *Substrate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
+	if strings.HasPrefix(r.URL.Path, "/clones/") {
+		s.serveClone(w, r)
+		return
+	}
 	id := strings.TrimPrefix(r.URL.Path, "/effects/")
 	if _, e := uuid.Parse(id); e != nil {
 		http.Error(w, "invalid id", 400)
@@ -197,65 +203,25 @@ func git(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 func exists(path string) bool { _, e := os.Stat(path); return e == nil }
+
+// WorkspaceData is one Workspace's persistent data, the stand-in for its data volume: it outlives
+// every sandbox of the Workspace and is removed only by workspace_data_delete. The simulated Node's
+// home, its clone and installed plugins all live in it.
+func (s *Substrate) WorkspaceData(workspaceID string) string {
+	return filepath.Join(s.Root, "workspaces", workspaceID)
+}
+
 func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core.Object, error) {
-	pid, wid := b.S("projectId"), b.S("workspaceId")
-	root := filepath.Join(s.Root, "projects", pid)
-	bare := filepath.Join(root, "repository.git")
-	checkout := filepath.Join(root, "workspaces", wid, "checkout")
-	runtime := filepath.Join(root, "workspaces", wid, "runtime")
+	wid := b.S("workspaceId")
+	if _, e := uuid.Parse(wid); e != nil {
+		return nil, fmt.Errorf("workspace required")
+	}
+	data := s.WorkspaceData(wid)
 	out := core.Object{}
 	switch b.S("kind") {
-	case "storage_ensure":
-		if e := os.MkdirAll(root, 0o700); e != nil {
-			return nil, e
-		}
-		out["layoutVersion"] = 1
-	case "worktree_ensure":
-		if wid == "" {
-			return nil, fmt.Errorf("workspace required")
-		}
-		source, ok := s.Repositories[b.S("repositoryUrl")]
-		if !ok {
-			return nil, fmt.Errorf("repository must be explicitly mapped for simulator")
-		}
-		if !exists(bare) {
-			if _, e := git(ctx, "clone", "--bare", "--", source, bare); e != nil {
-				return nil, e
-			}
-		}
-		ref := b.S("requestedRef")
-		if ref == "" || strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, "\r\n\x00") {
-			return nil, fmt.Errorf("invalid ref")
-		}
-		branch := "ora/" + wid
-		if !exists(checkout) {
-			if e := os.MkdirAll(filepath.Dir(checkout), 0o700); e != nil {
-				return nil, e
-			}
-			commit, e := git(ctx, "--git-dir", bare, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
-			if e != nil {
-				return nil, e
-			}
-			if _, e = git(ctx, "--git-dir", bare, "show-ref", "--verify", "refs/heads/"+branch); e == nil {
-				_, e = git(ctx, "--git-dir", bare, "worktree", "add", "--", checkout, branch)
-			} else {
-				_, e = git(ctx, "--git-dir", bare, "worktree", "add", "-b", branch, "--", checkout, commit)
-			}
-			if e != nil {
-				return nil, e
-			}
-		}
-		commit, e := git(ctx, "-C", checkout, "rev-parse", "HEAD")
-		if e != nil {
-			return nil, e
-		}
-		if e := os.MkdirAll(runtime, 0o700); e != nil {
-			return nil, e
-		}
-		out["commitId"], out["jobTerminated"] = commit, true
 	case "sandbox_ensure":
-		if wid == "" || !exists(checkout) {
-			return nil, fmt.Errorf("checkout required")
+		if e := os.MkdirAll(filepath.Join(data, "home"), 0o700); e != nil {
+			return nil, e
 		}
 		file := filepath.Join(s.Root, "effects", id+".sandbox.json")
 		sandbox, e := readObject(file)
@@ -288,26 +254,8 @@ func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core
 			return nil, e
 		}
 		out["terminated"] = true
-	case "worktree_delete":
-		if wid == "" {
-			return nil, fmt.Errorf("workspace required")
-		}
-		if exists(checkout) {
-			if _, e := git(ctx, "--git-dir", bare, "worktree", "remove", "--force", "--", checkout); e != nil {
-				return nil, e
-			}
-		}
-		if _, e := git(ctx, "--git-dir", bare, "show-ref", "--verify", "refs/heads/ora/"+wid); e == nil {
-			if _, e = git(ctx, "--git-dir", bare, "branch", "-D", "--", "ora/"+wid); e != nil {
-				return nil, e
-			}
-		}
-		if e := os.RemoveAll(filepath.Join(root, "workspaces", wid)); e != nil {
-			return nil, e
-		}
-		out["jobTerminated"], out["removed"] = true, true
-	case "storage_delete":
-		if e := os.RemoveAll(root); e != nil {
+	case "workspace_data_delete":
+		if e := os.RemoveAll(data); e != nil {
 			return nil, e
 		}
 		out["removed"] = true
@@ -317,9 +265,6 @@ func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core
 		// desktop layout plugins/installed/<ns>/<name>/<version>/. Real Node
 		// wiring (target selection, zip extraction, Deno runtime) is a later
 		// phase; the digest check is real and never optional.
-		if wid == "" {
-			return nil, fmt.Errorf("workspace required")
-		}
 		artifactURL, expected := s.selectArtifact(b)
 		if artifactURL == "" {
 			return nil, fmt.Errorf("no release artifact in effect payload")
@@ -328,11 +273,11 @@ func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core
 		if !ok {
 			return nil, fmt.Errorf("artifact must be explicitly mapped for simulator")
 		}
-		data, e := os.ReadFile(local)
+		artifact, e := os.ReadFile(local)
 		if e != nil {
 			return nil, e
 		}
-		sum := sha256.Sum256(data)
+		sum := sha256.Sum256(artifact)
 		if hex.EncodeToString(sum[:]) != strings.ToLower(expected) {
 			return nil, fmt.Errorf("sha256 mismatch")
 		}
@@ -340,25 +285,22 @@ func (s *Substrate) perform(ctx context.Context, id string, b core.Object) (core
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid plugin id")
 		}
-		installDir := filepath.Join(root, "workspaces", wid, "plugins", "installed", parts[0], parts[1], b.S("version"))
+		installDir := filepath.Join(data, "home", "plugins", "installed", parts[0], parts[1], b.S("version"))
 		if e := os.MkdirAll(installDir, 0o700); e != nil {
 			return nil, e
 		}
-		if e := writeObject(filepath.Join(installDir, "artifact.json"), core.Object{"url": artifactURL, "sha256": expected, "bytes": len(data)}); e != nil {
+		if e := writeObject(filepath.Join(installDir, "artifact.json"), core.Object{"url": artifactURL, "sha256": expected, "bytes": len(artifact)}); e != nil {
 			return nil, e
 		}
 		out["installed"] = true
 		out["version"] = b.S("version")
 	case "plugin_delete":
-		if wid == "" {
-			return nil, fmt.Errorf("workspace required")
-		}
 		parts := strings.SplitN(b.S("pluginId"), "/", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid plugin id")
 		}
 		// Uninstall is idempotent: an absent install dir still reports removed.
-		if e := os.RemoveAll(filepath.Join(root, "workspaces", wid, "plugins", "installed", parts[0], parts[1])); e != nil {
+		if e := os.RemoveAll(filepath.Join(data, "home", "plugins", "installed", parts[0], parts[1])); e != nil {
 			return nil, e
 		}
 		out["removed"] = true

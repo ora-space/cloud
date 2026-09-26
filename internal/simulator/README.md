@@ -10,9 +10,9 @@
 - 通过本地 HTTP 模拟外部存储交互与 Effect 日志执行。
 - 在本地磁盘管理 Effect 执行日志 JSON 文件（`<root>/effects/<effect-id>.json`）。
 - 执行模拟基础设施操作：
-  - **存储管理（Storage）**：准备本地项目目录（`<root>/projects/<project-id>`）。
-  - **工作区检出（Worktree）**：调用本地 Git CLI 执行真实的 Git Clone 与 Worktree 检出操作。
-  - **沙箱模拟（Sandbox）**：模拟 Sandbox 实例的分配与终止生命周期。
+  - **沙箱模拟（Sandbox）**：模拟 Sandbox 实例的分配与终止；sandbox_ensure 挂载该 Workspace 自己的数据（`<root>/workspaces/<workspace-id>/home`）并返回 Node 的 `nodeId`。
+  - **Workspace 数据**：`workspace_data_delete` 删除单个 Workspace 的数据目录。
+  - **Node clone**（`node.go`）：`PUT/GET /clones/<execution-id>` 模拟 desktop Node 用本地 Git CLI clone 到 `home/checkout`，按 execution 落日志。
 - 支持确定性故障注入（`SetFault`），用于验证错误恢复与重试策略。
 
 ### Controller 执行替身 (`controller.go`)
@@ -22,6 +22,7 @@
   - 针对 Substrate 规划并执行所需的 Effect。
   - 通过 `/internal/v1/operations/{oid}/effects/{eid}/result` 上报 Effect 执行结果。
   - 在严格的单调递增 Epoch 栅栏保护下推进或延期操作。
+  - 通过 gRPC `ExecutionService` 驱动 clone 步骤（`clone.go`）：登记 execution、交给模拟 Node 执行、登记查询结果，失败时以 `clone_failed` 延期到 retry_wait。
 
 ### 临时凭据签发器
 - `NewCredentials()` 在内存中为四种不同的角色（`gateway`、`controller`、`node`、`user`）生成 Ed25519 密码学密钥对。

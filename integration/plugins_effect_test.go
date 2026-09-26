@@ -289,7 +289,7 @@ func TestPluginIsolationSerializationAndRecovery(t *testing.T) {
 	if _, e := f.client.Control(context.Background(), "/internal/v1/controller-lease/release", core.Object{"epoch": f.controller.Epoch}); e != nil {
 		t.Fatal(e)
 	}
-	replacement := &simulator.Controller{Client: &simulator.Client{URL: f.cloud.URL, Credentials: f.client.Credentials, HTTP: f.client.HTTP, Subject: "controller-replacement"}, SubstrateURL: f.external.URL}
+	replacement := &simulator.Controller{Client: &simulator.Client{URL: f.cloud.URL, Credentials: f.client.Credentials, HTTP: f.client.HTTP, Subject: "controller-replacement"}, SubstrateURL: f.external.URL, Executions: f.executions}
 	if e := replacement.Acquire(context.Background()); e != nil {
 		t.Fatal(e)
 	}

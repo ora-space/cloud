@@ -77,7 +77,7 @@ go run ./cmd/cloudctl -command migrate
 go run ./cmd/simulator
 ```
 
-演示启动独立 loopback HTTP cloud/Substrate，创建测试租户、bare repo、main linked worktree、模拟 sandbox 和 Node，再输出 Ready Workspace。磁盘在 `.local/demo/`，PG 记录保留；再次运行创建新的演示租户。模拟器没有生产基础设施凭据，不部署 Kubernetes，不启动真实 Agent/Deno。
+演示启动独立 loopback HTTP cloud/Substrate，创建测试租户、模拟 sandbox 和 Node，并把仓库真实 clone 到 main Workspace 自己的数据中，再输出 Ready Workspace。磁盘在 `.local/demo/`，PG 记录保留；再次运行创建新的演示租户。模拟器没有生产基础设施凭据，不部署 Kubernetes，不启动真实 Agent/Deno。
 
 ## 前端
 
@@ -104,7 +104,7 @@ npm run build          # tsc -b && vite build
 - [OpenAPI 3.0](api/openapi.json)：所有 19 个公开接口、15 个内部接口和 health。`task openapi` 重新生成，测试校验文档合法性、生成结果和实际 HTTP 响应结构。
 - [Web 前端](frontend/README.md)：`frontend/src/api` 由 orval 从同一份 `api/openapi.json` 生成带类型的 TanStack Query hooks，`task frontend:generate` 一次完成 Go 契约 → JSON → TypeScript；CI 检测生成物漂移。
 - [核心不变量与状态机](docs/core-contract.md)：身份、归属、幂等、准入、租约、恢复和清理。
-- [Substrate/Node 与阶段二边界](docs/execution-contract.md)：共享卷布局、维护 Job、容器挂载、Git 语义与迁移责任。
+- [Substrate/Node 与阶段二边界](docs/execution-contract.md)：Workspace 数据、Node clone、Substrate 接口与迁移责任。
 - [需求—实现—验证清单](docs/acceptance.md)：本次实际证据与未完成的阶段二验证。
 
 ## 模块架构与分层文档

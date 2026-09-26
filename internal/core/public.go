@@ -406,9 +406,9 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 			// A shared (space-scoped) project exposes all of its runtime workspaces to
 			// workspace members; an unscoped (legacy) project stays owner-filtered.
 			if p.S("spaceId") != "" {
-				return page(t, "SELECT w.*,wt.branch_name,wt.base_commit_id,task.title FROM workspaces w JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.deleted_at IS NULL", []any{p.S("id"), r.TenantID}, "w.id", r)
+				return page(t, "SELECT w.*,wt.branch_name,task.title FROM workspaces w LEFT JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.deleted_at IS NULL", []any{p.S("id"), r.TenantID}, "w.id", r)
 			}
-			return page(t, "SELECT w.*,wt.branch_name,wt.base_commit_id,task.title FROM workspaces w JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.owner_user_id=$3 AND w.deleted_at IS NULL", []any{p.S("id"), r.TenantID, uid}, "w.id", r)
+			return page(t, "SELECT w.*,wt.branch_name,task.title FROM workspaces w LEFT JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.owner_user_id=$3 AND w.deleted_at IS NULL", []any{p.S("id"), r.TenantID, uid}, "w.id", r)
 		}
 		return p
 	default:
@@ -494,15 +494,15 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	}
 	pid, wid := newID(), newID()
 	t.exec("INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,credential_ref_id,lifecycle) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'provisioning')", pid, r.TenantID, uid, spaceID, name, repo, branch, cred)
-	t.exec("INSERT INTO project_storage(project_id,observed_state) VALUES($1,'pending')", pid)
 	insertWorkspace(t, r.TenantID, uid, pid, wid, "main", branch, "")
-	op := newOperation(t, r, uid, pid, wid, "create_project", "storage", hash, Object{})
+	op := newOperation(t, r, uid, pid, wid, "create_project", "sandbox", hash, Object{})
 	return Object{"resource": t.one("SELECT * FROM projects WHERE id=$1", pid), "workspace": t.one("SELECT * FROM workspaces WHERE id=$1", wid), "operation": op}
 }
 
 func insertWorkspace(t *transaction, tid, uid, pid, wid, kind, ref, title string) {
-	t.exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state) VALUES($1,$2,$3,$4,$5,'running','provisioning')", wid, tid, uid, pid, kind)
-	t.exec("INSERT INTO workspace_worktrees(workspace_id,relative_path,branch_name,requested_ref,provisioning_state) VALUES($1,$2,$3,$4,'pending')", wid, "workspaces/"+wid+"/checkout", "ora/"+wid, ref)
+	// The Workspace's Node clones ref into the Workspace's own data; there is no shared Project
+	// repository or linked worktree any more.
+	t.exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,$5,'running','provisioning',$6)", wid, tid, uid, pid, kind, ref)
 	if kind == "isolated" {
 		t.exec("INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,$3)", newID(), wid, title)
 	}
@@ -515,7 +515,7 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	ref := validRef(r.Body.S("baseRef"))
 	wid := newID()
 	insertWorkspace(t, r.TenantID, uid, p.S("id"), wid, "isolated", ref, title)
-	op := newOperation(t, r, uid, p.S("id"), wid, "create_workspace", "worktree", hash, Object{})
+	op := newOperation(t, r, uid, p.S("id"), wid, "create_workspace", "sandbox", hash, Object{})
 	return Object{"resource": workspace(t, r.TenantID, uid, wid, false), "operation": op}
 }
 
@@ -526,6 +526,7 @@ func newOperation(t *transaction, r *PublicRequest, uid, pid, wid, kind, step, h
 		w = wid
 	}
 	t.exec("INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash) VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10)", id, r.TenantID, uid, pid, w, kind, step, jsonText(req), r.Key, hash)
+	t.queued = append(t.queued, id)
 	return t.one("SELECT * FROM operations WHERE id=$1", id)
 }
 
@@ -607,5 +608,6 @@ func retryOperation(t *transaction, r *PublicRequest, uid string) Object {
 	version(o, r.Body.N("version"))
 	require(o.S("state") == "blocked" || o.S("state") == "retry_wait", 409, "operation_not_retryable")
 	t.exec("UPDATE operations SET state='queued',retry_at=NULL,error_code=NULL,version=version+1,updated_at=now() WHERE id=$1", r.OperationID)
+	t.queued = append(t.queued, r.OperationID)
 	return Object{"operation": ownedOperation(t, r, uid)}
 }

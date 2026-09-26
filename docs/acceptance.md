@@ -9,7 +9,7 @@
 - `task test:race`：通过，`CGO_ENABLED=1`，使用隔离 LLVM-MinGW 20260908 编译器；最后一次 integration 用时 33.860s，无 race 报告。
 - `task build`：server/cloudctl/simulator 全部构建成功。
 - `go run ./cmd/cloudctl -command migrate`：迁移 0001–0004 成功且可重入；集成测试既在新 schema 运行迁移两次，也从含数据的 0003 schema 升级并验证回填。server 检查全部 migration checksum，并拒绝来自更新二进制的未知 migration；启动时不执行迁移。
-- `go run ./cmd/simulator`：真实 HTTP/PG/Git 演示完成，输出 `observedState=ready`、`admissionOpen=true`、generation=1；磁盘保留 bare repo 和 linked main worktree。此命令没有启动真正的 Rust Node/Agent。
+- `go run ./cmd/simulator`：真实 HTTP/PG/Git 演示完成，输出 `observedState=ready`、`admissionOpen=true`、generation=1；磁盘在 main Workspace 自己的数据中保留真实 clone（`workspaces/{id}/home/checkout`），Workspace 带 `requestedRef` 与 `baseCommitId`。此命令没有启动真正的 Rust Node/Agent。
 - 空 trust 配置运行 server：实际非零退出（exit 1），没有退回匿名访问。PG/监听失败也由启动入口返回错误。
 - `git diff --check`：通过。仅存在 Windows 行尾提示，不存在 patch 空白错误。
 
@@ -31,11 +31,11 @@
 | 19公开+15内部接口的可执行契约 | `router.Routes`、`internal/contract/openapi.go`、`api/openapi.json` | `TestPublishedOpenAPIIsValidAndCurrent`验证合法性/同步；集成客户端对所有cloud响应运行OpenAPI验证，补测members/tenants/workspace list/rename/access等正向路径 |
 | POST/DELETE 幂等，重试在版本校验前 | idempotency_records、Public事务 | `TestConcurrentIdempotencyAndLastAdminProtection`：16并发只创建一组资源/operation；`TestHTTPProjectLifecycleAndDurableRecovery`同键不同内容409；`TestTerminationUnknownRetryAndVersionedReplay`旧version原样重放原operation |
 | 分页、稳定排序、仅改名和严格输入 | `page`、PATCH分支、router字段白名单/类型检查 | `TestListPaginationAndErrorShape`、`TestRemainingPublicContractsAndMembershipRevocation`：UUID游标、范围限制、错误结构、rename version；禁止repo修改、客户端宿主路径、URL密码 |
-| 真实创建流程，Ready需要Node初始化 | 控制有限状态机、模拟磁盘Substrate/真实Git | `TestHTTPProjectLifecycleAndDurableRecovery`：真实commit、bare repo、main linked worktree、isolated/Task；提前advance/伪造success/错effect步骤被`TestOperationPreconditionsAndScheduledRetry`拒绝 |
+| 真实创建流程，Ready需要Node初始化 | 控制有限状态机、模拟磁盘Substrate/真实Git | `TestHTTPProjectLifecycleAndDurableRecovery`：sandbox→node→clone、真实commit写入baseCommitId、isolated/Task；`TestWorkspaceStepsPlanOnlyRetainedEffects`、`TestCloneFailureRetriesAsNewExecutionAndUnknownBlocks`：只计划保留effect，clone失败以新execution重试、未知结果阻塞；提前advance/伪造success/错effect步骤被`TestOperationPreconditionsAndScheduledRetry`拒绝 |
 | 创建与Project删除并发 | Project操作唯一+事务锁+lifecycle检查 | `TestProjectCreationDeletionSerializationAndStrictInputs`：恰一方接受，另一冲突，没有逃逸Workspace |
 | 停止与执行并发，保护待交互 | execution_tickets、关闭准入、scoped Node idle | `TestStopAdmissionRaceAndIdleEvidence`：真实interaction阻止停止，admit/stop竞争恰一方成功；缺idle不能推进；Node拒绝恢复原准入；没有常量0绕过 |
 | idle证据绑定正确操作和实例 | node_idle operationId+workspace集合+epoch/version | `TestWrongWorkspaceNodeCannotRefuseAnotherStop`：同Project旁支Node不能取消另一Workspace的stop；旧Node在生命周期测试中拒绝 |
-| Project删除等待全部终止/维护清理 | quiesce→terminate→cleanup→storage_delete | `TestProjectDeleteClosesEveryWorkspaceAndWaitsForCleanup`：任一Workspace活动阻止整项删除，关闭后两者都不能准入；Git清理失败不调度storage_delete，所有引用保留；恢复后整项删除 |
+| Project删除等待全部终止与Workspace数据删除 | quiesce→terminate→cleanup（workspace_data_delete） | `TestProjectDeleteClosesEveryWorkspaceAndWaitsForCleanup`：任一Workspace活动阻止整项删除，关闭后两者都不能准入；数据删除失败时Project不删除，所有引用保留；`TestWorkspaceDataDeleteWaitsForTermination`：存在活sandbox时拒绝计划数据删除；恢复后整项删除 |
 | Lease数据库时间、epoch接管/fencing | lease/claim/operation/准入检查 | `TestControllerTakeoverReconcilesAndFences`：过期接管epoch++，旧推进/续租/释放/admit均409，存量sandbox只一份 |
 | 外部成功但响应丢失，重建对象恢复 | external_effects、Substrate磁盘journal、Controller GET-before-PUT | `TestRestartRecreatesCloudSubstrateAndController`：关闭原HTTP和PG pool，重建Store/HTTP/Substrate/Controller，原ID恢复；Git和sandbox不重复创建；幂等响应仍在PG |
 | 未确认终止/清理失败不误报成功 | defer/retry与受控推进、保留绑定 | `TestTerminationUnknownRetryAndVersionedReplay`：blocked仍保留live实例，start失败，显式retry后恢复；生命周期/Project删除测试：cleanup失败保留数据和operation |

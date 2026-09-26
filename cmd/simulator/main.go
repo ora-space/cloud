@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,9 +19,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/wanglongan587/cloud/internal/api/router"
 	"github.com/wanglongan587/cloud/internal/config"
+	"github.com/wanglongan587/cloud/internal/controlgrpc"
+	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/internal/repository"
@@ -102,7 +107,25 @@ func run() error {
 		return e
 	}
 	client := &simulator.Client{URL: cloud.URL, Credentials: credentials, HTTP: &http.Client{Timeout: 30 * time.Second}, Subject: "controller-" + uuid.NewString()}
-	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL}
+	// The clone step reports its execution through the gRPC ExecutionService, served here on a
+	// loopback listener that lives exactly as long as the demo.
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		return e
+	}
+	control := controlgrpc.New(store)
+	served := make(chan error, 1)
+	go func() { served <- control.Serve(listener) }()
+	defer func() {
+		control.Stop()
+		<-served
+	}()
+	conn, e := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if e != nil {
+		return e
+	}
+	defer func() { _ = conn.Close() }()
+	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(conn)}
 	if e := controller.Acquire(ctx); e != nil {
 		return e
 	}
