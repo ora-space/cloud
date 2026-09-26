@@ -135,7 +135,7 @@ func TestMigrationUpstream0007UpgradePath(t *testing.T) {
 	must(t, e)
 	_, e = unscopedTx.Exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,NULL,'Unscoped project','https://example.invalid/unscoped.git','main','active')`, ids[4], ids[1], ids[0])
 	must(t, e)
-	_, e = unscopedTx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state) VALUES($1,$2,$3,$4,'main','running','ready')`, uuid.NewString(), ids[1], ids[0], ids[4])
+	_, e = unscopedTx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'main','running','ready','main')`, uuid.NewString(), ids[1], ids[0], ids[4])
 	must(t, e)
 	must(t, unscopedTx.Commit())
 	if !columnNullable(t, pool, "projects", "space_id") {
@@ -203,8 +203,106 @@ func TestMigrationFullSequenceFreshDB(t *testing.T) {
 		VALUES($1,$2,$3,NULL,'Fresh','https://example.invalid/fresh.git','main','active')`, fpid, ftid, fuid)
 	must(t, e)
 	// A live project requires exactly one main workspace (deferred one_main trigger in 0001).
-	_, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state)
-		VALUES($1,$2,$3,$4,'main','running','ready')`, uuid.NewString(), ftid, fuid, fpid)
+	_, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref)
+		VALUES($1,$2,$3,$4,'main','running','ready','main')`, uuid.NewString(), ftid, fuid, fpid)
 	must(t, e)
 	must(t, tx.Commit())
+}
+
+// Migration 0016 retires the Project storage and worktree steps without touching their history:
+// in-flight operations still in storage or worktree fail with lifecycle_flow_retired, a project
+// deletion waiting on storage deletion returns to cleanup, planned effects keep their records, and
+// every Workspace gets the ref it will clone. Running Migrate again changes nothing.
+//
+// Evidence for specs test-cases/cloud/operation/workspace-runtime-lifecycle.md
+// #retired-storage-and-worktree-steps-leave-history-intact.
+func TestMigration0016RetiresStorageAndWorktreeStepsKeepingHistory(t *testing.T) {
+	pool, _ := testSchema(t, "test_m16_")
+	entries, e := os.ReadDir(filepath.Join("..", "internal", "core", "migrations"))
+	must(t, e)
+	var previous []string
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".sql" && entry.Name() < "0016" {
+			previous = append(previous, entry.Name())
+		}
+	}
+	applyMigrationsUpTo(t, pool, previous)
+
+	user, tenant := uuid.NewString(), uuid.NewString()
+	type legacy struct{ project, workspace, operation, effect, kind, step, state, effectKind, effectState string }
+	cases := map[string]*legacy{
+		"storage":        {kind: "create_project", step: "storage", state: "queued"},
+		"worktree":       {kind: "create_project", step: "worktree", state: "running", effectKind: "worktree_ensure", effectState: "planned"},
+		"storage_delete": {kind: "delete_project", step: "storage_delete", state: "retry_wait", effectKind: "worktree_delete", effectState: "succeeded"},
+		"done":           {kind: "create_project", step: "done", state: "succeeded", effectKind: "storage_ensure", effectState: "succeeded"},
+	}
+	tx, e := pool.Begin()
+	must(t, e)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		_, err := tx.Exec(q, args...)
+		must(t, err)
+	}
+	exec("INSERT INTO users(id,display_name,status) VALUES($1,'Legacy user','active')", user)
+	exec("INSERT INTO tenants(id,name,status) VALUES($1,'Legacy tenant','active')", tenant)
+	exec("INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')", tenant, user)
+	for _, c := range cases {
+		c.project, c.workspace, c.operation, c.effect = uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+		exec("INSERT INTO projects(id,tenant_id,owner_user_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,'Legacy','https://example.invalid/legacy.git','trunk','active')", c.project, tenant, user)
+		exec("INSERT INTO project_storage(project_id,substrate_storage_id,observed_state) VALUES($1,$2,'ready')", c.project, "storage-"+c.project)
+		exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state) VALUES($1,$2,$3,$4,'main','running','provisioning')", c.workspace, tenant, user, c.project)
+		exec("INSERT INTO workspace_worktrees(workspace_id,relative_path,branch_name,requested_ref,provisioning_state) VALUES($1,$2,$3,'release','pending')", c.workspace, "workspaces/"+c.workspace+"/checkout", "ora/"+c.workspace)
+		exec("INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash,controller_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','k','h',1)", c.operation, tenant, user, c.project, c.workspace, c.kind, c.state, c.step)
+		if c.effectKind != "" {
+			exec("INSERT INTO external_effects(id,operation_id,project_id,workspace_id,kind,state,request,reconciled_epoch) VALUES($1,$2,$3,$4,$5,$6,'{\"kind\":\"legacy\"}',1)", c.effect, c.operation, c.project, c.workspace, c.effectKind, c.effectState)
+		}
+	}
+	// A Workspace without a worktree row takes its Project's default branch.
+	bare := uuid.NewString()
+	exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state) VALUES($1,$2,$3,$4,'isolated','stopped','stopped')", bare, tenant, user, cases["done"].project)
+	exec("INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'Bare')", uuid.NewString(), bare)
+	must(t, tx.Commit())
+	snapshot := func(q string) string {
+		t.Helper()
+		var out string
+		must(t, pool.QueryRow(q).Scan(&out))
+		return out
+	}
+	storageBefore := snapshot("SELECT string_agg(row_to_json(s)::text,'|' ORDER BY project_id) FROM project_storage s")
+	worktreesBefore := snapshot("SELECT string_agg(row_to_json(w)::text,'|' ORDER BY workspace_id) FROM workspace_worktrees w")
+	effectsBefore := snapshot("SELECT string_agg(row_to_json(e)::text,'|' ORDER BY id) FROM external_effects e")
+
+	store := newStoreOnSchema(t, pool)
+	must(t, store.Migrate(context.Background()))
+	must(t, store.Migrate(context.Background()))
+	must(t, store.CheckSchema(context.Background()))
+
+	if snapshot("SELECT string_agg(row_to_json(s)::text,'|' ORDER BY project_id) FROM project_storage s") != storageBefore ||
+		snapshot("SELECT string_agg(row_to_json(w)::text,'|' ORDER BY workspace_id) FROM workspace_worktrees w") != worktreesBefore ||
+		snapshot("SELECT string_agg(row_to_json(e)::text,'|' ORDER BY id) FROM external_effects e") != effectsBefore {
+		t.Fatal("migration rewrote retired storage, worktree or effect history")
+	}
+	want := map[string]struct{ state, step, errorCode string }{
+		"storage":        {"failed", "storage", "lifecycle_flow_retired"},
+		"worktree":       {"failed", "worktree", "lifecycle_flow_retired"},
+		"storage_delete": {"retry_wait", "cleanup", ""},
+		"done":           {"succeeded", "done", ""},
+	}
+	for name, c := range cases {
+		var state, step string
+		var code sql.NullString
+		must(t, pool.QueryRow("SELECT state,step,error_code FROM operations WHERE id=$1", c.operation).Scan(&state, &step, &code))
+		if w := want[name]; state != w.state || step != w.step || code.String != w.errorCode {
+			t.Errorf("%s operation became %s/%s/%s, want %v", name, state, step, code.String, w)
+		}
+		var ref string
+		var base sql.NullString
+		must(t, pool.QueryRow("SELECT requested_ref,base_commit_id FROM workspaces WHERE id=$1", c.workspace).Scan(&ref, &base))
+		if ref != "release" || base.Valid {
+			t.Errorf("%s workspace got ref %q base %v, want the worktree's ref and no baseline", name, ref, base)
+		}
+	}
+	if snapshot("SELECT requested_ref FROM workspaces WHERE id='"+bare+"'") != "trunk" {
+		t.Error("a Workspace without a worktree must take its Project's default branch")
+	}
 }

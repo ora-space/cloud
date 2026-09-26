@@ -14,7 +14,7 @@
   1. Bootstraps a demo tenant and user.
   2. Acquires a controller lease via `/internal/v1/controller-lease/acquire`.
   3. Dispatches a project creation request via the public API (`POST /api/v1/tenants/{tid}/projects`).
-  4. Simulates Controller queue draining: executes the effect plan (allocating project storage, provisioning Git worktrees, scheduling sandboxes, and registering nodes).
+  4. Simulates Controller queue draining: executes the effect plan (scheduling sandboxes, registering nodes, and cloning the repository into the Workspace's data through a loopback gRPC `ExecutionService`).
   5. Verifies that the workspace reaches `ready` state and queries it through the public API.
   6. Releases the controller lease cleanly.
   7. Emits JSON summary to `stdout`.

@@ -110,6 +110,29 @@ export interface AssistSuggestion {
   suggestedValues: AssistSuggestionSuggestedValues;
 }
 
+export type CloneExecutionInput = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type CloneExecutionResult = { [key: string]: unknown } | null;
+
+export interface CloneExecution {
+  /** @nullable */
+  cloneRequestId: string | null;
+  createdAt: string;
+  dispatchedEpoch: number;
+  executionId: string;
+  input: CloneExecutionInput;
+  nodeId: string;
+  operationId: string;
+  /** @nullable */
+  result: CloneExecutionResult;
+  updatedAt: string;
+  /** @nullable */
+  workspaceId: string | null;
+}
+
 export type CloneStateKind = typeof CloneStateKind[keyof typeof CloneStateKind];
 
 
@@ -257,7 +280,6 @@ export interface ControllerWorkspace {
      * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
      */
   baseCommitId: string | null;
-  branchName: string;
   createdAt: string;
   /** @nullable */
   deletedAt: string | null;
@@ -267,7 +289,6 @@ export interface ControllerWorkspace {
   observedState: string;
   ownerUserId: string;
   projectId: string;
-  relativePath: string;
   requestedRef: string;
   runtimeGeneration: number;
   tenantId: string;
@@ -284,6 +305,7 @@ export const EffectRequestKind = {
   sandbox_terminate: 'sandbox_terminate',
   worktree_delete: 'worktree_delete',
   storage_delete: 'storage_delete',
+  workspace_data_delete: 'workspace_data_delete',
   plugin_ensure: 'plugin_ensure',
   plugin_delete: 'plugin_delete',
 } as const;
@@ -674,6 +696,10 @@ export interface Node {
   idleAdmissionEpoch: number | null;
   initialized: boolean;
   lastSeenAt: string;
+  /** @nullable */
+  nodeId: string | null;
+  /** @nullable */
+  nodeIncarnationId: string | null;
   protocolVersion: number;
   sandboxInstanceId: string;
   serviceSubject: string;
@@ -701,6 +727,7 @@ export const OperationStep = {
   worktree: 'worktree',
   sandbox: 'sandbox',
   node: 'node',
+  clone: 'clone',
   ready: 'ready',
   quiesce: 'quiesce',
   terminate: 'terminate',
@@ -744,6 +771,11 @@ export const WorkspaceObservedState = {
 export interface Workspace {
   admissionEpoch: number;
   admissionOpen: boolean;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  baseCommitId: string | null;
   createdAt: string;
   /** @nullable */
   deletedAt: string | null;
@@ -753,6 +785,7 @@ export interface Workspace {
   observedState: WorkspaceObservedState;
   ownerUserId: string;
   projectId: string;
+  requestedRef: string;
   runtimeGeneration: number;
   tenantId: string;
   version: number;
@@ -906,23 +939,13 @@ export interface Sandbox {
   workspaceId: string;
 }
 
-export interface Storage {
-  layoutVersion: number;
-  observedState: string;
-  projectId: string;
-  storageProfile: string;
-  /** @nullable */
-  substrateStorageId: string | null;
-  version: number;
-}
-
 export interface Snapshot {
+  clones: CloneExecution[];
   effects: Effect[];
   nodes: Node[];
   operation: Operation;
   project: ControllerProject;
   sandboxes: Sandbox[];
-  storage: Storage;
   workspaces: ControllerWorkspace[];
 }
 
@@ -1168,7 +1191,8 @@ export interface WorkspaceListItem {
      * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
      */
   baseCommitId: string | null;
-  branchName: string;
+  /** @nullable */
+  branchName: string | null;
   createdAt: string;
   /** @nullable */
   deletedAt: string | null;
@@ -1178,6 +1202,7 @@ export interface WorkspaceListItem {
   observedState: WorkspaceListItemObservedState;
   ownerUserId: string;
   projectId: string;
+  requestedRef: string;
   runtimeGeneration: number;
   tenantId: string;
   /** @nullable */
@@ -2155,6 +2180,8 @@ export const PostInternalV1OperationsOidDeferBodyErrorCode = {
   git_cleanup_failed: 'git_cleanup_failed',
   node_unavailable: 'node_unavailable',
   external_failure: 'external_failure',
+  clone_failed: 'clone_failed',
+  clone_result_unknown: 'clone_result_unknown',
 } as const;
 
 export type PostInternalV1OperationsOidDeferBodyState = typeof PostInternalV1OperationsOidDeferBodyState[keyof typeof PostInternalV1OperationsOidDeferBodyState];
@@ -2183,12 +2210,11 @@ export type PostInternalV1OperationsOidEffectsBodyKind = typeof PostInternalV1Op
 
 
 export const PostInternalV1OperationsOidEffectsBodyKind = {
-  storage_ensure: 'storage_ensure',
-  worktree_ensure: 'worktree_ensure',
   sandbox_ensure: 'sandbox_ensure',
   sandbox_terminate: 'sandbox_terminate',
-  worktree_delete: 'worktree_delete',
-  storage_delete: 'storage_delete',
+  workspace_data_delete: 'workspace_data_delete',
+  plugin_ensure: 'plugin_ensure',
+  plugin_delete: 'plugin_delete',
 } as const;
 
 export type PostInternalV1OperationsOidEffectsBody = {

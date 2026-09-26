@@ -1,0 +1,331 @@
+syntax = "proto3";
+
+package ora.cloud.internal.v1;
+
+import "ora/cloud/internal/v1/executions.proto";
+import "ora/cloud/internal/v1/nodes.proto";
+
+// Runtime Workspace operations driven by the lease-holding Controller: create goes
+// sandbox -> node -> clone, start goes sandbox -> node, stop and delete go quiesce -> terminate
+// (-> cleanup). Each method runs the same Cloud transaction as the JSON internal API's operation
+// actions. Writes are fenced by `epoch` and the operation `version`, and carry a `submission_id`
+// with the same replay rules as ExecutionService. The clone step is dispatched and reported through
+// ExecutionService with the operation's ID; its input and target Node are decided by Cloud.
+service WorkspaceOperationService {
+  // Takes the oldest queued, due or running operation for the caller's epoch and returns its
+  // snapshot, or none. Calling it again returns the running operation with a new version.
+  rpc ClaimOperation(ClaimOperationRequest) returns (ClaimOperationResponse);
+  // Records the effect plan of the current step before anything is sent to the Substrate. The
+  // effect ID is the Substrate idempotency key; planning the same kind for the same Workspace again
+  // returns the original effect.
+  rpc PlanEffect(PlanEffectRequest) returns (PlanEffectResponse);
+  // Records what the Substrate reported for one effect, including the reconciliation of an effect
+  // planned under an earlier epoch. External identity and succeeded evidence never change.
+  rpc RecordEffectResult(RecordEffectResultRequest) returns (RecordEffectResultResponse);
+  // Moves the operation to its next step once the current step's evidence is complete.
+  rpc AdvanceOperation(AdvanceOperationRequest) returns (AdvanceOperationResponse);
+  // Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
+  rpc DeferOperation(DeferOperationRequest) returns (DeferOperationResponse);
+}
+
+enum OperationKind {
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_KIND_CREATE_PROJECT = 1;
+  OPERATION_KIND_CREATE_WORKSPACE = 2;
+  OPERATION_KIND_START = 3;
+  OPERATION_KIND_STOP = 4;
+  OPERATION_KIND_ADMINISTRATIVE_STOP = 5;
+  OPERATION_KIND_DELETE_WORKSPACE = 6;
+  OPERATION_KIND_DELETE_PROJECT = 7;
+  OPERATION_KIND_INSTALL_PLUGIN = 8;
+  OPERATION_KIND_REMOVE_PLUGIN = 9;
+}
+
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_QUEUED = 1;
+  OPERATION_STATE_RUNNING = 2;
+  OPERATION_STATE_RETRY_WAIT = 3;
+  OPERATION_STATE_BLOCKED = 4;
+  OPERATION_STATE_SUCCEEDED = 5;
+  OPERATION_STATE_FAILED = 6;
+}
+
+enum OperationStep {
+  OPERATION_STEP_UNSPECIFIED = 0;
+  OPERATION_STEP_SANDBOX = 1;
+  OPERATION_STEP_NODE = 2;
+  OPERATION_STEP_CLONE = 3;
+  OPERATION_STEP_QUIESCE = 4;
+  OPERATION_STEP_TERMINATE = 5;
+  OPERATION_STEP_CLEANUP = 6;
+  OPERATION_STEP_PLUGIN = 7;
+  OPERATION_STEP_DONE = 8;
+}
+
+message Operation {
+  string id = 1;
+  OperationKind kind = 2;
+  OperationState state = 3;
+  OperationStep step = 4;
+  string project_id = 5;
+  // Unset for a Project-wide operation (delete_project).
+  optional string workspace_id = 6;
+  int64 version = 7;
+  // Epoch of the Controller that claimed it last.
+  optional int64 controller_epoch = 8;
+  optional string error_code = 9;
+}
+
+message OperationProject {
+  string id = 1;
+  string repository_url = 2;
+  string default_branch = 3;
+  // Infrastructure reference to the repository credential; never the credential itself.
+  optional string credential_ref = 4;
+}
+
+enum WorkspaceKind {
+  WORKSPACE_KIND_UNSPECIFIED = 0;
+  WORKSPACE_KIND_MAIN = 1;
+  WORKSPACE_KIND_ISOLATED = 2;
+}
+
+message OperationWorkspace {
+  string id = 1;
+  WorkspaceKind kind = 2;
+  // running, stopped or deleted.
+  string desired_state = 3;
+  // provisioning, starting, ready, stopping, stopped, unavailable, deleting or deleted.
+  string observed_state = 4;
+  int64 runtime_generation = 5;
+  bool admission_open = 6;
+  int64 admission_epoch = 7;
+  // The ref the Workspace's Node clones.
+  string requested_ref = 8;
+  // Commit of the Workspace's successful clone.
+  optional string base_commit_id = 9;
+  int64 version = 10;
+}
+
+message SandboxRecord {
+  // Equal to the ID of the ensure effect that created it.
+  string id = 1;
+  string workspace_id = 2;
+  int64 generation = 3;
+  optional string substrate_sandbox_id = 4;
+  // allocating, starting, running, terminating or terminated.
+  string observed_state = 5;
+}
+
+enum EffectKind {
+  EFFECT_KIND_UNSPECIFIED = 0;
+  EFFECT_KIND_SANDBOX_ENSURE = 1;
+  EFFECT_KIND_SANDBOX_TERMINATE = 2;
+  EFFECT_KIND_WORKSPACE_DATA_DELETE = 3;
+  EFFECT_KIND_PLUGIN_ENSURE = 4;
+  EFFECT_KIND_PLUGIN_DELETE = 5;
+}
+
+enum EffectState {
+  EFFECT_STATE_UNSPECIFIED = 0;
+  EFFECT_STATE_PLANNED = 1;
+  EFFECT_STATE_RUNNING = 2;
+  EFFECT_STATE_SUCCEEDED = 3;
+  EFFECT_STATE_FAILED = 4;
+  // Only as a report: the Substrate has no record of a planned effect, which stays planned.
+  EFFECT_STATE_ABSENT = 5;
+}
+
+message SandboxEnsureRequest {
+  string project_id = 1;
+  string workspace_id = 2;
+}
+
+message SandboxTerminateRequest {
+  string project_id = 1;
+  string workspace_id = 2;
+  string sandbox_instance_id = 3;
+}
+
+// Deletes all data of one Workspace; planned only once the Workspace has no live sandbox.
+message WorkspaceDataDeleteRequest {
+  string project_id = 1;
+  string workspace_id = 2;
+}
+
+message PluginArtifact {
+  // Rust target triple; unset for a universal release.
+  optional string target = 1;
+  string url = 2;
+  string sha256 = 3;
+}
+
+message PluginEnsureRequest {
+  string project_id = 1;
+  string workspace_id = 2;
+  string plugin_id = 3;
+  string version = 4;
+  optional PluginArtifact universal = 5;
+  repeated PluginArtifact targets = 6;
+}
+
+message PluginDeleteRequest {
+  string project_id = 1;
+  string workspace_id = 2;
+  string plugin_id = 3;
+  string version = 4;
+}
+
+// The request Cloud planned; the Controller sends it to the Substrate unchanged.
+message EffectRequest {
+  oneof request {
+    SandboxEnsureRequest sandbox_ensure = 1;
+    SandboxTerminateRequest sandbox_terminate = 2;
+    WorkspaceDataDeleteRequest workspace_data_delete = 3;
+    PluginEnsureRequest plugin_ensure = 4;
+    PluginDeleteRequest plugin_delete = 5;
+  }
+}
+
+message SandboxEnsured {
+  string sandbox_instance_id = 1;
+  // Identity of the Node the sandbox runs; fixed per Workspace data.
+  string node_id = 2;
+}
+
+message SandboxTerminated {}
+
+message WorkspaceDataDeleted {}
+
+message PluginInstalled {
+  string version = 1;
+}
+
+message PluginRemoved {}
+
+// Success evidence of one effect; its member must match the effect kind.
+message EffectEvidence {
+  oneof evidence {
+    SandboxEnsured sandbox_ensured = 1;
+    SandboxTerminated sandbox_terminated = 2;
+    WorkspaceDataDeleted workspace_data_deleted = 3;
+    PluginInstalled plugin_installed = 4;
+    PluginRemoved plugin_removed = 5;
+  }
+}
+
+message Effect {
+  string id = 1;
+  EffectKind kind = 2;
+  EffectState state = 3;
+  string workspace_id = 4;
+  EffectRequest request = 5;
+  optional string external_id = 6;
+  // Set when the effect succeeded.
+  optional EffectEvidence evidence = 7;
+  // Set when the effect failed and the Substrate gave a reason.
+  optional string failure = 8;
+  int64 reconciled_epoch = 9;
+}
+
+message OperationSnapshot {
+  Operation operation = 1;
+  OperationProject project = 2;
+  // Live Workspaces of the operation's Project.
+  repeated OperationWorkspace workspaces = 3;
+  repeated SandboxRecord sandboxes = 4;
+  repeated NodeRecord nodes = 5;
+  // Effects of this operation. Records of retired storage and worktree effects are left out.
+  repeated Effect effects = 6;
+  // Clone executions registered for this operation's clone step.
+  repeated ExecutionRecord clones = 7;
+}
+
+message ClaimOperationRequest {
+  int64 epoch = 1;
+}
+
+message ClaimOperationResponse {
+  optional OperationSnapshot snapshot = 1;
+}
+
+message PlanEffectRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string operation_id = 3;
+  int64 version = 4;
+  EffectKind kind = 5;
+  string workspace_id = 6;
+}
+
+message PlanEffectResponse {
+  Effect effect = 1;
+  Operation operation = 2;
+}
+
+message RecordEffectResultRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string operation_id = 3;
+  int64 version = 4;
+  string effect_id = 5;
+  // RUNNING, SUCCEEDED, FAILED or ABSENT.
+  EffectState state = 6;
+  // The Substrate's identity for the effect; required unless state is ABSENT.
+  string external_id = 7;
+  // Required when state is SUCCEEDED.
+  optional EffectEvidence evidence = 8;
+  // Optional reason when state is FAILED.
+  optional string failure = 9;
+}
+
+message RecordEffectResultResponse {
+  Effect effect = 1;
+  Operation operation = 2;
+}
+
+message AdvanceOperationRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string operation_id = 3;
+  int64 version = 4;
+}
+
+message AdvanceOperationResponse {
+  Operation operation = 1;
+}
+
+enum DeferState {
+  DEFER_STATE_UNSPECIFIED = 0;
+  DEFER_STATE_RETRY_WAIT = 1;
+  DEFER_STATE_BLOCKED = 2;
+}
+
+enum DeferReason {
+  DEFER_REASON_UNSPECIFIED = 0;
+  DEFER_REASON_SUBSTRATE_TIMEOUT = 1;
+  DEFER_REASON_TERMINATION_UNCONFIRMED = 2;
+  DEFER_REASON_NODE_UNAVAILABLE = 3;
+  DEFER_REASON_EXTERNAL_FAILURE = 4;
+  // The Node reported a failed clone; a retry dispatches a new execution.
+  DEFER_REASON_CLONE_FAILED = 5;
+  // The Node could not tell the clone's outcome; the operation stays blocked and is not retried
+  // automatically.
+  DEFER_REASON_CLONE_RESULT_UNKNOWN = 6;
+}
+
+message DeferOperationRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string operation_id = 3;
+  int64 version = 4;
+  DeferState state = 5;
+  DeferReason reason = 6;
+  // 1 to 3600 seconds.
+  uint32 retry_seconds = 7;
+}
+
+message DeferOperationResponse {
+  Operation operation = 1;
+}

@@ -12,7 +12,9 @@
 | `errors.proto` | `ErrorDetail{ErrorCode}`：附在 `google.rpc.Status` detail 上的错误分类；gRPC 状态码是主分类，枚举细分 |
 | `lease.proto` | `ControllerLeaseService`：全局协调租约，`epoch` 作为所有写操作的 fencing token |
 | `executions.proto` | `ExecutionService`：领取工作、派发前登记、Node 事件接管、查询结果保存与恢复读取；第一版只覆盖 clone 闭环 |
-| `signals.proto` | `ControlSignalService.Watch`：Controller 发起的服务端流，下发 `WorkAvailable`／`Drain`／`NodeAssignment` |
+| `operations.proto` | `WorkspaceOperationService`：领取、计划 effect、登记 effect 结果、推进与延期 Workspace 生命周期操作 |
+| `nodes.proto` | `NodeReportService`：Controller 登记它持有会话的 desktop Node（`node_id` + `node_incarnation_id`），并报告状态、结束与 idle |
+| `signals.proto` | `ControlSignalService.Watch`：Controller 发起的服务端流，下发 `WorkAvailable`／`OperationAvailable`／`Drain`／`NodeAssignment` |
 
 ## 语义要点
 

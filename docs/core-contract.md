@@ -6,7 +6,7 @@ Cloud 是唯一业务权威存储。Gateway 转发查询/生命周期到 cloud�
 
 `tenant_memberships(tenant_id,user_id)` 为 Project owner 的 FK 目标。Workspace 通过 `(project_id,tenant_id,owner_user_id)` 复合 FK 继承完整归属。Project/Workspace 归属和 Workspace kind 不可更新；operation/effect/ticket/node 也有跨表作用域约束。软删保留所有运行及清理引用。
 
-每个未软删 Project 通过延迟约束触发器检查恰有一个未软删 main Workspace，允许在同一事务原子创建或整体删除；不能单独删 main。partial unique index 防止两个 main。isolated Workspace 有唯一 Task 展示身份。云端 main 同样有 `workspace_worktrees` 行及 linked worktree；这与只读参考的 desktop 当前 schema 不同，未改动 desktop/specs 的现有语义。
+每个未软删 Project 通过延迟约束触发器检查恰有一个未软删 main Workspace，允许在同一事务原子创建或整体删除；不能单独删 main。partial unique index 防止两个 main。isolated Workspace 有唯一 Task 展示身份。每个 Workspace 保存自己的 `requested_ref` 与 clone 得到的 `base_commit_id`；Cloud 不再为 Workspace 建立 linked worktree，历史 `workspace_worktrees` 行只保留、不再新增。
 
 租户有两条创建路径，共用同一事务形态：`cloudctl bootstrap` 为部署创建租户、首位管理员与 slug 固定为 `default` 的空间；`POST /api/v1/tenants` 让已验证身份的用户为自己创建租户，租户借用请求中第一个空间的 `name`，空间使用请求中的 `slug`，调用者同时成为租户 admin 与空间 owner。自助创建的租户没有 `default` 空间，租户级 `POST /tenants/{tid}/projects` 对其返回 404；项目应通过空间级路径创建。
 
@@ -26,16 +26,16 @@ PATCH 与生命周期动作携带整数 `version`；现存 membership PUT/operat
 
 | Operation | 受控推进步骤 |
 |---|---|
-| create_project | storage → worktree → sandbox → node → done |
-| create_workspace | worktree → sandbox → node → done |
+| create_project | sandbox → node → clone → done |
+| create_workspace | sandbox → node → clone → done |
 | start | sandbox → node → done |
 | stop / administrative_stop | quiesce → terminate → done |
 | delete_workspace | quiesce → terminate → cleanup → done |
-| delete_project | quiesce → terminate → cleanup → storage_delete → done |
+| delete_project | quiesce → terminate → cleanup → done |
 
-接口不接受“设 state=succeeded”这类任意写入。storage/worktree/sandbox 等阶段必须有同 epoch 成功 effect；Node 阶段必须有当前实例已初始化、connected、30 秒内 heartbeat 的 Node，才原子提交 worktree ready、Workspace Ready/开放准入和 operation success。Pod Running 或单个 Substrate 创建结果不能代替 Node 协议确认。
+接口不接受“设 state=succeeded”这类任意写入。sandbox 阶段必须有同 epoch 成功 sandbox_ensure；Node 阶段必须有当前实例已初始化、connected、30 秒内 heartbeat 且 NodeId 等于 sandbox_ensure 返回值的 Node；create 还必须经过 clone 阶段：当前 Node 上最近一次 clone execution 为 clone_ready 且带真实 40/64 位 commit，才原子写入 `base_commit_id`、Workspace Ready/开放准入和 operation success。start 在 Node 阶段直接完成。Pod Running 或单个 Substrate 创建结果不能代替 Node 协议确认。
 
-worktree 成功证据包含解析后的真实 40/64 位 commit 和维护 Job 终止确认；cleanup 包含 removed+jobTerminated；sandbox terminate 包含真实终止确认；存储删除必须等所有 sandbox 和已计划维护工作完成。Cloud 信任受认证 Controller 对 Substrate 的观察，但仍检查类型、绑定和阶段。实际证明基础设施终止是 Substrate/Node 阶段二实现的责任，不能拿 PG fencing 替代。
+sandbox terminate 包含真实终止确认；cleanup 为每个待删 Workspace 计划 `workspace_data_delete`，只有该 Workspace 没有未终止 sandbox 时才能计划（否则 409 termination_unconfirmed），成功证据为 removed。delete_project 在 cleanup 完成全部 Workspace 数据删除后直接结束。0016 迁移把停在 storage/worktree 的进行中 operation 标记为 failed（lifecycle_flow_retired），把停在 storage_delete 的 delete_project 退回 cleanup。Cloud 信任受认证 Controller 对 Substrate 的观察，但仍检查类型、绑定和阶段。实际证明基础设施终止是 Substrate/Node 阶段二实现的责任，不能拿 PG fencing 替代。
 
 外部 ID 一经登记不可改变，已成功 effect 的结果不可改写。失败/超时保留 plan、外部引用和当前 step；`defer` 设置 retry_wait/blocked 及有限错误码，`retry` 重新入队，不凭超时推断外部未执行。模拟器在磁盘日志成功但 HTTP 响应丢失后按原 ID 查询恢复。
 
@@ -43,7 +43,7 @@ worktree 成功证据包含解析后的真实 40/64 位 commit 和维护 Job 终
 
 全局 `controller_leases(name=global)` 使用 PG `clock_timestamp()`，有效期 30 秒，约定每 10 秒续租；模拟器每个短 Step 续租。未过期 holder 不能被夺取；过期 acquire 增加 epoch，renew/release 需要精确 holder+epoch。Controller 调度前、领取、阶段结果、推进、重试安排、sandbox 分配和 execute 准入均验证有效租约；用户 read access 只做权限查询。
 
-claim 会领取 queued、到期 retry_wait 或任意 running operation；同一 holder/epoch 重启后重新领取 running operation 时递增 operation version，从而 fence 仍持有旧内存快照的 worker。claim 返回当前 operation、Project/storage、全部相关 Workspace/sandbox/Node/effect。旧 epoch effect 必须先按稳定 ID 查询 Substrate，再登记本 epoch 的观察；否则 plan/advance 返回 reconcile_required。未知进行中维护 Job 先等终止或恢复同一任务，不能盲目创建另一个 Job。epoch 与 Workspace runtime_generation 是独立的。
+claim 会领取 queued、到期 retry_wait 或任意 running operation；同一 holder/epoch 重启后重新领取 running operation 时递增 operation version，从而 fence 仍持有旧内存快照的 worker。claim 返回当前 operation、Project、全部相关 Workspace/sandbox/Node/effect 以及该 operation 的 clone execution。旧 epoch effect 必须先按稳定 ID 查询 Substrate，再登记本 epoch 的观察；否则 plan/advance 返回 reconcile_required。结果未知的 clone execution 阻止登记第二个，不能盲目再次 clone。epoch 与 Workspace runtime_generation 是独立的。
 
 `UNIQUE(workspace_id,generation)` 及唯一未终止 sandbox 保护替换。分配新 generation 前必须确认旧实例 terminated；登记新 Node 也不能覆盖活实例。数据库拒绝旧 epoch/旧实例迟到回写，但不会终止已经运行的文件写入。因此真实接管必须先查询/fence 外部进程；无法确认时保持 blocked，不能重放未知结果 prompt 或全局标记 Session 失败。
 

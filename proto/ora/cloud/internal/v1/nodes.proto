@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package ora.cloud.internal.v1;
+
+import "ora/cloud/internal/v1/executions.proto";
+
+// Node reports made by the lease-holding Controller on behalf of the desktop Nodes it holds a
+// session with. A Node never talks to Cloud and holds no Cloud credential; the Controller's own
+// observation of the handshake and the session is the node-step evidence. Every call is fenced by
+// `epoch` and carries a `submission_id` with the same replay rules as ExecutionService, and every
+// report is refused (FAILED_PRECONDITION or ABORTED) unless its sandbox is the Workspace's current
+// generation and has not been terminated.
+service NodeReportService {
+  // Registers one Node incarnation after its handshake completed. Idempotent by
+  // (sandbox_instance_id, node.node_incarnation_id). node.node_id must equal the NodeId the sandbox's
+  // ensure effect reported; a second incarnation of the same sandbox fails with ABORTED (CONFLICT)
+  // until the first one was ended.
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+  // Reports the session state and refreshes the heartbeat. The Controller reports at most every
+  // 10 seconds while the session lasts; Cloud treats a Node silent for 30 seconds as not ready.
+  rpc ReportNodeStatus(ReportNodeStatusRequest) returns (ReportNodeStatusResponse);
+  // Ends one incarnation, for example when the Node reconnected as a new incarnation. Ending an
+  // already ended incarnation returns it unchanged.
+  rpc EndNode(EndNodeRequest) returns (EndNodeResponse);
+  // Reports whether the Node is idle for one quiesce request. idle may be true only when the
+  // Controller has no dispatch to this Node without a terminal result, and has stopped dispatching
+  // to it; false restores admission and fails the requesting operation.
+  rpc ReportNodeIdle(ReportNodeIdleRequest) returns (ReportNodeIdleResponse);
+}
+
+enum NodeConnection {
+  NODE_CONNECTION_UNSPECIFIED = 0;
+  NODE_CONNECTION_CONNECTED = 1;
+  NODE_CONNECTION_DISCONNECTED = 2;
+  // Set by Cloud only: the incarnation ended or its sandbox was terminated.
+  NODE_CONNECTION_ENDED = 3;
+}
+
+// Cloud's record of one Node incarnation.
+message NodeRecord {
+  // Cloud's own identity of this incarnation record; later reports name it.
+  string id = 1;
+  string sandbox_instance_id = 2;
+  string workspace_id = 3;
+  // Unset only for records a Node registered itself before Controllers reported Nodes.
+  NodeIdentity identity = 4;
+  NodeConnection connection = 5;
+  bool initialized = 6;
+  // Resource version; every report names the version it was based on.
+  int64 version = 7;
+  // Admission epoch of the latest accepted idle evidence.
+  optional int64 idle_admission_epoch = 8;
+}
+
+message RegisterNodeRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  // The effect ID of the sandbox's ensure effect, which is also the sandbox instance ID.
+  string sandbox_instance_id = 3;
+  int64 generation = 4;
+  NodeIdentity node = 5;
+  uint32 protocol_version = 6;
+}
+
+message RegisterNodeResponse {
+  NodeRecord node = 1;
+}
+
+message ReportNodeStatusRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string node_instance_id = 3;
+  int64 version = 4;
+  // CONNECTED or DISCONNECTED.
+  NodeConnection connection = 5;
+  bool initialized = 6;
+}
+
+message ReportNodeStatusResponse {
+  NodeRecord node = 1;
+}
+
+message EndNodeRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string node_instance_id = 3;
+  int64 version = 4;
+}
+
+message EndNodeResponse {
+  NodeRecord node = 1;
+}
+
+message ReportNodeIdleRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  string node_instance_id = 3;
+  int64 version = 4;
+  string operation_id = 5;
+  int64 admission_epoch = 6;
+  bool idle = 7;
+}
+
+message ReportNodeIdleResponse {
+  // False when idle was false: Cloud restored admission and failed the operation.
+  bool accepted = 1;
+  // The updated record when the idle evidence was accepted.
+  optional NodeRecord node = 2;
+}

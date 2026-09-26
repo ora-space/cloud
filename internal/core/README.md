@@ -15,7 +15,7 @@
 ### 聚合根与实体关系
 - **用户与身份（Users & Identities）**：用户通过稳定的 IdP 身份断言（`source`、`subject`）进行唯一识别。用户记录在首次通过鉴权访问或由管理员初始化引导（bootstrap）时建立。
 - **租户与成员（Tenants & Memberships）**：租户用于隔离组织边界。用户作为成员归属于租户，拥有 `admin` 或 `member` 角色。
-- **项目（Projects）**：由 `(tenant_id, owner_user_id)` 所有。每个项目都有一个关联的仓库 URL 和默认分支，并关联一条 `project_storage` 记录。
+- **项目（Projects）**：由 `(tenant_id, owner_user_id)` 所有。每个项目都有一个关联的仓库 URL 和默认分支；每个 Workspace 按自己的 `requested_ref` 把它 clone 到自己的数据中（`project_storage` 记录只作为历史保留）。
 - **工作区与任务（Workspaces & Tasks）**：每个项目至多拥有一个活跃的 `main` 主工作区（由 `one_main` 部分唯一索引强制约束）。其余工作区均为 `isolated` 隔离工作区，且与 `tasks` 保持 1:1 映射。
 - **操作与效果（Operations & Effects）**：状态变更（如创建项目、启动/停止工作区或删除）作为持久化 `operations` 执行（状态包括 `queued`、`running`、`retry_wait`、`blocked`、`done`、`failed`）。Operation 被分解为持久化 `effects`，表示由 Substrate 和 Controller 执行的外部任务。
 - **clone 请求（Clone Requests）**：由 `(tenant_id, actor_user_id, request_id)` 幂等接受的独立工作项，不挂在 operation/effect 模型上；Controller 经内部控制契约领取、登记派发（`clone_executions`）并接管 Node 结果（`clone_event_receipts`）。公开 `/clones` 路由只对提交者可见，`state` 由请求状态与执行结果投影而来。

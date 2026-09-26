@@ -45,9 +45,23 @@ The status code is the primary classification and `ErrorDetail{ErrorCode}` is at
   Input and result are stored in fixed JSON shapes (`{kind, repositoryUrl, branch}`;
   `{node, outcome, path, commit | reason, retainedPath}`) and conflicts are compared on those shapes.
 
+- `WorkspaceOperationService`: the Workspace lifecycle operations (specs
+  `decisions/cloud/controller-integration/20260926-workspace-operations-and-controller-reported-nodes.md`).
+  `ClaimOperation` / `PlanEffect` / `RecordEffectResult` / `AdvanceOperation` / `DeferOperation` map
+  to the same control actions as the `/internal/v1/operations` JSON routes, so both surfaces share
+  lease, operation-version and step fencing. `ClaimOperation` claims (bumping the version on a
+  re-claim), it is not a pure read. The snapshot carries the operation's clone executions; retired
+  storage/worktree effects are left out.
+
+- `NodeReportService`: the Controller reports the desktop Nodes it holds sessions with.
+  `RegisterNode` is idempotent per (sandbox instance, `node_incarnation_id`) and rejects a `node_id`
+  other than the one sandbox_ensure returned; a new incarnation is accepted only after the previous
+  one ended. `ReportNodeStatus` / `EndNode` / `ReportNodeIdle` share the Node-credential routes'
+  transactions and fencing.
+
 - `ControlSignalService.Watch`: the Controller-opened server stream. Opening verifies the epoch with
   `lease_check` (read-only, no renewal); afterwards it forwards signals from the in-process
-  `core.ControlHub`: `WorkAvailable{operation_id}` after a `clone_requests` row commits, `Drain` before
+  `core.ControlHub`: `WorkAvailable{operation_id}` after a `clone_requests` row commits, `OperationAvailable{operation_id}` after a Workspace operation is created or retried, `Drain` before
   the server stops. At-most-once, not persisted, a slow subscriber loses signals; after `Drain` the
   stream ends cleanly (EOF) and new `Watch` calls during shutdown return `UNAVAILABLE`. The stream ends with
   OK only while draining and with an error status otherwise, so a holder may treat a clean end as `Drain`;

@@ -393,7 +393,7 @@ export const usePostInternalV1ControllerLeaseRenew = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1ControllerLeaseRenewMutationOptions(options), queryClient);
     }
     /**
- * Requires node service credential whose sub is a process UUID and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
+ * Kept for the Go simulator's Node: desktop Nodes hold no Cloud credential and are reported by their Controller over gRPC NodeReportService. Requires node service credential whose sub is a process UUID equal to the sandbox's ensured nodeId and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
  * @summary node idle
  */
 export const postInternalV1NodesIdle = (
@@ -461,7 +461,7 @@ export const usePostInternalV1NodesIdle = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1NodesIdleMutationOptions(options), queryClient);
     }
     /**
- * Requires node service credential whose sub is a process UUID and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
+ * Kept for the Go simulator's Node: desktop Nodes hold no Cloud credential and are reported by their Controller over gRPC NodeReportService. Requires node service credential whose sub is a process UUID equal to the sandbox's ensured nodeId and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
  * @summary node register
  */
 export const postInternalV1NodesRegister = (
@@ -529,7 +529,7 @@ export const usePostInternalV1NodesRegister = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1NodesRegisterMutationOptions(options), queryClient);
     }
     /**
- * Requires node service credential whose sub is a process UUID and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
+ * Kept for the Go simulator's Node: desktop Nodes hold no Cloud credential and are reported by their Controller over gRPC NodeReportService. Requires node service credential whose sub is a process UUID equal to the sandbox's ensured nodeId and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
  * @summary node status
  */
 export const postInternalV1NodesStatus = (
@@ -597,7 +597,7 @@ export const usePostInternalV1NodesStatus = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1NodesStatusMutationOptions(options), queryClient);
     }
     /**
- * Requires node service credential whose sub is a process UUID and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
+ * Kept for the Go simulator's Node: desktop Nodes hold no Cloud credential and are reported by their Controller over gRPC NodeReportService. Requires node service credential whose sub is a process UUID equal to the sandbox's ensured nodeId and whose workspaceId/sandboxId/generation match the current unterminated instance. Node identity cannot be replaced while live. Status/idle use Node version; ticket finish uses Ticket version and a completed replay is idempotent. initialized cannot regress. Idle is scoped to operationId and exact Workspace admissionEpoch; true requires no active tickets. false fails that quiesce operation with resource_in_use and restores original admission. Registration requires protocolVersion=1; Pod Running alone cannot make Ready.
  * @summary node finish
  */
 export const postInternalV1NodesTicketsTicketFinish = (
@@ -734,7 +734,7 @@ export const usePostInternalV1OperationsClaim = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1OperationsClaimMutationOptions(options), queryClient);
     }
     /**
- * Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Derives the next step server-side. Requires current-epoch successful effects. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. node step atomically commits worktree readiness, Workspace Ready/admission, and operation success after fresh initialized current Node. Cleanup and storage deletion cannot complete before termination confirmation.
+ * Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Derives the next step server-side. Requires current-epoch successful effects. Create goes sandbox, node, clone; start goes sandbox, node. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. The clone step requires the operation's latest clone execution (registered over gRPC) to have succeeded on the current Node; it records the baseline commit and commits Workspace Ready/admission with operation success, re-checking the fresh initialized current Node. start commits the same readiness at its node step. Workspace data deletion is planned and completed only after termination confirmation.
  * @summary advance
  */
 export const postInternalV1OperationsOidAdvance = (
@@ -941,7 +941,7 @@ export const usePostInternalV1OperationsOidEffects = <TError = ErrorType<Error>,
       return useMutation(getPostInternalV1OperationsOidEffectsMutationOptions(options), queryClient);
     }
     /**
- * Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Reports/reconciles one scoped external effect. External ID cannot change; succeeded evidence is immutable. absent is allowed only for a planned effect. Worktree success requires real commitId and jobTerminated; cleanup requires removed and jobTerminated; termination requires terminated; storage requires layoutVersion=1; sandbox requires its preallocated instance ID. This endpoint trusts the authenticated controller's Substrate observation, not client-supplied status.
+ * Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Reports/reconciles one scoped external effect. External ID cannot change; succeeded evidence is immutable. absent is allowed only for a planned effect. Sandbox success requires its preallocated instance ID and the nodeId its Node will present; termination requires terminated; Workspace data deletion requires removed. This endpoint trusts the authenticated controller's Substrate observation, not client-supplied status.
  * @summary effect result
  */
 export const postInternalV1OperationsOidEffectsEidResult = (

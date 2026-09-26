@@ -57,6 +57,8 @@ func response(signal core.ControlSignal) *controlpb.WatchResponse {
 			out.OperationId = &signal.OperationID
 		}
 		return &controlpb.WatchResponse{Signal: &controlpb.WatchResponse_WorkAvailable{WorkAvailable: out}}
+	case core.SignalOperationAvailable:
+		return &controlpb.WatchResponse{Signal: &controlpb.WatchResponse_OperationAvailable{OperationAvailable: &controlpb.OperationAvailable{OperationId: signal.OperationID}}}
 	default:
 		return &controlpb.WatchResponse{Signal: &controlpb.WatchResponse_NodeAssignment{NodeAssignment: &controlpb.NodeAssignment{NodeId: signal.NodeID}}}
 	}

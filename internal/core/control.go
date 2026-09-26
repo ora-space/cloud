@@ -49,29 +49,12 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		if isCloneAction(r.Action) {
 			return cloneCommand(t, r)
 		}
-		o := operation(t, r)
-		switch r.Action {
-		case "snapshot":
-			return snapshot(t, o)
-		case "plan":
-			return planEffect(t, r, o, &events)
-		case "effect_result":
-			return effectResult(t, r, o, &events)
-		case "advance":
-			return advance(t, r, o, &events)
-		case "defer":
-			state := r.Body.S("state")
-			code := r.Body.S("errorCode")
-			require(state == "blocked" || state == "retry_wait", 400, "invalid_operation_state")
-			require(code == "substrate_timeout" || code == "termination_unconfirmed" || code == "git_cleanup_failed" || code == "node_unavailable" || code == "external_failure", 400, "invalid_error_code")
-			delay := r.Body.N("retrySeconds")
-			require(delay >= 1 && delay <= 3600, 400, "invalid_retry_delay")
-			t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)
-			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
-		default:
-			reject(404, "not_found")
+		if strings.HasPrefix(r.Action, "report_node_") {
+			return submitted(t, r, func() Object { return nodeReport(t, r) })
 		}
-		return nil
+		// The submission wraps the operation lookup too: a replay after the version moved on must
+		// return the recorded response, not fail the version check it already passed.
+		return submitted(t, r, func() Object { return operationCommand(t, r, &events) })
 	})
 	if err == nil && s.Events != nil {
 		for _, ev := range events {
@@ -79,6 +62,33 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		}
 	}
 	return out, err
+}
+
+// operationCommand runs one Effect-level action on the operation the caller claimed.
+func operationCommand(t *transaction, r *ControlRequest, events *[]SpaceEvent) Object {
+	o := operation(t, r)
+	switch r.Action {
+	case "snapshot":
+		return snapshot(t, o)
+	case "plan":
+		return planEffect(t, r, o, events)
+	case "effect_result":
+		return effectResult(t, r, o, events)
+	case "advance":
+		return advance(t, r, o, events)
+	case "defer":
+		state := r.Body.S("state")
+		code := r.Body.S("errorCode")
+		require(state == "blocked" || state == "retry_wait", 400, "invalid_operation_state")
+		require(deferCodes[code], 400, "invalid_error_code")
+		delay := r.Body.N("retrySeconds")
+		require(delay >= 1 && delay <= 3600, 400, "invalid_retry_delay")
+		t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)
+		return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+	default:
+		reject(404, "not_found")
+	}
+	return nil
 }
 
 func lease(t *transaction, r *ControlRequest) Object {
@@ -132,9 +142,13 @@ func operation(t *transaction, r *ControlRequest) Object {
 	return o
 }
 
+// snapshot is everything a Controller needs to drive one operation. Workspaces carry their own
+// requested ref and baseline commit; the retired Project storage and worktree rows are not part of
+// it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
+// original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
 	p := t.one("SELECT p.*,c.secret_ref FROM projects p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
-	return Object{"operation": o, "project": p, "storage": t.one("SELECT * FROM project_storage WHERE project_id=$1", o.S("projectId")), "workspaces": t.list("SELECT w.*,wt.relative_path,wt.branch_name,wt.requested_ref,wt.base_commit_id FROM workspaces w JOIN workspace_worktrees wt ON wt.workspace_id=w.id WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId")), "sandboxes": t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")), "nodes": t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")), "effects": t.list("SELECT * FROM external_effects WHERE operation_id=$1 ORDER BY created_at,id", o.S("id"))}
+	return Object{"operation": o, "project": p, "workspaces": t.list("SELECT w.* FROM workspaces w WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId")), "sandboxes": t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")), "nodes": t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")), "effects": t.list("SELECT * FROM external_effects WHERE operation_id=$1 ORDER BY created_at,id", o.S("id")), "clones": t.list("SELECT * FROM clone_executions WHERE operation_id=$1 ORDER BY created_at,execution_id", o.S("id"))}
 }
 
 func operationWorkspaces(t *transaction, o Object) []Object {
@@ -144,8 +158,11 @@ func operationWorkspaces(t *transaction, o Object) []Object {
 	return t.list("SELECT * FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL ORDER BY id", o.S("projectId"))
 }
 
+// reconciled requires every effect of the operation to have been reconciled by the current epoch.
+// Retired storage and worktree effects of an operation that crossed migration 0016 are history no
+// Substrate serves any more, so they cannot be reconciled and do not block it.
 func reconciled(t *transaction, o Object) {
-	require(t.one("SELECT id FROM external_effects WHERE operation_id=$1 AND reconciled_epoch<>$2", o.S("id"), o.N("controllerEpoch")) == nil, 409, "reconcile_required")
+	require(t.one("SELECT id FROM external_effects WHERE operation_id=$1 AND reconciled_epoch<>$2 AND kind NOT IN ('storage_ensure','worktree_ensure','worktree_delete','storage_delete')", o.S("id"), o.N("controllerEpoch")) == nil, 409, "reconcile_required")
 }
 
 func effectFor(t *transaction, oid, kind, wid string) Object {
@@ -162,18 +179,14 @@ func nullable(s string) any {
 func planEffect(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEvent) Object {
 	reconciled(t, o)
 	kind, wid := r.Body.S("kind"), r.Body.S("workspaceId")
-	if kind == "storage_ensure" || kind == "storage_delete" {
-		require(wid == "", 400, "invalid_effect_scope")
-	} else {
-		require(validID(wid), 400, "invalid_effect_scope")
-		found := false
-		for _, w := range operationWorkspaces(t, o) {
-			if w.S("id") == wid {
-				found = true
-			}
+	require(validID(wid), 400, "invalid_effect_scope")
+	found := false
+	for _, w := range operationWorkspaces(t, o) {
+		if w.S("id") == wid {
+			found = true
 		}
-		require(found, 403, "invalid_effect_scope")
 	}
+	require(found, 403, "invalid_effect_scope")
 	if existing := effectFor(t, o.S("id"), kind, wid); existing != nil {
 		return Object{"effect": existing, "operation": o}
 	}
@@ -185,18 +198,11 @@ func planEffect(t *transaction, r *ControlRequest, o Object, spaceEvents *[]Spac
 	case "plugin":
 		request = planPluginEffect(t, o, kind, wid, spaceEvents)
 	default:
-		allowed := map[string]string{"storage": "storage_ensure", "worktree": "worktree_ensure", "sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "worktree_delete", "storage_delete": "storage_delete"}
+		// Only the three lifecycle effects remain; the clone step dispatches through the execution
+		// registry, not through a Substrate effect.
+		allowed := map[string]string{"sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "workspace_data_delete"}
 		require(allowed[o.S("step")] == kind, 409, "invalid_step")
-		request = Object{"kind": kind, "projectId": o.S("projectId")}
-		if wid != "" {
-			request["workspaceId"] = wid
-		}
-		if kind == "worktree_ensure" {
-			project := t.one("SELECT repository_url FROM projects WHERE id=$1", o.S("projectId"))
-			worktree := t.one("SELECT requested_ref FROM workspace_worktrees WHERE workspace_id=$1", wid)
-			request["repositoryUrl"] = project.S("repositoryUrl")
-			request["requestedRef"] = worktree.S("requestedRef")
-		}
+		request = Object{"kind": kind, "projectId": o.S("projectId"), "workspaceId": wid}
 		if kind == "sandbox_ensure" {
 			w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
 			require(w.S("desiredState") == "running", 409, "resource_unavailable")
@@ -210,9 +216,9 @@ func planEffect(t *transaction, r *ControlRequest, o Object, spaceEvents *[]Spac
 			request["sandboxInstanceId"] = s.S("id")
 			t.exec("UPDATE sandbox_instances SET observed_state='terminating' WHERE id=$1", s.S("id"))
 		}
-		if kind == "storage_delete" {
-			require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")
-			require(t.one("SELECT id FROM external_effects WHERE project_id=$1 AND state IN ('planned','running')", o.S("projectId")) == nil, 409, "maintenance_unconfirmed")
+		if kind == "workspace_data_delete" {
+			// The data is deleted only once no sandbox of this Workspace can still write to it.
+			require(t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", wid) == nil, 409, "termination_unconfirmed")
 		}
 	}
 	t.exec("INSERT INTO external_effects(id,operation_id,project_id,workspace_id,kind,state,request,reconciled_epoch) VALUES($1,$2,$3,$4,$5,'planned',$6,$7)", id, o.S("id"), o.S("projectId"), nullable(wid), kind, jsonText(request), o.N("controllerEpoch"))
@@ -284,18 +290,14 @@ func effectResult(t *transaction, r *ControlRequest, o Object, spaceEvents *[]Sp
 	}
 	if state == "succeeded" {
 		switch e.S("kind") {
-		case "worktree_ensure":
-			require(commitID(result.S("commitId")) && result.B("jobTerminated"), 400, "invalid_worktree_evidence")
-		case "worktree_delete":
-			require(result.B("jobTerminated") && result.B("removed"), 400, "invalid_cleanup_evidence")
 		case "sandbox_terminate":
 			require(result.B("terminated"), 409, "termination_unconfirmed")
-		case "storage_delete":
+		case "workspace_data_delete":
 			require(result.B("removed"), 400, "invalid_cleanup_evidence")
-		case "storage_ensure":
-			require(result.N("layoutVersion") == 1, 400, "invalid_storage_layout")
 		case "sandbox_ensure":
-			require(result.S("sandboxInstanceId") == e.S("id"), 400, "invalid_sandbox_evidence")
+			// nodeId is the identity the sandbox's Node must present; node reports are checked against it.
+			node := result.S("nodeId")
+			require(result.S("sandboxInstanceId") == e.S("id") && node != "" && len(node) <= 200, 400, "invalid_sandbox_evidence")
 		case "plugin_ensure":
 			// Success evidence must name the exact version the effect was
 			// planned with: a Node may not substitute its own resolution.
@@ -341,28 +343,23 @@ func advance(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEv
 	next := ""
 	wid := o.S("workspaceId")
 	switch o.S("step") {
-	case "storage":
-		e := completedEffect(t, o, "storage_ensure", "")
-		t.exec("UPDATE project_storage SET substrate_storage_id=$2,observed_state='ready',version=version+1 WHERE project_id=$1 AND substrate_storage_id IS NULL", o.S("projectId"), e.S("externalId"))
-		next = "worktree"
-	case "worktree":
-		e := completedEffect(t, o, "worktree_ensure", wid)
-		t.exec("UPDATE workspace_worktrees SET base_commit_id=$2 WHERE workspace_id=$1", wid, e.O("result").S("commitId"))
-		next = "sandbox"
 	case "sandbox":
 		e := completedEffect(t, o, "sandbox_ensure", wid)
 		t.exec("UPDATE sandbox_instances SET substrate_sandbox_id=$2,observed_state='starting' WHERE id=$1 AND substrate_sandbox_id IS NULL AND terminated_at IS NULL", e.S("id"), e.S("externalId"))
 		next = "node"
 	case "node":
-		w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
-		require(w.S("desiredState") == "running", 409, "resource_unavailable")
-		n := t.one("SELECT n.id FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id WHERE s.workspace_id=$1 AND s.generation=$2 AND s.terminated_at IS NULL AND n.ended_at IS NULL AND n.initialized AND n.connection_state='connected' AND n.last_seen_at>clock_timestamp()-interval '30 seconds'", wid, w.N("runtimeGeneration"))
-		require(n != nil, 409, "node_not_ready")
-		require(t.one("SELECT workspace_id FROM workspace_worktrees WHERE workspace_id=$1 AND base_commit_id IS NOT NULL", wid) != nil, 409, "worktree_not_ready")
-		t.exec("UPDATE workspace_worktrees SET provisioning_state='ready' WHERE workspace_id=$1", wid)
+		currentNode(t, wid)
 		t.exec("UPDATE sandbox_instances SET observed_state='running' WHERE workspace_id=$1 AND terminated_at IS NULL", wid)
-		t.exec("UPDATE workspaces SET observed_state='ready',admission_open=true,version=version+1 WHERE id=$1", wid)
-		t.exec("UPDATE projects SET lifecycle='active',version=version+1 WHERE id=$1 AND lifecycle='provisioning'", o.S("projectId"))
+		if o.S("kind") == "create_project" || o.S("kind") == "create_workspace" {
+			// A new Workspace has a connected Node but no code yet: admission waits for the clone.
+			next = "clone"
+		} else {
+			openWorkspace(t, o, wid)
+			next = "done"
+		}
+	case "clone":
+		advanceClone(t, o, wid)
+		openWorkspace(t, o, wid)
 		next = "done"
 	case "quiesce":
 		for _, w := range operationWorkspaces(t, o) {
@@ -389,17 +386,20 @@ func advance(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEv
 			next = "cleanup"
 		}
 	case "cleanup":
+		// Each Workspace's data was deleted by its own effect, planned only after its sandbox ended.
 		for _, w := range operationWorkspaces(t, o) {
-			completedEffect(t, o, "worktree_delete", w.S("id"))
-			t.exec("UPDATE workspace_worktrees SET provisioning_state='deleted' WHERE workspace_id=$1", w.S("id"))
+			completedEffect(t, o, "workspace_data_delete", w.S("id"))
 		}
 		if o.S("kind") == "delete_project" {
-			t.exec("UPDATE project_storage SET observed_state='deleting',version=version+1 WHERE project_id=$1", o.S("projectId"))
-			next = "storage_delete"
+			require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")
+			for _, w := range operationWorkspaces(t, o) {
+				deleteWorkspace(t, w.S("id"))
+			}
+			t.exec("UPDATE projects SET lifecycle='deleted',deleted_at=now(),version=version+1 WHERE id=$1", o.S("projectId"))
 		} else {
 			deleteWorkspace(t, wid)
-			next = "done"
 		}
+		next = "done"
 	case "plugin":
 		// The plugin step completes the install/remove for exactly the
 		// operation's bound workspace; the space-level aggregate is recomputed
@@ -412,15 +412,6 @@ func advance(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEv
 		completedEffect(t, o, kind, wid)
 		pluginInstanceWriteback(t, o, state, version, nil, spaceEvents)
 		next = "done"
-	case "storage_delete":
-		completedEffect(t, o, "storage_delete", "")
-		require(t.one("SELECT s.id FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", o.S("projectId")) == nil, 409, "termination_unconfirmed")
-		for _, w := range operationWorkspaces(t, o) {
-			deleteWorkspace(t, w.S("id"))
-		}
-		t.exec("UPDATE project_storage SET observed_state='deleted',version=version+1 WHERE project_id=$1", o.S("projectId"))
-		t.exec("UPDATE projects SET lifecycle='deleted',deleted_at=now(),version=version+1 WHERE id=$1", o.S("projectId"))
-		next = "done"
 	default:
 		reject(409, "invalid_step")
 	}
@@ -430,6 +421,24 @@ func advance(t *transaction, r *ControlRequest, o Object, spaceEvents *[]SpaceEv
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
 	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+}
+
+// currentNode requires the Node evidence the node step is built on: an initialized, connected Node
+// with a fresh heartbeat on the running Workspace's current, live sandbox generation.
+func currentNode(t *transaction, wid string) Object {
+	w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
+	require(w.S("desiredState") == "running", 409, "resource_unavailable")
+	n := t.one("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id WHERE s.workspace_id=$1 AND s.generation=$2 AND s.terminated_at IS NULL AND n.ended_at IS NULL AND n.initialized AND n.connection_state='connected' AND n.last_seen_at>clock_timestamp()-interval '30 seconds'", wid, w.N("runtimeGeneration"))
+	require(n != nil, 409, "node_not_ready")
+	return n
+}
+
+// openWorkspace commits Workspace readiness and admission together with the operation's success.
+// The Node is checked again so admission never opens on a Node that went away since the node step.
+func openWorkspace(t *transaction, o Object, wid string) {
+	currentNode(t, wid)
+	t.exec("UPDATE workspaces SET observed_state='ready',admission_open=true,version=version+1 WHERE id=$1", wid)
+	t.exec("UPDATE projects SET lifecycle='active',version=version+1 WHERE id=$1 AND lifecycle='provisioning'", o.S("projectId"))
 }
 
 func deleteWorkspace(t *transaction, wid string) {

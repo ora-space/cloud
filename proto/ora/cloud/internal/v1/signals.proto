@@ -4,7 +4,7 @@ package ora.cloud.internal.v1;
 
 // Cloud-to-Controller notifications over a stream the Controller opens. Signals are at-most-once
 // accelerators: Cloud neither persists nor replays them, and none of them changes ownership or
-// state. A Controller that loses the stream falls back to periodic ClaimWork and reopens it.
+// state. A Controller that loses the stream falls back to periodic ClaimWork and ClaimOperation and reopens it.
 service ControlSignalService {
   // Ends with OK only when the serving instance drains, after it has tried to send Drain; every other
   // end, including a refused subscription, carries an error status. A holder may therefore treat a
@@ -23,6 +23,7 @@ message WatchResponse {
     WorkAvailable work_available = 1;
     Drain drain = 2;
     NodeAssignment node_assignment = 3;
+    OperationAvailable operation_available = 4;
   }
 }
 
@@ -30,6 +31,13 @@ message WatchResponse {
 message WorkAvailable {
   // Set when Cloud knows which operation became claimable.
   optional string operation_id = 1;
+}
+
+// Hints that a runtime Workspace operation became claimable after the transaction that queued it
+// committed; ownership is still decided by ClaimOperation. An operation whose retry delay elapses
+// has no such commit and is found by the periodic claim instead.
+message OperationAvailable {
+  string operation_id = 1;
 }
 
 // The instance that sends it is about to stop. The holder stops claiming from it until a new Watch

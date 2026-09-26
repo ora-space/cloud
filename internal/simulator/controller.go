@@ -14,6 +14,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
 )
 
@@ -123,9 +124,12 @@ func (c *Client) Control(ctx context.Context, path string, body core.Object) (co
 }
 
 // Controller has no database handle; recovery always queries external effect IDs before dispatch.
+// Effect-level steps use the JSON internal API; the clone step registers and reports its execution
+// through the gRPC ExecutionService, the only contract that carries clone executions.
 type Controller struct {
 	Client       *Client
 	SubstrateURL string
+	Executions   controlpb.ExecutionServiceClient
 	Epoch        int64
 	Operation    core.Object
 }
@@ -143,8 +147,10 @@ func (c *Controller) command(ctx context.Context, suffix string, b core.Object) 
 	return c.Client.Control(ctx, "/internal/v1/operations/"+c.Operation.S("id")+suffix, b)
 }
 
-func (c *Controller) external(ctx context.Context, method, id string, b core.Object) (core.Object, int, error) {
-	req, e := http.NewRequestWithContext(ctx, method, c.SubstrateURL+"/effects/"+id, bytes.NewBufferString(jsonString(b)))
+// external calls the simulated Substrate at path: /effects/{id} for effects, /clones/{id} for the
+// simulated Node's clone executions.
+func (c *Controller) external(ctx context.Context, method, path string, b core.Object) (core.Object, int, error) {
+	req, e := http.NewRequestWithContext(ctx, method, c.SubstrateURL+path, bytes.NewBufferString(jsonString(b)))
 	if e != nil {
 		return nil, 0, e
 	}
@@ -203,9 +209,6 @@ func (c *Controller) deferExternalFailure(ctx context.Context, kind string, stat
 	if cause != nil || status == http.StatusGatewayTimeout || external.S("state") == "running" {
 		code = "substrate_timeout"
 	}
-	if kind == "worktree_delete" && cause == nil {
-		code = "git_cleanup_failed"
-	}
 	if kind == "sandbox_terminate" && external.S("state") == "running" {
 		state, code = "blocked", "termination_unconfirmed"
 	}
@@ -261,7 +264,7 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 		if effect.N("reconciledEpoch") == c.Epoch {
 			continue
 		}
-		external, status, e := c.external(ctx, "GET", effect.S("id"), nil)
+		external, status, e := c.external(ctx, "GET", "/effects/"+effect.S("id"), nil)
 		if e != nil {
 			return false, c.deferExternalFailure(ctx, effect.S("kind"), status, external, e)
 		}
@@ -299,6 +302,10 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 				return false, fmt.Errorf("node status: %d %v %s", status, e, jsonString(n))
 			}
 		}
+	case "clone":
+		if e := c.clone(ctx, snap, workspaces, nodes); e != nil {
+			return false, e
+		}
 	case "quiesce":
 		for _, w := range workspaces {
 			if c.Operation.S("workspaceId") != "" && w.S("id") != c.Operation.S("workspaceId") {
@@ -321,7 +328,7 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 			}
 		}
 	default:
-		kinds := map[string]string{"storage": "storage_ensure", "worktree": "worktree_ensure", "sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "worktree_delete", "storage_delete": "storage_delete"}
+		kinds := map[string]string{"sandbox": "sandbox_ensure", "terminate": "sandbox_terminate", "cleanup": "workspace_data_delete"}
 		kind := kinds[step]
 		if step == "plugin" {
 			// The plugin step's effect follows the operation intent: an
@@ -334,13 +341,10 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 		if kind == "" {
 			return false, fmt.Errorf("unknown step %s", step)
 		}
-		targets := []core.Object{{}}
-		if step != "storage" && step != "storage_delete" {
-			targets = nil
-			for _, w := range workspaces {
-				if c.Operation.S("workspaceId") == "" || c.Operation.S("workspaceId") == w.S("id") {
-					targets = append(targets, w)
-				}
+		var targets []core.Object
+		for _, w := range workspaces {
+			if c.Operation.S("workspaceId") == "" || c.Operation.S("workspaceId") == w.S("id") {
+				targets = append(targets, w)
 			}
 		}
 		for _, w := range targets {
@@ -361,7 +365,7 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 			}
 			c.Operation = planned.O("operation")
 			effect := planned.O("effect")
-			external, status, e := c.external(ctx, "GET", effect.S("id"), nil)
+			external, status, e := c.external(ctx, "GET", "/effects/"+effect.S("id"), nil)
 			if e != nil {
 				return false, c.deferExternalFailure(ctx, kind, status, external, e)
 			}
@@ -369,7 +373,7 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 				if _, e = c.command(ctx, "/snapshot", core.Object{}); e != nil {
 					return false, e
 				}
-				external, status, e = c.external(ctx, "PUT", effect.S("id"), effect.O("request"))
+				external, status, e = c.external(ctx, "PUT", "/effects/"+effect.S("id"), effect.O("request"))
 				if e != nil {
 					return false, c.deferExternalFailure(ctx, kind, status, external, e)
 				}

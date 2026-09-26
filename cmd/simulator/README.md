@@ -14,7 +14,7 @@
   1. 引导配置演示租户和用户。
   2. 通过 `/internal/v1/controller-lease/acquire` 获取 Controller 独占租约。
   3. 通过公开 API 发起项目创建请求（`POST /api/v1/tenants/{tid}/projects`）。
-  4. 模拟 Controller 清空队列：执行 Effect 计划（分配项目存储、创建 Git worktree、调度沙箱并注册节点）。
+  4. 模拟 Controller 清空队列：执行 Effect 计划（调度沙箱、注册节点，并通过 loopback gRPC `ExecutionService` 把仓库 clone 到 Workspace 数据中）。
   5. 验证 Workspace 成功达到 `ready` 就绪状态，并通过公开 API 查询校验。
   6. 正常释放 Controller 租约。
   7. 向 `stdout` 输出 JSON 摘要。

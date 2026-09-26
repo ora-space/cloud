@@ -113,6 +113,8 @@ type transaction struct {
 	contextBuilder ContextBuilder
 	forms          FormDescriptorProvider
 	assist         InputAssistProvider
+	// queued names operations this transaction made claimable; they are published only after commit.
+	queued []string
 }
 
 func (t *transaction) exec(q string, args ...any) {
@@ -216,7 +218,9 @@ func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (out
 	t := &transaction{tx: tx, ctx: ctx, directory: s.Directory, contextBuilder: s.Context, forms: s.Forms, assist: s.Assist}
 	t.exec("SELECT pg_advisory_xact_lock(67420911)")
 	out = fn(t)
-	err = tx.Commit()
+	if err = tx.Commit(); err == nil {
+		s.signalOperations(t.queued)
+	}
 	return out, err
 }
 

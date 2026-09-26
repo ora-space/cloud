@@ -52,6 +52,8 @@ func New(store *core.Store) *grpc.Server {
 	controlpb.RegisterControllerLeaseServiceServer(server, &leaseService{store: store})
 	controlpb.RegisterExecutionServiceServer(server, &executionService{store: store})
 	controlpb.RegisterControlSignalServiceServer(server, &signalService{store: store})
+	controlpb.RegisterWorkspaceOperationServiceServer(server, &operationService{store: store})
+	controlpb.RegisterNodeReportServiceServer(server, &nodeService{store: store})
 	return server
 }
 

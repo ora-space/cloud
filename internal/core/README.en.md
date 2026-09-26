@@ -14,7 +14,7 @@
 ### Aggregates and relationships
 - **Users & Identities**: Users are identified by stable IdP claims (`source`, `subject`). User creation is tied to first authenticated access or administrative bootstrap.
 - **Tenants & Memberships**: Tenants isolate organizational boundaries. Users belong to tenants with either `admin` or `member` roles.
-- **Projects**: Owned by `(tenant_id, owner_user_id)`. Each project has an associated repository URL and default branch, linked to a single `project_storage` row.
+- **Projects**: Owned by `(tenant_id, owner_user_id)`. Each project has an associated repository URL and default branch; every Workspace clones it into its own data at its `requested_ref` (`project_storage` rows are retained history only).
 - **Workspaces & Tasks**: Each project has at most one active `main` workspace (enforced by the `one_main` partial unique index). Additional workspaces are `isolated` and map 1:1 with `tasks`.
 - **Operations & Effects**: Mutations (such as project creation, workspace start/stop, or deletion) execute as durable `operations` (`queued`, `running`, `retry_wait`, `blocked`, `done`, `failed`). Operations decompose into durable `effects` representing external tasks executed by Substrate and Controller.
 - **Clone Requests**: independent work items accepted idempotently by `(tenant_id, actor_user_id, request_id)`, outside the operation/effect model; a Controller claims them over the internal control contract, registers the dispatch (`clone_executions`) and takes over the Node result (`clone_event_receipts`). The public `/clones` routes are visible to the submitting user only; `state` is projected from the request state and the execution result.

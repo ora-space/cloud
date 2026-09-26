@@ -77,7 +77,7 @@ go run ./cmd/cloudctl -command migrate
 go run ./cmd/simulator
 ```
 
-The demo starts isolated loopback HTTP cloud and Substrate services, creates a test tenant, bare repository, main linked worktree, simulated sandbox, and Node, and then outputs the ready Workspace. Disk state remains under `.local/demo/`, and PostgreSQL records are retained; each subsequent run creates another demo tenant. The simulator has no production infrastructure credentials, does not deploy Kubernetes, and does not start real Agent or Deno runtimes.
+The demo starts isolated loopback HTTP cloud and Substrate services, creates a test tenant, a simulated sandbox and Node, and a real clone into the main Workspace's own data, and then outputs the ready Workspace. Disk state remains under `.local/demo/`, and PostgreSQL records are retained; each subsequent run creates another demo tenant. The simulator has no production infrastructure credentials, does not deploy Kubernetes, and does not start real Agent or Deno runtimes.
 
 ## Frontend
 

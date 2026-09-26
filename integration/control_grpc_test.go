@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -38,14 +35,7 @@ func newControlHarness(t *testing.T) *controlHarness {
 	store, e := core.NewStore(db)
 	must(t, e)
 	must(t, store.Migrate(context.Background()))
-	listener := bufconn.Listen(1 << 20)
-	server := controlgrpc.New(store)
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(server.Stop)
-	conn, e := grpc.NewClient("passthrough:///control", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	must(t, e)
-	t.Cleanup(func() { _ = conn.Close() })
-	return &controlHarness{store: store, conn: conn}
+	return &controlHarness{store: store, conn: controlConn(t, store)}
 }
 
 // asController returns a context naming the calling Controller; the surface authenticates nobody at this stage.

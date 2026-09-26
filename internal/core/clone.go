@@ -30,6 +30,17 @@ func (s *Store) signalWork(operationID string) {
 	}
 }
 
+// signalOperations tells the lease holder which operations became claimable. Like signalWork it
+// runs only after the queuing transaction committed.
+func (s *Store) signalOperations(ids []string) {
+	if s.Signals == nil {
+		return
+	}
+	for _, id := range ids {
+		s.Signals.Publish(ControlSignal{Kind: SignalOperationAvailable, OperationID: id})
+	}
+}
+
 // enqueueClone records one clone request inside the caller's transaction. Repeating
 // (tenant, user, requestId) with the same input returns the original request and reports nothing
 // new; different input is a conflict. Nothing is dispatched here: a Controller claims the row.
@@ -185,13 +196,16 @@ func cloneCommand(t *transaction, r *ControlRequest) Object {
 }
 
 // cloneDispatch registers execution identity, target Node and full input before any Node sees the
-// command. The request must still be queued (or already dispatched as exactly this execution).
+// command. The request must still be queued (or already dispatched as exactly this execution). An
+// operation ID that names no tenant clone request is a Workspace operation's clone step.
 func cloneDispatch(t *transaction, r *ControlRequest) Object {
 	operation, execution, node := r.Body.S("operationId"), r.Body.S("executionId"), r.Body.S("nodeId")
 	input := r.Body.O("input")
 	require(validID(operation) && execution != "" && node != "" && len(input) > 0, 400, "invalid_dispatch")
 	request := t.one("SELECT * FROM clone_requests WHERE id=$1", operation)
-	require(request != nil, 404, "not_found")
+	if request == nil {
+		return workspaceCloneDispatch(t, r, operation, execution, node, input)
+	}
 	require(input.S("repositoryUrl") == request.S("repositoryUrl") && input.S("branch") == request.S("branch"), 409, "dispatch_conflict")
 	if existing := t.one("SELECT * FROM clone_executions WHERE operation_id=$1", operation); existing != nil {
 		require(existing.S("executionId") == execution && existing.S("nodeId") == node && jsonText(existing.O("input")) == jsonText(input), 409, "dispatch_conflict")

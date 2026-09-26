@@ -10,9 +10,9 @@
 - Simulates external storage and effect journal execution over local HTTP.
 - Manages effect journal JSON files on disk (`<root>/effects/<effect-id>.json`).
 - Executes mock infrastructure operations:
-  - **Storage**: Prepares local project directories (`<root>/projects/<project-id>`).
-  - **Worktree**: Performs real Git clone and worktree checkouts using local Git CLI.
-  - **Sandbox**: Simulates sandbox instance allocation and termination lifecycles.
+  - **Sandbox**: Simulates sandbox instance allocation and termination; sandbox_ensure mounts the Workspace's own data (`<root>/workspaces/<workspace-id>/home`) and returns the Node's `nodeId`.
+  - **Workspace data**: `workspace_data_delete` removes one Workspace's data directory.
+  - **Node clone** (`node.go`): `PUT/GET /clones/<execution-id>` stands in for the desktop Node running a clone with the local Git CLI into `home/checkout`, journaled per execution.
 - Supports deterministic fault injection (`SetFault`) for testing error recovery and retry policies.
 
 ### Controller double (`controller.go`)
@@ -22,6 +22,7 @@
   - Plans and executes required effects against Substrate.
   - Reports effect execution outcomes via `/internal/v1/operations/{oid}/effects/{eid}/result`.
   - Advances or defers operations with proper monotonic epoch fencing.
+  - Drives the clone step (`clone.go`) through the gRPC `ExecutionService`: registers the execution, lets the simulated Node run it, records the queried result, and defers `clone_failed` to retry_wait.
 
 ### Ephemeral credential issuer
 - `NewCredentials()` generates in-memory Ed25519 cryptographic keypairs for the four distinct actor roles: `gateway`, `controller`, `node`, and `user`.
