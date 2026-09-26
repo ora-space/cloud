@@ -46,7 +46,11 @@ describe('CreateProjectDialog', () => {
     await user.click(screen.getByRole('button', { name: '创建' }))
 
     await waitFor(() => expect(posted).not.toBeNull())
-    expect(posted).toMatchObject({ name: 'Demo', repositoryUrl: 'https://example.com/repo.git' })
+    expect(posted).toMatchObject({
+      name: 'Demo',
+      repositoryUrl: 'https://example.com/repo.git',
+      defaultBranch: 'main',
+    })
     expect(onCreated).toHaveBeenCalledWith(PROJECT_ID)
   })
 
@@ -59,5 +63,26 @@ describe('CreateProjectDialog', () => {
     await user.type(screen.getByLabelText('仓库 URL（HTTPS 或 SSH）'), 'ftp://example.com/repo')
     expect(screen.getByText('仅支持 https:// 或 ssh:// 地址')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '创建' })).toBeDisabled()
+  })
+
+  it('requires a concrete default branch, not an empty one or HEAD', async () => {
+    installCloudSpaceHandlers('owner')
+    setupDialog()
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('名称'), 'Demo')
+    await user.type(
+      screen.getByLabelText('仓库 URL（HTTPS 或 SSH）'),
+      'https://example.com/repo.git',
+    )
+    const branch = screen.getByLabelText('默认分支')
+    await user.clear(branch)
+    expect(screen.getByText('请填写具体分支名，不能为空或 HEAD')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建' })).toBeDisabled()
+    await user.type(branch, 'HEAD')
+    expect(screen.getByRole('button', { name: '创建' })).toBeDisabled()
+    await user.clear(branch)
+    await user.type(branch, 'trunk')
+    expect(screen.getByRole('button', { name: '创建' })).toBeEnabled()
   })
 })

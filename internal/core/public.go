@@ -481,11 +481,12 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 		_, password := parsed.User.Password()
 		require(!password && parsed.Scheme == "ssh", 400, "embedded_credentials_forbidden")
 	}
+	// The Node clones only a literal branch name and Cloud reads no remote repository, so the
+	// caller names the branch; HEAD would leave the Workspace's clone step blocked for good.
 	branch := r.Body.S("defaultBranch")
-	if branch == "" {
-		branch = "HEAD"
-	}
+	require(strings.TrimSpace(branch) != "", 400, "default_branch_required")
 	branch = validRef(branch)
+	require(branch != "HEAD", 400, "default_branch_required")
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
@@ -513,6 +514,12 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	idleProject(t, p.S("id"))
 	title := validText(r.Body.S("title"), 200)
 	ref := validRef(r.Body.S("baseRef"))
+	if ref == "HEAD" {
+		// HEAD means the Project's default branch, which is concrete for every Project created
+		// since defaultBranch became required; an older Project that still stores HEAD cannot say.
+		ref = p.S("defaultBranch")
+		require(ref != "HEAD", 400, "default_branch_required")
+	}
 	wid := newID()
 	insertWorkspace(t, r.TenantID, uid, p.S("id"), wid, "isolated", ref, title)
 	op := newOperation(t, r, uid, p.S("id"), wid, "create_workspace", "sandbox", hash, Object{})

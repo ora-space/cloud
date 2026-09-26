@@ -351,7 +351,7 @@ func TestPostgresAggregateConstraints(t *testing.T) {
 	f.call("PUT", f.path("/members/"+bob.S("id")), core.Object{"role": "member", "status": "active", "version": 0}, "", 200)
 	ref, e := f.store.ConfigureCredential(context.Background(), f.tid, bob.S("id"), "secret://bob/git")
 	must(t, e)
-	f.call("POST", f.path("/projects"), core.Object{"name": "wrong credential", "repositoryUrl": "https://example.invalid/repo.git", "credentialRefId": ref.S("id")}, "credential-owner", 404)
+	f.call("POST", f.path("/projects"), core.Object{"name": "wrong credential", "repositoryUrl": "https://example.invalid/repo.git", "defaultBranch": "main", "credentialRefId": ref.S("id")}, "credential-owner", 404)
 }
 
 func TestListPaginationAndErrorShape(t *testing.T) {

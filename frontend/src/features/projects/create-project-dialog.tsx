@@ -32,14 +32,21 @@ function CreateProjectFields({
   const [repositoryUrl, setRepositoryUrl] = useState('')
   const [defaultBranch, setDefaultBranch] = useState('main')
   const urlValid = repositoryUrl === '' || looksLikeRepositoryUrl(repositoryUrl)
-  const submittable = title.trim() !== '' && repositoryUrl.trim() !== '' && urlValid && !pending
+  // Cloud clones only a literal branch and never reads the remote to resolve HEAD.
+  const branchValid = defaultBranch.trim() !== '' && defaultBranch.trim() !== 'HEAD'
+  const submittable =
+    title.trim() !== '' && repositoryUrl.trim() !== '' && urlValid && branchValid && !pending
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault()
         if (!submittable) return
-        onSubmit({ title: title.trim(), repositoryUrl: repositoryUrl.trim(), defaultBranch })
+        onSubmit({
+          title: title.trim(),
+          repositoryUrl: repositoryUrl.trim(),
+          defaultBranch: defaultBranch.trim(),
+        })
       }}
       className="space-y-4"
     >
@@ -62,10 +69,12 @@ function CreateProjectFields({
       />
       <DialogFormField
         id="new-project-branch"
-        label="默认分支（可选）"
+        label="默认分支"
         value={defaultBranch}
         onChange={setDefaultBranch}
         placeholder="main"
+        hint={branchValid ? undefined : '请填写具体分支名，不能为空或 HEAD'}
+        required
       />
       {errorCode && <p className="text-xs text-destructive">创建失败：{errorCode}</p>}
       <Button type="submit" className="w-full" disabled={!submittable}>

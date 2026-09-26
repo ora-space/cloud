@@ -46,6 +46,9 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		if r.Action == "claim" {
 			return claim(t, r)
 		}
+		if r.Action == "live_sandboxes" {
+			return liveSandboxes(t)
+		}
 		if isCloneAction(r.Action) {
 			return cloneCommand(t, r)
 		}

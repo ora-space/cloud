@@ -194,7 +194,7 @@ workflow_not_available` (3B-1) is **SUPERSEDED**.
 | Method | Path | Body fields | Response |
 | --- | --- | --- | --- |
 | GET | `/projects` | — | `{items, nextCursor}` (tenant-level, **owner-filtered** — see access note) |
-| POST 🔑 | `/projects` | `name`*, `repositoryUrl`*, `defaultBranch`, `credentialRefId` | 202 `{resource, workspace, operation}` |
+| POST 🔑 | `/projects` | `name`*, `repositoryUrl`*, `defaultBranch`* (not `HEAD`), `credentialRefId` | 202 `{resource, workspace, operation}` |
 | GET | `/projects/{pid}` | — | Project |
 | PATCH | `/projects/{pid}` | `name`, 🔢`version` | Project |
 | DELETE 🔑 | `/projects/{pid}` | 🔢`version` | 202 `{resource, operation}` |

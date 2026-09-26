@@ -76,6 +76,23 @@ func (s *operationService) AdvanceOperation(ctx context.Context, req *controlpb.
 	return &controlpb.AdvanceOperationResponse{Operation: operation(out)}, nil
 }
 
+// ListLiveSandboxes is the lease holder's read of every sandbox it should hold a Node session with.
+func (s *operationService) ListLiveSandboxes(ctx context.Context, req *controlpb.ListLiveSandboxesRequest) (*controlpb.ListLiveSandboxesResponse, error) {
+	out, e := control(ctx, s.store, "live_sandboxes", "", "", core.Object{"epoch": req.GetEpoch()})
+	if e != nil {
+		return nil, e
+	}
+	response := &controlpb.ListLiveSandboxesResponse{}
+	for _, sb := range rows(out["sandboxes"]) {
+		live := &controlpb.LiveSandbox{Sandbox: sandbox(sb), NodeId: sb.S("nodeId")}
+		for _, n := range rows(sb["nodes"]) {
+			live.Nodes = append(live.Nodes, node(n))
+		}
+		response.Sandboxes = append(response.Sandboxes, live)
+	}
+	return response, nil
+}
+
 func (s *operationService) DeferOperation(ctx context.Context, req *controlpb.DeferOperationRequest) (*controlpb.DeferOperationResponse, error) {
 	if req.GetState() == controlpb.DeferState_DEFER_STATE_UNSPECIFIED || req.GetReason() == controlpb.DeferReason_DEFER_REASON_UNSPECIFIED {
 		return nil, status.Error(codes.InvalidArgument, "invalid_defer")
@@ -165,7 +182,7 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 		})
 	}
 	for _, sb := range rows(out["sandboxes"]) {
-		snap.Sandboxes = append(snap.Sandboxes, &controlpb.SandboxRecord{Id: sb.S("id"), WorkspaceId: sb.S("workspaceId"), Generation: sb.N("generation"), SubstrateSandboxId: optionalString(sb, "substrateSandboxId"), ObservedState: sb.S("observedState")})
+		snap.Sandboxes = append(snap.Sandboxes, sandbox(sb))
 	}
 	for _, n := range rows(out["nodes"]) {
 		snap.Nodes = append(snap.Nodes, node(n))
@@ -180,6 +197,10 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 		snap.Clones = append(snap.Clones, record(c))
 	}
 	return snap
+}
+
+func sandbox(sb core.Object) *controlpb.SandboxRecord {
+	return &controlpb.SandboxRecord{Id: sb.S("id"), WorkspaceId: sb.S("workspaceId"), Generation: sb.N("generation"), SubstrateSandboxId: optionalString(sb, "substrateSandboxId"), ObservedState: sb.S("observedState")}
 }
 
 func effect(e core.Object) *controlpb.Effect {
