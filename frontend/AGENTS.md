@@ -151,9 +151,10 @@ review verifies substance.
   requires, and CI's `npm ci` then fails with "lock file out of sync".
 - After any `package.json` change, run `npm ci` before committing: it is the same command CI
   runs and the only reliable proof that `package.json` and the lock agree. Commit both files
-  together, never hand-edit the lock, and keep one registry in it; entries currently resolve to
-  `registry.npmmirror.com`, so a machine with a different registry setting must not rewrite the
-  others.
+  together, never hand-edit the lock, and keep one registry in it: every entry resolves to the
+  official `registry.npmjs.org`. To install through a mirror, set npm's `registry` locally: npm's
+  default `replace-registry-host=npmjs` redirects the lock's URLs at install time, and mirror URLs
+  must never be written into the lock.
 
 ## Security and data
 
