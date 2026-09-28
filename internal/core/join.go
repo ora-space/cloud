@@ -93,12 +93,18 @@ func adminJoinRead(t *transaction, r *PublicRequest) Object {
 func adminJoinWrite(t *transaction, r *PublicRequest, uid string) (out Object, status int) {
 	switch {
 	case r.Method == "POST" && strings.HasSuffix(r.Path, "/invitations"):
+		digest := joinTokenDigest(r.Body.S("token"))
+		// Token digests are globally unique per table. A deliberately reused
+		// token is a client conflict, never an internal constraint failure.
+		require(t.one("SELECT id FROM tenant_invitations WHERE token_hash=$1", digest) == nil, 409, "join_token_conflict")
 		id := newID()
-		t.exec("INSERT INTO tenant_invitations(id,tenant_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '7 days')", id, r.TenantID, joinTokenDigest(r.Body.S("token")), uid)
+		t.exec("INSERT INTO tenant_invitations(id,tenant_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '7 days')", id, r.TenantID, digest, uid)
 		return t.one("SELECT id,tenant_id,created_by,created_at,expires_at,version FROM tenant_invitations WHERE id=$1", id), 201
 	case r.Method == "POST" && strings.HasSuffix(r.Path, "/join-links"):
+		digest := joinTokenDigest(r.Body.S("token"))
+		require(t.one("SELECT id FROM tenant_join_links WHERE token_hash=$1", digest) == nil, 409, "join_token_conflict")
 		id := newID()
-		t.exec("INSERT INTO tenant_join_links(id,tenant_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '30 days')", id, r.TenantID, joinTokenDigest(r.Body.S("token")), uid)
+		t.exec("INSERT INTO tenant_join_links(id,tenant_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '30 days')", id, r.TenantID, digest, uid)
 		return t.one("SELECT id,tenant_id,created_by,created_at,expires_at,version FROM tenant_join_links WHERE id=$1", id), 201
 	case r.Method == "DELETE" && r.InvitationID != "":
 		row := t.one("SELECT * FROM tenant_invitations WHERE id=$1 AND tenant_id=$2", r.InvitationID, r.TenantID)
