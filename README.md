@@ -107,6 +107,7 @@ npm run build          # tsc -b && vite build
 - [Web 前端](frontend/README.md)：`frontend/src/api` 由 orval 从同一份 `api/openapi.json` 生成带类型的 TanStack Query hooks，`task frontend:generate` 一次完成 Go 契约 → JSON → TypeScript；CI 检测生成物漂移。
 - [核心不变量与状态机](docs/core-contract.md)：身份、归属、幂等、准入、租约、恢复和清理。
 - [Substrate/Node 与阶段二边界](docs/execution-contract.md)：Workspace 数据、Node clone、Substrate 接口与迁移责任。
+- [Agent Substrate ?????](sandbox/README.md)????? effects??? Ora Node WebSocket ????????????
 - [需求—实现—验证清单](docs/acceptance.md)：本次实际证据与未完成的阶段二验证。
 
 ## 模块架构与分层文档

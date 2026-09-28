@@ -1,0 +1,13 @@
+FROM docker.m.daocloud.io/library/golang:1.27.1-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY sandbox/runtime ./sandbox/runtime
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/ora-sandbox-runtime ./sandbox/runtime
+
+FROM docker.m.daocloud.io/library/python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
+RUN sed -i 's#https://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#' /etc/apk/repositories \
+    && apk add --no-cache git ca-certificates openssh-client \
+    && mkdir -p /workspace
+COPY --from=build /out/ora-sandbox-runtime /usr/local/bin/ora-sandbox-runtime
+EXPOSE 80
+ENTRYPOINT ["/usr/local/bin/ora-sandbox-runtime"]

@@ -1,0 +1,14 @@
+[Unit]
+Description=ORA Agent Substrate lifecycle effects and WebSocket router
+After=network-online.target substrate-poc-node.service substrate-poc-registry.service substrate-poc-router.service
+Wants=network-online.target substrate-poc-node.service substrate-poc-registry.service substrate-poc-router.service
+
+[Service]
+Type=simple
+ExecStart=/opt/substrate-poc/bin/ora-sandbox-service -atespace ate-coding-poc -template ora-coding-v3 -controller-id ora-cloud-controller -lifecycle-addr 127.0.0.1:18002 -router-addr 127.0.0.1:18001 -internal-router ws://127.0.0.1:18000 -state /opt/substrate-poc/ora-sandbox-service/state/journal.json
+Restart=on-failure
+RestartSec=2s
+User=root
+
+[Install]
+WantedBy=multi-user.target

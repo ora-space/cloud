@@ -8,6 +8,7 @@ require (
 	github.com/go-git/go-git/v5 v5.16.3
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/viper v1.21.0
