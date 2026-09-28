@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,7 +21,8 @@ import (
 )
 
 // staticDirectory is a corporate-deployment Tianzhou double: the keyword
-// selects which employed person is found, mirroring the router.Directory
+// selects which person is found. The Gone person is reported as unemployed so
+// tests can cover the employment recheck, mirroring the router.Directory
 // contract.
 type staticDirectory struct{}
 
@@ -31,6 +33,8 @@ func (staticDirectory) Search(_ context.Context, keyword string) ([]core.Directo
 	switch strings.TrimSpace(keyword) {
 	case "Other":
 		return []core.DirectoryPerson{{GlobalUserID: "1001", Name: "Other Employee", EmployeeNumber: "00934888", DepartmentName: "R&D", Employed: true}}, nil
+	case "Gone":
+		return []core.DirectoryPerson{{GlobalUserID: "1002", Name: "Former Employee", EmployeeNumber: "00934889", DepartmentName: "R&D", Employed: false}}, nil
 	default:
 		return []core.DirectoryPerson{{GlobalUserID: "205045249610656", Name: "Employee", EmployeeNumber: "00934887", DepartmentName: "R&D", Employed: true}}, nil
 	}
@@ -203,8 +207,8 @@ func TestInvitationTokenValidationAndRevocationSemantics(t *testing.T) {
 	for _, method := range []string{"GET", "POST"} {
 		callAs(t, f, bob, method, f.path("/invitations"), "member-"+method, core.Object{"token": joinToken('e')}, 403)
 		callAs(t, f, bob, method, f.path("/join-links"), "member-link-"+method, core.Object{"token": joinToken('f')}, 403)
-		callAs(t, f, bob, "GET", f.path("/join-requests"), "", nil, 403)
 	}
+	callAs(t, f, bob, "GET", f.path("/join-requests"), "", nil, 403)
 
 	// Deliberate token reuse is a client conflict, never an internal error,
 	// and the digest stays reserved even after revocation.
@@ -226,7 +230,9 @@ func TestInvitationTokenValidationAndRevocationSemantics(t *testing.T) {
 	total := f.scalar("SELECT count(*) FROM tenant_invitations")
 	var listed []any
 	cursor := ""
-	for {
+	// Bound the walk so a server regression that never drains the cursor fails
+	// fast instead of spinning until the global test timeout.
+	for range total + 1 {
 		pagePath := f.path("/invitations?limit=2")
 		if cursor != "" {
 			pagePath += "&after=" + cursor
@@ -238,13 +244,29 @@ func TestInvitationTokenValidationAndRevocationSemantics(t *testing.T) {
 			break
 		}
 	}
+	if cursor != "" {
+		t.Fatalf("pagination cursor never drained within %d pages", total+1)
+	}
 	if len(listed) != total {
 		t.Fatalf("pagination must walk every invitation exactly once: listed=%d total=%d", len(listed), total)
 	}
+	// Walking every row exactly once also pins the keyset contract: ids must
+	// advance in UUID order without revisits, and no page leaks token material.
+	var ids []string
+	seen := map[string]bool{}
 	for _, item := range listed {
-		if row := core.Object(item.(map[string]any)); row["token"] != nil || row["tokenHash"] != nil {
+		row := core.Object(item.(map[string]any))
+		if seen[row.S("id")] {
+			t.Fatalf("pagination revisited invitation %s", row.S("id"))
+		}
+		seen[row.S("id")] = true
+		ids = append(ids, row.S("id"))
+		if row["token"] != nil || row["tokenHash"] != nil {
 			t.Fatalf("invitation list leaked token material: %v", row)
 		}
+	}
+	if !slices.IsSorted(ids) {
+		t.Fatalf("invitation pages must advance in UUID order: %v", ids)
 	}
 }
 
@@ -297,7 +319,9 @@ func TestJoinRequestLifecycleRules(t *testing.T) {
 	if code := codeOf(t, f.call("POST", f.path("/join-requests/"+first.S("id")+"/approve"), core.Object{"version": approved.N("version")}, "approve-2", 409)); code != "request_already_decided" {
 		t.Fatalf("re-approval: want request_already_decided got %s", code)
 	}
-	f.call("POST", f.path("/join-requests/"+first.S("id")+"/reject"), core.Object{"version": approved.N("version")}, "reject-decided", 409)
+	if code := codeOf(t, f.call("POST", f.path("/join-requests/"+first.S("id")+"/reject"), core.Object{"version": approved.N("version")}, "reject-decided", 409)); code != "request_already_decided" {
+		t.Fatalf("reject after decision: want request_already_decided got %s", code)
+	}
 
 	// An active member cannot apply again through any link.
 	bobID := userIDOf(t, f, bob)
@@ -419,17 +443,31 @@ func TestJoinDeploymentModeGating(t *testing.T) {
 		return out
 	}
 	corpToken := joinToken('h')
-	corp(f.user, "POST", "/api/v1/join/invitations/redeem", "corp-redeem", core.Object{"token": corpToken}, 404)
-	corp(f.user, "POST", "/api/v1/join/requests", "corp-request", core.Object{"token": corpToken}, 404)
+	// An exposed route would answer join_link_unavailable for this unknown
+	// token; only a hidden route answers not_found, so the fault code is what
+	// actually pins the gate.
+	if code := codeOf(t, corp(f.user, "POST", "/api/v1/join/invitations/redeem", "corp-redeem", core.Object{"token": corpToken}, 404)); code != "not_found" {
+		t.Fatalf("corporate redeem route must be hidden, got %s", code)
+	}
+	if code := codeOf(t, corp(f.user, "POST", "/api/v1/join/requests", "corp-request", core.Object{"token": corpToken}, 404)); code != "not_found" {
+		t.Fatalf("corporate application route must be hidden, got %s", code)
+	}
 	for _, method := range []string{"GET", "POST"} {
 		corp(f.user, method, f.path("/invitations"), "corp-invite-"+method, core.Object{"token": corpToken}, 404)
 		corp(f.user, method, f.path("/join-links"), "corp-link-"+method, core.Object{"token": corpToken}, 404)
 		corp(f.user, method, f.path("/join-requests"), "corp-req-"+method, nil, 404)
 	}
-	corp(f.user, "DELETE", f.path("/invitations/"+uuid.NewString()), "corp-del", core.Object{"version": 1}, 404)
-	corp(f.user, "DELETE", f.path("/join-links/"+uuid.NewString()), "corp-del-link", core.Object{"version": 1}, 404)
-	corp(f.user, "POST", f.path("/join-requests/"+uuid.NewString()+"/approve"), "corp-approve", core.Object{"version": 1}, 404)
-	corp(f.user, "POST", f.path("/join-requests/"+uuid.NewString()+"/reject"), "corp-reject", core.Object{"version": 1}, 404)
+	// Fresh UUIDs can never match a row, so even an exposed route would answer
+	// 404 for them. Seed real rows through the public fixture router (the
+	// corporate server shares its store) and point the corporate calls at
+	// them: an exposed route would now answer 200, not 404.
+	seedInvite := f.call("POST", f.path("/invitations"), core.Object{"token": joinToken('n')}, "gate-invite", 201)
+	seedLink := f.call("POST", f.path("/join-links"), core.Object{"token": joinToken('o')}, "gate-link", 201)
+	seedReq := joinCall(t, f, joinUser("iris"), "POST", "/api/v1/join/requests", "gate-apply", core.Object{"token": joinToken('o')}, 201)
+	corp(f.user, "DELETE", f.path("/invitations/"+seedInvite.S("id")), "corp-del", core.Object{"version": seedInvite.N("version")}, 404)
+	corp(f.user, "DELETE", f.path("/join-links/"+seedLink.S("id")), "corp-del-link", core.Object{"version": seedLink.N("version")}, 404)
+	corp(f.user, "POST", f.path("/join-requests/"+seedReq.S("id")+"/approve"), "corp-approve", core.Object{"version": seedReq.N("version")}, 404)
+	corp(f.user, "POST", f.path("/join-requests/"+seedReq.S("id")+"/reject"), "corp-reject", core.Object{"version": seedReq.N("version")}, 404)
 
 	// Directory search stays admin-only, then serves the employed person.
 	if code := codeOf(t, corp(bob, "GET", f.path("/people")+"?keyword=Employee", "", nil, 403)); code != "admin_required" {
@@ -449,10 +487,16 @@ func TestJoinDeploymentModeGating(t *testing.T) {
 	if added.S("role") != "admin" || added.S("status") != "active" {
 		t.Fatalf("directory add must honor the requested role: %v", added)
 	}
-	// A selected person who is no longer employed never becomes a member.
+	// A globalUserId absent from the verified search results never becomes a
+	// member, and neither does a person the directory reports as unemployed:
+	// the add path requires an employed match.
 	missing := corp(f.user, "POST", f.path("/members/huawei"), "corp-missing", core.Object{"keyword": "Employee", "globalUserId": "0000000000000001", "role": "member"}, 404)
 	if codeOf(t, missing) != "person_not_found" {
 		t.Fatalf("unverified person: want person_not_found got %s", missing.S("code"))
+	}
+	gone := corp(f.user, "POST", f.path("/members/huawei"), "corp-gone", core.Object{"keyword": "Gone", "globalUserId": "1002", "role": "member"}, 404)
+	if codeOf(t, gone) != "person_not_found" {
+		t.Fatalf("unemployed person: want person_not_found got %s", gone.S("code"))
 	}
 	// Directory adds are admin-only in corporate deployments too. Re-adding an
 	// already-active administrator is idempotent and never rewrites the role,
@@ -650,7 +694,11 @@ func TestConcurrentJoinDecisionAndApplicationRaces(t *testing.T) {
 	results := make(chan int, 2)
 	for i := range subjects {
 		go func(i int) {
-			_, status, _ := f.client.Call(context.Background(), "POST", f.path("/join-requests/"+firstID+"/"+decisions[i]), "gateway", gw, &subjects[i], "race-decision-"+decisions[i], core.Object{"version": 1})
+			_, status, callErr := f.client.Call(context.Background(), "POST", f.path("/join-requests/"+firstID+"/"+decisions[i]), "gateway", gw, &subjects[i], "race-decision-"+decisions[i], core.Object{"version": 1})
+			if callErr != nil {
+				results <- 0
+				return
+			}
 			results <- status
 		}(i)
 	}
