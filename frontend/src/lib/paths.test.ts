@@ -48,6 +48,7 @@ describe('workspacePaths', () => {
     expect(p.plugins).toBe('/w/acme/plugins')
     expect(p.members).toBe('/w/acme/settings/members')
     expect(p.repositories).toBe('/w/acme/repositories')
+    expect(p.gitIdentity).toBe('/w/acme/settings/git-identity')
     expect(workspaceUrlPrefix()).toBe('localhost:3000/w/')
   })
 })

@@ -7,13 +7,13 @@ import { describe, expect, it } from 'vitest'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import { makeIssue, makeStatus } from '@/test/issue-fixtures'
 import { server } from '@/test/msw-server'
-import type { Issue } from './types'
+import type { Issue, IssueRun } from './types'
 import { IssueDetailPage } from './issue-detail-page'
 
 const statuses = [makeStatus('backlog'), makeStatus('todo'), makeStatus('done')]
 
 /** Serves the issue plus the tenant/queries the detail page and its panels mount. */
-function serveDetail(issue: Issue, allIssues: Issue[] = [issue]) {
+function serveDetail(issue: Issue, allIssues: Issue[] = [issue], runs: IssueRun[] = []) {
   server.use(
     http.get('/api/v1/tenants/t1/issues/i1', () => HttpResponse.json(issue)),
     http.get('/api/v1/tenants/t1/issues', () =>
@@ -39,6 +39,12 @@ function serveDetail(issue: Issue, allIssues: Issue[] = [issue]) {
     ),
     http.get('/api/v1/tenants/t1/issues/i1/context-refs', () =>
       HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
+    http.get('/api/v1/tenants/t1/issues/i1/interactions', () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
+    http.get('/api/v1/tenants/t1/issues/i1/runs', () =>
+      HttpResponse.json({ items: runs, nextCursor: '' }),
     ),
   )
 }
@@ -113,5 +119,38 @@ describe('IssueDetailPage', () => {
     await screen.findByText('Fix the login')
 
     expect(await screen.findByText('暂无子任务')).toBeInTheDocument()
+  })
+
+  it('shows the Agent 会话 column for an agent run whose session is not declared yet', async () => {
+    const agentRun: IssueRun = {
+      id: 'r1',
+      tenantId: 't1',
+      issueId: 'i1',
+      executorType: 'agent',
+      executorId: 'a1',
+      input: {},
+      status: 'queued',
+      createdAt: '2026-10-01T00:00:00Z',
+      updatedAt: '2026-10-01T00:00:00Z',
+    }
+    serveDetail(makeIssue('i1', 'Fix the login'), undefined, [agentRun])
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i1/runs/r1/thread', () =>
+        HttpResponse.json({ code: 'not_found', params: {}, requestId: 'r' }, { status: 404 }),
+      ),
+    )
+    renderIssueDetail('i1')
+
+    expect(await screen.findByRole('heading', { name: 'Agent 会话' })).toBeInTheDocument()
+    expect(await screen.findByText('等待 Agent 会话启动…')).toBeInTheDocument()
+  })
+
+  it('has no Agent 会话 column without an agent run', async () => {
+    serveDetail(makeIssue('i1', 'Fix the login'))
+    renderIssueDetail('i1')
+    await screen.findByText('Fix the login')
+    await screen.findByText('暂无子任务')
+
+    expect(screen.queryByRole('heading', { name: 'Agent 会话' })).not.toBeInTheDocument()
   })
 })

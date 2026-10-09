@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { SpaceEvent } from '@/api/generated.schemas'
 import { getGetApiV1MeSpacesQueryKey } from '@/api/me/me'
+import { getGetApiV1TenantsTidIssuesIidRunsRidThreadQueryKey } from '@/api/tenants/tenants'
 
 /**
  * Narrows an unknown value to a property bag; JSON.parse and network payloads
@@ -18,7 +19,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function isSpaceEvent(value: unknown): value is SpaceEvent {
   if (!isRecord(value)) return false
-  return typeof value['type'] === 'string' && typeof value['spaceId'] === 'string'
+  if (typeof value['type'] !== 'string' || typeof value['spaceId'] !== 'string') return false
+  return ['issueId', 'runId'].every((field) => optionalString(value[field]))
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+/**
+ * A Thread notice refetches that run's Thread and the issue's run list (the
+ * run's status moves with its session). `lastSeq` is only a hint and is never
+ * used as a cursor: the Thread query reads forward from what it has cached.
+ */
+function invalidateForThreadEvent(event: SpaceEvent, tenantId: string, queryClient: QueryClient) {
+  if (!event.issueId) return
+  void queryClient.invalidateQueries({ queryKey: ['issue-runs', tenantId, event.issueId] })
+  if (!event.runId) return
+  void queryClient.invalidateQueries({
+    queryKey: getGetApiV1TenantsTidIssuesIidRunsRidThreadQueryKey(
+      tenantId,
+      event.issueId,
+      event.runId,
+    ),
+  })
 }
 
 /**
@@ -54,7 +78,9 @@ function invalidateForEvent(
   spaceId: string,
   queryClient: QueryClient,
 ): void {
-  if (event.type.startsWith('project.')) {
+  if (event.type === 'issue_run.thread_appended' || event.type === 'issue_run.thread_changed') {
+    invalidateForThreadEvent(event, tenantId, queryClient)
+  } else if (event.type.startsWith('project.')) {
     void queryClient.invalidateQueries({
       queryKey: [`/api/v1/tenants/${tenantId}/spaces/${spaceId}/projects`],
     })

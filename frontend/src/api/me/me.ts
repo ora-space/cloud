@@ -6,21 +6,26 @@
  * OpenAPI spec version: 1.0.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
   DataTag,
   DefinedInitialDataOptions,
   DefinedUseQueryResult,
+  MutationFunction,
   QueryClient,
   QueryFunction,
   QueryKey,
   UndefinedInitialDataOptions,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
+  DeleteApiV1MeGitIdentityBody,
   Error,
   GetApiV1MeJoinRequests200,
   GetApiV1MeJoinRequestsParams,
@@ -28,6 +33,8 @@ import type {
   GetApiV1MeSpacesParams,
   GetApiV1MeTenants200,
   GetApiV1MeTenantsParams,
+  GitIdentity,
+  PutApiV1MeGitIdentityBody,
   User
 } from '../generated.schemas';
 
@@ -148,6 +155,235 @@ export function useGetApiV1Me<TData = Awaited<ReturnType<typeof getApiV1Me>>, TE
 
 
 /**
+ * Restores the default git commit identity (display name and a per-user noreply address). A stated identity is removed only at its current version, otherwise 409 version_conflict; an identity that is already the default restores as a no-op whatever version is sent, which makes a retry safe without an Idempotency-Key.
+ * @summary DELETE /api/v1/me/git-identity
+ */
+export const deleteApiV1MeGitIdentity = (
+    deleteApiV1MeGitIdentityBody: DeleteApiV1MeGitIdentityBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GitIdentity>(
+      {url: `/api/v1/me/git-identity`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeGitIdentityBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeGitIdentityMutationKey = () => ['deleteApiV1MeGitIdentity'] as const;
+
+export const getDeleteApiV1MeGitIdentityMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>, TError,DeleteApiV1MeGitIdentityMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>, TError,DeleteApiV1MeGitIdentityMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeGitIdentityMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>, DeleteApiV1MeGitIdentityMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  deleteApiV1MeGitIdentity(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeGitIdentityMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>>
+    export type DeleteApiV1MeGitIdentityMutationBody = DeleteApiV1MeGitIdentityBody
+    export type DeleteApiV1MeGitIdentityMutationError = ErrorType<Error>
+    export type DeleteApiV1MeGitIdentityMutationVariables = {data: DeleteApiV1MeGitIdentityBody}
+
+    /**
+ * @summary DELETE /api/v1/me/git-identity
+ */
+export const useDeleteApiV1MeGitIdentity = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>, TError,DeleteApiV1MeGitIdentityMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeGitIdentity>>,
+        TError,
+        DeleteApiV1MeGitIdentityMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeGitIdentityMutationOptions(options), queryClient);
+    }
+    /**
+ * Returns the git commit identity the verified user's Agent runs commit as: the stated one, or the default (display name and a per-user noreply address) with isDefault true and version 0.
+ * @summary GET /api/v1/me/git-identity
+ */
+export const getApiV1MeGitIdentity = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GitIdentity>(
+      {url: `/api/v1/me/git-identity`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeGitIdentityQueryKey = () => {
+    return [
+    `/api/v1/me/git-identity`
+    ] as const;
+    }
+
+
+export const getGetApiV1MeGitIdentityQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError = ErrorType<Error>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeGitIdentityQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>> = ({ signal }) => getApiV1MeGitIdentity(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeGitIdentityQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>>
+export type GetApiV1MeGitIdentityQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeGitIdentity<TData = Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError = ErrorType<Error>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeGitIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeGitIdentity>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeGitIdentity<TData = Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeGitIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeGitIdentity>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeGitIdentity<TData = Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/git-identity
+ */
+
+export function useGetApiV1MeGitIdentity<TData = Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeGitIdentity>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeGitIdentityQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * States the git commit identity the verified user's Agent runs commit as. name is 1..200 characters with no line break or angle bracket, otherwise 400 invalid_git_name; email is at most 254 bytes shaped local@domain with no whitespace or angle bracket, otherwise 400 invalid_git_email. Only the shape is checked: the identity is a commit signature, never an authentication identity, and grants nothing. version is optimistic concurrency over the stated identity: 0 creates it, the current version replaces it, anything else is 409 version_conflict. Only the user can set their own identity; there is no administrator path. A session resolves the trigger user's identity when it starts, so a change applies to sessions that start afterwards.
+ * @summary PUT /api/v1/me/git-identity
+ */
+export const putApiV1MeGitIdentity = (
+    putApiV1MeGitIdentityBody: PutApiV1MeGitIdentityBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GitIdentity>(
+      {url: `/api/v1/me/git-identity`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeGitIdentityBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeGitIdentityMutationKey = () => ['putApiV1MeGitIdentity'] as const;
+
+export const getPutApiV1MeGitIdentityMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeGitIdentity>>, TError,PutApiV1MeGitIdentityMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeGitIdentity>>, TError,PutApiV1MeGitIdentityMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeGitIdentityMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeGitIdentity>>, PutApiV1MeGitIdentityMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  putApiV1MeGitIdentity(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeGitIdentityMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeGitIdentity>>>
+    export type PutApiV1MeGitIdentityMutationBody = PutApiV1MeGitIdentityBody
+    export type PutApiV1MeGitIdentityMutationError = ErrorType<Error>
+    export type PutApiV1MeGitIdentityMutationVariables = {data: PutApiV1MeGitIdentityBody}
+
+    /**
+ * @summary PUT /api/v1/me/git-identity
+ */
+export const usePutApiV1MeGitIdentity = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeGitIdentity>>, TError,PutApiV1MeGitIdentityMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeGitIdentity>>,
+        TError,
+        PutApiV1MeGitIdentityMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeGitIdentityMutationOptions(options), queryClient);
+    }
+    /**
  * Lists the verified user's pending and decided join applications without requiring prior tenant membership.
  * @summary GET /api/v1/me/join-requests
  */

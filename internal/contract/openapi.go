@@ -89,7 +89,13 @@ func Document() map[string]any {
 	s["Invitation"] = object(obj{"id": uuid(), "tenantId": uuid(), "createdBy": uuid(), "createdAt": timestamp(), "expiresAt": timestamp(), "revokedAt": optional(timestamp()), "consumedBy": optional(uuid()), "consumedAt": optional(timestamp()), "version": number()}, "id", "tenantId", "createdBy", "createdAt", "expiresAt", "version")
 	s["JoinLink"] = object(obj{"id": uuid(), "tenantId": uuid(), "createdBy": uuid(), "createdAt": timestamp(), "expiresAt": timestamp(), "revokedAt": optional(timestamp()), "version": number()}, "id", "tenantId", "createdBy", "createdAt", "expiresAt", "version")
 	s["JoinRequest"] = object(obj{"id": uuid(), "tenantId": uuid(), "userId": uuid(), "linkId": uuid(), "status": enumeration("pending", "approved", "rejected"), "createdAt": timestamp(), "decidedAt": optional(timestamp()), "decidedBy": optional(uuid()), "version": number(), "name": str(), "displayName": str()}, "id", "tenantId", "userId", "linkId", "status", "createdAt", "version")
-	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number()}, "type", "spaceId")
+	// issue_run.thread_appended / issue_run.thread_changed address one agent run's Thread (Thread
+	// D5): issueId and runId name it and lastSeq is only a hint — the Thread GET alone moves a
+	// client's cursor. Every other event omits the three fields.
+	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated", "issue_run.thread_appended", "issue_run.thread_changed"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number(), "issueId": uuid(), "runId": uuid(), "lastSeq": number()}, "type", "spaceId")
+	// GitIdentity is the identity the caller's Agent runs commit as (identity-access git identity
+	// D1). version is 0 while isDefault is true: no identity is stated and the default applies.
+	s["GitIdentity"] = object(obj{"name": str(), "email": str(), "isDefault": boolean(), "version": number()}, "name", "email", "isDefault", "version")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")
@@ -323,7 +329,9 @@ func Document() map[string]any {
 			responses[code] = obj{"description": errorDescription(code), "content": obj{"application/json": obj{"schema": ref("Error")}}}
 		}
 		operation := obj{"operationId": strings.ToLower(r.Method) + strings.NewReplacer("/", "_", ":", "").Replace(r.Path), "tags": []string{tag(r)}, "summary": summary(r), "description": description, "security": security, "responses": responses}
-		if public && (r.Method == "POST" || r.Method == "DELETE") {
+		// Restoring the default git identity needs no idempotency record (there is no tenant to scope
+		// one to): an identity that is already the default restores as a no-op, so a retry is safe.
+		if public && (r.Method == "POST" || r.Method == "DELETE") && r.Path != "/api/v1/me/git-identity" {
 			keyScope := "Scoped to tenant and user."
 			if strings.HasPrefix(r.Path, "/api/v1/join/") {
 				keyScope = "Scoped to the verified user before tenant membership exists."
@@ -432,6 +440,9 @@ func isList(r router.Route) bool {
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
+	if r.Path == "/api/v1/me/git-identity" {
+		return ref("GitIdentity"), "200"
+	}
 	if r.Action != "" {
 		switch r.Action {
 		case "access":
@@ -837,6 +848,14 @@ func description(r router.Route) string {
 	switch r.Path {
 	case "/api/v1/me/spaces":
 		return "Lists every active collaboration space whose tenant has an active membership for the verified user. A space corresponds to exactly one tenant; clients follow all pages before presenting the switcher."
+	case "/api/v1/me/git-identity":
+		switch r.Method {
+		case "PUT":
+			return "States the git commit identity the verified user's Agent runs commit as. name is 1..200 characters with no line break or angle bracket, otherwise 400 invalid_git_name; email is at most 254 bytes shaped local@domain with no whitespace or angle bracket, otherwise 400 invalid_git_email. Only the shape is checked: the identity is a commit signature, never an authentication identity, and grants nothing. version is optimistic concurrency over the stated identity: 0 creates it, the current version replaces it, anything else is 409 version_conflict. Only the user can set their own identity; there is no administrator path. A session resolves the trigger user's identity when it starts, so a change applies to sessions that start afterwards."
+		case "DELETE":
+			return "Restores the default git commit identity (display name and a per-user noreply address). A stated identity is removed only at its current version, otherwise 409 version_conflict; an identity that is already the default restores as a no-op whatever version is sent, which makes a retry safe without an Idempotency-Key."
+		}
+		return "Returns the git commit identity the verified user's Agent runs commit as: the stated one, or the default (display name and a per-user noreply address) with isDefault true and version 0."
 	case "/api/v1/me/join-requests":
 		return "Lists the verified user's pending and decided join applications without requiring prior tenant membership."
 	case "/api/v1/join/invitations/redeem":

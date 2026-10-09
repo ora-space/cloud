@@ -452,6 +452,13 @@ export interface FormDescriptor {
   title?: string | null;
 }
 
+export interface GitIdentity {
+  email: string;
+  isDefault: boolean;
+  name: string;
+  version: number;
+}
+
 export interface HuaweiMember {
   displayName: string;
   role: string;
@@ -1167,11 +1174,16 @@ export const SpaceEventType = {
   projectarchived: 'project.archived',
   spaceplugins_updated: 'space.plugins_updated',
   pluginscatalog_updated: 'plugins.catalog_updated',
+  issue_runthread_appended: 'issue_run.thread_appended',
+  issue_runthread_changed: 'issue_run.thread_changed',
 } as const;
 
 export interface SpaceEvent {
+  issueId?: string;
+  lastSeq?: number;
   /** @nullable */
   projectId?: string | null;
+  runId?: string;
   spaceId: string;
   type: SpaceEventType;
   version?: number;
@@ -1531,6 +1543,18 @@ export type PostApiV1JoinInvitationsRedeemBody = {
 
 export type PostApiV1JoinRequestsBody = {
   token: string;
+};
+
+export type DeleteApiV1MeGitIdentityBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PutApiV1MeGitIdentityBody = {
+  email: string;
+  name: string;
+  /** @minimum 0 */
+  version?: number;
 };
 
 export type GetApiV1MeJoinRequestsParams = {

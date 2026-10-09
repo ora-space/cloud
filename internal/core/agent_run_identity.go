@@ -10,12 +10,9 @@ import "fmt"
 // state one identity per AgentSession, and it states it in the session-start spec this package
 // (`agent_run_session_start.go`) builds.
 //
-// What is implemented here is the ADR's *default* identity only: `{display name, {userId}@noreply}`
-// derived from Cloud's own user row. The user-settable override the ADR's D1 describes (its
-// `users.git_author_name` / `git_author_email` columns, the `/me/git-identity` API and the settings
-// form) is not part of this change, and neither is a configurable noreply domain: the decision is
-// still `proposed`, so Cloud states the one identity it can derive from authoritative state rather
-// than inventing a stored profile field the decision has not yet approved.
+// The identity is the one the trigger user states through `/api/v1/me/git-identity`
+// (git_identity.go), or, when they stated none, D1's default: `{display name, {userId}@noreply}`
+// derived from Cloud's own user row. The noreply domain is not configurable yet.
 //
 // When the identity is resolved is D2's rule: at session start, in the transaction that builds the
 // session-start spec, not at run creation. `runGitIdentity` honors an identity a run input already
@@ -46,8 +43,8 @@ func defaultGitIdentity(t *transaction, uid string) (Object, error) {
 }
 
 // runGitIdentity returns the identity an Agent run's session must commit as: the run input's frozen
-// `gitIdentity` when it carries one, and otherwise the default identity of the user who triggered
-// the run — the state every run in this repository is actually in. It never invents an identity: a
+// `gitIdentity` when it carries one, otherwise the identity the user who triggered the run has
+// stated, and otherwise that user's default identity. It never invents an identity: a
 // run whose input names no identity and whose trigger actor cannot be resolved is an error the
 // caller turns into a rolled-back transaction, because an AgentSession without a git identity is
 // not dispatchable under the wire contract.
@@ -57,5 +54,8 @@ func runGitIdentity(t *transaction, run Object) (Object, error) {
 		return identity, nil
 	}
 	actor := runTriggerActor(t, run)
+	if stated := t.one("SELECT name, email FROM user_git_identities WHERE user_id=$1", actor); stated != nil {
+		return Object{"name": stated.S("name"), "email": stated.S("email")}, nil
+	}
 	return defaultGitIdentity(t, actor)
 }

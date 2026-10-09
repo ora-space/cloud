@@ -14,7 +14,7 @@
 | `current-space.tsx` | 从路由 slug 推导当前空间和该空间的租户 ID |
 | `slug.ts` | 与服务端一致的 slug 校验与名称派生 |
 | `create-space-dialog.tsx` | 创建新租户及其唯一空间的对话框 |
-| `use-space-events.ts` | SSE 解析、重连与 Query 缓存失效 |
+| `use-space-events.ts` | SSE 解析、重连与 Query 缓存失效（含 Issue run Thread 事件） |
 | `*.test.tsx` | 列表、创建、切换和事件行为测试 |
 
 ## 依赖与不变量
@@ -30,4 +30,4 @@
 
 MSW 模拟生成客户端的网络边界；纯函数单测覆盖 slug、SSE 帧与重连间隔。
 
-创建表单复用 `CreateFormSubmit` 统一错误与等待反馈；SSE 同时支持租户成员撤权、插件选择和目录更新，刷新相应查询。
+创建表单复用 `CreateFormSubmit` 统一错误与等待反馈；SSE 同时支持租户成员撤权、插件选择和目录更新，刷新相应查询。`issue_run.thread_appended` / `issue_run.thread_changed` 失效该 run 的 Thread 查询（生成客户端的 `getGetApiV1TenantsTidIssuesIidRunsRidThreadQueryKey`，不带参数）和 `['issue-runs', tid, issueId]`；`lastSeq` 只是提示，游标只由 Thread GET 推进。缺少 `issueId` 的 Thread 事件被忽略，`issueId`/`runId` 不是字符串的事件在边界处丢弃。

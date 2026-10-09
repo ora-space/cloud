@@ -21,6 +21,7 @@ function renderSettings() {
         children: [
           { index: true, element: <GeneralSettingsPage /> },
           { path: 'members', element: <div>Members screen</div> },
+          { path: 'git-identity', element: <div>Git identity screen</div> },
         ],
       },
     ],
@@ -37,5 +38,14 @@ describe('SettingsLayout', () => {
 
     await user.click(screen.getByRole('link', { name: '成员' }))
     expect(await screen.findByText('Members screen')).toBeInTheDocument()
+  })
+
+  it('links the Git 身份 tab to the git identity route', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+
+    expect(await screen.findByDisplayValue('Cloud Dev')).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Git 身份' }))
+    expect(await screen.findByText('Git identity screen')).toBeInTheDocument()
   })
 })

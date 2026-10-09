@@ -43,6 +43,7 @@ export function workspacePaths(slug: string) {
     runtimes: `${base}/runtimes`,
     members: `${base}/settings/members`,
     billing: `${base}/settings/billing`,
+    gitIdentity: `${base}/settings/git-identity`,
     settings: `${base}/settings`,
   }
 }
