@@ -14,7 +14,7 @@ It does not own membership (`features/members`), joining (`features/onboarding`)
 | `current-space.tsx` | Derives the active space and its tenant ID from the route slug |
 | `slug.ts` | Backend-compatible slug validation and name derivation |
 | `create-space-dialog.tsx` | Dialog creating a new tenant and its sole space |
-| `use-space-events.ts` | SSE parsing, reconnection, and Query cache invalidation |
+| `use-space-events.ts` | SSE parsing, reconnection, and Query cache invalidation (including issue-run Thread events) |
 | `*.test.tsx` | Tests for listing, creation, switching, and events |
 
 ## Dependencies and invariants
@@ -30,4 +30,4 @@ Depends on the generated client, `features/auth/session`, and TanStack Query. La
 
 MSW replaces the generated client's network boundary; pure tests cover slugs, SSE frames, and reconnect delays.
 
-Creation uses shared `CreateFormSubmit` error and pending feedback. SSE handles tenant membership revocation, plugin selection and catalog updates by refreshing the corresponding queries.
+Creation uses shared `CreateFormSubmit` error and pending feedback. SSE handles tenant membership revocation, plugin selection and catalog updates by refreshing the corresponding queries. `issue_run.thread_appended` / `issue_run.thread_changed` invalidate that run's Thread query (the generated client's `getGetApiV1TenantsTidIssuesIidRunsRidThreadQueryKey`, without params) and `['issue-runs', tid, issueId]`; `lastSeq` is only a hint, and only the Thread GET moves a cursor. A Thread event without `issueId` is ignored, and an event whose `issueId`/`runId` is not a string is dropped at the boundary.

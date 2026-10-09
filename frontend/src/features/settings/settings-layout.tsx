@@ -9,6 +9,7 @@ export function SettingsLayout({ slug }: { slug: string }) {
     { to: p.settings, label: '通用', end: true },
     { to: p.members, label: '成员', end: false },
     { to: p.billing, label: '账单', end: false },
+    { to: p.gitIdentity, label: 'Git 身份', end: false },
   ]
 
   return (

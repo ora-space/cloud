@@ -279,6 +279,36 @@ describe('useSpaceEvents', () => {
     unmount()
   })
 
+  it('refetches the run thread and the issue runs a thread event names, and nothing else', async () => {
+    server.use(
+      http.get(eventsUrl, () =>
+        eventStream([
+          'data: {"type":"issue_run.thread_appended","spaceId":"S","issueId":"I","runId":"R","lastSeq":7}\n\n',
+          'data: {"type":"issue_run.thread_changed","spaceId":"S","issueId":"J"}\n\n',
+          'data: {"type":"issue_run.thread_changed","spaceId":"S","runId":"R"}\n\n',
+          'data: {"type":"issue_run.thread_changed","spaceId":"S","issueId":3}\n\n',
+        ]),
+      ),
+    )
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const threadKey = [`/api/v1/tenants/${tenantId}/issues/I/runs/R/thread`]
+    const runsKey = ['issue-runs', tenantId, 'I']
+    const otherRunsKey = ['issue-runs', tenantId, 'J']
+    const spacesKey = ['/api/v1/me/spaces']
+    const { unmount, invalidated } = renderEvents(queryClient, [
+      threadKey,
+      runsKey,
+      otherRunsKey,
+      spacesKey,
+    ])
+
+    await waitFor(() => expect(invalidated(otherRunsKey)).toBe(true))
+    expect(invalidated(threadKey)).toBe(true)
+    expect(invalidated(runsKey)).toBe(true)
+    expect(invalidated(spacesKey)).toBe(false)
+    unmount()
+  })
+
   it('does nothing without a tenant or space', async () => {
     let connections = 0
     server.use(
