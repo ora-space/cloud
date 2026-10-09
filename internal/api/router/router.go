@@ -52,6 +52,9 @@ const threadMessageBodyLimit = 256 << 10
 func Routes() []Route {
 	return []Route{
 		{"GET", "/api/v1/me", "", nil},
+		{"GET", "/api/v1/me/git-identity", "", nil},
+		{"PUT", "/api/v1/me/git-identity", "", []string{"name", "email", "version"}},
+		{"DELETE", "/api/v1/me/git-identity", "", []string{"version"}},
 		{"GET", "/api/v1/me/tenants", "", nil},
 		{"GET", "/api/v1/me/spaces", "", nil},
 		{"GET", "/api/v1/me/join-requests", "", nil},

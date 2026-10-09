@@ -37,6 +37,15 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		if r.Path == "/api/v1/me" {
 			return u
 		}
+		if r.Path == "/api/v1/me/git-identity" {
+			switch r.Method {
+			case "PUT":
+				return putGitIdentity(t, r, uid)
+			case "DELETE":
+				return deleteGitIdentity(t, r, uid)
+			}
+			return gitIdentityView(t, uid)
+		}
 		if r.Path == "/api/v1/me/tenants" {
 			// Preserve the historical creation-order contract for tenant clients.
 			// The visible switcher uses /me/spaces and loads every page.

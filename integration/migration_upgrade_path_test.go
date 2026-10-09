@@ -970,3 +970,43 @@ func TestMigration0031AgentRunThreadEntriesAppliesFreshAndUpgrades(t *testing.T)
 		}
 	}
 }
+
+// TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades covers 0032 on a fresh database and as an
+// upgrade over 0031 with an existing user: the table is created once, an existing user keeps their
+// row untouched, and the CHECKs refuse what identity-access D1 refuses.
+func TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades(t *testing.T) {
+	freshPool, _ := testSchema(t, "test_gi32f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !tableExists(t, freshPool, "user_git_identities") {
+		t.Fatal("a fresh database must have user_git_identities")
+	}
+
+	pool, _ := testSchema(t, "test_gi32_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0032_user_git_identities.sql"))
+	if tableExists(t, pool, "user_git_identities") {
+		t.Fatal("user_git_identities must not exist before 0032")
+	}
+	user := uuid.NewString()
+	_, e := pool.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Existing','active')`, user)
+	must(t, e)
+	migratedTwice(t, newStoreOnSchema(t, pool))
+
+	var name string
+	must(t, pool.QueryRow(`SELECT display_name FROM users WHERE id=$1`, user).Scan(&name))
+	if name != "Existing" {
+		t.Fatalf("an existing user row must be untouched, got %q", name)
+	}
+	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ada','ada@example.invalid')`, user)
+	must(t, e)
+	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ada','ada@example.invalid')`, user)
+	wantPGError(t, e, "23505") // one identity per user
+	other := uuid.NewString()
+	_, e = pool.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Other','active')`, other)
+	must(t, e)
+	for _, bad := range [][2]string{{"", "a@b"}, {"a\nb", "a@b"}, {"<a>", "a@b"}, {"Ada", "no-at"}, {"Ada", "a b@c"}} {
+		_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,$2,$3)`, other, bad[0], bad[1])
+		wantPGError(t, e, "23514")
+	}
+	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ghost','g@x')`, uuid.NewString())
+	wantPGError(t, e, "23503") // the identity belongs to a real user
+}
