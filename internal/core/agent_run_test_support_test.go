@@ -425,6 +425,15 @@ func threadRecord(tag string, line int64, text string) Object {
 	}
 }
 
+// userTurnRecord is the user message record the Node writes when it starts a user turn — the only
+// record that echoes a turn Cloud wrote. Agent replies in the same turn carry the turn id as well
+// (Node protocol D2) and are built with threadRecord.
+func userTurnRecord(line int64, text string) Object {
+	record := threadRecord("update", line, text)
+	record["update"] = Object{"sessionUpdate": "user_message_chunk", "content": Object{"type": "text", "text": text}}
+	return record
+}
+
 // threadEvent builds one wire ThreadEvent in the canonical shape the control plane's takeover action
 // requires: the record travels as the opaque JSON *string* desktop `ora-history` owns, which is why
 // the business seam parses it once at the boundary.

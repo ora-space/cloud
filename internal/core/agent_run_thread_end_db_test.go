@@ -649,7 +649,7 @@ func TestThreadHistoryIsImmutableAcrossEnding(t *testing.T) {
 	// Deliver the queued turn and end the agent's turn in one batch, so the Thread history holds a
 	// delivered user turn next to Node records before anything ends the Thread.
 	if _, err := takeOver(t, store, scene, scene.execution, []Object{
-		threadEvent(2, threadRecord("update", 1, "the user turn"), turnID),
+		threadEvent(2, userTurnRecord(1, "the user turn"), turnID),
 		threadEvent(3, threadRecord("turnEnded", 2, ""), ""),
 	}); err != nil {
 		t.Fatalf("deliver the user turn and end the agent's turn: %v", err)

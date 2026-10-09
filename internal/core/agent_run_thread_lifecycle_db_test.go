@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -119,7 +120,7 @@ func TestThreadTakeoverUserTurnEchoMarksDelivered(t *testing.T) {
 	beforeCommands := countCommands(t, store, scene.run)
 
 	out, err := takeOver(t, store, scene, scene.execution, []Object{
-		threadEvent(2, threadRecord("update", 1, "the agent sees the user turn"), turnID),
+		threadEvent(2, userTurnRecord(1, "the agent sees the user turn"), turnID),
 	})
 	if err != nil {
 		t.Fatalf("echo batch: %v", err)
@@ -181,7 +182,7 @@ func TestThreadTakeoverUserTurnLifecycleIsOneWay(t *testing.T) {
 		t.Fatalf("a queued turn stays queued until its own echo, got %q", status)
 	}
 
-	echo := threadEvent(3, threadRecord("update", 2, "the user turn"), turnID)
+	echo := threadEvent(3, userTurnRecord(2, "the user turn"), turnID)
 	if _, err := takeOver(t, store, scene, scene.execution, []Object{echo}); err != nil {
 		t.Fatalf("echo batch: %v", err)
 	}
@@ -359,7 +360,7 @@ func TestThreadTakeoverInitialEchoLeavesLifecycleAlone(t *testing.T) {
 	scene := seedTakeoverScene(t, store)
 
 	out, err := takeOver(t, store, scene, scene.execution, []Object{
-		threadEvent(1, threadRecord("update", 0, "the first prompt"), scene.initialTurnID),
+		threadEvent(1, userTurnRecord(0, "the first prompt"), scene.initialTurnID),
 	})
 	if err != nil {
 		t.Fatalf("initial echo batch: %v", err)
@@ -378,5 +379,57 @@ func TestThreadTakeoverInitialEchoLeavesLifecycleAlone(t *testing.T) {
 	id, _ := turnID.(*string)
 	if !present || source != "system" || kind != "user_turn" || id == nil || *id != scene.initialTurnID {
 		t.Fatalf("seq=1 must stay the Cloud-authored prompt, got %s/%s turn=%v", source, kind, turnID)
+	}
+}
+
+// TestThreadTakeoverKeepsTheTurnsOwnRecords pins the shape a real Node sends (Node protocol D2):
+// every record of a user turn carries that turn's id, not only the user message that echoes it.
+// Only the user message record is an echo; the agent's reply and the turn's `turnEnded` in the same
+// turn are ordinary entries that keep the turn id. Before this rule the whole first turn of a real
+// echo agent was dropped as an "echo" and the Thread never showed a reply or went idle.
+func TestThreadTakeoverKeepsTheTurnsOwnRecords(t *testing.T) {
+	store := commandStore(t)
+	scene := seedTakeoverScene(t, store)
+
+	if _, err := takeOver(t, store, scene, scene.execution, []Object{
+		threadEvent(1, threadRecord("meta", 0, ""), ""),
+		threadEvent(2, userTurnRecord(1, "the first prompt"), scene.initialTurnID),
+		threadEvent(3, threadRecord("update", 2, "echo: the first prompt"), scene.initialTurnID),
+		threadEvent(4, threadRecord("turnEnded", 3, ""), scene.initialTurnID),
+	}); err != nil {
+		t.Fatalf("first turn batch: %v", err)
+	}
+	if got := threadSeqs(t, store, scene.run); !slices.Equal(got, []int64{1, 2, 3, 4}) {
+		t.Fatalf("the first prompt's echo alone is skipped; meta, reply and turnEnded are entries, got %v", got)
+	}
+	for sequence, want := range map[int64]string{3: "update", 4: "turnEnded"} {
+		_, source, kind, _, turnID, present := nodeEntry(t, store, scene.run, sequence)
+		if !present || source != "node" || kind != want || turnID == nil || *turnID != scene.initialTurnID {
+			t.Fatalf("node sequence %d must be a %s entry keeping the turn id, got present=%v %s/%s turn=%v", sequence, want, present, source, kind, turnID)
+		}
+	}
+	if state := runThreadState(t, store, scene.run); !state.Valid || state.String != "idle" {
+		t.Fatalf("a first turn that ended with no queued turn leaves the Thread idle, got %v", state)
+	}
+
+	turnID, turnSeq := seedQueuedUserTurn(t, store, scene.run, "and again")
+	if _, err := takeOver(t, store, scene, scene.execution, []Object{
+		threadEvent(5, userTurnRecord(4, "and again"), turnID),
+		threadEvent(6, threadRecord("update", 5, "echo: and again"), turnID),
+		threadEvent(7, threadRecord("turnEnded", 6, ""), turnID),
+	}); err != nil {
+		t.Fatalf("second turn batch: %v", err)
+	}
+	if _, _, status, _ := threadEntryRow(t, store, scene.run, turnSeq); status != "delivered" {
+		t.Fatalf("the user message record delivers its turn, got %q", status)
+	}
+	if _, _, kind, _, id, present := nodeEntry(t, store, scene.run, 6); !present || kind != "update" || id == nil || *id != turnID {
+		t.Fatalf("the reply to a later turn is an entry keeping its turn id, got present=%v kind=%s turn=%v", present, kind, id)
+	}
+	if _, _, _, _, _, present := nodeEntry(t, store, scene.run, 5); present {
+		t.Fatal("the later turn's user message is an echo and must not become a node entry")
+	}
+	if state := runThreadState(t, store, scene.run); !state.Valid || state.String != "idle" {
+		t.Fatalf("the later turn ended too, got %v", state)
 	}
 }

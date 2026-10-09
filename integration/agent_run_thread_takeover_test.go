@@ -190,9 +190,21 @@ func mustJSON(t *testing.T, v any) string {
 // crates/history/src/record.rs). The inner `seq` is the Node's line number and is deliberately
 // unrelated to the Cloud-assigned Thread seq.
 func threadLine(tag, text string) string {
+	return historyLine(tag, "agent_message_chunk", text)
+}
+
+// userTurnLine renders the user message record the Node writes when it starts a user turn: the
+// only record whose turn id makes it an echo of a turn Cloud already wrote. The agent's replies in
+// that turn carry the same turn id (Node protocol D2) but render through threadLine.
+func userTurnLine(text string) string {
+	return historyLine("update", "user_message_chunk", text)
+}
+
+// historyLine renders one `ora-history` line with an ACP session update of the given kind.
+func historyLine(tag, sessionUpdate, text string) string {
 	line := core.Object{"at": "2026-09-30T10:00:00+00:00", "seq": 0, "type": tag}
 	if text != "" {
-		line["update"] = core.Object{"sessionUpdate": "agent_message_chunk", "content": core.Object{"type": "text", "text": text}}
+		line["update"] = core.Object{"sessionUpdate": sessionUpdate, "content": core.Object{"type": "text", "text": text}}
 	}
 	b, e := json.Marshal(line)
 	if e != nil {
@@ -214,7 +226,7 @@ func TestAgentRunThreadTakeoverOverGRPC(t *testing.T) {
 
 	batch := []*controlpb.ThreadEvent{
 		{Sequence: 1, Record: threadLine("update", "working on the fix")},
-		{Sequence: 2, TurnId: &scene.initialTurnID, Record: threadLine("update", "Fix the auth flow")},
+		{Sequence: 2, TurnId: &scene.initialTurnID, Record: userTurnLine("Fix the auth flow")},
 	}
 	resp, e := client.TakeOverThreadEvents(asController("ctrl-a"), &controlpb.TakeOverThreadEventsRequest{
 		Epoch: 1, OperationId: scene.runID, ExecutionId: scene.executionID, Events: batch,

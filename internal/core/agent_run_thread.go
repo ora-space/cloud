@@ -41,19 +41,31 @@ func threadRecordKind(record Object) (string, bool) {
 	return kind, threadRecordKinds[kind]
 }
 
+// userTurnEcho reports whether a Node record is the user message a turn starts with — the only
+// record that echoes a turn Cloud already wrote. Node protocol D2 tags every record that belongs to
+// a user turn with that turn's id, so the agent's own replies and the turn's `turnEnded` carry it
+// too; the turn id alone therefore says which turn a record belongs to, never that it is an echo.
+func userTurnEcho(record Object) bool {
+	return record.S("type") == "update" && record.O("update").S("sessionUpdate") == "user_message_chunk"
+}
+
 // settleThreadEvents is the B-owned core behind the A→B hook OnThreadEvents
 // (controller-integration D6, IssueRun D3, Thread D1/D4; plan §4B.7).
 //
 //	authoritative re-read: issue_runs, node_executions and execution_work are read here, never taken
 //	                      from the caller; the execution must be an agent_session execution whose
 //	                      work item is this run's own session work.
-//	echo dedupe:          an event whose turn_id is the Thread's first prompt turn_id is the echo of
-//	                      the prompt Cloud already wrote as seq=1: it is persisted as a receipt by
-//	                      the caller but produces no entry and consumes no seq (Thread D3 rule).
-//	user turn echo:       an event whose turn_id is an existing Cloud-written user turn takes that
-//	                      turn over: the row moves `queued → delivered` and nothing else changes —
-//	                      no entry, no seq, no rewrite of the stored content, no new command
-//	                      (Thread D3, D-4C-08).
+//	echo dedupe:          a user message record (userTurnEcho) whose turn_id is the Thread's first
+//	                      prompt turn_id is the echo of the prompt Cloud already wrote as seq=1: it
+//	                      is persisted as a receipt by the caller but produces no entry and consumes
+//	                      no seq (Thread D3 rule).
+//	user turn echo:       a user message record whose turn_id is an existing Cloud-written user turn
+//	                      takes that turn over: the row moves `queued → delivered` and nothing else
+//	                      changes — no entry, no seq, no rewrite of the stored content, no new
+//	                      command (Thread D3, D-4C-08).
+//	turn records:         every other record of a turn — the agent's replies, its tool records, the
+//	                      turn's `turnEnded` — carries the same turn_id (Node protocol D2) and is an
+//	                      ordinary entry that keeps that turn_id.
 //	seq allocation:       one gapless run-scoped seq per real record, from MAX(seq)+1 — seq=1 stays
 //	                      the immutable Cloud-authored first prompt (D-023, G-009/§21/§23).
 //	running authority:    the first real record commits `starting → running` in this same
@@ -120,7 +132,8 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	// what the session did afterwards.
 	lastKind := ""
 	for _, ev := range events {
-		if turnID := ev.S("turnId"); turnID != "" && turnID == initialTurnID {
+		echo := userTurnEcho(ev.O("record"))
+		if turnID := ev.S("turnId"); echo && turnID != "" && turnID == initialTurnID {
 			continue // echo of the first prompt: receipt only, seq=1 already presents it
 		}
 		kind, ok := threadRecordKind(ev.O("record"))
@@ -137,14 +150,14 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		// and only a session end that found the turn still queued writes `discarded` (Thread D3
 		// invariant 4, Phase 5) — an echo cannot undo it, which is why the test above needs no third
 		// branch and no default.
-		if turnID := ev.S("turnId"); turnID != "" {
-			if echo := t.one("SELECT seq, status FROM thread_entries WHERE run_id=$1 AND turn_id=$2 AND source='user' AND kind='user_turn'", runID, turnID); echo != nil {
-				if echo.S("status") == "queued" {
+		if turnID := ev.S("turnId"); echo && turnID != "" {
+			if turn := t.one("SELECT seq, status FROM thread_entries WHERE run_id=$1 AND turn_id=$2 AND source='user' AND kind='user_turn'", runID, turnID); turn != nil {
+				if turn.S("status") == "queued" {
 					// Same hardening as every other Thread CAS: the row was just read under the
 					// caller's advisory lock, so zero affected rows means the lifecycle moved under
 					// a predicate this transaction did not observe — invariant corruption that rolls
 					// the batch back rather than being silently tolerated.
-					if moved := t.execRows(`UPDATE thread_entries SET status='delivered' WHERE run_id=$1 AND seq=$2 AND status='queued'`, runID, echo.N("seq")); moved != 1 {
+					if moved := t.execRows(`UPDATE thread_entries SET status='delivered' WHERE run_id=$1 AND seq=$2 AND status='queued'`, runID, turn.N("seq")); moved != 1 {
 						return fmt.Errorf("settleThreadEvents: run %s user turn %s was not marked delivered (rows affected %d)", runID, turnID, moved)
 					}
 					// A4: the row moved, so the Thread's REST representation changed even though no
