@@ -25,9 +25,8 @@ package integration
 // internal/objectstore signs a HEAD and the fixture answers it, so what these tests pin is the
 // request Cloud actually sends — which object keys it spends a request on, and what a store that
 // disagrees with the declaration does to the run — rather than a call into a Go stand-in for the
-// client. What they deliberately do not prove is that a real S3 accepts Cloud's signature: the ADR's
-// local-MinIO acceptance is still owed, no MinIO endpoint was reachable when this was written, and
-// that gap is registered as G-037 rather than papered over here.
+// client. That a real S3 accepts Cloud's signatures is not this file's concern: revision_test.go and
+// revision_sandbox_test.go prove it against a real store (RustFS in CI and in cluster's acceptance).
 
 import (
 	"bytes"

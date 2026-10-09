@@ -49,15 +49,13 @@ SHA-256**(D4 step 2)。它不决定任何业务语义——授权给谁、何时
 - **签发的时限即服务的时限**:签名与到期时刻都按秒截断,`Grant.Expires` 报出的就是存储实际执行的边界。
 - **凭据不泄漏**:授权只返回 URL、方法与请求头,不含任何凭据;测试断言 URL 里不出现 secret。
 
-## 已知限制
-
-- **未与真实 S3/MinIO 联调**。本包只有 `httptest` 双端的确定性测试:它证明请求的形状、绑定与失败判定,
-  不证明真实存储接受这些签名。"本地 MinIO 集成测试"这条 ADR 要求仍待补齐(G-037 保持 OPEN),证据状态
-  如实登记为 Partial/Missing,不以单测冒充。
-
 ## 测试
 
 - 单测全部离线且确定性:真实 `httptest` S3 双端。覆盖授权对对象键的绑定与本地签名、`PresignPUTChecksum`
   对校验和头的绑定与非法摘要的拒绝、`public_endpoint` 与按秒截断的到期时刻、以及规范化对象路径。
 - 上传授权的签发入口(交付执行、校验和映射)与对象核验在交付状态机中的位置由 `internal/core` 的单测和
   `integration/agent_run_delivery_test.go` 覆盖。
+- 真实存储接受这些签名由 `integration/revision_test.go` 与 `integration/revision_sandbox_test.go` 对真实
+  S3(RustFS)证明:签名 PUT 与 HEAD 核验、错误校验和与过期授权被存储拒绝、已存对象不可被仍有效的授权覆盖,
+  以及沙盒网络内凭公开端点上传。它们由 `task test:revision`(`REQUIRE_S3=1`)与 cluster 的
+  `task agent:acceptance` 运行,CI 的 Backend 工作流也以固定版本的 RustFS 运行它们。

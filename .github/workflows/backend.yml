@@ -35,6 +35,15 @@ jobs:
       TEST_DATABASE_URL: 'host=127.0.0.1 port=5432 user=postgres password=postgres dbname=ora_test sslmode=disable'
       REQUIRE_POSTGRES: '1'
       CGO_ENABLED: '1'
+      # The Revision tests run against a real S3 (RustFS) instead of skipping: Cloud's presigned PUT,
+      # its checksum binding and its HEAD verification are only proven by a store that enforces them.
+      # The image is pinned by digest; the sandbox-network test also runs it as its curl uploader.
+      RUSTFS_IMAGE: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+      TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      TEST_S3_PUBLIC_ENDPOINT: http://ora-revisions:9000
+      TEST_S3_SANDBOX_NETWORK: ora-sandboxes
+      REQUIRE_S3: '1'
+      REQUIRE_S3_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,6 +55,36 @@ jobs:
           # Caches ~/go/pkg/mod and ~/.cache/go-build keyed by go.sum.
           cache: true
       - run: go mod download
+      # Same shape as cluster's Compose stack: Cloud reaches the store on a private endpoint, sandboxes
+      # on the `ora-sandboxes` network reach it as `ora-revisions`. Credentials are random per run and
+      # live only in files under RUNNER_TEMP; they are passed to curl on stdin, never as arguments.
+      - name: Start RustFS
+        run: |
+          creds="$RUNNER_TEMP/s3"
+          mkdir -m 755 "$creds"  # RustFS runs as a non-root user and must traverse it
+          openssl rand -hex 12 > "$creds/access-key"
+          openssl rand -hex 32 > "$creds/secret-key"
+          chmod 644 "$creds/access-key" "$creds/secret-key"
+          echo "TEST_S3_ACCESS_KEY_FILE=$creds/access-key" >> "$GITHUB_ENV"
+          echo "TEST_S3_SECRET_KEY_FILE=$creds/secret-key" >> "$GITHUB_ENV"
+          docker pull --quiet "$RUSTFS_IMAGE"
+          # integration/revision_sandbox_test.go runs `rustfs/rustfs:latest` as the sandbox uploader.
+          docker tag "$RUSTFS_IMAGE" rustfs/rustfs:latest
+          docker network create "$TEST_S3_SANDBOX_NETWORK"
+          docker run -d --name ora-revisions --network "$TEST_S3_SANDBOX_NETWORK" -p 127.0.0.1:9000:9000 \
+            -v "$creds:/credentials:ro" -e RUSTFS_ACCESS_KEY_FILE=/credentials/access-key \
+            -e RUSTFS_SECRET_KEY_FILE=/credentials/secret-key -e RUSTFS_CONSOLE_ENABLE=false \
+            -e RUSTFS_REGION=us-east-1 "$RUSTFS_IMAGE" /data
+          for _ in $(seq 60); do
+            curl -sf "$TEST_S3_ENDPOINT/health/ready" >/dev/null && break
+            sleep 1
+          done
+          # The bucket is created from inside the sandbox network with the pinned image's curl, whose
+          # SigV4 signing does not depend on the runner's curl version.
+          printf 'user = "%s:%s"\naws-sigv4 = "aws:amz:us-east-1:s3"\nrequest = "PUT"\nurl = "%s/revisions"\n' \
+            "$(cat "$creds/access-key")" "$(cat "$creds/secret-key")" "$TEST_S3_PUBLIC_ENDPOINT" |
+            docker run --rm -i --network "$TEST_S3_SANDBOX_NETWORK" --entrypoint /usr/bin/curl "$RUSTFS_IMAGE" \
+              --fail --silent --show-error --max-time 60 --output /dev/null --config -
       - run: go run ./cmd/checkformat
       # proto/ is the single source of the internal control contract; internal/controlpb is generated
       # from it with pinned remote plugins. Lint, reject breaking changes to v1 against the base

@@ -63,14 +63,6 @@ repository prefers the standard library over a new module for that.
 - **Credentials do not leak**: a grant returns a URL, a method and headers and no credential; the
   tests assert that no secret appears in the URL.
 
-## Known limitations
-
-- **Not exercised against a real S3/MinIO.** The package has deterministic `httptest`-double tests
-  only: they prove the shape, the binding and the failure judgements of the requests, not that a real
-  store accepts the signatures. The ADR's local-MinIO integration test is still owed (G-037 stays
-  OPEN), and the evidence rows record that honestly as Partial/Missing rather than letting a unit test
-  stand in for it.
-
 ## Tests
 
 - The unit tests are fully offline and deterministic, against a real `httptest` S3 double. They cover
@@ -80,3 +72,9 @@ repository prefers the standard library over a new module for that.
 - Where grant issuance (the delivery execution, the checksum map) and object verification sit in the
   delivery state machine is covered by `internal/core`'s unit tests and
   `integration/agent_run_delivery_test.go`.
+- That a real store accepts these signatures is proven against a real S3 (RustFS) by
+  `integration/revision_test.go` and `integration/revision_sandbox_test.go`: the signed PUT and the
+  HEAD verification, the store's refusal of a wrong checksum and of an expired grant, a stored object
+  that a still-live grant cannot overwrite, and an upload through the public endpoint from the sandbox
+  network. `task test:revision` (`REQUIRE_S3=1`) and cluster's `task agent:acceptance` run them, and
+  the Backend CI workflow runs them against a pinned RustFS.

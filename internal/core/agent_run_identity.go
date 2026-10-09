@@ -17,13 +17,12 @@ import "fmt"
 // still `proposed`, so Cloud states the one identity it can derive from authoritative state rather
 // than inventing a stored profile field the decision has not yet approved.
 //
-// Divergence worth naming: D2 freezes the identity at run creation, and no run-create path in this
-// repository writes one into the run input. `runGitIdentity` honors a frozen identity if a run
-// input carries one and derives the trigger actor's default otherwise, so for every run created here
-// the identity is resolved when the session starts rather than frozen when the run was created — a
-// display-name change in between changes the identity that run commits as. Closing that gap means
-// snapshotting at creation, which this change does not do: the approved schema has no place to put
-// it and the decision that asks for it is not yet binding.
+// When the identity is resolved is D2's rule: at session start, in the transaction that builds the
+// session-start spec, not at run creation. `runGitIdentity` honors an identity a run input already
+// carries — the entry point for freezing at creation later — and otherwise resolves the trigger
+// actor's identity then, so a display-name change between run creation and session start changes
+// the identity that session commits as. Once the session-start spec is recorded it is the
+// execution's fixed input and nothing later changes it.
 
 // gitNoreplyDomain is the platform noreply domain the default identity's email is built on
 // (identity-access D1's `git.noreply_domain`, proposed default). A `.invalid` TLD is deliberate: the
