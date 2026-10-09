@@ -88,8 +88,29 @@ export interface IssueRun {
   executorId: string
   input: Record<string, unknown>
   status: string
+  /** Agent runs: the settled delivery, `{revisionId, deliveryState}`, once the run released its Workspace. */
+  result?: RunResult | null
+  /** Agent runs: the registered Revision as metadata only; null until one is registered. */
+  revision?: RunRevision | null
   createdAt: string
   updatedAt: string
+}
+
+/** How an agent run's delivery settled (Cloud Revision D5, IssueRun D4). */
+export interface RunResult {
+  revisionId?: string | null
+  deliveryState?: 'saved' | 'unchanged' | 'skipped' | 'failed'
+}
+
+/** Public metadata of a registered Revision; object keys and URLs are never exposed. */
+export interface RunRevision {
+  id: string
+  baseCommit: string
+  finalCommit: string
+  changed: boolean
+  bundleSize: number | null
+  historySize: number
+  createdAt: string
 }
 
 /** Reference-not-copy pointer to an external resource attached to an issue. */

@@ -1491,6 +1491,48 @@
             "nullable": true,
             "type": "string"
           },
+          "revision": {
+            "additionalProperties": false,
+            "nullable": true,
+            "properties": {
+              "baseCommit": {
+                "type": "string"
+              },
+              "bundleSize": {
+                "format": "int64",
+                "nullable": true,
+                "type": "integer"
+              },
+              "changed": {
+                "type": "boolean"
+              },
+              "createdAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "finalCommit": {
+                "type": "string"
+              },
+              "historySize": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "baseCommit",
+              "finalCommit",
+              "changed",
+              "bundleSize",
+              "historySize",
+              "createdAt"
+            ],
+            "type": "object"
+          },
           "startedAt": {
             "format": "date-time",
             "nullable": true,

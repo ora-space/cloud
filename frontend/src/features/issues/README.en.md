@@ -10,7 +10,7 @@ The tenant's issue board, list and detail pages, plus the Cloud Issue data layer
 
 | File | Purpose |
 | --- | --- |
-| `api.ts` | Query hooks for issues, statuses, members, comments, runs, timeline, interactions and context refs |
+| `api.ts` | Query hooks for issues, statuses, members, comments, runs, timeline, interactions and context refs; `useRuns` refreshes every 5 s while an agent run is unsettled (run settlement publishes no space event) |
 | `types.ts` | Issue domain types mirroring the backend contract |
 | `present.ts` | Pure display helpers: number, assignee, status columns |
 | `issues-page.tsx` / `issues-board.tsx` / `issues-list.tsx` | The issues page, the board (drag → `move` anchors) and the list |

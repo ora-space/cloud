@@ -17,6 +17,7 @@ Issue 详情页右侧的「Agent 会话」栏：选出该 Issue 最近一次 age
 | `thread-messages.tsx` | 展示组件：消息列表（`role=list`，名称「会话消息」）与「加载更早」按钮 |
 | `thread-composer.tsx` | 输入框「给 Agent 发送消息」、「发送」与带确认步骤的「结束会话」 |
 | `thread-panel.tsx` | `IssueThreadPanel`：选 run、标题「Agent 会话」、状态徽章、等待提示与组合 |
+| `run-delivery.tsx` | 会话下方的 Revision 交付一行（`role=status`，名称「Revision 交付」）：已登记的 Revision 显示短提交与是否有改动，否则按 `result.deliveryState` 说明跳过或失败，会话已结束但运行未结算时显示保存中 |
 | `*.test.ts(x)` | 纯函数单测与 MSW 集成测试 |
 
 ## 依赖
@@ -29,6 +30,7 @@ Issue 详情页右侧的「Agent 会话」栏：选出该 Issue 最近一次 age
 - 发送成功后**不**把返回的 entry 直接并入缓存：它的 seq 可能领先于尚未读到的条目，提前推进窗口会永久跳过它们；只靠重新读取按序拿到。
 - 事件里的 `lastSeq` 只是提示，从不当作游标。
 - GET 404 表示会话尚未声明，是正常的等待状态（每 2.5s 轮询），不是错误；已声明后在非 `ended` 状态下每 5s 兜底轮询，防止 SSE 掉线。
+- Revision 只显示公开元数据（提交、是否有改动、大小）；运行结算没有空间事件，依赖 `useRuns` 在 agent 运行未结束时的轮询刷新。
 - `ending` / `ended` 时禁用发送与结束（与服务端 409 `thread_closed` 规则一致）；发送与结束各自的幂等键在同一次提交的重试间保持不变。
 
 ## 测试

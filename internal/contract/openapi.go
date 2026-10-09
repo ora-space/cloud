@@ -150,6 +150,9 @@ func Document() map[string]any {
 	runProps["input"] = obj{"type": "object", "additionalProperties": true}
 	runProps["result"] = optional(obj{"type": "object", "additionalProperties": true})
 	runProps["externalExecutionId"] = str()
+	// revision is the run's registered Revision as metadata only (Cloud Revision D5): no object key,
+	// ref, digest or URL is public. Null until a Revision is registered, and for every non-agent run.
+	runProps["revision"] = optional(object(obj{"id": uuid(), "baseCommit": str(), "finalCommit": str(), "changed": boolean(), "bundleSize": optional(number()), "historySize": number(), "createdAt": timestamp()}, "id", "baseCommit", "finalCommit", "changed", "bundleSize", "historySize", "createdAt"))
 	runProps["executionContextRef"] = optional(uuid())
 	runProps["workflowInvocationRef"] = optional(uuid())
 	// ThreadEntry is one ordered record of an Agent run's Thread (Thread D1/D2/D3). `seq` is the
