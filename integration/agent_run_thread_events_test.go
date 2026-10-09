@@ -902,6 +902,11 @@ func TestOnlyTheFirstRecordAdvancesRunning(t *testing.T) {
 func threadLineObjectWith(t *testing.T, sequence int64, turnID, tag, text string) core.Object {
 	t.Helper()
 	line := threadLine(tag, text)
+	if turnID != "" && tag == "update" {
+		// Every caller that names a turn means that turn's echo, which the Node writes as the user
+		// message record; an agent reply would carry the turn id too but is not an echo.
+		line = userTurnLine(text)
+	}
 	parsed := core.Object{}
 	if e := json.Unmarshal([]byte(line), &parsed); e != nil || parsed == nil {
 		t.Fatalf("fixture: thread line %q is not a JSON object: %v", line, e)
