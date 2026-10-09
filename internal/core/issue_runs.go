@@ -23,16 +23,43 @@ func run(t *transaction, tid, iid, rid string) Object {
 	require(validID(rid), 404, "not_found")
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL", rid, tid, iid)
 	require(o != nil, 404, "not_found")
-	return stripAgentRunSkeleton(o)
+	return withRevision(t, stripAgentRunSkeleton(o))
 }
 
 func runList(t *transaction, r *PublicRequest) Object {
 	issue(t, r.TenantID, r.IssueID)
 	items := t.list("SELECT * FROM issue_runs WHERE issue_id=$1 AND tenant_id=$2 AND deleted_at IS NULL ORDER BY created_at, id", r.IssueID, r.TenantID)
 	for _, o := range items {
-		stripAgentRunSkeleton(o)
+		withRevision(t, stripAgentRunSkeleton(o))
 	}
 	return Object{"items": items, "nextCursor": ""}
+}
+
+// withRevision projects the run's registered Revision as public metadata (Cloud Revision D5): the
+// final and base commits, whether the run changed anything, and the object sizes. Object keys, the
+// revision ref and digests stay private — the public API offers no download, and a key would name
+// a private storage location. `revision` is null for a run that registered none (not an agent run,
+// delivery still pending, skipped or failed); the run's `result.deliveryState` says which.
+func withRevision(t *transaction, o Object) Object {
+	o["revision"] = nil
+	if o.S("executorType") != "agent" {
+		return o
+	}
+	rev := t.one(`SELECT id, base_commit, final_commit, bundle_size, history_size, created_at
+		FROM revisions WHERE run_id=$1 AND tenant_id=$2`, o.S("id"), o.S("tenantId"))
+	if rev == nil {
+		return o
+	}
+	o["revision"] = Object{
+		"id":          rev.S("id"),
+		"baseCommit":  rev.S("baseCommit"),
+		"finalCommit": rev.S("finalCommit"),
+		"changed":     rev.S("baseCommit") != rev.S("finalCommit"),
+		"bundleSize":  rev["bundleSize"],
+		"historySize": rev["historySize"],
+		"createdAt":   rev["createdAt"],
+	}
+	return o
 }
 
 // createRun enqueues a manual IssueRun record. It never dispatches this wave: a manual run persists

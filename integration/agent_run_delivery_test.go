@@ -1323,6 +1323,33 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 			if row.BaseCommit != in.S("baseCommit") || row.RevisionRef != in.S("revisionRef") {
 				t.Fatalf("the Revision must carry the attempt's own baseline and ref, got %s/%s", row.BaseCommit, row.RevisionRef)
 			}
+			// D5: the public run read projects the Revision as metadata only — commits, whether the
+			// run changed anything and the object sizes, never a key, ref, digest or URL.
+			path := "/api/v1/tenants/" + scene.tenantID + "/issues/" + scene.issueID + "/runs/" + scene.runID
+			for _, read := range []string{path, strings.TrimSuffix(path, "/"+scene.runID)} {
+				status, out, e := f.threadRequest("GET", read, "", "")
+				must(t, e)
+				if status != 200 {
+					t.Fatalf("GET %s: want 200 got %d %v", read, status, out)
+				}
+				view := out
+				if items, ok := out["items"].([]any); ok {
+					view = core.Object(items[0].(map[string]any))
+				}
+				revision := view.O("revision")
+				if revision.S("id") != row.ID || revision.S("finalCommit") != row.FinalCommit || revision.S("baseCommit") != row.BaseCommit ||
+					revision.B("changed") != c.bundle || revision.N("historySize") != revisionHistorySize {
+					t.Fatalf("GET %s must project the registered Revision, got %v", read, revision)
+				}
+				if c.bundle != (revision["bundleSize"] != nil) {
+					t.Fatalf("bundleSize must be present exactly for a changed checkout, got %v", revision)
+				}
+				for _, private := range []string{in.S("bundleKey"), in.S("historyKey"), in.S("revisionRef"), revisionHistorySHA} {
+					if strings.Contains(mustJSON(t, view), private) {
+						t.Fatalf("GET %s leaks %q", read, private)
+					}
+				}
+			}
 			// Invariant 5: the session history is saved for every Revision, including an unchanged one.
 			if row.HistoryKey != in.S("historyKey") || row.HistorySHA256 != revisionHistorySHA || row.HistorySize != revisionHistorySize {
 				t.Fatalf("the history measured by the Node must be recorded verbatim, got %v", row)

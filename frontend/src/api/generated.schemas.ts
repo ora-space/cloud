@@ -610,6 +610,20 @@ export type IssueRunInput = { [key: string]: unknown };
  */
 export type IssueRunResult = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
+export type IssueRunRevision = {
+  baseCommit: string;
+  /** @nullable */
+  bundleSize: number | null;
+  changed: boolean;
+  createdAt: string;
+  finalCommit: string;
+  historySize: number;
+  id: string;
+} | null;
+
 export type IssueRunStatus = typeof IssueRunStatus[keyof typeof IssueRunStatus];
 
 
@@ -658,6 +672,8 @@ export interface IssueRun {
   result: IssueRunResult;
   /** @nullable */
   retryOfRunId: string | null;
+  /** @nullable */
+  revision?: IssueRunRevision;
   /** @nullable */
   startedAt: string | null;
   status: IssueRunStatus;

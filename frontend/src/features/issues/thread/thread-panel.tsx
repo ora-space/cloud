@@ -2,6 +2,8 @@ import { useId } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRuns } from '@/features/issues/api'
+import type { IssueRun } from '@/features/issues/types'
+import { RunDelivery } from './run-delivery'
 import { useLoadOlderThread, useThread, type ThreadRef, type ThreadSnapshot } from './thread-api'
 import { ThreadComposer } from './thread-composer'
 import { latestAgentRun, threadStateLabel } from './thread-entries'
@@ -32,7 +34,7 @@ function DeclaredThread({
   )
 }
 
-function RunThread({ threadRef }: { threadRef: ThreadRef }) {
+function RunThread({ threadRef, run }: { threadRef: ThreadRef; run: IssueRun }) {
   const thread = useThread(threadRef)
   const headingId = useId()
   const snapshot = thread.data
@@ -57,6 +59,10 @@ function RunThread({ threadRef }: { threadRef: ThreadRef }) {
         </p>
       )}
       {snapshot?.declared && <DeclaredThread threadRef={threadRef} snapshot={snapshot} />}
+      <RunDelivery
+        run={run}
+        threadEnded={snapshot?.declared === true && snapshot.threadState === 'ended'}
+      />
     </section>
   )
 }
@@ -74,7 +80,7 @@ export function IssueThreadPanel({ tid, issueId }: { tid: string; issueId: strin
   if (!run) return null
   return (
     <aside className="w-full shrink-0 md:w-80">
-      <RunThread key={run.id} threadRef={{ tid, issueId, runId: run.id }} />
+      <RunThread key={run.id} run={run} threadRef={{ tid, issueId, runId: run.id }} />
     </aside>
   )
 }

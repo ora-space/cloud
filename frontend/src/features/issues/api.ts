@@ -216,11 +216,26 @@ export function useCreateComment(tid: string, issueId: string) {
   })
 }
 
+/** Polls an issue's runs while one is unsettled; run status and delivery publish no space event. */
+export const RUNS_SETTLING_POLL_MS = 5000
+
+/**
+ * The issue's runs. While an agent run is still queued, dispatched or running the list refreshes
+ * itself: a session that ended keeps saving its Revision and releasing its Workspace, and Cloud
+ * publishes no event when the run finally settles.
+ */
 export function useRuns(tid: string, issueId: string) {
   return useQuery({
     queryKey: ['issue-runs', tid, issueId],
     queryFn: () => listPage<IssueRun>(`/api/v1/tenants/${tid}/issues/${issueId}/runs`),
     enabled: !!tid && !!issueId,
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some(
+        (run) =>
+          run.executorType === 'agent' && ['queued', 'dispatched', 'running'].includes(run.status),
+      )
+        ? RUNS_SETTLING_POLL_MS
+        : false,
   })
 }
 
