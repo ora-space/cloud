@@ -17,10 +17,16 @@ type PublicRequest struct {
 	// readPublic and Public, so a query parameter folded into it would let `GET /issues?issueId=…`
 	// hijack routing.
 	FormIssueID string
-	Limit       int
-	Body        Object
-	Identity    *Claims
-	Person      *DirectoryPerson
+	// CredentialID is the `:credId` path parameter of the Git credential routes. The token-bearing
+	// credential writes do not travel through Public: they run their own transactions so the token can
+	// be handed to the credential service between them without ever entering a request body this
+	// aggregate stores or hashes (see WriteGitCredential). This field therefore only ever carries an
+	// identifier, on the read that lists one owner's credentials.
+	CredentialID string
+	Limit        int
+	Body         Object
+	Identity     *Claims
+	Person       *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
@@ -410,6 +416,10 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 		}
 	}
 	switch {
+	case strings.HasSuffix(r.Path, "/git-credentials"):
+		// Matched first, so no later arm that keys on a shared substring can swallow the credential
+		// list. The caller's own personal credentials are the only ones it can see, in this tenant.
+		return listGitCredentials(t, r, uid)
 	case strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests"):
 		return adminJoinRead(t, r)
 	case r.CloneID != "" || strings.HasSuffix(r.Path, "/clones"):
@@ -549,7 +559,23 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
-		require(t.one("SELECT id FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid) != nil, 404, "credential_ref_not_found")
+		// `projects.credential_ref_id` is the one authoritative binding (D7), and it names the owner's
+		// own credential: `owner_user_id` is part of the lookup, so another member's credential in this
+		// tenant is not bindable — which is also what the table's own foreign key requires.
+		c := t.one("SELECT * FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid)
+		require(c != nil, 404, "credential_ref_not_found")
+		// The two conditions the clone-time guard enforces are enforced here too, with the same reason
+		// codes: binding a credential that can never clone would create a project whose only use is to
+		// fail, and the caller learns why while it can still choose another credential. An ssh
+		// repository URL normalizes to no scope at all, so binding any product credential to one is
+		// refused for the same reason — a scoped HTTPS token can never authorize an ssh clone.
+		require(c.S("availability") == "available", 409, "repository_credential_frozen")
+		if scope := c.S("repositoryScope"); scope != "" {
+			// A deployment-managed reference (`ConfigureCredential`) carries no scope and stays bindable
+			// for compatibility (D7); a product credential always carries one and must match exactly.
+			normalized, ok := normalizeRepositoryScope(repo)
+			require(ok && normalized == scope, 409, "repository_credential_scope_mismatch")
+		}
 		cred = id
 	}
 	pid, wid := newID(), newID()

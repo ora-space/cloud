@@ -17,6 +17,7 @@
 - [contract](contract/README.en.md) defines OpenAPI 3.0 schema models, DTO structures, and contract coverage tests.
 - [repository](repository/README.en.md) manages PostgreSQL database connection pools and startup health checks via GORM.
 - [objectstore](objectstore/README.en.md) is cloud's own S3-compatible object-store client (SigV4-presigned upload grants, HEAD verification of an object's size and SHA-256), serving the Revision path alone.
+- [credentialstore](credentialstore/README.en.md) is the independent Credential Service (sealing, rotation and revocation of user-managed personal HTTPS Git tokens) plus Cloud's `ingress-writer` client; its own process, volume and KEK.
 - [config](config/README.en.md) loads and validates application configuration files and environment overrides.
 - [logger](logger/README.en.md) provides structured, non-blocking JSON logging via Zap and Lumberjack.
 - [simulator](simulator/README.en.md) implements in-process doubles for the Substrate execution engine, Controller, and Workspace Node.
@@ -32,6 +33,7 @@
    - `internal/core` $\rightarrow$ standard library, `gorm.io/gorm`, `internal/core/migrations`.
    - `internal/repository` $\rightarrow$ `internal/config`, `gorm.io/gorm`.
    - `internal/objectstore` $\rightarrow$ `internal/core` (the `UploadGrant` value type only); `internal/core` reaches it through the `RevisionObjects` interface it declares for itself and never imports this package back.
+   - `internal/credentialstore` depends on the standard library and `zap` alone; `internal/config` and `cmd/credential-store` import it, and `internal/core` reaches it through the `CredentialSecretWriter` interface it declares for itself and never imports this package back.
    - Lower layers (`core`, `repository`, `objectstore`) never import upper presentation layers (`api`, `router`).
 2. **PostgreSQL is authoritative**:
    - All shared state is persisted in PostgreSQL. In-memory caching of authoritative domain state across requests is strictly prohibited.

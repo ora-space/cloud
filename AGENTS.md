@@ -121,6 +121,30 @@ in `go.mod`, repository tasks in `Taskfile.yml`, and checks in `.golangci.yml` a
   may exist only in isolated process memory or temporary paths and must never reach logs or durable
   fixtures. Logs use structured fields and request/resource IDs while excluding secrets and
   unnecessary personal data.
+
+  Exception — user-managed personal HTTPS Git tokens only. Cloud may accept one raw HTTPS Git token
+  from an authenticated and authorized end user through a dedicated credential-ingress endpoint,
+  subject to every one of the following, with no exceptions:
+  1. **Authenticated and authorized end user, own credential only.** The request is authenticated and
+     authorization derives only from verified claims and current PostgreSQL state — never from
+     caller-selected headers or body fields. The caller may only write a credential owned by itself
+     (`tenant_id` + `owner_user_id` = the caller); supplying another user's or another tenant's
+     ownership is rejected at the boundary.
+  2. **Dedicated endpoint, single position.** Only the dedicated endpoint accepts a token, and only in
+     the request body. A token must never appear in a URL, path, query, header, cookie, or any other
+     position, and no other endpoint may accept one.
+  3. **Same-request handoff, no persistence in Cloud.** Cloud must hand the token to the independent
+     Credential Service within the same request. The token must not be queued, buffered to disk, cached,
+     or written to any Cloud store — no business database column, business event, public response,
+     business message, durable file, or workspace volume. After the handoff Cloud retains only
+     `credential_refs` metadata and an opaque `secret_ref`; **no API may return the token**.
+  4. **No request bodies in logs or error context.** Request bodies must not enter access logs, tracing
+     spans, error details, or crash reports; error responses carry reason codes only. The structured-log
+     and secret-exclusion rules above remain fully in force.
+  5. **No scope expansion.** This exception does **not** apply to deployment private keys, object-storage
+     credentials, service-account tokens, SSH private keys, generated test keys, or team-shared
+     credentials. For those, the original rule above continues to apply in full, including its
+     `never accept` clause. Widening this exception requires a new decision, not an edit here.
 - Public endpoints return stable, bounded error shapes. Internal details belong in structured logs;
   clients receive actionable codes and safe parameters. Health checks report dependency readiness
   without disclosing configuration.

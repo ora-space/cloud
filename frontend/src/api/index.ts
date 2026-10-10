@@ -1,4 +1,5 @@
 export * from './clones/clones';
+export * from './credentials/credentials';
 export * from './health/health';
 export * from './internal/internal';
 export * from './me/me';

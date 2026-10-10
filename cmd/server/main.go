@@ -83,6 +83,14 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	// The Credential Service ingress is optional: an unconfigured deployment gets no client and every
+	// credential write refuses with `credential_store_unavailable`. An enabled but unusable section is
+	// a startup error, not a per-request one, because D6 makes "a capability that cannot be
+	// established" a refusal to start rather than a runtime downgrade.
+	store.Secrets, e = cfg.Credentials.Open()
+	if e != nil {
+		return e
+	}
 	configureCollaboration(store, cfg.Collaboration.DevelopmentFixtures, log)
 	// The B side of the Agent Run seam: Cloud's IssueRun/Thread lifecycle is driven by these five
 	// callbacks, each of which runs inside the control-plane transaction that just persisted the

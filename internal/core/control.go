@@ -171,7 +171,19 @@ func operation(t *transaction, r *ControlRequest) Object {
 // it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM projects p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	// D9: the Project projected to a Controller carries no credential reference at all. The
+	// authoritative binding is `credentialRefId`; the store's own reference is projected nowhere,
+	// because a Controller cannot resolve it and has no reason to hold it, and the 0023 column is
+	// blanked for the same reason it is never read to authorize: it has no writer, and letting it
+	// reappear here would give a Controller a second opinion about which credential a Project uses.
+	//
+	// Both declarations stay in the contract and are now always empty. `secretRef` is required by the
+	// schema, so it is written as an explicit null rather than omitted; the Controller's gRPC message
+	// carries the equivalent empty value (see controlgrpc.snapshot).
+	p := t.one("SELECT * FROM projects WHERE id=$1", o.S("projectId"))
+	if p != nil {
+		p["secretRef"], p["repositoryCredentialRefId"] = nil, nil
+	}
 	out := Object{
 		"operation":  o,
 		"project":    p,

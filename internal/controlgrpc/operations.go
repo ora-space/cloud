@@ -171,7 +171,11 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 	p := out.O("project")
 	snap := &controlpb.OperationSnapshot{
 		Operation: operation(out.O("operation")),
-		Project:   &controlpb.OperationProject{Id: p.S("id"), RepositoryUrl: p.S("repositoryUrl"), DefaultBranch: p.S("defaultBranch"), CredentialRef: optionalString(p, "secretRef")},
+		// CredentialRef is deliberately never set (D9). The projection carries no credential reference
+		// for a Controller to read, and the field stays declared so an older Controller finds a value
+		// rather than an unknown one — empty is the truthful answer, because resolving repository
+		// credentials is not something a Controller does.
+		Project: &controlpb.OperationProject{Id: p.S("id"), RepositoryUrl: p.S("repositoryUrl"), DefaultBranch: p.S("defaultBranch")},
 	}
 	for _, w := range rows(out["workspaces"]) {
 		snap.Workspaces = append(snap.Workspaces, &controlpb.OperationWorkspace{
