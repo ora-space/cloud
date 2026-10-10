@@ -97,10 +97,9 @@ describe('ModelConnectionsPage', () => {
       if (protocol === 'anthropic-messages') {
         await choose(user, '协议', protocolLabel)
         await choose(user, '认证方式', authLabel)
-      } else {
-        expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent(protocolLabel)
-        expect(screen.getByRole('combobox', { name: '认证方式' })).toHaveTextContent(authLabel)
       }
+      expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent(protocolLabel)
+      expect(screen.getByRole('combobox', { name: '认证方式' })).toHaveTextContent(authLabel)
       await enter(user, screen.getByLabelText('服务地址'), 'https://messages.example.com/v1')
       await enter(user, screen.getByLabelText('模型标识'), 'vendor/model-a')
       await enter(user, screen.getByLabelText('显示名称'), 'Model A')
