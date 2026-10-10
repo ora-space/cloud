@@ -64,9 +64,12 @@ func TestRevisionUpgradePreservesPublishedWorkflowSchema(t *testing.T) {
 	pool, _ := testSchema(t, "test_revision_workflow_upgrade_")
 	entries, err := os.ReadDir(filepath.Join("..", "internal", "core", "migrations"))
 	must(t, err)
+	// The published workflow schema ends at 0029. Later migrations come from the same branch as
+	// 0027_verified_revisions and may build on its tables (0033 alters `revisions`), so a database
+	// that has them without it does not exist.
 	var versions []string
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) == ".sql" && entry.Name() != "0027_verified_revisions.sql" {
+		if filepath.Ext(entry.Name()) == ".sql" && entry.Name() != "0027_verified_revisions.sql" && entry.Name() < "0030" {
 			versions = append(versions, entry.Name())
 		}
 	}
@@ -91,7 +94,7 @@ func TestRevisionUpgradePreservesPublishedWorkflowSchema(t *testing.T) {
 	}
 	must(t, tx.Commit())
 	const documents = `SELECT jsonb_build_object('workflow',to_jsonb(w),'snapshot',to_jsonb(s),'run',to_jsonb(r))::text FROM workflows w JOIN workflow_snapshots s ON s.workflow_id=w.id JOIN workflow_runs r ON r.snapshot_id=s.id WHERE r.id=$1`
-	const ledger = `SELECT jsonb_object_agg(version,checksum)::text FROM schema_migrations WHERE version <> '0027_verified_revisions.sql'`
+	const ledger = `SELECT jsonb_object_agg(version,checksum)::text FROM schema_migrations WHERE version <> '0027_verified_revisions.sql' AND version < '0030'`
 	var beforeDocuments, beforeLedger string
 	must(t, pool.QueryRow(documents, run).Scan(&beforeDocuments))
 	must(t, pool.QueryRow(ledger).Scan(&beforeLedger))
