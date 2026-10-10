@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useCreateIssue, useIssues } from '@/features/issues/api'
+import { IssueProjectSelect } from './issue-project-select'
 import { columnLabel, issueNumber } from '@/features/issues/present'
 import type { IssuePriority, IssueStatusColumn, TenantMember } from '@/features/issues/types'
 
@@ -43,6 +44,7 @@ const FALLBACK_STATUS_KEYS = [
 const EMPTY_STATUSES: IssueStatusColumn[] = []
 const EMPTY_MEMBERS: TenantMember[] = []
 
+/** Creates a task with optional project association; each opening starts a fresh draft after submission. */
 // oxlint-disable-next-line max-lines-per-function -- this dialog owns one cohesive create-issue form and its reset lifecycle.
 export function CreateIssueDialog({
   slug,
@@ -64,6 +66,7 @@ export function CreateIssueDialog({
   const [priority, setPriority] = useState<IssuePriority>('none')
   const [assigneeId, setAssigneeId] = useState<string>('none')
   const [parentIssueId, setParentIssueId] = useState<string>('none')
+  const [projectRef, setProjectRef] = useState('none')
   const createIssue = useCreateIssue(slug)
   const { data: issues = [] } = useIssues(slug)
 
@@ -76,6 +79,7 @@ export function CreateIssueDialog({
     setPriority('none')
     setAssigneeId('none')
     setParentIssueId('none')
+    setProjectRef('none')
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -89,6 +93,7 @@ export function CreateIssueDialog({
         priority,
         ...(assigneeId !== 'none' ? { assigneeType: 'user' as const, assigneeId } : {}),
         ...(parentIssueId !== 'none' ? { parentIssueId } : {}),
+        ...(projectRef !== 'none' ? { projectRef } : {}),
       },
       {
         onSuccess: () => {
@@ -121,6 +126,7 @@ export function CreateIssueDialog({
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
             />
+            <IssueProjectSelect value={projectRef} onChange={setProjectRef} />
             <div className="flex flex-wrap gap-2">
               <Select
                 value={status}

@@ -43,6 +43,9 @@ message AgentSessionSpec {
   GitIdentity git_identity = 4;
   // The prompt Cloud rendered from the Issue; later turns arrive as Thread commands.
   UserTurn initial_turn = 5;
+  // Opaque personal-model snapshot reference. Empty for agents that do not use model-gateway.
+  // No provider credential or temporary access token crosses this contract.
+  string model_binding_id = 6;
 }
 
 enum AgentSessionEndReason {

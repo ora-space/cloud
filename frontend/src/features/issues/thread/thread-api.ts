@@ -30,7 +30,22 @@ export interface ThreadRef {
  * entries appended, so it never has a hole.
  */
 export type ThreadSnapshot =
-  { declared: false } | { declared: true; entries: ThreadEntry[]; threadState: ThreadState }
+  | { declared: false }
+  | ({ declared: true; entries: ThreadEntry[]; threadState: ThreadState } & ThreadDetails)
+
+type ThreadDetails = Pick<
+  GetApiV1TenantsTidIssuesIidRunsRidThread200,
+  'initiatorUserId' | 'model' | 'canAppend' | 'canEnd'
+>
+
+function threadDetails(page: ThreadDetails): ThreadDetails {
+  return {
+    initiatorUserId: page.initiatorUserId,
+    model: page.model,
+    canAppend: page.canAppend,
+    canEnd: page.canEnd,
+  }
+}
 
 /** Entries requested per page; the server caps a page at 500. */
 const THREAD_PAGE_LIMIT = 200
@@ -85,7 +100,7 @@ async function readNewer(
   ref: ThreadRef,
   entries: ThreadEntry[],
   signal: AbortSignal,
-): Promise<{ entries: ThreadEntry[]; threadState: ThreadState }> {
+): Promise<{ entries: ThreadEntry[]; threadState: ThreadState } & ThreadDetails> {
   const page = await readPage(
     ref,
     { limit: THREAD_PAGE_LIMIT, after: forwardCursor(entries) },
@@ -93,7 +108,7 @@ async function readNewer(
   )
   const merged = mergeEntries(entries, page.items)
   if (page.items.length < THREAD_PAGE_LIMIT)
-    return { entries: merged, threadState: page.threadState }
+    return { entries: merged, threadState: page.threadState, ...threadDetails(page) }
   return readNewer(ref, merged, signal)
 }
 
@@ -116,6 +131,7 @@ async function readThread(
         : await readPage(ref, { limit: THREAD_PAGE_LIMIT }, signal).then((page) => ({
             entries: page.items,
             threadState: page.threadState,
+            ...threadDetails(page),
           }))
     const latest = queryClient.getQueryData<ThreadSnapshot>(key)
     const base = latest?.declared ? latest.entries : []
@@ -123,6 +139,7 @@ async function readThread(
       declared: true,
       entries: mergeEntries(base, next.entries),
       threadState: next.threadState,
+      ...threadDetails(next),
     }
   } catch (error) {
     if (faultCode(error) === 'not_found') return { declared: false }
@@ -221,6 +238,9 @@ export function useEndThread(ref: ThreadRef) {
 const SEND_FAULTS: Record<string, string> = {
   thread_closed: '会话已结束，无法继续发送',
   content_too_large: '消息过长',
+  forbidden: '没有发送此消息的权限',
+  model_run_initiator_required: '只有运行发起者可以继续发送模型请求',
+  model_connection_unavailable: '此会话的模型授权已失效，请结束后重新发起任务',
 }
 
 const END_FAULTS: Record<string, string> = {

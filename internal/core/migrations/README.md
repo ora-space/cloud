@@ -85,3 +85,9 @@
 0030–0031 在已发布 0029 之后追加，是把 B 侧业务生命周期移植到上游控制面时**唯一**新增的 schema，functionB 原有但上游已具备的部分（0024–0029 的执行侧）一律不再新建：0030 只给 `issue_runs` 增加业务列（`phase`、`workspace_id`、`cancel_requested_at`、`thread_state`、`idle_since`）、agent 专用列约束、`workspace_id` 唯一绑定和 idle 线程的部分索引；0031 新建 `thread_entries`（`(run_id,seq)` 主键、Node 来源按 `(node_execution_id,node_sequence)` 幂等、user 来源必带 turn 生命周期、`record` 限 256 KiB JSON 对象）。两者纯前向、可重复执行，不回填也不改写任何既有行（0030 的列由它自己创建，旧行不可能带有需要迁移的值；非 agent 运行的整行保持原样），并且不覆盖上游 `0018–0029` 的同号文件。真实新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0030AgentRunBusinessLifecycleAppliesFreshAndUpgrades` 与 `TestMigration0031AgentRunThreadEntriesAppliesFreshAndUpgrades`。
 
 0032 在 0031 之后新增 `user_git_identities`（identity-access git 身份 D1）：每个用户至多一行，主键并外键引用 `users(id)`，`name` 为 1–200 个字符且不含换行与尖括号，`email` 不超过 254 字节、形如 `local@domain` 且不含空白与尖括号，`version` 为该行自己的乐观并发计数。身份单独成表而不是给 `users` 加列，因为 `/me` 与所有用户读取都返回整行 `users`，git 邮箱放在那里会随之流向每个读者；没有行即使用默认身份。纯前向、可重复执行，不改动任何既有表。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades`。
+
+## 0033：个人模型连接
+
+0033 追加用户私有模型连接、默认模型、不可变密文凭据、用户作用域幂等记录、运行快照和
+临时授权摘要表。历史运行不会新增绑定；跨表复合外键保存用户归属。原始密钥从不进入迁移或
+Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs/model-connections.md)。

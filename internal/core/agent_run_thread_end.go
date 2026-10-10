@@ -173,6 +173,11 @@ func endThreadByUser(t *transaction, s *Store, r *PublicRequest) Object {
 	require(validID(r.RunID), 404, "not_found")
 	run := t.one(`SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL`, r.RunID, r.TenantID, i.S("id"))
 	require(run != nil && run.S("executorType") == "agent", 404, "not_found")
+	if binding := t.one("SELECT user_id FROM run_model_bindings WHERE run_id=$1", run.S("id")); binding != nil {
+		uid := identityWithAlias(t, r.Identity).S("id")
+		member := t.one("SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='active'", r.TenantID, uid)
+		require(uid == binding.S("userId") || member != nil && member.S("role") == "admin", 403, "model_run_end_forbidden")
+	}
 	// A run whose session was never declared has no Thread to end: D-4C-01 materializes `pending`
 	// inside StartSession, so an empty state is a genuine absence, answered like every other
 	// out-of-scope run rather than as a conflict.

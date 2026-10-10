@@ -46,3 +46,10 @@ task test:race
 `task test:revision` 强制真实 PostgreSQL 和 S3。设置 `TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY_FILE`、`TEST_S3_SECRET_KEY_FILE`，预建 `revisions` 桶；凭据仅为临时文件引用。设 `REQUIRE_S3=1` 时缺少存储立即失败。sandbox 用例还需 `TEST_S3_PUBLIC_ENDPOINT`、`TEST_S3_SANDBOX_NETWORK` 及 `REQUIRE_S3_SANDBOX=1`；集群配套 `task agent:acceptance` 自动配置这些环境。
 
 Revision 测试直接覆盖真实上传、checksum/大小/缺失、授权过期刷新、外部校验后围栏、事务失败与重放、双替身重启及历史升级。业务钩子测试验证 ready/failed、Thread、会话结束、交付、删除与控制证据同提交/回滚。完整 `task test`、`task test:race` 也应启用这些强制环境，避免把跳过 S3 当作已验收。范围见[控制面报告](../docs/agent-run-control-plane-review.md)。
+
+## 契约验证的测试作用域
+
+同一测试进程只解析、验证和编译一次 OpenAPI 路由表，随后只读共享；每个 fixture 仍持有自己
+的 HTTP transport、请求/响应、数据库 schema、认证密钥与 Git 数据。所有真实响应仍逐条严格
+验证，不缓存验证结果。`contract_suite_test.go` 覆盖两个真实 fixture 的复用、并发读取、非法
+响应拒绝和契约不可变性；此缓存仅存在于测试，不增加生产全局状态，也不放宽测试超时。

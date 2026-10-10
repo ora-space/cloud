@@ -49,3 +49,9 @@
 - **租户强隔离**：项目和运行时读取先核验活动租户成员身份，再以可信 `tenant_id` 限定查询；`owner_user_id` 保留资源、凭据与外部执行归属，不用于排除同租户的其他成员。
 
 参见 [数据库迁移目录](migrations/README.md)、[核心不变量与契约](../../docs/core-contract.md) 与 [认证配置与凭据](../../docs/authentication.md)。
+
+## 个人模型连接
+
+`model_connections.go`、`model_credentials.go`、`model_run_binding.go` 和 `model_grants.go`
+管理用户私有连接、不可变密文引用、运行快照与临时令牌摘要。Core 不接收或解密上游 API Key；
+冻结、权限、续期与撤销规则见 [个人模型连接](../../docs/model-connections.md)。

@@ -174,10 +174,13 @@ describe('threadPollInterval', () => {
   it('polls fast while undeclared, slowly while live and stops once ended', () => {
     expect(threadPollInterval(undefined)).toBe(false)
     expect(threadPollInterval({ declared: false })).toBe(THREAD_DECLARE_POLL_MS)
-    expect(threadPollInterval({ declared: true, entries: [], threadState: 'idle' })).toBe(
-      THREAD_LIVE_POLL_MS,
-    )
-    expect(threadPollInterval({ declared: true, entries: [], threadState: 'ended' })).toBe(false)
+    const details = { initiatorUserId: null, model: null, canAppend: false, canEnd: false }
+    expect(
+      threadPollInterval({ declared: true, entries: [], threadState: 'idle', ...details }),
+    ).toBe(THREAD_LIVE_POLL_MS)
+    expect(
+      threadPollInterval({ declared: true, entries: [], threadState: 'ended', ...details }),
+    ).toBe(false)
   })
 })
 
@@ -185,6 +188,12 @@ describe('failure messages', () => {
   it('maps the send and end faults to readable sentences', () => {
     expect(sendFailureMessage(fault('thread_closed', 409))).toBe('会话已结束，无法继续发送')
     expect(sendFailureMessage(fault('content_too_large', 400))).toBe('消息过长')
+    expect(sendFailureMessage(fault('model_run_initiator_required', 403))).toBe(
+      '只有运行发起者可以继续发送模型请求',
+    )
+    expect(sendFailureMessage(fault('model_connection_unavailable', 409))).toBe(
+      '此会话的模型授权已失效，请结束后重新发起任务',
+    )
     expect(sendFailureMessage(new Error('network'))).toBe('发送失败，请稍后重试')
     expect(endFailureMessage(fault('thread_closed', 409))).toBe('会话已结束')
     expect(endFailureMessage(fault('internal', 500))).toBe('结束会话失败，请稍后重试')

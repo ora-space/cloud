@@ -802,6 +802,49 @@ export interface MemberListItem {
   version: number;
 }
 
+export type ModelConnectionAuthMode = typeof ModelConnectionAuthMode[keyof typeof ModelConnectionAuthMode];
+
+
+export const ModelConnectionAuthMode = {
+  bearer: 'bearer',
+  'x-api-key': 'x-api-key',
+} as const;
+
+export type ModelConnectionProtocol = typeof ModelConnectionProtocol[keyof typeof ModelConnectionProtocol];
+
+
+export const ModelConnectionProtocol = {
+  'openai-completions': 'openai-completions',
+  'anthropic-messages': 'anthropic-messages',
+} as const;
+
+export interface ModelDefinition {
+  contextWindow: number;
+  id: string;
+  maxTokens: number;
+  name: string;
+}
+
+export interface ModelConnection {
+  authMode: ModelConnectionAuthMode;
+  baseUrl: string;
+  createdAt: string;
+  credentialConfigured: boolean;
+  enabled: boolean;
+  id: string;
+  models: ModelDefinition[];
+  name: string;
+  protocol: ModelConnectionProtocol;
+  updatedAt: string;
+  version: number;
+}
+
+export interface ModelDefault {
+  connectionId: string;
+  modelId: string;
+  version: number;
+}
+
 export interface Node {
   connectionState: string;
   /** @nullable */
@@ -1323,6 +1366,12 @@ export interface ThreadEntry {
   turnId?: string | null;
 }
 
+export interface ThreadModel {
+  connectionName: string;
+  modelId: string;
+  modelName: string;
+}
+
 export interface Ticket {
   actorUserId: string;
   admissionEpoch: number;
@@ -1588,6 +1637,135 @@ after?: string;
 export type GetApiV1MeJoinRequests200 = {
   items: JoinRequest[];
   nextCursor: string;
+};
+
+export type GetApiV1MeModelConnectionsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1MeModelConnections200 = {
+  items: ModelConnection[];
+  nextCursor: string;
+};
+
+export type PostApiV1MeModelConnectionsBodyAuthMode = typeof PostApiV1MeModelConnectionsBodyAuthMode[keyof typeof PostApiV1MeModelConnectionsBodyAuthMode];
+
+
+export const PostApiV1MeModelConnectionsBodyAuthMode = {
+  bearer: 'bearer',
+  'x-api-key': 'x-api-key',
+} as const;
+
+export type PostApiV1MeModelConnectionsBodyProtocol = typeof PostApiV1MeModelConnectionsBodyProtocol[keyof typeof PostApiV1MeModelConnectionsBodyProtocol];
+
+
+export const PostApiV1MeModelConnectionsBodyProtocol = {
+  'openai-completions': 'openai-completions',
+  'anthropic-messages': 'anthropic-messages',
+} as const;
+
+export type PostApiV1MeModelConnectionsBody = {
+  authMode: PostApiV1MeModelConnectionsBodyAuthMode;
+  /**
+     * Public HTTPS model API base URL; requests are restricted to the selected protocol endpoints.
+     * @maxLength 2048
+     */
+  baseUrl: string;
+  enabled?: boolean;
+  models: ModelDefinition[];
+  name: string;
+  protocol: PostApiV1MeModelConnectionsBodyProtocol;
+};
+
+export type PostApiV1MeModelConnections201 = {
+  resource: ModelConnection;
+};
+
+export type DeleteApiV1MeModelConnectionsMcidBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1MeModelConnectionsMcid200 = {
+  resource: ModelConnection;
+};
+
+export type PutApiV1MeModelConnectionsMcidBodyAuthMode = typeof PutApiV1MeModelConnectionsMcidBodyAuthMode[keyof typeof PutApiV1MeModelConnectionsMcidBodyAuthMode];
+
+
+export const PutApiV1MeModelConnectionsMcidBodyAuthMode = {
+  bearer: 'bearer',
+  'x-api-key': 'x-api-key',
+} as const;
+
+export type PutApiV1MeModelConnectionsMcidBodyProtocol = typeof PutApiV1MeModelConnectionsMcidBodyProtocol[keyof typeof PutApiV1MeModelConnectionsMcidBodyProtocol];
+
+
+export const PutApiV1MeModelConnectionsMcidBodyProtocol = {
+  'openai-completions': 'openai-completions',
+  'anthropic-messages': 'anthropic-messages',
+} as const;
+
+export type PutApiV1MeModelConnectionsMcidBody = {
+  authMode: PutApiV1MeModelConnectionsMcidBodyAuthMode;
+  /**
+     * Public HTTPS model API base URL; requests are restricted to the selected protocol endpoints.
+     * @maxLength 2048
+     */
+  baseUrl: string;
+  enabled?: boolean;
+  models: ModelDefinition[];
+  name: string;
+  protocol: PutApiV1MeModelConnectionsMcidBodyProtocol;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PutApiV1MeModelConnectionsMcid200 = {
+  resource: ModelConnection;
+};
+
+export type DeleteApiV1MeModelConnectionsMcidCredentialBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1MeModelConnectionsMcidCredential200 = {
+  resource: ModelConnection;
+};
+
+export type PutApiV1MeModelConnectionsMcidCredentialBody = {
+  /**
+     * Handled exclusively by model-gateway; never returned or sent to Cloud HTTP.
+     * @minLength 1
+     * @maxLength 8192
+     */
+  apiKey: string;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PutApiV1MeModelConnectionsMcidCredential200 = {
+  resource: ModelConnection;
+};
+
+export type PutApiV1MeModelDefaultBody = {
+  connectionId: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  modelId: string;
+  /** @minimum 0 */
+  version: number;
 };
 
 export type GetApiV1MeSpacesParams = {
@@ -2133,12 +2311,17 @@ export const GetApiV1TenantsTidIssuesIidRunsRidThread200ThreadState = {
 } as const;
 
 export type GetApiV1TenantsTidIssuesIidRunsRidThread200 = {
+  canAppend: boolean;
+  canEnd: boolean;
   /**
      * When the Thread became idle; null in every other state.
      * @nullable
      */
   idleSince: string | null;
+  /** @nullable */
+  initiatorUserId: string | null;
   items: ThreadEntry[];
+  model: ThreadModel | null;
   /**
      * The window's last seq, to be sent back as `after`. Null for an empty window.
      * @nullable

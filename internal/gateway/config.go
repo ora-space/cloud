@@ -32,17 +32,25 @@ const (
 // Config is the complete Gateway process configuration. Secrets are referenced by file path and
 // never appear inline; the loaded key material lives only in process memory.
 type Config struct {
-	Server   config.ServerConfig   `mapstructure:"server"`
-	Logger   logger.Config         `mapstructure:"logger"`
-	Database config.DatabaseConfig `mapstructure:"database"`
-	Public   PublicConfig          `mapstructure:"public"`
-	Session  SessionConfig         `mapstructure:"session"`
-	Login    LoginConfig           `mapstructure:"login"`
-	Cloud    CloudConfig           `mapstructure:"cloud"`
-	Tokens   TokenConfig           `mapstructure:"tokens"`
-	GitHub   GitHubConfig          `mapstructure:"github"`
-	IDaaS    IDaaSConfig           `mapstructure:"idaas"`
-	Web      WebConfig             `mapstructure:"web"`
+	Server           config.ServerConfig    `mapstructure:"server"`
+	Logger           logger.Config          `mapstructure:"logger"`
+	Database         config.DatabaseConfig  `mapstructure:"database"`
+	Public           PublicConfig           `mapstructure:"public"`
+	Session          SessionConfig          `mapstructure:"session"`
+	Login            LoginConfig            `mapstructure:"login"`
+	Cloud            CloudConfig            `mapstructure:"cloud"`
+	Tokens           TokenConfig            `mapstructure:"tokens"`
+	GitHub           GitHubConfig           `mapstructure:"github"`
+	IDaaS            IDaaSConfig            `mapstructure:"idaas"`
+	Web              WebConfig              `mapstructure:"web"`
+	ModelCredentials ModelCredentialsConfig `mapstructure:"model_credentials"`
+}
+
+// ModelCredentialsConfig names the separate credential writer. The Cloud upstream never receives
+// original model keys, and only the credential-path allowlist can reach this fixed HTTPS origin.
+type ModelCredentialsConfig struct {
+	Upstream string `mapstructure:"upstream"`
+	CAFile   string `mapstructure:"ca_file"`
 }
 
 // PublicConfig fixes the origin browsers see. The callback URL is derived from it, never from
@@ -197,6 +205,14 @@ func (c *Config) applyDefaults() error {
 
 // Validate rejects any configuration that would weaken a security bound at runtime.
 func (c *Config) Validate() error {
+	if c.ModelCredentials.Upstream != "" {
+		upstream, err := url.Parse(c.ModelCredentials.Upstream)
+		if err != nil || upstream.Scheme != "https" || upstream.Host == "" || upstream.User != nil || upstream.Path != "" || upstream.RawQuery != "" || upstream.Fragment != "" || c.ModelCredentials.CAFile == "" {
+			return fmt.Errorf("model_credentials requires a fixed HTTPS origin and CA file")
+		}
+	} else if c.ModelCredentials.CAFile != "" {
+		return fmt.Errorf("model_credentials.ca_file requires an upstream")
+	}
 	if c.Server.ReadTimeout <= 0 || c.Server.WriteTimeout <= 0 || c.Database.ConnMaxLifetime <= 0 {
 		return fmt.Errorf("server timeouts and database.conn_max_lifetime must be positive durations")
 	}

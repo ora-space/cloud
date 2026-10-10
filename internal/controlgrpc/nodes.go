@@ -20,7 +20,7 @@ type nodeService struct {
 
 func (s *nodeService) RegisterNode(ctx context.Context, req *controlpb.RegisterNodeRequest) (*controlpb.RegisterNodeResponse, error) {
 	identity := req.GetNode()
-	body := core.Object{"epoch": req.GetEpoch(), "sandboxInstanceId": req.GetSandboxInstanceId(), "generation": req.GetGeneration(), "nodeId": identity.GetNodeId(), "nodeIncarnationId": identity.GetNodeIncarnationId(), "protocolVersion": int64(req.GetProtocolVersion())}
+	body := core.Object{"epoch": req.GetEpoch(), "sandboxInstanceId": req.GetSandboxInstanceId(), "generation": req.GetGeneration(), "nodeId": identity.GetNodeId(), "nodeIncarnationId": identity.GetNodeIncarnationId(), "protocolVersion": int64(req.GetProtocolVersion()), "modelProxy": req.GetModelProxy()}
 	out, e := control(ctx, s.store, "report_node_register", "", req.GetSubmissionId(), body)
 	if e != nil {
 		return nil, e
@@ -67,6 +67,7 @@ func node(n core.Object) *controlpb.NodeRecord {
 		Id: n.S("id"), SandboxInstanceId: n.S("sandboxInstanceId"), WorkspaceId: n.S("workspaceId"),
 		Connection:  controlpb.NodeConnection(enum(controlpb.NodeConnection_value, "NODE_CONNECTION_", n.S("connectionState"))),
 		Initialized: n.B("initialized"), Version: n.N("version"), IdleAdmissionEpoch: optionalInt(n, "idleAdmissionEpoch"),
+		ModelProxy: n.B("modelProxy"),
 	}
 	if n.S("nodeIncarnationId") != "" {
 		out.Identity = &controlpb.NodeIdentity{NodeId: n.S("nodeId"), NodeIncarnationId: n.S("nodeIncarnationId")}

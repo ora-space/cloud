@@ -53,6 +53,9 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 	current := currentNode(t, wid)
 	require(current.S("nodeId") == node && current.S("sandboxInstanceId") == target.S("sandboxInstanceId"), 409, "dispatch_conflict")
 	if input.S("kind") == "agent_session" {
+		if input.S("modelBindingId") != "" {
+			require(current.B("modelProxy"), 409, "model_proxy_required")
+		}
 		require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind='agent_session'", runID) == nil, 409, "dispatch_conflict")
 	}
 	if input.S("kind") == "deliver_revision" {

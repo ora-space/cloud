@@ -22,6 +22,10 @@
 
 ## 不变量
 
+个人模型 Key 的 `.../model-connections/:id/credential` 请求在完成同一会话/同源检查与内部签名后，
+只转给固定的 HTTPS model-gateway；Cloud 上游永远不作为该路径的回退。非法 ID 和路径变体也不能
+让原始 Key 落入 Cloud。Gateway 仅挂载该服务的公开 CA，不取得其加密主密钥或 TLS 私钥。
+
 - 原始 session token、attempt secret、OAuth code、provider token 与 PKCE verifier 不持久化、不写日志、不进入 Cloud。
 - 外部 HTTP 调用不在数据库事务或行锁内；provider 成功但事务失败即登录失败，不推断 session 已创建。
 - 每个 attempt 最多创建一个 session；两个并发 callback 只有一个能通过 `FOR UPDATE` 后的未消费检查。

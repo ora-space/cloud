@@ -19,6 +19,8 @@ interface ThreadStore {
   declared: boolean
   state: ThreadState
   entries: ThreadEntry[]
+  canAppend?: boolean
+  canEnd?: boolean
 }
 
 function entry(seq: number, overrides: Partial<ThreadEntry> = {}): ThreadEntry {
@@ -91,6 +93,10 @@ function serveThread(store: ThreadStore): URLSearchParams[] {
         prevCursor: window[0]?.seq ?? null,
         threadState: store.state,
         idleSince: null,
+        initiatorUserId: 'u1',
+        model: { connectionName: 'Personal Bluezone', modelId: 'vendor/model', modelName: 'Model' },
+        canAppend: store.canAppend ?? true,
+        canEnd: store.canEnd ?? true,
       })
     }),
   )
@@ -107,7 +113,20 @@ function renderPanel({ withEvents = false } = {}) {
   return render(
     <QueryClientProvider client={queryClient}>
       {withEvents && <EventsSubscriber />}
-      <IssueThreadPanel tid="t1" issueId="i1" />
+      <IssueThreadPanel
+        tid="t1"
+        issueId="i1"
+        members={[
+          {
+            id: 'm1',
+            userId: 'u1',
+            displayName: 'Alice',
+            role: 'member',
+            status: 'active',
+            version: 1,
+          },
+        ]}
+      />
     </QueryClientProvider>,
   )
 }
@@ -117,6 +136,37 @@ function messages() {
 }
 
 describe('IssueThreadPanel', () => {
+  it('shows the frozen model and prevents non-owners from sending while administrators can end', async () => {
+    serveThread({
+      declared: true,
+      state: 'active',
+      entries: [prompt],
+      canAppend: false,
+      canEnd: true,
+    })
+    renderPanel()
+    expect(await screen.findByText(/Personal Bluezone/)).toHaveTextContent('vendor/model')
+    expect(screen.getByText('发起者：Alice')).toBeInTheDocument()
+    expect(screen.getByLabelText('给 Agent 发送消息')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '结束会话' })).toBeEnabled()
+    expect(
+      screen.getByText('此会话当前只读；只有发起者且模型连接仍有效时可继续发送。'),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps unauthorized members read-only without an end-session action', async () => {
+    serveThread({
+      declared: true,
+      state: 'active',
+      entries: [prompt],
+      canAppend: false,
+      canEnd: false,
+    })
+    renderPanel()
+    await screen.findByText('Fix login')
+    expect(screen.queryByRole('button', { name: '结束会话' })).not.toBeInTheDocument()
+  })
   it('loads the tail of the newest agent run and shows the conversation and state', async () => {
     const reads = serveThread({
       declared: true,

@@ -375,9 +375,12 @@ type AgentSessionSpec struct {
 	CheckoutExecutionId string       `protobuf:"bytes,3,opt,name=checkout_execution_id,json=checkoutExecutionId,proto3" json:"checkout_execution_id,omitempty"`
 	GitIdentity         *GitIdentity `protobuf:"bytes,4,opt,name=git_identity,json=gitIdentity,proto3" json:"git_identity,omitempty"`
 	// The prompt Cloud rendered from the Issue; later turns arrive as Thread commands.
-	InitialTurn   *UserTurn `protobuf:"bytes,5,opt,name=initial_turn,json=initialTurn,proto3" json:"initial_turn,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	InitialTurn *UserTurn `protobuf:"bytes,5,opt,name=initial_turn,json=initialTurn,proto3" json:"initial_turn,omitempty"`
+	// Opaque personal-model snapshot reference. Empty for agents that do not use model-gateway.
+	// No provider credential or temporary access token crosses this contract.
+	ModelBindingId string `protobuf:"bytes,6,opt,name=model_binding_id,json=modelBindingId,proto3" json:"model_binding_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentSessionSpec) Reset() {
@@ -443,6 +446,13 @@ func (x *AgentSessionSpec) GetInitialTurn() *UserTurn {
 		return x.InitialTurn
 	}
 	return nil
+}
+
+func (x *AgentSessionSpec) GetModelBindingId() string {
+	if x != nil {
+		return x.ModelBindingId
+	}
+	return ""
 }
 
 // The only terminal result of a session execution. It is taken over only after every Thread event
@@ -937,13 +947,14 @@ const file_ora_cloud_internal_v1_agent_executions_proto_rawDesc = "" +
 	"\x05block\"b\n" +
 	"\bUserTurn\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12=\n" +
-	"\acontent\x18\x02 \x03(\v2#.ora.cloud.internal.v1.ContentBlockR\acontent\"\xab\x02\n" +
+	"\acontent\x18\x02 \x03(\v2#.ora.cloud.internal.v1.ContentBlockR\acontent\"\xd5\x02\n" +
 	"\x10AgentSessionSpec\x12&\n" +
 	"\x0fagent_plugin_id\x18\x01 \x01(\tR\ragentPluginId\x120\n" +
 	"\x14agent_plugin_version\x18\x02 \x01(\tR\x12agentPluginVersion\x122\n" +
 	"\x15checkout_execution_id\x18\x03 \x01(\tR\x13checkoutExecutionId\x12E\n" +
 	"\fgit_identity\x18\x04 \x01(\v2\".ora.cloud.internal.v1.GitIdentityR\vgitIdentity\x12B\n" +
-	"\finitial_turn\x18\x05 \x01(\v2\x1f.ora.cloud.internal.v1.UserTurnR\vinitialTurn\"\x81\x01\n" +
+	"\finitial_turn\x18\x05 \x01(\v2\x1f.ora.cloud.internal.v1.UserTurnR\vinitialTurn\x12(\n" +
+	"\x10model_binding_id\x18\x06 \x01(\tR\x0emodelBindingId\"\x81\x01\n" +
 	"\x11AgentSessionEnded\x12D\n" +
 	"\x06reason\x18\x01 \x01(\x0e2,.ora.cloud.internal.v1.AgentSessionEndReasonR\x06reason\x12\x1b\n" +
 	"\x06detail\x18\x02 \x01(\tH\x00R\x06detail\x88\x01\x01B\t\n" +

@@ -31,7 +31,9 @@ Depends on `src/api` (generated Thread client and types), `features/issues/api` 
 - An event's `lastSeq` is a hint and is never used as a cursor.
 - A GET 404 means the session is not declared yet; it is a normal waiting state (polled every 2.5s), not an error. Once declared, a 5s fallback poll runs in every state but `ended`, in case SSE drops.
 - A Revision shows public metadata only (commits, changed, sizes); run settlement publishes no space event, so the line relies on `useRuns` polling while an agent run is unsettled.
-- Sending and ending are disabled in `ending` / `ended` (the server's 409 `thread_closed` rule); each submission's idempotency key stays stable across its retries.
+- Sending and ending are disabled in `ending` / `ended` (the server's 409 `thread_closed` rule); each submission's idempotency key stays stable across its retries. Server-provided `canAppend` / `canEnd` control actions: only the initiator may append model requests, administrators may end, and other members remain read-only. The panel shows frozen connection/model metadata and member display names, never credentials.
+
+A revoked model authorization leaves the old run read-only. Reconfiguring the connection does not reopen that Thread; the send fault asks the user to end it and launch a new task.
 
 ## Testing
 

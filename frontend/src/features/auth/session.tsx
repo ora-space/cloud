@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from 'react'
 import type { User } from '@/api/generated.schemas'
 import {
@@ -43,6 +43,14 @@ export const SESSION_QUERY_KEY = ['session'] as const
 
 const SessionContext = createContext<SessionValue | null>(null)
 
+// The session probe survives so the route gate can react; every other cached
+// document may belong to the previous member, including private model metadata.
+function forgetMemberQueries(queryClient: QueryClient) {
+  queryClient.removeQueries({
+    predicate: (cached) => cached.queryKey[0] !== SESSION_QUERY_KEY[0],
+  })
+}
+
 /**
  * Owns the session probe and the 401 policy. Mount it once above the router:
  * any 401 from the shared HTTP client flips the session to signed out, so
@@ -60,19 +68,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(
     () =>
-      onUnauthorized(() =>
-        queryClient.setQueryData<SessionProbe>(SESSION_QUERY_KEY, { kind: 'signed-out' }),
-      ),
+      onUnauthorized(() => {
+        const previous = queryClient.getQueryData<SessionProbe>(SESSION_QUERY_KEY)
+        if (previous?.kind === 'signed-in') forgetMemberQueries(queryClient)
+        queryClient.setQueryData<SessionProbe>(SESSION_QUERY_KEY, { kind: 'signed-out' })
+      }),
     [queryClient],
   )
 
   const signOut = useCallback(async () => {
     await logoutSession()
     queryClient.setQueryData<SessionProbe>(SESSION_QUERY_KEY, { kind: 'signed-out' })
-    // Everything else in the cache belongs to the member who just left.
-    queryClient.removeQueries({
-      predicate: (cached) => cached.queryKey[0] !== SESSION_QUERY_KEY[0],
-    })
+    forgetMemberQueries(queryClient)
   }, [queryClient])
 
   const signOutOfGitHub = useCallback(async () => {

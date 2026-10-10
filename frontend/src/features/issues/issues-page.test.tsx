@@ -49,7 +49,8 @@ describe('IssuesPage', () => {
 
     await user.click(screen.getByRole('button', { name: '新建任务' }))
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByPlaceholderText('任务标题'), 'A brand new issue')
+    await user.click(within(dialog).getByPlaceholderText('任务标题'))
+    await user.paste('A brand new issue')
     await user.click(within(dialog).getByRole('button', { name: '创建任务' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())

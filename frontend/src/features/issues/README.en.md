@@ -23,6 +23,10 @@ Subdirectories: `components/` (page sub-components), `thread/` (the Agent sessio
 
 Depends on `src/api`, `lib`, `components`, `features/spaces`; used by `routes.tsx`. The `slug` prop is really the tenant id (forwarded by `CloudScope`); navigation links use the space slug from the route. The run list's query key is fixed as `['issue-runs', tid, issueId]`; space events invalidate it by that key.
 
+The detail page passes member display names to the Thread's initiator summary; Thread permissions remain server-authoritative.
+
+Issue creation supports the existing optional `projectRef` contract. Tests paste a complete title and verify the real API request and refreshed list.
+
 ## Testing
 
 MSW stands in for the real Cloud API; under `onUnhandledRequest: 'error'` every test must serve every query the page mounts.

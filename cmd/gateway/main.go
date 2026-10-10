@@ -153,17 +153,19 @@ func buildHandler(cfg *gateway.Config, store *gateway.Store, web *gateway.Web, l
 		return nil, fmt.Errorf("parse cloud upstream: %w", e)
 	}
 	engine, e := gateway.NewHandler(&gateway.Options{
-		Store:           store,
-		Login:           login,
-		Issuer:          issuer,
-		Limiter:         gateway.NewRateLimiter(cfg.Login.RateLimitPerMinute, cfg.Login.RateLimitBurst, 100000, time.Now),
-		Upstream:        upstream,
-		UpstreamTimeout: cfg.Cloud.Timeout,
-		PublicOrigin:    origin,
-		Cookies:         gateway.CookiePolicy{Secure: strings.HasPrefix(origin, "https://"), CallbackPath: gateway.CallbackPath},
-		Log:             log,
-		Now:             time.Now,
-		Web:             web,
+		Store:                  store,
+		Login:                  login,
+		Issuer:                 issuer,
+		Limiter:                gateway.NewRateLimiter(cfg.Login.RateLimitPerMinute, cfg.Login.RateLimitBurst, 100000, time.Now),
+		Upstream:               upstream,
+		UpstreamTimeout:        cfg.Cloud.Timeout,
+		PublicOrigin:           origin,
+		Cookies:                gateway.CookiePolicy{Secure: strings.HasPrefix(origin, "https://"), CallbackPath: gateway.CallbackPath},
+		Log:                    log,
+		Now:                    time.Now,
+		Web:                    web,
+		ModelCredentials:       modelCredentialOrigin(cfg.ModelCredentials.Upstream),
+		ModelCredentialsCAFile: cfg.ModelCredentials.CAFile,
 	})
 	if e != nil {
 		return nil, e

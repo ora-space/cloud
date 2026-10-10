@@ -55,6 +55,15 @@ func Routes() []Route {
 		{"GET", "/api/v1/me/git-identity", "", nil},
 		{"PUT", "/api/v1/me/git-identity", "", []string{"name", "email", "version"}},
 		{"DELETE", "/api/v1/me/git-identity", "", []string{"version"}},
+		{"GET", "/api/v1/me/model-connections", "", nil},
+		{"POST", "/api/v1/me/model-connections", "", []string{"name", "protocol", "baseUrl", "authMode", "models", "enabled"}},
+		{"GET", "/api/v1/me/model-connections/:mcid", "", nil},
+		{"PUT", "/api/v1/me/model-connections/:mcid", "", []string{"name", "protocol", "baseUrl", "authMode", "models", "enabled", "version"}},
+		{"DELETE", "/api/v1/me/model-connections/:mcid", "", []string{"version"}},
+		{"PUT", "/api/v1/me/model-connections/:mcid/credential", "", []string{"apiKey", "version"}},
+		{"DELETE", "/api/v1/me/model-connections/:mcid/credential", "", []string{"version"}},
+		{"GET", "/api/v1/me/model-default", "", nil},
+		{"PUT", "/api/v1/me/model-default", "", []string{"connectionId", "modelId", "version"}},
 		{"GET", "/api/v1/me/tenants", "", nil},
 		{"GET", "/api/v1/me/spaces", "", nil},
 		{"GET", "/api/v1/me/join-requests", "", nil},
@@ -273,6 +282,12 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 				c.JSON(200, gin.H{"items": people})
 				return
 			}
+			// Credential bodies belong exclusively to model-gateway. Refuse before reading a body,
+			// even if a caller bypasses Gateway routing, so plaintext cannot enter this process.
+			if strings.HasPrefix(route.Path, "/api/v1/me/model-connections/") && strings.HasSuffix(route.Path, "/credential") {
+				failure(c, &core.Fault{Code: "credential_gateway_required", Status: 404, Params: core.Object{}})
+				return
+			}
 			body := core.Object{}
 			if c.Request.Method != "GET" {
 				limit := int64(defaultBodyLimit)
@@ -360,9 +375,20 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
+				// The retired development Node JSON contract keeps its historical resource shape.
+				// Model capability belongs to the production Controller gRPC registration/record.
+				if strings.HasPrefix(route.Action, "node_") {
+					delete(out, "modelProxy")
+				}
+				// Claim and snapshot both return the same snapshot document.
+				if nodes, ok := out["nodes"].([]core.Object); ok {
+					for _, node := range nodes {
+						delete(node, "modelProxy")
+					}
+				}
 			}
 			if e != nil {
 				f := core.ErrorCode(e)
@@ -528,6 +554,39 @@ func validField(name string, value any) bool {
 			}
 		}
 		return true
+	case "models":
+		arr, ok := value.([]any)
+		if !ok {
+			return false
+		}
+		for _, v := range arr {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			if len(m) != 4 {
+				return false
+			}
+			for k, entry := range m {
+				switch k {
+				case "id", "name":
+					if _, ok := entry.(string); !ok {
+						return false
+					}
+				case "contextWindow", "maxTokens":
+					n, ok := entry.(json.Number)
+					if !ok {
+						return false
+					}
+					if _, err := n.Int64(); err != nil {
+						return false
+					}
+				default:
+					return false
+				}
+			}
+		}
+		return true
 	case "filter", "properties", "input", "values", "graph":
 		_, ok := value.(map[string]any)
 		return ok
@@ -556,7 +615,7 @@ func validField(name string, value any) bool {
 			}
 		}
 		return true
-	case "idle", "initialized", "impactConfirmed":
+	case "idle", "initialized", "impactConfirmed", "enabled":
 		_, ok := value.(bool)
 		return ok
 	case "result":

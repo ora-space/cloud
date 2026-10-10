@@ -130,14 +130,18 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 	// The wire carries the first prompt as an ordered list of text blocks; the snapshot's single
 	// deterministic string is projected as exactly one block, the shape the contract defines rather
 	// than a reinterpretation of it.
-	return Object{
+	spec := Object{
 		"kind":                "agent_session",
 		"agentPluginId":       snap.S("agentPluginId"),
 		"agentPluginVersion":  snap.S("agentPluginVersion"),
 		"checkoutExecutionId": checkout.S("executionId"),
 		"gitIdentity":         identity,
 		"initialTurn":         Object{"turnId": turnID, "content": []Object{{"text": content}}},
-	}, nil
+	}
+	if bindingID := snap.S("modelBindingId"); bindingID != "" {
+		spec["modelBindingId"] = bindingID
+	}
+	return spec, nil
 }
 
 // renderAgentInitialTurn produces the deterministic first-prompt content from the frozen run-create

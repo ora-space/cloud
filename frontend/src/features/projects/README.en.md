@@ -22,6 +22,6 @@ Depends on `features/spaces/current-space`, the generated client, and UI compone
 
 ## Testing
 
-MSW simulates Cloud project lifecycle, version conflicts, and role controls.
+MSW simulates Cloud project lifecycle, version conflicts, and role controls. Rename tests paste the complete name and verify the optimistic-version request.
 
 Creation requires a concrete branch. The runtime starts and clones asynchronously; shared `CreateFormSubmit` feedback blocks repeated submission while pending.

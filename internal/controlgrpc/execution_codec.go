@@ -108,12 +108,16 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
 	}
 	turn := spec.GetInitialTurn()
-	return core.Object{
+	o := core.Object{
 		"kind": "agent_session", "agentPluginId": spec.GetAgentPluginId(), "agentPluginVersion": spec.GetAgentPluginVersion(),
 		"checkoutExecutionId": spec.GetCheckoutExecutionId(),
 		"gitIdentity":         core.Object{"name": spec.GetGitIdentity().GetName(), "email": spec.GetGitIdentity().GetEmail()},
 		"initialTurn":         core.Object{"turnId": turn.GetTurnId(), "content": contentObjects(turn.GetContent())},
-	}, nil
+	}
+	if id := spec.GetModelBindingId(); id != "" {
+		o["modelBindingId"] = id
+	}
+	return o, nil
 }
 
 func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
@@ -121,8 +125,9 @@ func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
 	turn := o.O("initialTurn")
 	return &controlpb.AgentSessionSpec{
 		AgentPluginId: o.S("agentPluginId"), AgentPluginVersion: o.S("agentPluginVersion"), CheckoutExecutionId: o.S("checkoutExecutionId"),
-		GitIdentity: &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
-		InitialTurn: &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
+		ModelBindingId: o.S("modelBindingId"),
+		GitIdentity:    &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
+		InitialTurn:    &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
 	}
 }
 

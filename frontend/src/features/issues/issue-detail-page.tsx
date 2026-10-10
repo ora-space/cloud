@@ -87,7 +87,7 @@ export function IssueDetailPage({ slug }: { slug: string }) {
           issueHref={p.issueDetail}
           onCommit={commit}
         />
-        <IssueThreadPanel tid={slug} issueId={issue.id} />
+        <IssueThreadPanel tid={slug} issueId={issue.id} members={members} />
       </div>
     </div>
   )
