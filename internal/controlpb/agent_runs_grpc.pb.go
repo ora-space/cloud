@@ -23,6 +23,7 @@ const (
 	AgentRunService_ClaimThreadCommands_FullMethodName          = "/ora.cloud.internal.v1.AgentRunService/ClaimThreadCommands"
 	AgentRunService_RecordThreadCommandDelivered_FullMethodName = "/ora.cloud.internal.v1.AgentRunService/RecordThreadCommandDelivered"
 	AgentRunService_GrantRevisionUpload_FullMethodName          = "/ora.cloud.internal.v1.AgentRunService/GrantRevisionUpload"
+	AgentRunService_GrantRevisionDownload_FullMethodName        = "/ora.cloud.internal.v1.AgentRunService/GrantRevisionDownload"
 )
 
 // AgentRunServiceClient is the client API for AgentRunService service.
@@ -44,6 +45,9 @@ type AgentRunServiceClient interface {
 	// Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
 	// write: nothing is recorded, and every call issues new grants.
 	GrantRevisionUpload(ctx context.Context, in *GrantRevisionUploadRequest, opts ...grpc.CallOption) (*GrantRevisionUploadResponse, error)
+	// Issues a fresh read grant for the prior Revision bundle of a registered session execution that
+	// has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
+	GrantRevisionDownload(ctx context.Context, in *GrantRevisionDownloadRequest, opts ...grpc.CallOption) (*GrantRevisionDownloadResponse, error)
 }
 
 type agentRunServiceClient struct {
@@ -94,6 +98,16 @@ func (c *agentRunServiceClient) GrantRevisionUpload(ctx context.Context, in *Gra
 	return out, nil
 }
 
+func (c *agentRunServiceClient) GrantRevisionDownload(ctx context.Context, in *GrantRevisionDownloadRequest, opts ...grpc.CallOption) (*GrantRevisionDownloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantRevisionDownloadResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_GrantRevisionDownload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentRunServiceServer is the server API for AgentRunService service.
 // All implementations must embed UnimplementedAgentRunServiceServer
 // for forward compatibility.
@@ -113,6 +127,9 @@ type AgentRunServiceServer interface {
 	// Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
 	// write: nothing is recorded, and every call issues new grants.
 	GrantRevisionUpload(context.Context, *GrantRevisionUploadRequest) (*GrantRevisionUploadResponse, error)
+	// Issues a fresh read grant for the prior Revision bundle of a registered session execution that
+	// has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
+	GrantRevisionDownload(context.Context, *GrantRevisionDownloadRequest) (*GrantRevisionDownloadResponse, error)
 	mustEmbedUnimplementedAgentRunServiceServer()
 }
 
@@ -134,6 +151,9 @@ func (UnimplementedAgentRunServiceServer) RecordThreadCommandDelivered(context.C
 }
 func (UnimplementedAgentRunServiceServer) GrantRevisionUpload(context.Context, *GrantRevisionUploadRequest) (*GrantRevisionUploadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GrantRevisionUpload not implemented")
+}
+func (UnimplementedAgentRunServiceServer) GrantRevisionDownload(context.Context, *GrantRevisionDownloadRequest) (*GrantRevisionDownloadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantRevisionDownload not implemented")
 }
 func (UnimplementedAgentRunServiceServer) mustEmbedUnimplementedAgentRunServiceServer() {}
 func (UnimplementedAgentRunServiceServer) testEmbeddedByValue()                         {}
@@ -228,6 +248,24 @@ func _AgentRunService_GrantRevisionUpload_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunService_GrantRevisionDownload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantRevisionDownloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).GrantRevisionDownload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_GrantRevisionDownload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).GrantRevisionDownload(ctx, req.(*GrantRevisionDownloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentRunService_ServiceDesc is the grpc.ServiceDesc for AgentRunService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -250,6 +288,10 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GrantRevisionUpload",
 			Handler:    _AgentRunService_GrantRevisionUpload_Handler,
+		},
+		{
+			MethodName: "GrantRevisionDownload",
+			Handler:    _AgentRunService_GrantRevisionDownload_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
