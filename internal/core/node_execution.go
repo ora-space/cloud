@@ -98,7 +98,11 @@ func nodeExecutionResult(t *transaction, r *ControlRequest, withReceipt bool) Ob
 	}
 	if withReceipt || e.S("kind") == "agent_session" || e.S("kind") == "deliver_revision" {
 		require(withReceipt, 400, "invalid_receipt")
-		if !fresh {
+		// Plugin queries settle the result without an ACK receipt. Only their first real
+		// terminal event may add that missing receipt; later terminal replays, sessions and
+		// deliveries still require the original sequence. recordNodeReceipt fences gaps/bytes.
+		firstPluginReceipt := e.N("lastEventSequence") == 0 && (e.S("kind") == "install_plugins" || e.S("kind") == "remove_plugins")
+		if !fresh && !firstPluginReceipt {
 			require(t.one("SELECT sequence FROM node_event_receipts WHERE execution_id=$1 AND sequence=$2", execution, r.Body.N("sequence")) != nil, 409, "receipt_conflict")
 		}
 		recordNodeReceipt(t, execution, r.Body.N("sequence"), r.Body.S("event"))
