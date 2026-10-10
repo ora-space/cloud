@@ -70,7 +70,11 @@ func validateDeliveryDeclaration(e, result Object) {
 	history := result.O("history")
 	require(history.S("key") == input.S("historyKey") && validStoredObject(history), 400, "invalid_result")
 	if result.S("outcome") == "revision_unchanged" {
-		require(result.S("finalCommit") == result.S("baseCommit") && len(result.O("bundle")) == 0, 409, "result_conflict")
+		// A resumed run that added nothing ends on its prior Revision's final commit (contract D4).
+		prior := input.O("priorRevision")
+		unchanged := result.S("finalCommit") == result.S("baseCommit") ||
+			(prior.S("finalCommit") != "" && result.S("finalCommit") == prior.S("finalCommit"))
+		require(unchanged && len(result.O("bundle")) == 0, 409, "result_conflict")
 	} else {
 		bundle := result.O("bundle")
 		require(result.S("finalCommit") != result.S("baseCommit") && bundle.S("key") == input.S("bundleKey") && validStoredObject(bundle) && bundle.N("size") > 0, 409, "result_conflict")
@@ -121,9 +125,18 @@ func settleVerifiedRevision(t *transaction, r *ControlRequest, e Object) {
 		if len(bundle) > 0 {
 			bundleKey, bundleSize, bundleDigest = bundle.S("key"), bundle.N("size"), bundle.S("sha256")
 		}
+		// A run that resumed and moved off its base commit records its prior Revision; one that ended
+		// on the prior's final commit reuses the prior's bundle instead of storing one (resume D5).
+		var priorID, holderID any
+		if prior := e.O("input").O("priorRevision"); prior.S("revisionId") != "" && result.S("finalCommit") != result.S("baseCommit") {
+			priorID = prior.S("revisionId")
+			if len(bundle) == 0 {
+				holderID = resumedBundleHolder(t, prior.S("revisionId"))
+			}
+		}
 		id := newID()
-		t.exec(`INSERT INTO revisions(id,execution_id,tenant_id,run_id,workspace_id,project_id,repository_url,base_commit,final_commit,revision_ref,bundle_key,bundle_size,bundle_sha256,history_key,history_size,history_sha256)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, id, e.S("executionId"), w.S("tenantId"), e.S("operationId"), w.S("id"), w.S("projectId"), w.S("repositoryUrl"), result.S("baseCommit"), result.S("finalCommit"), result.S("revisionRef"), bundleKey, bundleSize, bundleDigest, history.S("key"), history.N("size"), history.S("sha256"))
+		t.exec(`INSERT INTO revisions(id,execution_id,tenant_id,run_id,workspace_id,project_id,repository_url,base_commit,final_commit,revision_ref,bundle_key,bundle_size,bundle_sha256,history_key,history_size,history_sha256,prior_revision_id,bundle_revision_id)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, id, e.S("executionId"), w.S("tenantId"), e.S("operationId"), w.S("id"), w.S("projectId"), w.S("repositoryUrl"), result.S("baseCommit"), result.S("finalCommit"), result.S("revisionRef"), bundleKey, bundleSize, bundleDigest, history.S("key"), history.N("size"), history.S("sha256"), priorID, holderID)
 		settled["revision"] = t.one("SELECT * FROM revisions WHERE id=$1", id)
 		settled["revisionId"] = id
 		if outcome == "delivered" {

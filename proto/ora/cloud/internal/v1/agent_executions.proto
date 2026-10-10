@@ -34,6 +34,16 @@ message UserTurn {
   repeated ContentBlock content = 2;
 }
 
+// The Revision a new run of the same Issue resumes from (IssueRun resume decision D1). On a session
+// spec it names the verified object holding the bundle, which may belong to an earlier Revision the
+// resumed one reused; on a delivery spec it carries only the identity and final commit.
+message PriorRevision {
+  string revision_id = 1;
+  string final_commit = 2;
+  // Set on AgentSessionSpec only. The download grant covers exactly this object key.
+  StoredObject bundle = 3;
+}
+
 message AgentSessionSpec {
   // Canonical Plugin ID and exact version of the agent plugin installed in the Workspace.
   string agent_plugin_id = 1;
@@ -43,6 +53,10 @@ message AgentSessionSpec {
   GitIdentity git_identity = 4;
   // The prompt Cloud rendered from the Issue; later turns arrive as Thread commands.
   UserTurn initial_turn = 5;
+  // Set when the run resumes an earlier Revision of its Issue. The Node restores it into the checkout
+  // before starting the agent and needs a Node capable of restore; if restore fails the session ends
+  // AGENT_FAILED with detail `prior_revision_unavailable` or `prior_revision_base_unavailable`.
+  PriorRevision prior_revision = 6;
 }
 
 enum AgentSessionEndReason {
@@ -75,6 +89,9 @@ message DeliverRevisionSpec {
   // Object keys Cloud chose for this delivery; upload grants are issued only for these keys.
   string bundle_key = 5;
   string history_key = 6;
+  // The session's resumed Revision, without bundle. A final commit equal to its final commit is
+  // reported as RevisionUnchanged.
+  PriorRevision prior_revision = 7;
 }
 
 // An object the Node uploaded, as the Node measured it; Cloud verifies it before registering.
@@ -93,7 +110,8 @@ message RevisionDelivered {
   StoredObject history = 5;
 }
 
-// The final commit equals the base commit: no bundle, only the session history.
+// The final commit equals the base commit, or the delivery spec's prior_revision final commit (a
+// resumed run that added nothing): no bundle, only the session history.
 message RevisionUnchanged {
   string final_commit = 1;
   string base_commit = 2;
@@ -128,6 +146,18 @@ message UploadGrant {
   // A checksum-bound grant includes `x-amz-checksum-sha256`; legacy uploaders add that digest.
   // On 412, preserve the existing object and submit the declaration for Cloud verification;
   // neither the uploader nor Controller may treat 412 alone as proof that its bytes match.
+  map<string, string> headers = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// A presigned single-object read of a prior Revision's bundle. Like UploadGrant it is a short-lived
+// bearer credential kept in memory only and never logged.
+message DownloadGrant {
+  string object_key = 1;
+  string url = 2;
+  // Always GET.
+  string method = 3;
+  // Headers the download must carry unchanged.
   map<string, string> headers = 4;
   google.protobuf.Timestamp expires_at = 5;
 }

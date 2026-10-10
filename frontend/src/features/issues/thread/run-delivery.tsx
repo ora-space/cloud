@@ -10,7 +10,7 @@ function formatBytes(bytes: number): string {
 /**
  * The one-line summary of what an agent run saved, or null while there is
  * nothing to say. A registered Revision wins: its short final commit and
- * whether the run changed files. Without one, `result.deliveryState` explains
+ * whether the run changed files, or reused the Revision it resumed. Without one, `result.deliveryState` explains
  * why (skipped without an object store, failed after retries), and a run whose
  * session ended but has not settled yet is still saving.
  */
@@ -18,8 +18,12 @@ export function deliverySummary(run: IssueRun, threadEnded: boolean): string | n
   const revision = run.revision
   if (revision) {
     const commit = revision.finalCommit.slice(0, 7)
-    return revision.changed
-      ? `已保存 Revision ${commit}（含改动，bundle ${formatBytes(revision.bundleSize ?? 0)}）`
+    if (revision.changed) {
+      return `已保存 Revision ${commit}（含改动，bundle ${formatBytes(revision.bundleSize ?? 0)}）`
+    }
+    // A resumed run that added nothing reuses the resumed Revision's bundle instead of storing one.
+    return revision.priorRevisionId
+      ? `已保存 Revision ${commit}（无新改动，沿用续接的成果）`
       : `已保存 Revision ${commit}（无文件改动）`
   }
   const state = run.result?.deliveryState

@@ -20,6 +20,9 @@ service AgentRunService {
   // Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
   // write: nothing is recorded, and every call issues new grants.
   rpc GrantRevisionUpload(GrantRevisionUploadRequest) returns (GrantRevisionUploadResponse);
+  // Issues a fresh read grant for the prior Revision bundle of a registered session execution that
+  // has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
+  rpc GrantRevisionDownload(GrantRevisionDownloadRequest) returns (GrantRevisionDownloadResponse);
 }
 
 // One non-terminal event of a session execution, as the Node sent it. Thread events share the
@@ -117,4 +120,15 @@ message GrantRevisionUploadRequest {
 message GrantRevisionUploadResponse {
   // One grant per requested checksum key, or both input keys for legacy requests.
   repeated UploadGrant grants = 1;
+}
+
+message GrantRevisionDownloadRequest {
+  int64 epoch = 1;
+  // A session execution registered through RecordDispatch whose input carries prior_revision.
+  string execution_id = 2;
+}
+
+message GrantRevisionDownloadResponse {
+  // Exactly one grant, for the input's prior_revision bundle key.
+  repeated DownloadGrant grants = 1;
 }

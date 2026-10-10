@@ -112,6 +112,10 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 		UPDATE thread_entries SET status='discarded'
 		WHERE run_id=$1 AND source='user' AND status='queued'`, runID)
 
+	// A restore that found the prior Revision's base commit gone from the remote refuses that Revision
+	// for later runs in this same transaction (resume decision D3).
+	refuseResumedRevision(t, executionID, ended)
+
 	// The delivery work item is released in this transaction (IssueRun D3). A failure returns the
 	// error, which the seam turns into a databaseFailure: the whole takeover rolls back, so the run
 	// is never `delivering` without the delivery that phase exists to produce.
@@ -141,6 +145,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 //	sessionExecutionId:  the ended session execution.
 //	checkoutExecutionId: the clone execution that produced the run Workspace's recorded baseline.
 //	baseCommit:          workspaces.base_commit_id, the commit the bundle is relative to.
+//	priorRevision:       the Revision the session resumed, without bundle (resume decision D5).
 //	kind:                the work item kind, which the control plane's enqueue re-checks.
 //
 // The three server-owned locations — the per-attempt `bundleKey`/`historyKey` and the
@@ -171,10 +176,14 @@ func (s *Store) sessionDeliverySpec(t *transaction, o Object, sessionExecutionID
 	if checkout == nil {
 		return nil, fmt.Errorf("sessionEnded: run %s workspace %s has no successful clone execution for base commit %s", runID, wid, base)
 	}
-	return Object{
+	spec := Object{
 		"kind":                "deliver_revision",
 		"sessionExecutionId":  sessionExecutionID,
 		"checkoutExecutionId": checkout.S("executionId"),
 		"baseCommit":          base,
-	}, nil
+	}
+	if prior := deliveryPriorRevision(t, sessionExecutionID); prior != nil {
+		spec["priorRevision"] = prior
+	}
+	return spec, nil
 }

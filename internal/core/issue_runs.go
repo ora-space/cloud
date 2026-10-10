@@ -40,24 +40,30 @@ func runList(t *transaction, r *PublicRequest) Object {
 // revision ref and digests stay private — the public API offers no download, and a key would name
 // a private storage location. `revision` is null for a run that registered none (not an agent run,
 // delivery still pending, skipped or failed); the run's `result.deliveryState` says which.
+//
+// `changed` says whether this run stored a bundle of its own: a resumed run that added nothing reuses
+// its prior Revision's bundle and is unchanged (resume decision D5). `priorRevisionId` names the
+// Revision the run resumed; the run's own `resumeRevisionId` shows it from session start on.
 func withRevision(t *transaction, o Object) Object {
 	o["revision"] = nil
 	if o.S("executorType") != "agent" {
 		return o
 	}
-	rev := t.one(`SELECT id, base_commit, final_commit, bundle_size, history_size, created_at
+	rev := t.one(`SELECT id, base_commit, final_commit, bundle_key IS NOT NULL AS stored_bundle, bundle_size,
+		history_size, prior_revision_id, created_at
 		FROM revisions WHERE run_id=$1 AND tenant_id=$2`, o.S("id"), o.S("tenantId"))
 	if rev == nil {
 		return o
 	}
 	o["revision"] = Object{
-		"id":          rev.S("id"),
-		"baseCommit":  rev.S("baseCommit"),
-		"finalCommit": rev.S("finalCommit"),
-		"changed":     rev.S("baseCommit") != rev.S("finalCommit"),
-		"bundleSize":  rev["bundleSize"],
-		"historySize": rev["historySize"],
-		"createdAt":   rev["createdAt"],
+		"id":              rev.S("id"),
+		"baseCommit":      rev.S("baseCommit"),
+		"finalCommit":     rev.S("finalCommit"),
+		"changed":         rev.B("storedBundle"),
+		"bundleSize":      rev["bundleSize"],
+		"historySize":     rev["historySize"],
+		"priorRevisionId": rev["priorRevisionId"],
+		"createdAt":       rev["createdAt"],
 	}
 	return o
 }

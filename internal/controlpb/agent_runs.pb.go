@@ -791,6 +791,104 @@ func (x *GrantRevisionUploadResponse) GetGrants() []*UploadGrant {
 	return nil
 }
 
+type GrantRevisionDownloadRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Epoch int64                  `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	// A session execution registered through RecordDispatch whose input carries prior_revision.
+	ExecutionId   string `protobuf:"bytes,2,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantRevisionDownloadRequest) Reset() {
+	*x = GrantRevisionDownloadRequest{}
+	mi := &file_ora_cloud_internal_v1_agent_runs_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantRevisionDownloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantRevisionDownloadRequest) ProtoMessage() {}
+
+func (x *GrantRevisionDownloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_agent_runs_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantRevisionDownloadRequest.ProtoReflect.Descriptor instead.
+func (*GrantRevisionDownloadRequest) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_agent_runs_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GrantRevisionDownloadRequest) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *GrantRevisionDownloadRequest) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+type GrantRevisionDownloadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exactly one grant, for the input's prior_revision bundle key.
+	Grants        []*DownloadGrant `protobuf:"bytes,1,rep,name=grants,proto3" json:"grants,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantRevisionDownloadResponse) Reset() {
+	*x = GrantRevisionDownloadResponse{}
+	mi := &file_ora_cloud_internal_v1_agent_runs_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantRevisionDownloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantRevisionDownloadResponse) ProtoMessage() {}
+
+func (x *GrantRevisionDownloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_agent_runs_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantRevisionDownloadResponse.ProtoReflect.Descriptor instead.
+func (*GrantRevisionDownloadResponse) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_agent_runs_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GrantRevisionDownloadResponse) GetGrants() []*DownloadGrant {
+	if x != nil {
+		return x.Grants
+	}
+	return nil
+}
+
 var File_ora_cloud_internal_v1_agent_runs_proto protoreflect.FileDescriptor
 
 const file_ora_cloud_internal_v1_agent_runs_proto_rawDesc = "" +
@@ -846,17 +944,23 @@ const file_ora_cloud_internal_v1_agent_runs_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Y\n" +
 	"\x1bGrantRevisionUploadResponse\x12:\n" +
-	"\x06grants\x18\x01 \x03(\v2\".ora.cloud.internal.v1.UploadGrantR\x06grants*\xa0\x01\n" +
+	"\x06grants\x18\x01 \x03(\v2\".ora.cloud.internal.v1.UploadGrantR\x06grants\"W\n" +
+	"\x1cGrantRevisionDownloadRequest\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\x12!\n" +
+	"\fexecution_id\x18\x02 \x01(\tR\vexecutionId\"]\n" +
+	"\x1dGrantRevisionDownloadResponse\x12<\n" +
+	"\x06grants\x18\x01 \x03(\v2$.ora.cloud.internal.v1.DownloadGrantR\x06grants*\xa0\x01\n" +
 	"\x10EndSessionReason\x12\"\n" +
 	"\x1eEND_SESSION_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dEND_SESSION_REASON_USER_ENDED\x10\x01\x12#\n" +
 	"\x1fEND_SESSION_REASON_IDLE_TIMEOUT\x10\x02\x12 \n" +
-	"\x1cEND_SESSION_REASON_CANCELLED\x10\x032\xa8\x04\n" +
+	"\x1cEND_SESSION_REASON_CANCELLED\x10\x032\xad\x05\n" +
 	"\x0fAgentRunService\x12\x7f\n" +
 	"\x14TakeOverThreadEvents\x122.ora.cloud.internal.v1.TakeOverThreadEventsRequest\x1a3.ora.cloud.internal.v1.TakeOverThreadEventsResponse\x12|\n" +
 	"\x13ClaimThreadCommands\x121.ora.cloud.internal.v1.ClaimThreadCommandsRequest\x1a2.ora.cloud.internal.v1.ClaimThreadCommandsResponse\x12\x97\x01\n" +
 	"\x1cRecordThreadCommandDelivered\x12:.ora.cloud.internal.v1.RecordThreadCommandDeliveredRequest\x1a;.ora.cloud.internal.v1.RecordThreadCommandDeliveredResponse\x12|\n" +
-	"\x13GrantRevisionUpload\x121.ora.cloud.internal.v1.GrantRevisionUploadRequest\x1a2.ora.cloud.internal.v1.GrantRevisionUploadResponseB\xdf\x01\n" +
+	"\x13GrantRevisionUpload\x121.ora.cloud.internal.v1.GrantRevisionUploadRequest\x1a2.ora.cloud.internal.v1.GrantRevisionUploadResponse\x12\x82\x01\n" +
+	"\x15GrantRevisionDownload\x123.ora.cloud.internal.v1.GrantRevisionDownloadRequest\x1a4.ora.cloud.internal.v1.GrantRevisionDownloadResponseB\xdf\x01\n" +
 	"\x19com.ora.cloud.internal.v1B\x0eAgentRunsProtoP\x01Z;github.com/wanglongan587/cloud/internal/controlpb;controlpb\xa2\x02\x03OCI\xaa\x02\x15Ora.Cloud.Internal.V1\xca\x02\x15Ora\\Cloud\\Internal\\V1\xe2\x02!Ora\\Cloud\\Internal\\V1\\GPBMetadata\xea\x02\x18Ora::Cloud::Internal::V1b\x06proto3"
 
 var (
@@ -872,7 +976,7 @@ func file_ora_cloud_internal_v1_agent_runs_proto_rawDescGZIP() []byte {
 }
 
 var file_ora_cloud_internal_v1_agent_runs_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ora_cloud_internal_v1_agent_runs_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_ora_cloud_internal_v1_agent_runs_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_ora_cloud_internal_v1_agent_runs_proto_goTypes = []any{
 	(EndSessionReason)(0),                        // 0: ora.cloud.internal.v1.EndSessionReason
 	(*ThreadEvent)(nil),                          // 1: ora.cloud.internal.v1.ThreadEvent
@@ -887,34 +991,40 @@ var file_ora_cloud_internal_v1_agent_runs_proto_goTypes = []any{
 	(*RecordThreadCommandDeliveredResponse)(nil), // 10: ora.cloud.internal.v1.RecordThreadCommandDeliveredResponse
 	(*GrantRevisionUploadRequest)(nil),           // 11: ora.cloud.internal.v1.GrantRevisionUploadRequest
 	(*GrantRevisionUploadResponse)(nil),          // 12: ora.cloud.internal.v1.GrantRevisionUploadResponse
-	nil,                                          // 13: ora.cloud.internal.v1.GrantRevisionUploadRequest.ChecksumsEntry
-	(*UserTurn)(nil),                             // 14: ora.cloud.internal.v1.UserTurn
-	(*WorkTarget)(nil),                           // 15: ora.cloud.internal.v1.WorkTarget
-	(*UploadGrant)(nil),                          // 16: ora.cloud.internal.v1.UploadGrant
+	(*GrantRevisionDownloadRequest)(nil),         // 13: ora.cloud.internal.v1.GrantRevisionDownloadRequest
+	(*GrantRevisionDownloadResponse)(nil),        // 14: ora.cloud.internal.v1.GrantRevisionDownloadResponse
+	nil,                                          // 15: ora.cloud.internal.v1.GrantRevisionUploadRequest.ChecksumsEntry
+	(*UserTurn)(nil),                             // 16: ora.cloud.internal.v1.UserTurn
+	(*WorkTarget)(nil),                           // 17: ora.cloud.internal.v1.WorkTarget
+	(*UploadGrant)(nil),                          // 18: ora.cloud.internal.v1.UploadGrant
+	(*DownloadGrant)(nil),                        // 19: ora.cloud.internal.v1.DownloadGrant
 }
 var file_ora_cloud_internal_v1_agent_runs_proto_depIdxs = []int32{
 	1,  // 0: ora.cloud.internal.v1.TakeOverThreadEventsRequest.events:type_name -> ora.cloud.internal.v1.ThreadEvent
-	14, // 1: ora.cloud.internal.v1.SubmitUserTurn.turn:type_name -> ora.cloud.internal.v1.UserTurn
+	16, // 1: ora.cloud.internal.v1.SubmitUserTurn.turn:type_name -> ora.cloud.internal.v1.UserTurn
 	0,  // 2: ora.cloud.internal.v1.EndSession.reason:type_name -> ora.cloud.internal.v1.EndSessionReason
-	15, // 3: ora.cloud.internal.v1.ThreadCommand.target:type_name -> ora.cloud.internal.v1.WorkTarget
+	17, // 3: ora.cloud.internal.v1.ThreadCommand.target:type_name -> ora.cloud.internal.v1.WorkTarget
 	4,  // 4: ora.cloud.internal.v1.ThreadCommand.submit_user_turn:type_name -> ora.cloud.internal.v1.SubmitUserTurn
 	5,  // 5: ora.cloud.internal.v1.ThreadCommand.end_session:type_name -> ora.cloud.internal.v1.EndSession
 	6,  // 6: ora.cloud.internal.v1.ClaimThreadCommandsResponse.commands:type_name -> ora.cloud.internal.v1.ThreadCommand
-	13, // 7: ora.cloud.internal.v1.GrantRevisionUploadRequest.checksums:type_name -> ora.cloud.internal.v1.GrantRevisionUploadRequest.ChecksumsEntry
-	16, // 8: ora.cloud.internal.v1.GrantRevisionUploadResponse.grants:type_name -> ora.cloud.internal.v1.UploadGrant
-	2,  // 9: ora.cloud.internal.v1.AgentRunService.TakeOverThreadEvents:input_type -> ora.cloud.internal.v1.TakeOverThreadEventsRequest
-	7,  // 10: ora.cloud.internal.v1.AgentRunService.ClaimThreadCommands:input_type -> ora.cloud.internal.v1.ClaimThreadCommandsRequest
-	9,  // 11: ora.cloud.internal.v1.AgentRunService.RecordThreadCommandDelivered:input_type -> ora.cloud.internal.v1.RecordThreadCommandDeliveredRequest
-	11, // 12: ora.cloud.internal.v1.AgentRunService.GrantRevisionUpload:input_type -> ora.cloud.internal.v1.GrantRevisionUploadRequest
-	3,  // 13: ora.cloud.internal.v1.AgentRunService.TakeOverThreadEvents:output_type -> ora.cloud.internal.v1.TakeOverThreadEventsResponse
-	8,  // 14: ora.cloud.internal.v1.AgentRunService.ClaimThreadCommands:output_type -> ora.cloud.internal.v1.ClaimThreadCommandsResponse
-	10, // 15: ora.cloud.internal.v1.AgentRunService.RecordThreadCommandDelivered:output_type -> ora.cloud.internal.v1.RecordThreadCommandDeliveredResponse
-	12, // 16: ora.cloud.internal.v1.AgentRunService.GrantRevisionUpload:output_type -> ora.cloud.internal.v1.GrantRevisionUploadResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	15, // 7: ora.cloud.internal.v1.GrantRevisionUploadRequest.checksums:type_name -> ora.cloud.internal.v1.GrantRevisionUploadRequest.ChecksumsEntry
+	18, // 8: ora.cloud.internal.v1.GrantRevisionUploadResponse.grants:type_name -> ora.cloud.internal.v1.UploadGrant
+	19, // 9: ora.cloud.internal.v1.GrantRevisionDownloadResponse.grants:type_name -> ora.cloud.internal.v1.DownloadGrant
+	2,  // 10: ora.cloud.internal.v1.AgentRunService.TakeOverThreadEvents:input_type -> ora.cloud.internal.v1.TakeOverThreadEventsRequest
+	7,  // 11: ora.cloud.internal.v1.AgentRunService.ClaimThreadCommands:input_type -> ora.cloud.internal.v1.ClaimThreadCommandsRequest
+	9,  // 12: ora.cloud.internal.v1.AgentRunService.RecordThreadCommandDelivered:input_type -> ora.cloud.internal.v1.RecordThreadCommandDeliveredRequest
+	11, // 13: ora.cloud.internal.v1.AgentRunService.GrantRevisionUpload:input_type -> ora.cloud.internal.v1.GrantRevisionUploadRequest
+	13, // 14: ora.cloud.internal.v1.AgentRunService.GrantRevisionDownload:input_type -> ora.cloud.internal.v1.GrantRevisionDownloadRequest
+	3,  // 15: ora.cloud.internal.v1.AgentRunService.TakeOverThreadEvents:output_type -> ora.cloud.internal.v1.TakeOverThreadEventsResponse
+	8,  // 16: ora.cloud.internal.v1.AgentRunService.ClaimThreadCommands:output_type -> ora.cloud.internal.v1.ClaimThreadCommandsResponse
+	10, // 17: ora.cloud.internal.v1.AgentRunService.RecordThreadCommandDelivered:output_type -> ora.cloud.internal.v1.RecordThreadCommandDeliveredResponse
+	12, // 18: ora.cloud.internal.v1.AgentRunService.GrantRevisionUpload:output_type -> ora.cloud.internal.v1.GrantRevisionUploadResponse
+	14, // 19: ora.cloud.internal.v1.AgentRunService.GrantRevisionDownload:output_type -> ora.cloud.internal.v1.GrantRevisionDownloadResponse
+	15, // [15:20] is the sub-list for method output_type
+	10, // [10:15] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_agent_runs_proto_init() }
@@ -935,7 +1045,7 @@ func file_ora_cloud_internal_v1_agent_runs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_agent_runs_proto_rawDesc), len(file_ora_cloud_internal_v1_agent_runs_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

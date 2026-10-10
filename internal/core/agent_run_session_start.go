@@ -45,7 +45,10 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 		return nil
 	}
 	snap := o.O("input")
-	content := renderAgentInitialTurn(snap)
+	// The prior Revision is chosen before the first prompt is rendered: the prompt tells the Agent what
+	// it resumes, and both are fixed by this one transaction (resume decision D1, D4).
+	resume := selectPriorRevision(t, o)
+	content := renderAgentInitialTurn(snap, resume.context)
 	turnID := newID()
 	// Exactly-once marker write. 0 affected rows → a prior start already declared the first produce;
 	// keep the run 'starting' and skip the enqueue.
@@ -63,9 +66,13 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 	// the run, and zero affected rows is an invariant violation, not a race. Rolling back is the only
 	// honest outcome — a committed first prompt whose Thread state never materialized would leave the
 	// read model permanently inconsistent.
+	var resumed any
+	if resume.prior != nil {
+		resumed = resume.prior.S("revisionId")
+	}
 	if t.execRows(`
-		UPDATE issue_runs SET thread_state='pending', version=version+1, updated_at=now()
-		WHERE id=$1 AND thread_state IS NULL`, runID) != 1 {
+		UPDATE issue_runs SET thread_state='pending', resume_revision_id=$2, version=version+1, updated_at=now()
+		WHERE id=$1 AND thread_state IS NULL`, runID, resumed) != 1 {
 		panic(databaseFailure{fmt.Errorf("session start: run %s Thread state was not materialized", runID)})
 	}
 	// seq=1 is a Thread entry write like any other, so the declaration queues the same invalidation
@@ -80,7 +87,7 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 	// (D-013, G-007/G-009) — and names the checkout execution the Node must run the session in, which
 	// is the clone that produced the Workspace's recorded baseline (controller-integration D1: the
 	// Controller and Cloud never pass a Node-local path).
-	spec, err := s.sessionStartSpec(t, o, snap, turnID, content)
+	spec, err := s.sessionStartSpec(t, o, snap, turnID, content, resume.prior)
 	if err != nil {
 		return err
 	}
@@ -99,11 +106,12 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 //	                       actor's default (identity-access D1; agent_run_identity.go names the
 //	                       divergence from D2's creation-time freeze).
 //	initialTurn:           the deterministic first prompt this transaction just wrote as seq=1.
+//	priorRevision:         the Revision the run resumes, when selectPriorRevision chose one.
 //
 // A run Workspace with no recorded baseline, or one whose baseline names no successful clone
 // execution, is an invariant violation: a session cannot run in a Workspace that was never cloned, so
 // failing closed (and rolling the seq=1 write back with it) is the only honest outcome.
-func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content string) (Object, error) {
+func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content string, prior Object) (Object, error) {
 	runID, wid := o.S("id"), o.S("workspaceId")
 	if wid == "" {
 		return nil, fmt.Errorf("session start: run %s has no run workspace", runID)
@@ -130,14 +138,18 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 	// The wire carries the first prompt as an ordered list of text blocks; the snapshot's single
 	// deterministic string is projected as exactly one block, the shape the contract defines rather
 	// than a reinterpretation of it.
-	return Object{
+	spec := Object{
 		"kind":                "agent_session",
 		"agentPluginId":       snap.S("agentPluginId"),
 		"agentPluginVersion":  snap.S("agentPluginVersion"),
 		"checkoutExecutionId": checkout.S("executionId"),
 		"gitIdentity":         identity,
 		"initialTurn":         Object{"turnId": turnID, "content": []Object{{"text": content}}},
-	}, nil
+	}
+	if prior != nil {
+		spec["priorRevision"] = prior
+	}
+	return spec, nil
 }
 
 // renderAgentInitialTurn produces the deterministic first-prompt content from the frozen run-create
@@ -146,19 +158,26 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 // current roster. Determinism: the section order is fixed and each embedded structure is canonicalised
 // with encoding/json, which sorts map keys, so two renders of the same snapshot are byte-identical —
 // the replay once-guard depends on the content being stable.
-func renderAgentInitialTurn(input Object) string {
+//
+// `resume` is the run's resume context (resume decision D4); it joins the Context only when the Issue
+// had a Revision to resume or skip, so the prompt of a run without history is unchanged.
+func renderAgentInitialTurn(input, resume Object) string {
 	s := input.S("task")
 	if s == "" {
 		s = "[no task statement]"
 	}
+	sections := Object{
+		"inputs":      input["interactionValues"],
+		"target":      input["target"],
+		"contextRefs": input["contextRefs"],
+	}
+	if resume != nil {
+		sections["resume"] = resume
+	}
 	return fmt.Sprintf(
 		"Begin this task for the Space agent.\n\nTask\n%s\n\nContext\n%s",
 		s,
-		canonicalJSON(Object{
-			"inputs":      input["interactionValues"],
-			"target":      input["target"],
-			"contextRefs": input["contextRefs"],
-		}),
+		canonicalJSON(sections),
 	)
 }
 
