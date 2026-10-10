@@ -22,6 +22,7 @@ function renderSettings() {
           { index: true, element: <GeneralSettingsPage /> },
           { path: 'members', element: <div>Members screen</div> },
           { path: 'git-identity', element: <div>Git identity screen</div> },
+          { path: 'model-connections', element: <div>Personal model connections</div> },
         ],
       },
     ],
@@ -47,5 +48,13 @@ describe('SettingsLayout', () => {
     expect(await screen.findByDisplayValue('Cloud Dev')).toBeInTheDocument()
     await user.click(screen.getByRole('link', { name: 'Git 身份' }))
     expect(await screen.findByText('Git identity screen')).toBeInTheDocument()
+  })
+
+  it('links personal model connections for every workspace member', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByDisplayValue('Cloud Dev')
+    await user.click(screen.getByRole('link', { name: '模型连接' }))
+    expect(await screen.findByText('Personal model connections')).toBeInTheDocument()
   })
 })

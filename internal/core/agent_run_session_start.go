@@ -146,6 +146,9 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 		"gitIdentity":         identity,
 		"initialTurn":         Object{"turnId": turnID, "content": []Object{{"text": content}}},
 	}
+	if bindingID := snap.S("modelBindingId"); bindingID != "" {
+		spec["modelBindingId"] = bindingID
+	}
 	if prior != nil {
 		spec["priorRevision"] = prior
 	}

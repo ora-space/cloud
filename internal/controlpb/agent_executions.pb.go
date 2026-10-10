@@ -444,8 +444,11 @@ type AgentSessionSpec struct {
 	// before starting the agent and needs a Node capable of restore; if restore fails the session ends
 	// AGENT_FAILED with detail `prior_revision_unavailable` or `prior_revision_base_unavailable`.
 	PriorRevision *PriorRevision `protobuf:"bytes,6,opt,name=prior_revision,json=priorRevision,proto3" json:"prior_revision,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Opaque personal-model snapshot reference. Empty for agents that do not use model-gateway.
+	// No provider credential or temporary access token crosses this contract.
+	ModelBindingId string `protobuf:"bytes,7,opt,name=model_binding_id,json=modelBindingId,proto3" json:"model_binding_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentSessionSpec) Reset() {
@@ -518,6 +521,13 @@ func (x *AgentSessionSpec) GetPriorRevision() *PriorRevision {
 		return x.PriorRevision
 	}
 	return nil
+}
+
+func (x *AgentSessionSpec) GetModelBindingId() string {
+	if x != nil {
+		return x.ModelBindingId
+	}
+	return ""
 }
 
 // The only terminal result of a session execution. It is taken over only after every Thread event
@@ -1108,14 +1118,15 @@ const file_ora_cloud_internal_v1_agent_executions_proto_rawDesc = "" +
 	"\vrevision_id\x18\x01 \x01(\tR\n" +
 	"revisionId\x12!\n" +
 	"\ffinal_commit\x18\x02 \x01(\tR\vfinalCommit\x12;\n" +
-	"\x06bundle\x18\x03 \x01(\v2#.ora.cloud.internal.v1.StoredObjectR\x06bundle\"\xf8\x02\n" +
+	"\x06bundle\x18\x03 \x01(\v2#.ora.cloud.internal.v1.StoredObjectR\x06bundle\"\xa2\x03\n" +
 	"\x10AgentSessionSpec\x12&\n" +
 	"\x0fagent_plugin_id\x18\x01 \x01(\tR\ragentPluginId\x120\n" +
 	"\x14agent_plugin_version\x18\x02 \x01(\tR\x12agentPluginVersion\x122\n" +
 	"\x15checkout_execution_id\x18\x03 \x01(\tR\x13checkoutExecutionId\x12E\n" +
 	"\fgit_identity\x18\x04 \x01(\v2\".ora.cloud.internal.v1.GitIdentityR\vgitIdentity\x12B\n" +
 	"\finitial_turn\x18\x05 \x01(\v2\x1f.ora.cloud.internal.v1.UserTurnR\vinitialTurn\x12K\n" +
-	"\x0eprior_revision\x18\x06 \x01(\v2$.ora.cloud.internal.v1.PriorRevisionR\rpriorRevision\"\x81\x01\n" +
+	"\x0eprior_revision\x18\x06 \x01(\v2$.ora.cloud.internal.v1.PriorRevisionR\rpriorRevision\x12(\n" +
+	"\x10model_binding_id\x18\a \x01(\tR\x0emodelBindingId\"\x81\x01\n" +
 	"\x11AgentSessionEnded\x12D\n" +
 	"\x06reason\x18\x01 \x01(\x0e2,.ora.cloud.internal.v1.AgentSessionEndReasonR\x06reason\x12\x1b\n" +
 	"\x06detail\x18\x02 \x01(\tH\x00R\x06detail\x88\x01\x01B\t\n" +

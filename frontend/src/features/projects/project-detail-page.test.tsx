@@ -80,7 +80,8 @@ describe('ProjectDetailPage', () => {
 
     await screen.findAllByText('Demo')
     await user.click(screen.getByRole('button', { name: '重命名' }))
-    await user.type(screen.getByLabelText('名称'), ' Renamed')
+    await user.clear(screen.getByLabelText('名称'))
+    await user.paste('Demo Renamed')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(patchBody).not.toBeNull())

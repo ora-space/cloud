@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { act, renderHook, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -11,6 +11,7 @@ import { installSignedInSession, TEST_USER } from '@/test/cloud-handlers'
 import { installFakeNavigation } from '@/test/navigation'
 import { renderRoutes, renderWithProviders } from '@/test/render'
 import { server } from '@/test/msw-server'
+import { getGetApiV1MeModelConnectionsQueryKey } from '@/api/me/me'
 import {
   fetchLoginProviders,
   fetchSessionUser,
@@ -141,21 +142,26 @@ describe('SessionProvider', () => {
     await waitFor(() => expect(result.current.session).toEqual({ status: 'unavailable' }))
   })
 
-  it('ends the session as soon as any request answers 401', async () => {
+  it('ends an expired session and drops the previous member private model cache', async () => {
     installSignedInSession()
     server.use(
       http.get('/api/v1/me/tenants', () =>
         HttpResponse.json({ code: 'unauthenticated', params: {}, requestId: 'r' }, { status: 401 }),
       ),
     )
-    const { result } = renderHook(() => useSession(), { wrapper })
+    const { result } = renderHook(() => ({ ...useSession(), queryClient: useQueryClient() }), {
+      wrapper,
+    })
     await waitFor(() => expect(result.current.session.status).toBe('signed-in'))
+    const key = getGetApiV1MeModelConnectionsQueryKey()
+    result.current.queryClient.setQueryData(key, [{ name: 'Previous member private model' }])
 
     await act(async () => {
       await AXIOS_INSTANCE.get('/api/v1/me/tenants').catch(() => undefined)
     })
 
     await waitFor(() => expect(result.current.session).toEqual({ status: 'signed-out' }))
+    expect(result.current.queryClient.getQueryData(key)).toBeUndefined()
   })
 
   it('signs out through the gateway and forgets the member', async () => {

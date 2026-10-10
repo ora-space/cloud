@@ -86,4 +86,13 @@
 
 0032 在 0031 之后新增 `user_git_identities`（identity-access git 身份 D1）：每个用户至多一行，主键并外键引用 `users(id)`，`name` 为 1–200 个字符且不含换行与尖括号，`email` 不超过 254 字节、形如 `local@domain` 且不含空白与尖括号，`version` 为该行自己的乐观并发计数。身份单独成表而不是给 `users` 加列，因为 `/me` 与所有用户读取都返回整行 `users`，git 邮箱放在那里会随之流向每个读者；没有行即使用默认身份。纯前向、可重复执行，不改动任何既有表。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades`。
 
+## 0033：个人模型连接
+
+0033 追加用户私有模型连接、默认模型、不可变密文凭据、用户作用域幂等记录、运行快照和
+临时授权摘要表。历史运行不会新增绑定；跨表复合外键保存用户归属。原始密钥从不进入迁移或
+Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs/model-connections.md)。
+## 0033：Revision 续接
+
 0033 在 0032 之后支持新运行续接同一 Issue 的最近一次 Revision（issue-run 续接决策）：`revisions` 增加 `prior_revision_id`（续接自哪个 Revision）、`bundle_revision_id`（续接后没有新提交时不存 bundle，指向实际持有 bundle 的那一行，永远一跳）、`resume_refused_at` 与 `resume_refused_reason`（恢复时发现基础提交已从远端消失，只允许 `prior_revision_base_unavailable`）；`issue_runs` 增加 `resume_revision_id`（会话启动时固定的前序 Revision）。原匿名约束 `revisions_check` 换成具名的 `revisions_bundle_shape`：既有行仍满足原来的两种形状，新增的第三种形状只允许“沿用 bundle 且有前序”。纯前向、可重复执行，既有行的新列均为 NULL。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0033RevisionResumeAppliesFreshAndUpgrades`，约束对真实行的拒绝见 `integration/agent_run_resume_test.go`。
+
+两个 `0033` 文件保留各自完整文件名与原始 SQL；迁移身份由完整文件名和校验和确定，数字前缀不是唯一键。新库执行两项追加迁移，已应用个人模型迁移的验收库只追加尚未应用的 Revision 迁移，不改写旧账本或模型绑定。

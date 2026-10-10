@@ -96,6 +96,10 @@ func Document() map[string]any {
 	// GitIdentity is the identity the caller's Agent runs commit as (identity-access git identity
 	// D1). version is 0 while isDefault is true: no identity is stated and the default applies.
 	s["GitIdentity"] = object(obj{"name": str(), "email": str(), "isDefault": boolean(), "version": number()}, "name", "email", "isDefault", "version")
+	s["ModelDefinition"] = object(obj{"id": str(), "name": str(), "contextWindow": number(), "maxTokens": number()}, "id", "name", "contextWindow", "maxTokens")
+	s["ModelConnection"] = object(obj{"id": uuid(), "name": str(), "protocol": enumeration("openai-completions", "anthropic-messages"), "baseUrl": str(), "authMode": enumeration("bearer", "x-api-key"), "models": array(ref("ModelDefinition")), "enabled": boolean(), "credentialConfigured": boolean(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "id", "name", "protocol", "baseUrl", "authMode", "models", "enabled", "credentialConfigured", "version", "createdAt", "updatedAt")
+	s["ModelDefault"] = object(obj{"connectionId": str(), "modelId": str(), "version": number()}, "connectionId", "modelId", "version")
+	s["ThreadModel"] = object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")
@@ -338,9 +342,10 @@ func Document() map[string]any {
 		operation := obj{"operationId": strings.ToLower(r.Method) + strings.NewReplacer("/", "_", ":", "").Replace(r.Path), "tags": []string{tag(r)}, "summary": summary(r), "description": description, "security": security, "responses": responses}
 		// Restoring the default git identity needs no idempotency record (there is no tenant to scope
 		// one to): an identity that is already the default restores as a no-op, so a retry is safe.
-		if public && (r.Method == "POST" || r.Method == "DELETE") && r.Path != "/api/v1/me/git-identity" {
+		credentialWrite := r.Method == "PUT" && strings.HasPrefix(r.Path, "/api/v1/me/model-connections/") && strings.HasSuffix(r.Path, "/credential")
+		if public && (r.Method == "POST" || r.Method == "DELETE" || credentialWrite) && r.Path != "/api/v1/me/git-identity" {
 			keyScope := "Scoped to tenant and user."
-			if strings.HasPrefix(r.Path, "/api/v1/join/") {
+			if strings.HasPrefix(r.Path, "/api/v1/join/") || strings.HasPrefix(r.Path, "/api/v1/me/model-") {
 				keyScope = "Scoped to the verified user before tenant membership exists."
 			}
 			parameters = append(parameters, obj{"name": "Idempotency-Key", "in": "header", "required": true, "schema": obj{"type": "string", "minLength": 1, "maxLength": 200}, "description": keyScope + " Same key and canonical method/path/body returns the original response before version validation; changed request is 409."})
@@ -443,10 +448,29 @@ func tag(r router.Route) string {
 }
 
 func isList(r router.Route) bool {
+	if r.Path == "/api/v1/me/model-connections" {
+		return r.Method == "GET"
+	}
 	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
+	if r.Path == "/api/v1/me/model-default" {
+		return ref("ModelDefault"), "200"
+	}
+	if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") {
+		if isList(r) {
+			return object(obj{"items": array(ref("ModelConnection")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		}
+		if r.Method == "GET" {
+			return ref("ModelConnection"), "200"
+		}
+		status := "200"
+		if r.Method == "POST" {
+			status = "201"
+		}
+		return object(obj{"resource": ref("ModelConnection")}, "resource"), status
+	}
 	if r.Path == "/api/v1/me/git-identity" {
 		return ref("GitIdentity"), "200"
 	}
@@ -642,12 +666,16 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		// here rather than read off the run resource, which keeps stripping these columns from
 		// IssueRun (T4C-10). The window's cursors are nullable because an empty Thread has neither.
 		return object(obj{
-			"items":       array(ref("ThreadEntry")),
-			"threadState": enumeration("pending", "active", "idle", "ending", "ended"),
-			"idleSince":   obj{"type": "string", "format": "date-time", "nullable": true, "description": "When the Thread became idle; null in every other state."},
-			"nextCursor":  obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's last seq, to be sent back as `after`. Null for an empty window."},
-			"prevCursor":  obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's first seq, to be sent back as `before`. Null for an empty window."},
-		}, "items", "threadState", "idleSince", "nextCursor", "prevCursor"), "200"
+			"items":           array(ref("ThreadEntry")),
+			"threadState":     enumeration("pending", "active", "idle", "ending", "ended"),
+			"idleSince":       obj{"type": "string", "format": "date-time", "nullable": true, "description": "When the Thread became idle; null in every other state."},
+			"initiatorUserId": optional(uuid()),
+			"model":           optional(ref("ThreadModel")),
+			"canAppend":       boolean(),
+			"canEnd":          boolean(),
+			"nextCursor":      obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's last seq, to be sent back as `after`. Null for an empty window."},
+			"prevCursor":      obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's first seq, to be sent back as `before`. Null for an empty window."},
+		}, "items", "threadState", "idleSince", "nextCursor", "prevCursor", "initiatorUserId", "model", "canAppend", "canEnd"), "200"
 	case strings.Contains(r.Path, "/runs"):
 		if r.Method == "GET" && strings.HasSuffix(r.Path, "/runs") {
 			return object(obj{"items": array(ref("IssueRun")), "nextCursor": str()}, "items", "nextCursor"), "200"
@@ -741,6 +769,9 @@ func responseSchema(r router.Route) (schema obj, status string) {
 }
 
 func optionalField(name string, r router.Route) bool {
+	if strings.HasPrefix(r.Path, "/api/v1/me/model-") {
+		return name == "enabled"
+	}
 	if strings.Contains(r.Path, "/issues") {
 		switch name {
 		case "title":
@@ -771,6 +802,20 @@ func optionalField(name string, r router.Route) bool {
 
 func inputSchema(name string, r router.Route) obj {
 	switch name {
+	case "models":
+		return array(ref("ModelDefinition"))
+	case "protocol":
+		return enumeration("openai-completions", "anthropic-messages")
+	case "authMode":
+		return enumeration("bearer", "x-api-key")
+	case "baseUrl":
+		return obj{"type": "string", "maxLength": 2048, "description": "Public HTTPS model API base URL; requests are restricted to the selected protocol endpoints."}
+	case "enabled":
+		return boolean()
+	case "apiKey":
+		return obj{"type": "string", "minLength": 1, "maxLength": 8192, "writeOnly": true, "description": "Handled exclusively by model-gateway; never returned or sent to Cloud HTTP."}
+	case "modelId":
+		return obj{"type": "string", "minLength": 1, "maxLength": 500}
 	case "version", "epoch", "admissionEpoch":
 		return obj{"type": "integer", "format": "int64", "minimum": 0}
 	case "retrySeconds":
@@ -852,6 +897,15 @@ func summary(r router.Route) string {
 }
 
 func description(r router.Route) string {
+	if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") {
+		if strings.HasSuffix(r.Path, "/credential") {
+			return "Gateway-owned credential operation. Gateway routes this request directly to model-gateway using independent service and caller-bound final-user credentials; Cloud HTTP rejects the route without reading its body. The API key is write-only and never returned. version is required and a stale version is 409 version_conflict. Deleting a credential revokes active model grants; replacement retains immutable references for existing runs."
+		}
+		return "Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs."
+	}
+	if r.Path == "/api/v1/me/model-default" {
+		return "Reads or selects the verified user's default connection and model. An unset default has empty connectionId/modelId and version 0; replacing a selection requires its current version. The connection must be owned, enabled and contain the selected model. OpenCode run creation requires a usable default and credential and rejects atomically with model_default_required, model_credential_required or model_connection_unavailable before the comment/run persists."
+	}
 	switch r.Path {
 	case "/api/v1/me/spaces":
 		return "Lists every active collaboration space whose tenant has an active membership for the verified user. A space corresponds to exactly one tenant; clients follow all pages before presenting the switcher."

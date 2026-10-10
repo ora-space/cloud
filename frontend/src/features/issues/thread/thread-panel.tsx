@@ -2,7 +2,8 @@ import { useId } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useRuns } from '@/features/issues/api'
-import type { IssueRun } from '@/features/issues/types'
+import type { IssueRun, TenantMember } from '@/features/issues/types'
+import { memberNameById } from '@/features/issues/present'
 import { RunDelivery } from './run-delivery'
 import { RunResume } from './run-resume'
 import { useLoadOlderThread, useThread, type ThreadRef, type ThreadSnapshot } from './thread-api'
@@ -13,9 +14,11 @@ import { ThreadMessages } from './thread-messages'
 function DeclaredThread({
   threadRef,
   snapshot,
+  names,
 }: {
   threadRef: ThreadRef
   snapshot: Extract<ThreadSnapshot, { declared: true }>
+  names: ReadonlyMap<string, string>
 }) {
   const loadOlder = useLoadOlderThread(threadRef)
   const oldest = snapshot.entries[0]?.seq
@@ -30,7 +33,21 @@ function DeclaredThread({
         }}
       />
       {loadOlder.isError && <p className="text-xs text-destructive">加载更早的消息失败</p>}
-      <ThreadComposer threadRef={threadRef} threadState={snapshot.threadState} />
+      <p className="text-xs text-muted-foreground">
+        发起者：
+        {snapshot.initiatorUserId ? (names.get(snapshot.initiatorUserId) ?? '用户') : '历史会话'}
+      </p>
+      {snapshot.model && (
+        <p className="break-all text-xs text-muted-foreground">
+          {snapshot.model.connectionName} · {snapshot.model.modelName}（{snapshot.model.modelId}）
+        </p>
+      )}
+      <ThreadComposer
+        threadRef={threadRef}
+        threadState={snapshot.threadState}
+        canAppend={snapshot.canAppend}
+        canEnd={snapshot.canEnd}
+      />
     </>
   )
 }
@@ -38,10 +55,12 @@ function DeclaredThread({
 function RunThread({
   threadRef,
   run,
+  names,
   runs,
 }: {
   threadRef: ThreadRef
   run: IssueRun
+  names: ReadonlyMap<string, string>
   runs: readonly IssueRun[]
 }) {
   const thread = useThread(threadRef)
@@ -68,7 +87,9 @@ function RunThread({
           等待 Agent 会话启动…
         </p>
       )}
-      {snapshot?.declared && <DeclaredThread threadRef={threadRef} snapshot={snapshot} />}
+      {snapshot?.declared && (
+        <DeclaredThread threadRef={threadRef} snapshot={snapshot} names={names} />
+      )}
       <RunDelivery
         run={run}
         threadEnded={snapshot?.declared === true && snapshot.threadState === 'ended'}
@@ -84,13 +105,27 @@ function RunThread({
  * workflows keep their layout. The Thread is keyed by run, so a newer agent
  * run starts from its own tail instead of inheriting the previous one's rows.
  */
-export function IssueThreadPanel({ tid, issueId }: { tid: string; issueId: string }) {
+export function IssueThreadPanel({
+  tid,
+  issueId,
+  members,
+}: {
+  tid: string
+  issueId: string
+  members?: TenantMember[]
+}) {
   const { data: runs = [] } = useRuns(tid, issueId)
   const run = latestAgentRun(runs)
   if (!run) return null
   return (
     <aside className="w-full shrink-0 md:w-80">
-      <RunThread key={run.id} run={run} runs={runs} threadRef={{ tid, issueId, runId: run.id }} />
+      <RunThread
+        key={run.id}
+        run={run}
+        runs={runs}
+        threadRef={{ tid, issueId, runId: run.id }}
+        names={memberNameById(members)}
+      />
     </aside>
   )
 }

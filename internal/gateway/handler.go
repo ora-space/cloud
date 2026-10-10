@@ -32,6 +32,9 @@ type Options struct {
 	Now             func() time.Time
 	// Web, when set, serves the built frontend for GET/HEAD requests no route matches.
 	Web *Web
+	// ModelCredentials routes only write-only personal key mutations away from Cloud.
+	ModelCredentials       *url.URL
+	ModelCredentialsCAFile string
 }
 
 // Route paths of the authentication boundary. Everything under /api/v1 is proxied; /internal/v1
@@ -47,7 +50,8 @@ const (
 
 type handler struct {
 	Options
-	proxy *proxy
+	proxy            *proxy
+	modelCredentials *proxy
 }
 
 // fault is the stable, bounded error shape shared with Cloud responses.
@@ -69,6 +73,13 @@ func NewHandler(o *Options) (*gin.Engine, error) {
 		o.Now = time.Now
 	}
 	h := &handler{Options: *o, proxy: newProxy(o.Upstream, o.UpstreamTimeout)}
+	if o.ModelCredentials != nil {
+		var err error
+		h.modelCredentials, err = newCredentialProxy(o.ModelCredentials, o.ModelCredentialsCAFile, o.UpstreamTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
 	r := gin.New()
 	r.Use(h.recovery)
 	r.GET("/healthz", h.health)
@@ -265,7 +276,15 @@ func (h *handler) relay(c *gin.Context) {
 	}
 	out.Header.Set("Authorization", "Bearer "+credentials.Service)
 	out.Header.Set("X-Ora-User-Token", credentials.User)
-	h.proxy.ServeHTTP(c.Writer, out, func(err error) {
+	selected := h.proxy
+	if isModelCredentialPath(c.Request.URL.Path) {
+		if h.modelCredentials == nil {
+			h.fail(c, fault{"model_service_unavailable", http.StatusServiceUnavailable})
+			return
+		}
+		selected = h.modelCredentials
+	}
+	selected.ServeHTTP(c.Writer, out, func(err error) {
 		h.Log.Warn("upstream failure", zap.String("requestId", c.GetString("requestId")), zap.String("sessionId", session.ID), zap.Error(err))
 		h.fail(c, fault{"upstream_unavailable", http.StatusBadGateway})
 	}, func() {

@@ -28,3 +28,9 @@
   4. `frontend/src/api`（通过 `task frontend:generate` 重新生成，CI 检测漂移）。
 
 参见 [OpenAPI JSON 制品文件](../../api/openapi.json)、[HTTP 路由网关](../api/router/README.md)、[cmd/openapi 工具](../../cmd/openapi/README.md) 与 [Web 前端](../../frontend/README.md)。
+
+## 模型与 Thread 扩展
+
+`ModelDefinition`、`ModelConnection` 和 `ModelDefault` 定义个人配置。API Key 字段仅写，
+credential 接口由 Gateway/model-gateway 承接，Cloud HTTP 不读取其请求体。
+Thread 增加发起者、可空模型摘要及可追加/可结束权限；OpenAPI 和客户端必须由生成器更新。

@@ -21,6 +21,7 @@ import { RepositoriesPage } from '@/features/clones/repositories-page'
 import { RuntimesPage } from '@/features/runtimes/runtimes-page'
 import { GeneralSettingsPage } from '@/features/settings/general-settings-page'
 import { GitIdentityPage } from '@/features/settings/git-identity-page'
+import { ModelConnectionsPage } from '@/features/model-connections/model-connections-page'
 import { SettingsLayout } from '@/features/settings/settings-layout'
 import { SkillsPage } from '@/features/skills/skills-page'
 import { SquadDetailPage } from '@/features/squads/squad-detail-page'
@@ -140,6 +141,7 @@ export const router = createBrowserRouter([
           { path: 'members', element: <WithSlug component={MembersPage} /> },
           { path: 'billing', element: <WithSlug component={BillingPage} /> },
           { path: 'git-identity', element: <GitIdentityPage /> },
+          { path: 'model-connections', element: <ModelConnectionsPage /> },
         ],
       },
     ],

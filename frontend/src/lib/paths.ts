@@ -44,6 +44,7 @@ export function workspacePaths(slug: string) {
     members: `${base}/settings/members`,
     billing: `${base}/settings/billing`,
     gitIdentity: `${base}/settings/git-identity`,
+    modelConnections: `${base}/settings/model-connections`,
     settings: `${base}/settings`,
   }
 }

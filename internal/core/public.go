@@ -17,10 +17,12 @@ type PublicRequest struct {
 	// readPublic and Public, so a query parameter folded into it would let `GET /issues?issueId=…`
 	// hijack routing.
 	FormIssueID string
-	Limit       int
-	Body        Object
-	Identity    *Claims
-	Person      *DirectoryPerson
+	// ModelConnectionID addresses an owner-scoped personal connection outside tenant routing.
+	ModelConnectionID string
+	Limit             int
+	Body              Object
+	Identity          *Claims
+	Person            *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
@@ -36,6 +38,11 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		uid := u.S("id")
 		if r.Path == "/api/v1/me" {
 			return u
+		}
+		if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") || r.Path == "/api/v1/me/model-default" {
+			var out Object
+			out, status = personalModelsPublic(t, r, uid)
+			return out
 		}
 		if r.Path == "/api/v1/me/git-identity" {
 			switch r.Method {

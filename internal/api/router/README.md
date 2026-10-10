@@ -35,3 +35,9 @@
 - **契约严格同步**：路由路径、允许字段以及 HTTP 方法必须与 `internal/contract` 及 `api/openapi.json` 保持严格同步。
 
 参见 [api 总览](../README.md)、[核心领域状态机](../../core/README.md)、[OpenAPI 契约](../../contract/README.md) 与 [认证配置与凭据](../../../docs/authentication.md)。
+
+## 个人模型路由
+
+`/me/model-connections` 与 `/me/model-default` 使用已验证用户作用域，严格校验模型数组和版本。
+credential 路由只用于公开契约；Cloud HTTP 在读取请求体前拒绝，Gateway 将请求直接交给
+model-gateway。Thread 返回发起者、模型摘要及可追加/可结束权限。见 [模型连接](../../../docs/model-connections.md)。

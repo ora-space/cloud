@@ -114,6 +114,9 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 		"gitIdentity":         core.Object{"name": spec.GetGitIdentity().GetName(), "email": spec.GetGitIdentity().GetEmail()},
 		"initialTurn":         core.Object{"turnId": turn.GetTurnId(), "content": contentObjects(turn.GetContent())},
 	}
+	if id := spec.GetModelBindingId(); id != "" {
+		out["modelBindingId"] = id
+	}
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
 	}
@@ -145,9 +148,10 @@ func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
 	turn := o.O("initialTurn")
 	return &controlpb.AgentSessionSpec{
 		AgentPluginId: o.S("agentPluginId"), AgentPluginVersion: o.S("agentPluginVersion"), CheckoutExecutionId: o.S("checkoutExecutionId"),
-		GitIdentity:   &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
-		InitialTurn:   &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
-		PriorRevision: priorMessage(o.O("priorRevision")),
+		ModelBindingId: o.S("modelBindingId"),
+		GitIdentity:    &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
+		InitialTurn:    &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
+		PriorRevision:  priorMessage(o.O("priorRevision")),
 	}
 }
 

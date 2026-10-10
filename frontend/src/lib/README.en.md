@@ -20,6 +20,8 @@ Utilities shared by generated code and components that contain neither React nor
 | `mock-api-client.ts` | Axios client for the MSW-mocked domain (`/mock-api/*`), kept separate from the real-backend generated client. It rewrites the real space slug to the seeded demo workspace so pages without a backend keep showing demo data in any space until they gain real API counterparts. The mock domain has no authentication. |
 | `utils.ts` | Re-exports `cn` (Tailwind-aware class merging); shadcn components import it via `@/lib/utils`. |
 
+`workspacePaths().modelConnections` builds `/w/:slug/settings/model-connections`; routes carry no credentials.
+
 ## Dependency direction
 
 Third-party libraries and sibling modules in this directory only. **Never** import `react`, `@/components` or `@/api` (`@/api` depends on this module; the reverse would be a cycle).

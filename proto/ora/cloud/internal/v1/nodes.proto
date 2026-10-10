@@ -50,6 +50,8 @@ message NodeRecord {
   int64 version = 7;
   // Admission epoch of the latest accepted idle evidence.
   optional int64 idle_admission_epoch = 8;
+  // Dedicated personal-model proxy access was advertised by this Node's handshake.
+  bool model_proxy = 9;
 }
 
 message RegisterNodeRequest {
@@ -60,6 +62,8 @@ message RegisterNodeRequest {
   int64 generation = 4;
   NodeIdentity node = 5;
   uint32 protocol_version = 6;
+  // False for older Nodes or Nodes without configured model-access mTLS credentials.
+  bool model_proxy = 7;
 }
 
 message RegisterNodeResponse {

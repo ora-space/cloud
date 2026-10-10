@@ -37,6 +37,7 @@ May be consumed by: `main.tsx` (mounts `SessionProvider`), `routes.tsx`, layout 
 - Invitation and application tokens never enter Gateway's `returnTo`; the provider round trip stores only `/join/continue` while the full link stays in this browser tab.
 - The automatic login start happens at most once per mount: a failed start shows an explicit retry, never a redirect loop.
 - `signOut` calls the gateway first, then clears the cache: the session becomes null and every other query is removed, so the next member never sees the previous one's data.
+- A 401 in a signed-in session also removes the prior member's queries, including private model connections. The initial anonymous probe preserves public login-provider queries.
 - Ora cannot end a github.com session: the gateway never holds a GitHub token (it discards it right after reading the profile), so "sign out of GitHub" can only open GitHub's own sign-out page, always after revoking the Ora session, and in a new tab so the member returns to the login screen in this one. The URL is public github.com; a GitHub Enterprise Server deployment would need it made configurable.
 - The login page never builds a provider URL or parses a callback; that is the gateway's job. It also never decides on its own whether the developer login exists: the button appears only when `/auth/providers` lists `dev`, which the gateway allows solely on loopback development origins.
 

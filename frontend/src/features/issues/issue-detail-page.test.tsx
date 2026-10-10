@@ -143,6 +143,7 @@ describe('IssueDetailPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Agent 会话' })).toBeInTheDocument()
     expect(await screen.findByText('等待 Agent 会话启动…')).toBeInTheDocument()
+    expect(screen.queryByLabelText('给 Agent 发送消息')).not.toBeInTheDocument()
   })
 
   it('has no Agent 会话 column without an agent run', async () => {

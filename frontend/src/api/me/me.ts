@@ -26,15 +26,30 @@ import type {
 
 import type {
   DeleteApiV1MeGitIdentityBody,
+  DeleteApiV1MeModelConnectionsMcid200,
+  DeleteApiV1MeModelConnectionsMcidBody,
+  DeleteApiV1MeModelConnectionsMcidCredential200,
+  DeleteApiV1MeModelConnectionsMcidCredentialBody,
   Error,
   GetApiV1MeJoinRequests200,
   GetApiV1MeJoinRequestsParams,
+  GetApiV1MeModelConnections200,
+  GetApiV1MeModelConnectionsParams,
   GetApiV1MeSpaces200,
   GetApiV1MeSpacesParams,
   GetApiV1MeTenants200,
   GetApiV1MeTenantsParams,
   GitIdentity,
+  ModelConnection,
+  ModelDefault,
+  PostApiV1MeModelConnections201,
+  PostApiV1MeModelConnectionsBody,
   PutApiV1MeGitIdentityBody,
+  PutApiV1MeModelConnectionsMcid200,
+  PutApiV1MeModelConnectionsMcidBody,
+  PutApiV1MeModelConnectionsMcidCredential200,
+  PutApiV1MeModelConnectionsMcidCredentialBody,
+  PutApiV1MeModelDefaultBody,
   User
 } from '../generated.schemas';
 
@@ -478,6 +493,698 @@ export function useGetApiV1MeJoinRequests<TData = Awaited<ReturnType<typeof getA
 
 
 /**
+ * Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs.
+ * @summary GET /api/v1/me/model-connections
+ */
+export const getApiV1MeModelConnections = (
+    params?: GetApiV1MeModelConnectionsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetApiV1MeModelConnections200>(
+      {url: `/api/v1/me/model-connections`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeModelConnectionsQueryKey = (params?: GetApiV1MeModelConnectionsParams,) => {
+    return [
+    `/api/v1/me/model-connections`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetApiV1MeModelConnectionsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError = ErrorType<Error>>(params?: GetApiV1MeModelConnectionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeModelConnectionsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeModelConnections>>> = ({ signal }) => getApiV1MeModelConnections(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeModelConnectionsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeModelConnections>>>
+export type GetApiV1MeModelConnectionsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeModelConnections<TData = Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError = ErrorType<Error>>(
+ params: undefined |  GetApiV1MeModelConnectionsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelConnections>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelConnections>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelConnections<TData = Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeModelConnectionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelConnections>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelConnections>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelConnections<TData = Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeModelConnectionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/model-connections
+ */
+
+export function useGetApiV1MeModelConnections<TData = Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeModelConnectionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnections>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeModelConnectionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs.
+ * @summary POST /api/v1/me/model-connections
+ */
+export const postApiV1MeModelConnections = (
+    postApiV1MeModelConnectionsBody: PostApiV1MeModelConnectionsBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostApiV1MeModelConnections201>(
+      {url: `/api/v1/me/model-connections`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: postApiV1MeModelConnectionsBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPostApiV1MeModelConnectionsMutationKey = () => ['postApiV1MeModelConnections'] as const;
+
+export const getPostApiV1MeModelConnectionsMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeModelConnections>>, TError,PostApiV1MeModelConnectionsMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeModelConnections>>, TError,PostApiV1MeModelConnectionsMutationVariables, TContext> => {
+
+const mutationKey = getPostApiV1MeModelConnectionsMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof postApiV1MeModelConnections>>, PostApiV1MeModelConnectionsMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  postApiV1MeModelConnections(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PostApiV1MeModelConnectionsMutationResult = NonNullable<Awaited<ReturnType<typeof postApiV1MeModelConnections>>>
+    export type PostApiV1MeModelConnectionsMutationBody = PostApiV1MeModelConnectionsBody
+    export type PostApiV1MeModelConnectionsMutationError = ErrorType<Error>
+    export type PostApiV1MeModelConnectionsMutationVariables = {data: PostApiV1MeModelConnectionsBody}
+
+    /**
+ * @summary POST /api/v1/me/model-connections
+ */
+export const usePostApiV1MeModelConnections = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeModelConnections>>, TError,PostApiV1MeModelConnectionsMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof postApiV1MeModelConnections>>,
+        TError,
+        PostApiV1MeModelConnectionsMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPostApiV1MeModelConnectionsMutationOptions(options), queryClient);
+    }
+    /**
+ * Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs.
+ * @summary DELETE /api/v1/me/model-connections/:mcid
+ */
+export const deleteApiV1MeModelConnectionsMcid = (
+    mcid: string,
+    deleteApiV1MeModelConnectionsMcidBody: DeleteApiV1MeModelConnectionsMcidBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeleteApiV1MeModelConnectionsMcid200>(
+      {url: `/api/v1/me/model-connections/${mcid}`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeModelConnectionsMcidBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeModelConnectionsMcidMutationKey = () => ['deleteApiV1MeModelConnectionsMcid'] as const;
+
+export const getDeleteApiV1MeModelConnectionsMcidMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>, TError,DeleteApiV1MeModelConnectionsMcidMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>, TError,DeleteApiV1MeModelConnectionsMcidMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeModelConnectionsMcidMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>, DeleteApiV1MeModelConnectionsMcidMutationVariables> = (props) => {
+          const {mcid,data} = props ?? {};
+
+          return  deleteApiV1MeModelConnectionsMcid(mcid,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeModelConnectionsMcidMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>>
+    export type DeleteApiV1MeModelConnectionsMcidMutationBody = DeleteApiV1MeModelConnectionsMcidBody
+    export type DeleteApiV1MeModelConnectionsMcidMutationError = ErrorType<Error>
+    export type DeleteApiV1MeModelConnectionsMcidMutationVariables = {mcid: string;data: DeleteApiV1MeModelConnectionsMcidBody}
+
+    /**
+ * @summary DELETE /api/v1/me/model-connections/:mcid
+ */
+export const useDeleteApiV1MeModelConnectionsMcid = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>, TError,DeleteApiV1MeModelConnectionsMcidMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcid>>,
+        TError,
+        DeleteApiV1MeModelConnectionsMcidMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeModelConnectionsMcidMutationOptions(options), queryClient);
+    }
+    /**
+ * Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs.
+ * @summary GET /api/v1/me/model-connections/:mcid
+ */
+export const getApiV1MeModelConnectionsMcid = (
+    mcid: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ModelConnection>(
+      {url: `/api/v1/me/model-connections/${mcid}`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeModelConnectionsMcidQueryKey = (mcid: string,) => {
+    return [
+    `/api/v1/me/model-connections/${mcid}`
+    ] as const;
+    }
+
+
+export const getGetApiV1MeModelConnectionsMcidQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError = ErrorType<Error>>(mcid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeModelConnectionsMcidQueryKey(mcid);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>> = ({ signal }) => getApiV1MeModelConnectionsMcid(mcid, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: mcid !== null && mcid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeModelConnectionsMcidQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>>
+export type GetApiV1MeModelConnectionsMcidQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeModelConnectionsMcid<TData = Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError = ErrorType<Error>>(
+ mcid: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelConnectionsMcid<TData = Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError = ErrorType<Error>>(
+ mcid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelConnectionsMcid<TData = Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError = ErrorType<Error>>(
+ mcid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/model-connections/:mcid
+ */
+
+export function useGetApiV1MeModelConnectionsMcid<TData = Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError = ErrorType<Error>>(
+ mcid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelConnectionsMcid>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeModelConnectionsMcidQueryOptions(mcid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Private model connection metadata scoped to the verified active user, independent of tenant membership. Supports openai-completions and anthropic-messages with public HTTPS service addresses, bearer authentication and Anthropic x-api-key. Model IDs including slashes are preserved exactly. Read responses expose only credentialConfigured, never credential references or encrypted data. POST and DELETE require a user-scoped Idempotency-Key; updates and deletion require the current resource version. Disabling or deleting a connection revokes all its active grants; metadata changes affect only subsequently created runs.
+ * @summary PUT /api/v1/me/model-connections/:mcid
+ */
+export const putApiV1MeModelConnectionsMcid = (
+    mcid: string,
+    putApiV1MeModelConnectionsMcidBody: PutApiV1MeModelConnectionsMcidBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PutApiV1MeModelConnectionsMcid200>(
+      {url: `/api/v1/me/model-connections/${mcid}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeModelConnectionsMcidBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeModelConnectionsMcidMutationKey = () => ['putApiV1MeModelConnectionsMcid'] as const;
+
+export const getPutApiV1MeModelConnectionsMcidMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>, TError,PutApiV1MeModelConnectionsMcidMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>, TError,PutApiV1MeModelConnectionsMcidMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeModelConnectionsMcidMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>, PutApiV1MeModelConnectionsMcidMutationVariables> = (props) => {
+          const {mcid,data} = props ?? {};
+
+          return  putApiV1MeModelConnectionsMcid(mcid,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeModelConnectionsMcidMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>>
+    export type PutApiV1MeModelConnectionsMcidMutationBody = PutApiV1MeModelConnectionsMcidBody
+    export type PutApiV1MeModelConnectionsMcidMutationError = ErrorType<Error>
+    export type PutApiV1MeModelConnectionsMcidMutationVariables = {mcid: string;data: PutApiV1MeModelConnectionsMcidBody}
+
+    /**
+ * @summary PUT /api/v1/me/model-connections/:mcid
+ */
+export const usePutApiV1MeModelConnectionsMcid = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>, TError,PutApiV1MeModelConnectionsMcidMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcid>>,
+        TError,
+        PutApiV1MeModelConnectionsMcidMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeModelConnectionsMcidMutationOptions(options), queryClient);
+    }
+    /**
+ * Gateway-owned credential operation. Gateway routes this request directly to model-gateway using independent service and caller-bound final-user credentials; Cloud HTTP rejects the route without reading its body. The API key is write-only and never returned. version is required and a stale version is 409 version_conflict. Deleting a credential revokes active model grants; replacement retains immutable references for existing runs.
+ * @summary DELETE /api/v1/me/model-connections/:mcid/credential
+ */
+export const deleteApiV1MeModelConnectionsMcidCredential = (
+    mcid: string,
+    deleteApiV1MeModelConnectionsMcidCredentialBody: DeleteApiV1MeModelConnectionsMcidCredentialBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeleteApiV1MeModelConnectionsMcidCredential200>(
+      {url: `/api/v1/me/model-connections/${mcid}/credential`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeModelConnectionsMcidCredentialBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeModelConnectionsMcidCredentialMutationKey = () => ['deleteApiV1MeModelConnectionsMcidCredential'] as const;
+
+export const getDeleteApiV1MeModelConnectionsMcidCredentialMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>, TError,DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>, TError,DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeModelConnectionsMcidCredentialMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>, DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables> = (props) => {
+          const {mcid,data} = props ?? {};
+
+          return  deleteApiV1MeModelConnectionsMcidCredential(mcid,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeModelConnectionsMcidCredentialMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>>
+    export type DeleteApiV1MeModelConnectionsMcidCredentialMutationBody = DeleteApiV1MeModelConnectionsMcidCredentialBody
+    export type DeleteApiV1MeModelConnectionsMcidCredentialMutationError = ErrorType<Error>
+    export type DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables = {mcid: string;data: DeleteApiV1MeModelConnectionsMcidCredentialBody}
+
+    /**
+ * @summary DELETE /api/v1/me/model-connections/:mcid/credential
+ */
+export const useDeleteApiV1MeModelConnectionsMcidCredential = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>, TError,DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeModelConnectionsMcidCredential>>,
+        TError,
+        DeleteApiV1MeModelConnectionsMcidCredentialMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeModelConnectionsMcidCredentialMutationOptions(options), queryClient);
+    }
+    /**
+ * Gateway-owned credential operation. Gateway routes this request directly to model-gateway using independent service and caller-bound final-user credentials; Cloud HTTP rejects the route without reading its body. The API key is write-only and never returned. version is required and a stale version is 409 version_conflict. Deleting a credential revokes active model grants; replacement retains immutable references for existing runs.
+ * @summary PUT /api/v1/me/model-connections/:mcid/credential
+ */
+export const putApiV1MeModelConnectionsMcidCredential = (
+    mcid: string,
+    putApiV1MeModelConnectionsMcidCredentialBody: PutApiV1MeModelConnectionsMcidCredentialBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PutApiV1MeModelConnectionsMcidCredential200>(
+      {url: `/api/v1/me/model-connections/${mcid}/credential`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeModelConnectionsMcidCredentialBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeModelConnectionsMcidCredentialMutationKey = () => ['putApiV1MeModelConnectionsMcidCredential'] as const;
+
+export const getPutApiV1MeModelConnectionsMcidCredentialMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>, TError,PutApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>, TError,PutApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeModelConnectionsMcidCredentialMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>, PutApiV1MeModelConnectionsMcidCredentialMutationVariables> = (props) => {
+          const {mcid,data} = props ?? {};
+
+          return  putApiV1MeModelConnectionsMcidCredential(mcid,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeModelConnectionsMcidCredentialMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>>
+    export type PutApiV1MeModelConnectionsMcidCredentialMutationBody = PutApiV1MeModelConnectionsMcidCredentialBody
+    export type PutApiV1MeModelConnectionsMcidCredentialMutationError = ErrorType<Error>
+    export type PutApiV1MeModelConnectionsMcidCredentialMutationVariables = {mcid: string;data: PutApiV1MeModelConnectionsMcidCredentialBody}
+
+    /**
+ * @summary PUT /api/v1/me/model-connections/:mcid/credential
+ */
+export const usePutApiV1MeModelConnectionsMcidCredential = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>, TError,PutApiV1MeModelConnectionsMcidCredentialMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeModelConnectionsMcidCredential>>,
+        TError,
+        PutApiV1MeModelConnectionsMcidCredentialMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeModelConnectionsMcidCredentialMutationOptions(options), queryClient);
+    }
+    /**
+ * Reads or selects the verified user's default connection and model. An unset default has empty connectionId/modelId and version 0; replacing a selection requires its current version. The connection must be owned, enabled and contain the selected model. OpenCode run creation requires a usable default and credential and rejects atomically with model_default_required, model_credential_required or model_connection_unavailable before the comment/run persists.
+ * @summary GET /api/v1/me/model-default
+ */
+export const getApiV1MeModelDefault = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ModelDefault>(
+      {url: `/api/v1/me/model-default`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeModelDefaultQueryKey = () => {
+    return [
+    `/api/v1/me/model-default`
+    ] as const;
+    }
+
+
+export const getGetApiV1MeModelDefaultQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError = ErrorType<Error>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeModelDefaultQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeModelDefault>>> = ({ signal }) => getApiV1MeModelDefault(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeModelDefaultQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeModelDefault>>>
+export type GetApiV1MeModelDefaultQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeModelDefault<TData = Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError = ErrorType<Error>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelDefault>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelDefault>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelDefault<TData = Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeModelDefault>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeModelDefault>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeModelDefault<TData = Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/model-default
+ */
+
+export function useGetApiV1MeModelDefault<TData = Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError = ErrorType<Error>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeModelDefault>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeModelDefaultQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Reads or selects the verified user's default connection and model. An unset default has empty connectionId/modelId and version 0; replacing a selection requires its current version. The connection must be owned, enabled and contain the selected model. OpenCode run creation requires a usable default and credential and rejects atomically with model_default_required, model_credential_required or model_connection_unavailable before the comment/run persists.
+ * @summary PUT /api/v1/me/model-default
+ */
+export const putApiV1MeModelDefault = (
+    putApiV1MeModelDefaultBody: PutApiV1MeModelDefaultBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ModelDefault>(
+      {url: `/api/v1/me/model-default`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeModelDefaultBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeModelDefaultMutationKey = () => ['putApiV1MeModelDefault'] as const;
+
+export const getPutApiV1MeModelDefaultMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelDefault>>, TError,PutApiV1MeModelDefaultMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelDefault>>, TError,PutApiV1MeModelDefaultMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeModelDefaultMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeModelDefault>>, PutApiV1MeModelDefaultMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  putApiV1MeModelDefault(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeModelDefaultMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeModelDefault>>>
+    export type PutApiV1MeModelDefaultMutationBody = PutApiV1MeModelDefaultBody
+    export type PutApiV1MeModelDefaultMutationError = ErrorType<Error>
+    export type PutApiV1MeModelDefaultMutationVariables = {data: PutApiV1MeModelDefaultBody}
+
+    /**
+ * @summary PUT /api/v1/me/model-default
+ */
+export const usePutApiV1MeModelDefault = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeModelDefault>>, TError,PutApiV1MeModelDefaultMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeModelDefault>>,
+        TError,
+        PutApiV1MeModelDefaultMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeModelDefaultMutationOptions(options), queryClient);
+    }
+    /**
  * Lists every active collaboration space whose tenant has an active membership for the verified user. A space corresponds to exactly one tenant; clients follow all pages before presenting the switcher.
  * @summary GET /api/v1/me/spaces
  */

@@ -65,6 +65,22 @@ func TestRequiredIsOmittedWhenEmpty(t *testing.T) {
 	walk("", tree)
 }
 
+func TestModelCredentialPUTRequiresUserScopedIdempotencyHeader(t *testing.T) {
+	paths := Document()["paths"].(map[string]any)
+	operation := paths["/api/v1/me/model-connections/{mcid}/credential"].(map[string]any)["put"].(map[string]any)
+	parameters := operation["parameters"].([]any)
+	for _, raw := range parameters {
+		parameter := raw.(map[string]any)
+		if parameter["name"] == "Idempotency-Key" {
+			if parameter["in"] != "header" || parameter["required"] != true {
+				t.Fatal("credential PUT idempotency header must be required")
+			}
+			return
+		}
+	}
+	t.Fatal("credential PUT omitted required Idempotency-Key")
+}
+
 // TestPluginRoutesInDocument pins the four marketplace routes into the
 // generated contract: path shape, request body fields, and response schemas.
 func TestPluginRoutesInDocument(t *testing.T) {

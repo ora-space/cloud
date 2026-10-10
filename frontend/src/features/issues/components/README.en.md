@@ -11,17 +11,18 @@ Sub-components of the issue board and detail page: cards and rows, the create di
 | File | Purpose |
 | --- | --- |
 | `issue-card.tsx` / `issue-row.tsx` | Board card and list row |
-| `create-issue-dialog.tsx` | New-issue dialog |
+| `create-issue-dialog.tsx` / `issue-project-select.tsx` | New issue dialog and optional current real-space project choice, preserving the unassociated option |
 | `issue-properties-panel.tsx` | Detail-page properties column: status, priority, assignee, parent/sub-issues, project, labels, properties, context refs |
 | `activity-panel.tsx` | Activity column: timeline and new comments/targets |
 | `target-picker.tsx` / `pending-targets.tsx` | @ target picking and pending targets |
 | `workflow-interaction-composer.tsx` / `dynamic-form-renderer.tsx` / `form-field-renderer.tsx` / `assist-suggestions.tsx` / `confirm-review.tsx` | Workflow form rendering, AI suggestions, review and confirm |
 | `context-refs-panel.tsx` | Adding and removing context refs |
-| `*.test.tsx` | Component tests |
+| `agent-request-failure.tsx` | Safe task-refusal messages and a personal-settings link for missing model configuration |
+| `*.test.tsx` | Component tests, including refused tasks retaining their draft and actionable settings links |
 
 ## Dependencies and invariants
 
-Depends on `features/issues/api`, `features/issues/types`, `features/issues/present`, `components`; used by the `features/issues` pages. Drafts (comments, targets, forms) reach the server only when their own button is pressed; property edits all go through the page's versioned `onCommit`.
+Depends on `features/issues/api`, `features/issues/types`, `features/issues/present`, the real project list in `features/projects/api`, `features/spaces/current-space`, and `components`; used by the `features/issues` pages. Drafts (comments, targets, forms) reach the server only when their own button is pressed; property edits all go through the page's versioned `onCommit`. Project choices come from the current joined space and never fall back to demo data.
 
 ## Testing
 

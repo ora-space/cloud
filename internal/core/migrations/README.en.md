@@ -86,4 +86,14 @@ Merging current upstream preserves the complete filenames and original SQL of `0
 
 0032 follows 0031 and adds `user_git_identities` (identity-access git identity D1): at most one row per user, keyed by and referencing `users(id)`, a `name` of 1–200 characters with no line break or angle bracket, an `email` of at most 254 bytes shaped `local@domain` with no whitespace or angle bracket, and a `version` that is the row's own optimistic-concurrency counter. The identity has its own table rather than columns on `users` because `/me` and every user read return the `users` row whole, so a git email there would travel to every reader; no row means the default identity applies. Purely forward and retry-safe; no existing table is altered. Fresh-database, upgrade and repeated-migration evidence is `TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades` in `integration/migration_upgrade_path_test.go`.
 
+## 0033: Personal model connections
+
+0033 adds private connection metadata, defaults, immutable ciphertext credentials, user-scoped
+idempotency records, run bindings and temporary grant digests. Historical runs remain unbound;
+composite foreign keys preserve user ownership. No plaintext key enters migrations or Cloud domain
+methods. See [model connections](../../../docs/model-connections.en.md).
+## 0033: Revision resume
+
 0033 follows 0032 and lets a new run resume its Issue's latest Revision (issue-run resume decision): `revisions` gains `prior_revision_id` (the Revision a run resumed), `bundle_revision_id` (a resumed run that added nothing stores no bundle and names the row holding it, always one hop), and `resume_refused_at` with `resume_refused_reason` (a restore found the base commit gone from the remote; only `prior_revision_base_unavailable`); `issue_runs` gains `resume_revision_id` (the prior Revision fixed at session start). The anonymous `revisions_check` is replaced by the named `revisions_bundle_shape`: existing rows still satisfy the two original shapes, and the new third shape only admits a reused bundle with a prior. Purely forward and retry-safe; the new columns are NULL on existing rows. Fresh-database, upgrade and repeated-migration evidence is `TestMigration0033RevisionResumeAppliesFreshAndUpgrades` in `integration/migration_upgrade_path_test.go`; the constraints' refusal of real rows is in `integration/agent_run_resume_test.go`.
+
+Both `0033` files retain their complete filenames and original SQL. The complete filename and checksum identify a migration; the numeric prefix is not a unique key. Fresh databases apply both additions. An acceptance database with the personal-model migration already applied only adds the missing Revision migration without rewriting its ledger or model bindings.

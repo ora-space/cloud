@@ -89,8 +89,10 @@ type NodeRecord struct {
 	Version int64 `protobuf:"varint,7,opt,name=version,proto3" json:"version,omitempty"`
 	// Admission epoch of the latest accepted idle evidence.
 	IdleAdmissionEpoch *int64 `protobuf:"varint,8,opt,name=idle_admission_epoch,json=idleAdmissionEpoch,proto3,oneof" json:"idle_admission_epoch,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Dedicated personal-model proxy access was advertised by this Node's handshake.
+	ModelProxy    bool `protobuf:"varint,9,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NodeRecord) Reset() {
@@ -179,6 +181,13 @@ func (x *NodeRecord) GetIdleAdmissionEpoch() int64 {
 	return 0
 }
 
+func (x *NodeRecord) GetModelProxy() bool {
+	if x != nil {
+		return x.ModelProxy
+	}
+	return false
+}
+
 type RegisterNodeRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	SubmissionId string                 `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
@@ -188,8 +197,10 @@ type RegisterNodeRequest struct {
 	Generation        int64         `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
 	Node              *NodeIdentity `protobuf:"bytes,5,opt,name=node,proto3" json:"node,omitempty"`
 	ProtocolVersion   uint32        `protobuf:"varint,6,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// False for older Nodes or Nodes without configured model-access mTLS credentials.
+	ModelProxy    bool `protobuf:"varint,7,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterNodeRequest) Reset() {
@@ -262,6 +273,13 @@ func (x *RegisterNodeRequest) GetProtocolVersion() uint32 {
 		return x.ProtocolVersion
 	}
 	return 0
+}
+
+func (x *RegisterNodeRequest) GetModelProxy() bool {
+	if x != nil {
+		return x.ModelProxy
+	}
+	return false
 }
 
 type RegisterNodeResponse struct {
@@ -699,7 +717,7 @@ var File_ora_cloud_internal_v1_nodes_proto protoreflect.FileDescriptor
 
 const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\n" +
-	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\x83\x03\n" +
+	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\xa4\x03\n" +
 	"\n" +
 	"NodeRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
@@ -711,8 +729,10 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"connection\x12 \n" +
 	"\vinitialized\x18\x06 \x01(\bR\vinitialized\x12\x18\n" +
 	"\aversion\x18\a \x01(\x03R\aversion\x125\n" +
-	"\x14idle_admission_epoch\x18\b \x01(\x03H\x00R\x12idleAdmissionEpoch\x88\x01\x01B\x17\n" +
-	"\x15_idle_admission_epoch\"\x84\x02\n" +
+	"\x14idle_admission_epoch\x18\b \x01(\x03H\x00R\x12idleAdmissionEpoch\x88\x01\x01\x12\x1f\n" +
+	"\vmodel_proxy\x18\t \x01(\bR\n" +
+	"modelProxyB\x17\n" +
+	"\x15_idle_admission_epoch\"\xa5\x02\n" +
 	"\x13RegisterNodeRequest\x12#\n" +
 	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12.\n" +
@@ -721,7 +741,9 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"generation\x18\x04 \x01(\x03R\n" +
 	"generation\x127\n" +
 	"\x04node\x18\x05 \x01(\v2#.ora.cloud.internal.v1.NodeIdentityR\x04node\x12)\n" +
-	"\x10protocol_version\x18\x06 \x01(\rR\x0fprotocolVersion\"M\n" +
+	"\x10protocol_version\x18\x06 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
+	"\vmodel_proxy\x18\a \x01(\bR\n" +
+	"modelProxy\"M\n" +
 	"\x14RegisterNodeResponse\x125\n" +
 	"\x04node\x18\x01 \x01(\v2!.ora.cloud.internal.v1.NodeRecordR\x04node\"\x81\x02\n" +
 	"\x17ReportNodeStatusRequest\x12#\n" +
