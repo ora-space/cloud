@@ -1486,6 +1486,11 @@
             "nullable": true,
             "type": "object"
           },
+          "resumeRevisionId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
           "retryOfRunId": {
             "format": "uuid",
             "nullable": true,
@@ -1520,6 +1525,11 @@
               "id": {
                 "format": "uuid",
                 "type": "string"
+              },
+              "priorRevisionId": {
+                "format": "uuid",
+                "nullable": true,
+                "type": "string"
               }
             },
             "required": [
@@ -1529,6 +1539,7 @@
               "changed",
               "bundleSize",
               "historySize",
+              "priorRevisionId",
               "createdAt"
             ],
             "type": "object"
@@ -1611,7 +1622,8 @@
           "leaseExpiresAt",
           "createdAt",
           "updatedAt",
-          "deletedAt"
+          "deletedAt",
+          "resumeRevisionId"
         ],
         "type": "object"
       },

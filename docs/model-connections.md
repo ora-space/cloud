@@ -22,6 +22,10 @@
 事务回滚。其他 agent 的既有行为保持兼容。Controller 的 `AgentSessionSpec.model_binding_id`
 只携带不透明引用，临时授权与上游密钥不进入控制消息。
 
+会话可以同时固定个人模型绑定与前序 Revision；前序 Revision 使用已发布的通信字段 6，
+模型绑定使用独立字段 7。Controller 分别检查模型代理与 Revision 恢复能力，不互相替代。
+两个 `0033` 迁移按完整文件名和校验和独立追踪，保留已应用迁移的身份及 SQL。
+
 model-gateway 将专用 mTLS 证书的租户、Workspace、运行代次交给 Core。Core 同时检查已登记的
 会话执行、当前 Node、运行占用、运行与 Thread 状态、租户成员、用户和连接状态。授权只保存
 SHA-256 摘要，有效期为 PostgreSQL 时钟的 15 分钟；续期延长同一授权，不换令牌。

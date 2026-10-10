@@ -17,7 +17,8 @@ Issue 详情页右侧的「Agent 会话」栏：选出该 Issue 最近一次 age
 | `thread-messages.tsx` | 展示组件：消息列表（`role=list`，名称「会话消息」）与「加载更早」按钮 |
 | `thread-composer.tsx` | 输入框「给 Agent 发送消息」、「发送」与带确认步骤的「结束会话」 |
 | `thread-panel.tsx` | `IssueThreadPanel`：选 run、标题「Agent 会话」、状态徽章、等待提示与组合 |
-| `run-delivery.tsx` | 会话下方的 Revision 交付一行（`role=status`，名称「Revision 交付」）：已登记的 Revision 显示短提交与是否有改动，否则按 `result.deliveryState` 说明跳过或失败，会话已结束但运行未结算时显示保存中 |
+| `run-delivery.tsx` | 会话下方的 Revision 交付一行（`role=status`，名称「Revision 交付」）：已登记的 Revision 显示短提交与是否有改动（续接后无新提交时说明沿用了续接的成果），否则按 `result.deliveryState` 说明跳过或失败，会话已结束但运行未结算时显示保存中 |
+| `run-resume.tsx` | 会话上方的续接一行（`role=note`，名称「续接」）：运行续接了同一 Issue 之前的 Revision 时，从该 Issue 的运行列表中找到它并显示短提交；全新运行不渲染 |
 | `*.test.ts(x)` | 纯函数单测与 MSW 集成测试 |
 
 ## 依赖

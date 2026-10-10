@@ -10,3 +10,4 @@ internal/core/migrations/0027_workflows.sql text eol=lf
 internal/core/migrations/0028_workflow_snapshots.sql text eol=lf
 internal/core/migrations/0029_workflow_runs.sql text eol=lf
 internal/core/migrations/0033_personal_model_connections.sql text eol=lf
+internal/core/migrations/0033_revision_resume.sql text eol=lf

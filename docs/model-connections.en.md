@@ -27,6 +27,11 @@ identity. Missing defaults, credentials or available connections roll back the c
 and run together. Other agents retain existing behavior. Controller `AgentSessionSpec.model_binding_id`
 carries only an opaque reference; neither temporary grants nor upstream keys enter control messages.
 
+A session can freeze both a personal-model binding and a prior Revision. The published Revision
+wire field remains 6; the model reference uses separate field 7. Controller independently checks
+model-proxy and Revision-restore capabilities. The two `0033` migrations retain their complete
+filenames and SQL, tracked independently by filename and checksum.
+
 model-gateway passes the dedicated verified mTLS certificate's tenant, Workspace and generation to
 Core. Core checks registered session execution, current Node, run reservation, run/Thread lifecycle,
 tenant membership, user and connection status. PostgreSQL stores only SHA-256 token digests with a

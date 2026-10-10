@@ -92,6 +92,8 @@ export interface IssueRun {
   result?: RunResult | null
   /** Agent runs: the registered Revision as metadata only; null until one is registered. */
   revision?: RunRevision | null
+  /** Agent runs: the Revision this run resumed, fixed when its session started; null for a fresh run. */
+  resumeRevisionId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -110,6 +112,8 @@ export interface RunRevision {
   changed: boolean
   bundleSize: number | null
   historySize: number
+  /** The Revision the run resumed; with `changed: false` the run reused that Revision's bundle. */
+  priorRevisionId?: string | null
   createdAt: string
 }
 

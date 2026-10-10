@@ -5,6 +5,7 @@ import { useRuns } from '@/features/issues/api'
 import type { IssueRun, TenantMember } from '@/features/issues/types'
 import { memberNameById } from '@/features/issues/present'
 import { RunDelivery } from './run-delivery'
+import { RunResume } from './run-resume'
 import { useLoadOlderThread, useThread, type ThreadRef, type ThreadSnapshot } from './thread-api'
 import { ThreadComposer } from './thread-composer'
 import { latestAgentRun, threadStateLabel } from './thread-entries'
@@ -55,10 +56,12 @@ function RunThread({
   threadRef,
   run,
   names,
+  runs,
 }: {
   threadRef: ThreadRef
   run: IssueRun
   names: ReadonlyMap<string, string>
+  runs: readonly IssueRun[]
 }) {
   const thread = useThread(threadRef)
   const headingId = useId()
@@ -76,6 +79,7 @@ function RunThread({
           </Badge>
         )}
       </div>
+      <RunResume run={run} runs={runs} />
       {thread.isPending && <Skeleton className="h-16 w-full" />}
       {thread.isError && <p className="text-sm text-destructive">会话加载失败</p>}
       {snapshot?.declared === false && (
@@ -118,6 +122,7 @@ export function IssueThreadPanel({
       <RunThread
         key={run.id}
         run={run}
+        runs={runs}
         threadRef={{ tid, issueId, runId: run.id }}
         names={memberNameById(members)}
       />

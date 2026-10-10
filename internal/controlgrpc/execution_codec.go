@@ -108,16 +108,39 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
 	}
 	turn := spec.GetInitialTurn()
-	o := core.Object{
+	out := core.Object{
 		"kind": "agent_session", "agentPluginId": spec.GetAgentPluginId(), "agentPluginVersion": spec.GetAgentPluginVersion(),
 		"checkoutExecutionId": spec.GetCheckoutExecutionId(),
 		"gitIdentity":         core.Object{"name": spec.GetGitIdentity().GetName(), "email": spec.GetGitIdentity().GetEmail()},
 		"initialTurn":         core.Object{"turnId": turn.GetTurnId(), "content": contentObjects(turn.GetContent())},
 	}
 	if id := spec.GetModelBindingId(); id != "" {
-		o["modelBindingId"] = id
+		out["modelBindingId"] = id
 	}
-	return o, nil
+	if prior := spec.GetPriorRevision(); prior != nil {
+		out["priorRevision"] = priorObject(prior)
+	}
+	return out, nil
+}
+
+// priorObject is the durable form of a PriorRevision; a delivery spec's has no bundle.
+func priorObject(prior *controlpb.PriorRevision) core.Object {
+	out := core.Object{"revisionId": prior.GetRevisionId(), "finalCommit": prior.GetFinalCommit()}
+	if prior.GetBundle() != nil {
+		out["bundle"] = storedObject(prior.GetBundle())
+	}
+	return out
+}
+
+func priorMessage(o core.Object) *controlpb.PriorRevision {
+	if o.S("revisionId") == "" {
+		return nil
+	}
+	prior := &controlpb.PriorRevision{RevisionId: o.S("revisionId"), FinalCommit: o.S("finalCommit")}
+	if bundle := o.O("bundle"); len(bundle) > 0 {
+		prior.Bundle = storedMessage(bundle)
+	}
+	return prior
 }
 
 func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
@@ -128,6 +151,7 @@ func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
 		ModelBindingId: o.S("modelBindingId"),
 		GitIdentity:    &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
 		InitialTurn:    &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
+		PriorRevision:  priorMessage(o.O("priorRevision")),
 	}
 }
 
@@ -151,16 +175,21 @@ func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
 	if spec.GetSessionExecutionId() == "" || spec.GetBundleKey() == "" || spec.GetHistoryKey() == "" {
 		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
 	}
-	return core.Object{
+	out := core.Object{
 		"kind": "deliver_revision", "sessionExecutionId": spec.GetSessionExecutionId(), "checkoutExecutionId": spec.GetCheckoutExecutionId(),
 		"baseCommit": spec.GetBaseCommit(), "revisionRef": spec.GetRevisionRef(), "bundleKey": spec.GetBundleKey(), "historyKey": spec.GetHistoryKey(),
-	}, nil
+	}
+	if prior := spec.GetPriorRevision(); prior != nil {
+		out["priorRevision"] = priorObject(prior)
+	}
+	return out, nil
 }
 
 func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
 	return &controlpb.DeliverRevisionSpec{
 		SessionExecutionId: o.S("sessionExecutionId"), CheckoutExecutionId: o.S("checkoutExecutionId"), BaseCommit: o.S("baseCommit"),
 		RevisionRef: o.S("revisionRef"), BundleKey: o.S("bundleKey"), HistoryKey: o.S("historyKey"),
+		PriorRevision: priorMessage(o.O("priorRevision")),
 	}
 }
 

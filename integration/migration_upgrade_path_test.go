@@ -1010,3 +1010,41 @@ func TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades(t *testing.T) {
 	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ghost','g@x')`, uuid.NewString())
 	wantPGError(t, e, "23503") // the identity belongs to a real user
 }
+
+// 0033 (issue-run resume decision): fresh databases and upgrades from 0032 both get the resume
+// columns, the old anonymous bundle CHECK is replaced by the named shape that also admits a reused
+// bundle, and rerunning the migration changes nothing. The shape itself is exercised against real
+// rows by TestRevisionResumeColumnsKeepTheBundleShape.
+func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
+	constraints := func(pool *sql.DB) string {
+		t.Helper()
+		var names string
+		must(t, pool.QueryRow(`SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint
+			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused')`).Scan(&names))
+		return names
+	}
+	columns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND
+			((table_name='revisions' AND column_name IN ('prior_revision_id','bundle_revision_id','resume_refused_at','resume_refused_reason'))
+			 OR (table_name='issue_runs' AND column_name='resume_revision_id'))`).Scan(&n))
+		return n
+	}
+
+	freshPool, _ := testSchema(t, "test_rr33f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got := columns(freshPool); got != 5 {
+		t.Fatalf("a fresh database must have the five resume columns, got %d", got)
+	}
+
+	pool, _ := testSchema(t, "test_rr33_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0033_revision_resume.sql"))
+	if got, names := columns(pool), constraints(pool); got != 0 || names != "revisions_check" {
+		t.Fatalf("before 0033: columns %d constraints %q", got, names)
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_bundle_shape,revisions_resume_refused" {
+		t.Fatalf("after 0033: columns %d constraints %q", got, names)
+	}
+}

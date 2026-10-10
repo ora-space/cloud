@@ -622,6 +622,8 @@ export type IssueRunRevision = {
   finalCommit: string;
   historySize: number;
   id: string;
+  /** @nullable */
+  priorRevisionId: string | null;
 } | null;
 
 export type IssueRunStatus = typeof IssueRunStatus[keyof typeof IssueRunStatus];
@@ -670,6 +672,8 @@ export interface IssueRun {
   rerunOfRunId: string | null;
   /** @nullable */
   result: IssueRunResult;
+  /** @nullable */
+  resumeRevisionId: string | null;
   /** @nullable */
   retryOfRunId: string | null;
   /** @nullable */

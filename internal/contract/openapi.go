@@ -145,7 +145,7 @@ func Document() map[string]any {
 	issueProps["properties"] = obj{"type": "object", "additionalProperties": true}
 	issueProps["labels"] = array(ref("Label"))
 	issueProps["assigneeType"] = enumeration("user", "agent", "team")
-	s["IssueRun"] = resource("id tenantId issueId version executorType executorId externalExecutionId executionContextRef workflowInvocationRef triggerEvidenceKind triggerEvidenceRefId status parentRunId retryOfRunId rerunOfRunId delegatedFromRunId attempt maxAttempts input result error failureReason triggerSummary queuedAt dispatchedAt startedAt completedAt fireAt leaseExpiresAt createdAt updatedAt deletedAt", "executionContextRef workflowInvocationRef triggerEvidenceRefId parentRunId retryOfRunId rerunOfRunId delegatedFromRunId result dispatchedAt startedAt completedAt fireAt leaseExpiresAt deletedAt")
+	s["IssueRun"] = resource("id tenantId issueId version executorType executorId externalExecutionId executionContextRef workflowInvocationRef triggerEvidenceKind triggerEvidenceRefId status parentRunId retryOfRunId rerunOfRunId delegatedFromRunId attempt maxAttempts input result error failureReason triggerSummary queuedAt dispatchedAt startedAt completedAt fireAt leaseExpiresAt createdAt updatedAt deletedAt resumeRevisionId", "executionContextRef workflowInvocationRef triggerEvidenceRefId parentRunId retryOfRunId rerunOfRunId delegatedFromRunId result dispatchedAt startedAt completedAt fireAt leaseExpiresAt deletedAt resumeRevisionId")
 	runProps := properties(s, "IssueRun")
 	runProps["executorType"] = enumeration("agent", "team", "workflow")
 	runProps["status"] = enumeration("queued", "dispatched", "running", "completed", "failed", "cancelled", "deferred")
@@ -156,7 +156,11 @@ func Document() map[string]any {
 	runProps["externalExecutionId"] = str()
 	// revision is the run's registered Revision as metadata only (Cloud Revision D5): no object key,
 	// ref, digest or URL is public. Null until a Revision is registered, and for every non-agent run.
-	runProps["revision"] = optional(object(obj{"id": uuid(), "baseCommit": str(), "finalCommit": str(), "changed": boolean(), "bundleSize": optional(number()), "historySize": number(), "createdAt": timestamp()}, "id", "baseCommit", "finalCommit", "changed", "bundleSize", "historySize", "createdAt"))
+	// `changed` says whether the run stored a bundle of its own; `priorRevisionId` is the Revision it
+	// resumed (issue-run resume decision D4, D5).
+	runProps["revision"] = optional(object(obj{"id": uuid(), "baseCommit": str(), "finalCommit": str(), "changed": boolean(), "bundleSize": optional(number()), "historySize": number(), "priorRevisionId": optional(uuid()), "createdAt": timestamp()}, "id", "baseCommit", "finalCommit", "changed", "bundleSize", "historySize", "priorRevisionId", "createdAt"))
+	// resumeRevisionId is the Revision an agent run resumes, fixed at session start; null otherwise.
+	runProps["resumeRevisionId"] = optional(uuid())
 	runProps["executionContextRef"] = optional(uuid())
 	runProps["workflowInvocationRef"] = optional(uuid())
 	// ThreadEntry is one ordered record of an Agent run's Thread (Thread D1/D2/D3). `seq` is the
