@@ -4,6 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useRuns } from '@/features/issues/api'
 import type { IssueRun } from '@/features/issues/types'
 import { RunDelivery } from './run-delivery'
+import { RunResume } from './run-resume'
 import { useLoadOlderThread, useThread, type ThreadRef, type ThreadSnapshot } from './thread-api'
 import { ThreadComposer } from './thread-composer'
 import { latestAgentRun, threadStateLabel } from './thread-entries'
@@ -34,7 +35,15 @@ function DeclaredThread({
   )
 }
 
-function RunThread({ threadRef, run }: { threadRef: ThreadRef; run: IssueRun }) {
+function RunThread({
+  threadRef,
+  run,
+  runs,
+}: {
+  threadRef: ThreadRef
+  run: IssueRun
+  runs: readonly IssueRun[]
+}) {
   const thread = useThread(threadRef)
   const headingId = useId()
   const snapshot = thread.data
@@ -51,6 +60,7 @@ function RunThread({ threadRef, run }: { threadRef: ThreadRef; run: IssueRun }) 
           </Badge>
         )}
       </div>
+      <RunResume run={run} runs={runs} />
       {thread.isPending && <Skeleton className="h-16 w-full" />}
       {thread.isError && <p className="text-sm text-destructive">会话加载失败</p>}
       {snapshot?.declared === false && (
@@ -80,7 +90,7 @@ export function IssueThreadPanel({ tid, issueId }: { tid: string; issueId: strin
   if (!run) return null
   return (
     <aside className="w-full shrink-0 md:w-80">
-      <RunThread key={run.id} run={run} threadRef={{ tid, issueId, runId: run.id }} />
+      <RunThread key={run.id} run={run} runs={runs} threadRef={{ tid, issueId, runId: run.id }} />
     </aside>
   )
 }
