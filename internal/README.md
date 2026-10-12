@@ -17,7 +17,10 @@
 - [contract](contract/README.md)：定义 OpenAPI 3.0 Schema 模型、DTO 结构体与契约覆盖率测试。
 - [repository](repository/README.md)：基于 GORM 管理 PostgreSQL 连接池与启动时快速探活。
 - [objectstore](objectstore/README.md)：Cloud 自己的 S3 兼容对象存储客户端（SigV4 预签上传授权、HEAD 校验对象的大小与 SHA-256），只服务 Revision 链路。
-- [credentialstore](credentialstore/README.md)：独立 Credential Service（用户自管个人 HTTPS Git Token 的密封、轮换、撤销）与 Cloud 侧 `ingress-writer` 客户端；独立进程、独立卷、独立 KEK。
+- [credentialstore](credentialstore/README.md)：独立 Credential Service（用户自管个人 HTTPS Git Token 的密封、轮换、撤销，以及按单次授权兑换与原子消费记录）与 Cloud 侧 `ingress-writer` 客户端；独立进程、独立卷、独立 KEK。
+- [cloneauth](cloneauth/README.md)：单次 Clone 授权的载体、绑定与有效期上限；Cloud 用 Ed25519 签发，Credential Service 与执行器只持公钥验签。
+- [cloneexec](cloneexec/README.md)：凭据执行器 C——验签 → 兑换 → 物化 → 受约束克隆 → 销毁的五步契约、双向认证监听端与 `broker-resolver` 客户端。
+- [credentialmaterial](credentialmaterial/README.md)：物化布局本身（`<root>/<execution-id>/token` 与 `scope`，0700/0600 常量），由执行器与部署固定的 helper 共享。
 - [config](config/README.md)：加载并校验应用程序配置文件及环境变量覆盖。
 - [logger](logger/README.md)：基于 Zap 和 Lumberjack 提供结构化、非阻塞的 JSON 日志记录。
 - [simulator](simulator/README.md)：实现 Substrate 执行引擎、Controller 与 Workspace Node 的进程内替身。
