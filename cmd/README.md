@@ -9,6 +9,9 @@
 - [server](server/README.md)：核心的权威 HTTP API 服务守护进程。
 - [gateway](gateway/README.md)：浏览器可访问的认证与反向代理边界，完成 GitHub OAuth 登录、PostgreSQL 会话与内部凭据签发。
 - [cloudctl](cloudctl/README.md)：受限的运维与部署管理 CLI，用于数据库迁移、租户初始化引导以及凭据引用管理。
+- [credential-store](credential-store/README.md)：独立凭据服务进程（无数据库），在自己的卷与 KEK 下保存用户自管的个人 HTTPS Git Token，只对三种双向认证的服务身份开放。
+- [clone-executor](clone-executor/README.md)：凭据执行器进程（无数据库），以独立身份兑换单次授权、物化 Token、执行受约束 `git clone` 并在作答前销毁材料；启动前先清扫崩溃残留。
+- [git-credential-ora](git-credential-ora/README.md)：部署固定的 Git credential helper——不是凭据仓库，只读执行器物化的那一个文件，并在交出秘密的那一处强制主机范围。
 - [devsetup](devsetup/README.md)：仅限本地开发的一键配置（`task setup`），按 `config.toml` 生成 Gateway 私钥、Cloud 信任公钥与 PKCE 密钥，写出 GitHub client secret 文件与 `.local/dev.env`，并应用迁移。
 - [simulator](simulator/README.md)：基于进程内 Substrate 和 Git 执行替身提供一体化的本地演示环境。
 - [openapi](openapi/README.md)：根据 Go 契约定义生成并同步权威 OpenAPI 3.0 规范（`api/openapi.json`）。
