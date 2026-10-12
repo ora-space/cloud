@@ -15,6 +15,9 @@ type ControlRequest struct {
 	Service                                              *Claims
 	Identity                                             *Claims
 	verification                                         *revisionVerification
+	// credentialedResult is the outcome of a clone Cloud executed itself. It is set only by
+	// registerCredentialedClone, on a copy of the caller's request, so it belongs to one call.
+	credentialedResult *credentialedCloneResult
 }
 
 // Control is the finite internal command API. Controllers have no table-write or SQL interface.
@@ -32,6 +35,23 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		copyRequest.verification = prepared
 		r = &copyRequest
 	}
+	// A credentialed Workspace clone is executed by Cloud itself, before the ordinary dispatch below
+	// ever runs, so the Controller never sees an execution it would hand to a Node that holds no
+	// credential. Everything else — anonymous clones included — takes the unchanged path.
+	if s.credentialedCloner != nil && r.Action == "clone_dispatch" {
+		admitted, err := s.admitCredentialedClone(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		if admitted != nil {
+			return s.registerCredentialedClone(ctx, r, admitted)
+		}
+	}
+	return s.control(ctx, r)
+}
+
+// control is the finite internal command API as it behaves without the credentialed-clone boundary.
+func (s *Store) control(ctx context.Context, r *ControlRequest) (Object, error) {
 	out, err := s.transact(ctx, func(t *transaction) Object {
 		if r.Action == "access" || r.Action == "admit" {
 			require(r.Service.Role == "controller", 403, "service_forbidden")
@@ -71,7 +91,14 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 			return liveSandboxes(t)
 		}
 		if isCloneAction(r.Action) {
-			return cloneCommand(t, r)
+			out := cloneCommand(t, r)
+			// A clone Cloud executed itself is registered with its result already written, inside the
+			// same transaction that registers it. Anything else would leave a window in which the
+			// Controller could dispatch the execution to a Node.
+			if r.credentialedResult != nil {
+				out = recordCredentialedCloneResult(t, out, r.credentialedResult)
+			}
+			return out
 		}
 		if strings.HasPrefix(r.Action, "report_node_") {
 			return submitted(t, r, func() Object { return nodeReport(t, r) })
@@ -183,7 +210,19 @@ func operation(t *transaction, r *ControlRequest) Object {
 // it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM projects p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	// D9: the Project projected to a Controller carries no credential reference at all. The
+	// authoritative binding is `credentialRefId`; the store's own reference is projected nowhere,
+	// because a Controller cannot resolve it and has no reason to hold it, and the 0023 column is
+	// blanked for the same reason it is never read to authorize: it has no writer, and letting it
+	// reappear here would give a Controller a second opinion about which credential a Project uses.
+	//
+	// Both declarations stay in the contract and are now always empty. `secretRef` is required by the
+	// schema, so it is written as an explicit null rather than omitted; the Controller's gRPC message
+	// carries the equivalent empty value (see controlgrpc.snapshot).
+	p := t.one("SELECT * FROM projects WHERE id=$1", o.S("projectId"))
+	if p != nil {
+		p["secretRef"], p["repositoryCredentialRefId"] = nil, nil
+	}
 	out := Object{
 		"operation":  o,
 		"project":    p,
