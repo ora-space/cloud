@@ -57,6 +57,39 @@ import (
 // on both sides, so an authorization minted for one kind of work cannot be replayed against another.
 const OperationClone = "clone"
 
+// OperationMirrorPrepare permits reading one upstream repository's branch in order to publish one
+// internal mirror of it.
+//
+// It is a separate operation rather than a flag on OperationClone because the two authorize different
+// work with different subjects: a clone produces a checkout in one execution's working directory,
+// while a mirror preparation produces an artifact on the internal Git Server that later clones read.
+// An authorization captured from one must not be spendable on the other, and the operation is the
+// field that says which. It also permits the same capability a clone does, which is deliberate rather
+// than a shortcut — see Binding.Ref and Capability.
+const OperationMirrorPrepare = "mirror_prepare"
+
+// permittedCapabilities returns the one capability set an operation permits.
+//
+// Both operations permit `clone`, and the answer is keyed by the operation rather than shared by a
+// default, so an operation added later has to state its own answer instead of inheriting one.
+//
+// That a mirror preparation may carry `clone` is not a widening of the credential's authority.
+// Preparing a mirror reads strictly less than a clone of the same branch: one ref, no tags, no
+// submodules, no checkout, and the same closed protocol set, so the object set it reaches is a subset
+// of what `clone` already reaches. What the mirror purpose adds is not more read authority but a
+// second subject, and the published mirror is authorized by Cloud's own rows — see
+// internal/mirrorpublish — never by a token this package issues. Adding a capability value instead
+// would widen the vocabulary the credentials decision fixes at `["clone"]`, which that decision
+// reserves for review rather than for an enum edit.
+func permittedCapabilities(operation string) ([]string, bool) {
+	switch operation {
+	case OperationClone, OperationMirrorPrepare:
+		return []string{string(CapabilityClone)}, true
+	default:
+		return nil, false
+	}
+}
+
 // MaxLifetime bounds any authorization this package will issue.
 //
 // D5 requires an authorization to live no longer than one clone command timeout. This package cannot
@@ -95,6 +128,10 @@ var (
 // fixes; credential id and version pin the exact material; repository pins the target; the Node
 // instance, incarnation, runtime generation and control epoch are the fencing values that must match
 // the runtime the clone was admitted under.
+//
+// Operation and Ref are the pair that carries the purpose. The operation says which work the
+// authorization permits, and the ref is present for exactly the operation that needs one, so the
+// binding is never wider than the work it authorizes — see Binding.Ref.
 type Binding struct {
 	// AuthorizationID is the identifier the Store records consumption under. Cloud mints it once and
 	// it must be a canonical UUID, because the Store turns it into a file name.
@@ -117,6 +154,20 @@ type Binding struct {
 	CredentialVersion int64  `json:"credentialVersion"`
 	// Repository is the normalized repository identity the credential is scoped to.
 	Repository string `json:"repository"`
+	// Ref is the fully qualified ref this authorization pins. It is required by OperationMirrorPrepare
+	// and forbidden for OperationClone, and the asymmetry is the point.
+	//
+	// The clone purpose deliberately leaves the branch unsigned: it travels in the job's own field,
+	// because a clone of a repository whose default branch moved is still a clone of the repository
+	// the authorization names. A mirror preparation has no such slack. The published mirror is keyed by
+	// the commit the ref resolved to, and a reader compares that commit against Cloud's rows, so the
+	// ref has to be signed here — where an executor cannot be handed a different one than the issuer
+	// pinned. Resolving the commit is the fetching side's job; see internal/mirror, whose records carry
+	// it.
+	//
+	// The field is required in both directions. A clone that carried a ref would be a payload one side
+	// ignores, and this package does not sign values that no check reads.
+	Ref string `json:"ref,omitempty"`
 	// Capabilities is the set of repository operations this authorization permits, in canonical order.
 	//
 	// It is part of the binding because the continuity decision's D4 fixes the capability in the
@@ -163,8 +214,24 @@ func (b Binding) validate() error {
 			return fmt.Errorf("%w: %s is missing", ErrIncomplete, required.name)
 		}
 	}
-	if b.Operation != OperationClone {
-		return fmt.Errorf("%w: operation %q is not %q", ErrIncomplete, b.Operation, OperationClone)
+	// The operation decides what the rest of the binding has to look like, so it is resolved first. An
+	// operation this build does not define is refused rather than defaulted to `clone`: a payload
+	// naming an operation nobody implements must not be read as the one operation that is implemented.
+	permitted, known := permittedCapabilities(b.Operation)
+	if !known {
+		return fmt.Errorf("%w: operation %q is not one this package defines", ErrIncomplete, b.Operation)
+	}
+	// The ref's presence is fixed by the operation in both directions, for the reason Binding.Ref
+	// gives: a value one operation ignores must be absent rather than signed and never checked.
+	switch b.Operation {
+	case OperationClone:
+		if b.Ref != "" {
+			return fmt.Errorf("%w: operation %q does not carry a ref", ErrIncomplete, b.Operation)
+		}
+	case OperationMirrorPrepare:
+		if err := ValidateRef(b.Ref); err != nil {
+			return err
+		}
 	}
 	// The capability set is validated here rather than by the caller, because it is part of the signed
 	// payload: the executor compares the capabilities the payload carries against the capability the
@@ -175,11 +242,12 @@ func (b Binding) validate() error {
 	if !canonical {
 		return fmt.Errorf("%w: capabilities are empty, unknown, repeated or out of order", ErrIncomplete)
 	}
-	// A clone is a `clone`, and nothing else. Refusing any other set is what keeps the capability from
-	// being decorative: a plan that carried a capability this path never exercises would record an
-	// authority the execution did not rely on, and a later reader could not tell the two apart.
-	if !slices.Equal(capabilitySet, []string{string(CapabilityClone)}) {
-		return fmt.Errorf("%w: a clone permits exactly the %q capability", ErrIncomplete, CapabilityClone)
+	// An operation permits one capability set and no other. Refusing any other set is what keeps the
+	// capability from being decorative: a plan that carried a capability this path never exercises
+	// would record an authority the execution did not rely on, and a later reader could not tell the
+	// two apart.
+	if !slices.Equal(capabilitySet, permitted) {
+		return fmt.Errorf("%w: operation %q permits exactly the %v capability", ErrIncomplete, b.Operation, permitted)
 	}
 	if b.CredentialVersion < 1 {
 		return fmt.Errorf("%w: credential version must be positive", ErrIncomplete)

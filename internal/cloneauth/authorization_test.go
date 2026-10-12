@@ -95,6 +95,16 @@ func TestIssueRejectsIncompleteBindings(t *testing.T) {
 		{"no authorization id", func(b *Binding) { b.AuthorizationID = "" }, ErrIncomplete},
 		{"no operation", func(b *Binding) { b.Operation = "" }, ErrIncomplete},
 		{"wrong operation", func(b *Binding) { b.Operation = "push" }, ErrIncomplete},
+		{"a clone carrying a ref", func(b *Binding) { b.Ref = "refs/heads/main" }, ErrIncomplete},
+		{"a mirror preparation without a ref", func(b *Binding) { b.Operation = OperationMirrorPrepare }, ErrIncomplete},
+		{"a mirror preparation with an unqualified ref", func(b *Binding) {
+			b.Operation = OperationMirrorPrepare
+			b.Ref = "main"
+		}, ErrIncomplete},
+		{"a mirror preparation naming a tag", func(b *Binding) {
+			b.Operation = OperationMirrorPrepare
+			b.Ref = "refs/tags/v1.0.0"
+		}, ErrIncomplete},
 		{"no tenant", func(b *Binding) { b.TenantID = "" }, ErrIncomplete},
 		{"blank owner", func(b *Binding) { b.OwnerUserID = "  " }, ErrIncomplete},
 		{"no project", func(b *Binding) { b.ProjectID = "" }, ErrIncomplete},
