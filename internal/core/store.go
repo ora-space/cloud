@@ -148,6 +148,13 @@ type Store struct {
 	// Signals carries at-most-once work hints to the lease-holding Controller's Watch stream;
 	// clone requests stay durable in PostgreSQL whether or not a hint is delivered.
 	Signals *ControlHub
+
+	// credentialedCloner is the credentialed-clone executor boundary, installed once at startup by
+	// SetCredentialedCloner from deployment configuration. While it is nil — the default — a Project
+	// that names a credential is refused on every path with
+	// `repository_credential_executor_unavailable`, which is the approved fail-closed state. It is not
+	// exported because "which executor" is a deployment fact that must not be settable per request.
+	credentialedCloner CredentialedCloner
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no
@@ -212,6 +219,9 @@ type transaction struct {
 	workSignals           []string
 	commandSignals        []string
 	events                []SpaceEvent
+	// admittedCredential is set by requireRepositoryAccess when this deployment executes a credentialed
+	// clone itself. It is read by the dispatch that runs outside this transaction.
+	admittedCredential *admittedCredential
 }
 
 func (t *transaction) exec(q string, args ...any) {

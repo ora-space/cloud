@@ -15,6 +15,9 @@ type ControlRequest struct {
 	Service                                              *Claims
 	Identity                                             *Claims
 	verification                                         *revisionVerification
+	// credentialedResult is the outcome of a clone Cloud executed itself. It is set only by
+	// registerCredentialedClone, on a copy of the caller's request, so it belongs to one call.
+	credentialedResult *credentialedCloneResult
 }
 
 // Control is the finite internal command API. Controllers have no table-write or SQL interface.
@@ -32,6 +35,44 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		copyRequest.verification = prepared
 		r = &copyRequest
 	}
+	// A credentialed Workspace clone is executed by Cloud itself, before the ordinary dispatch below
+	// ever runs, so the Controller never sees an execution it would hand to a Node that holds no
+	// credential. Everything else — anonymous clones included — takes the unchanged path.
+	if s.credentialedCloner != nil && r.Action == "clone_dispatch" {
+		admitted, err := s.admitCredentialedClone(ctx, r)
+		if err != nil {
+			return nil, s.refusalOutcome(ctx, r, err)
+		}
+		if admitted != nil {
+			return s.registerCredentialedClone(ctx, r, admitted)
+		}
+	}
+	out, err := s.control(ctx, r)
+	if err == nil {
+		return out, nil
+	}
+	return nil, s.refusalOutcome(ctx, r, err)
+}
+
+// refusalOutcome records a refusal Cloud can never reverse as the refused Operation's terminal fact,
+// and returns the refusal exactly as the dispatch produced it.
+//
+// Recording it is a separate write because the refusal unwound its own transaction. See
+// `settleRefusedCredentialedClone`: for every other error the settlement is a no-op.
+//
+// Both places a credentialed clone can be refused go through here. With an executor installed the
+// guard is reached from `admitCredentialedClone`, before the ordinary dispatch runs; without one it is
+// reached from `s.control`. A refusal that settled in only one of the two would leave the wedge the
+// settlement exists to remove, on whichever path the deployment happens to take.
+func (s *Store) refusalOutcome(ctx context.Context, r *ControlRequest, refusal error) error {
+	if settleErr := s.settleRefusedCredentialedClone(ctx, r, refusal); settleErr != nil {
+		return settleErr
+	}
+	return refusal
+}
+
+// control is the finite internal command API as it behaves without the credentialed-clone boundary.
+func (s *Store) control(ctx context.Context, r *ControlRequest) (Object, error) {
 	out, err := s.transact(ctx, func(t *transaction) Object {
 		if r.Action == "access" || r.Action == "admit" {
 			require(r.Service.Role == "controller", 403, "service_forbidden")
@@ -71,7 +112,14 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 			return liveSandboxes(t)
 		}
 		if isCloneAction(r.Action) {
-			return cloneCommand(t, r)
+			out := cloneCommand(t, r)
+			// A clone Cloud executed itself is registered with its result already written, inside the
+			// same transaction that registers it. Anything else would leave a window in which the
+			// Controller could dispatch the execution to a Node.
+			if r.credentialedResult != nil {
+				out = recordCredentialedCloneResult(t, out, r.credentialedResult)
+			}
+			return out
 		}
 		if strings.HasPrefix(r.Action, "report_node_") {
 			return submitted(t, r, func() Object { return nodeReport(t, r) })
