@@ -64,6 +64,24 @@ type record struct {
 // revoked reports whether the record is a tombstone.
 func (r *record) revoked() bool { return r.RevokedAt != nil }
 
+// version returns the material of one generation, if this record can still serve it.
+//
+// Both the current generation and a superseded one inside its retention window are readable, because
+// D4 keeps a rotated-away version alive so an execution already admitted under it can settle. The
+// retention window is checked here rather than left to the rotation-time sweep: a version whose
+// window closed is no longer available even if no later rotation has run to drop it.
+func (r *record) version(want int64, now time.Time) (*material, bool) {
+	if r.Version == want {
+		return &r.Current, true
+	}
+	for i := range r.Previous {
+		if r.Previous[i].Version == want && r.Previous[i].RetainUntil.After(now) {
+			return &r.Previous[i].Material, true
+		}
+	}
+	return nil, false
+}
+
 // clearMaterial drops the sealed bytes of one version. Revocation destroys the stored secret rather
 // than only marking it, so a later reader cannot recover it even with the KEK.
 func (r *record) clearMaterial() {
@@ -91,6 +109,12 @@ type fileStore struct {
 // with a credential id.
 const credentialDirectory = "credentials"
 
+// authorizationDirectory holds one consumption record per spent authorization (D10). It is a sibling
+// of the credential records rather than a field inside one, because an authorization is spent whether
+// or not the credential it named still exists, and the record must outlive a revoked or rotated
+// credential to keep proving that the authorization cannot be replayed.
+const authorizationDirectory = "authorizations"
+
 // openFileStore prepares the record directory. The directory is created only if it is absent; an
 // existing directory is validated by the caller so a wrong mount point cannot silently become a new
 // empty store.
@@ -103,6 +127,9 @@ func openFileStore(root string) (*fileStore, error) {
 		return nil, fmt.Errorf("resolve credential store volume: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(absolute, credentialDirectory), 0o700); err != nil {
+		return nil, fmt.Errorf("prepare credential store volume: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(absolute, authorizationDirectory), 0o700); err != nil {
 		return nil, fmt.Errorf("prepare credential store volume: %w", err)
 	}
 	return &fileStore{root: absolute}, nil
@@ -125,8 +152,31 @@ func (f *fileStore) path(credentialID string) (string, error) {
 	return name, nil
 }
 
+// authorizationPath returns the consumption-record path for one authorization id.
+//
+// The id comes from Cloud's issued authorization, which the Store has already authenticated, but it
+// is still treated as untrusted input: it must be a canonical UUID, so it is always a single,
+// non-traversing path segment.
+func (f *fileStore) authorizationPath(authorizationID string) (string, error) {
+	if !validCanonicalUUID(authorizationID) {
+		return "", errors.New("authorization id is not a single safe path segment")
+	}
+	dir := filepath.Join(f.root, authorizationDirectory)
+	name := filepath.Join(dir, authorizationID+".json")
+	if filepath.Dir(name) != dir {
+		return "", errors.New("authorization id escapes the consumption record directory")
+	}
+	return name, nil
+}
+
 // validCredentialID accepts the canonical lowercase UUID form Cloud generates and nothing else.
-func validCredentialID(id string) bool {
+func validCredentialID(id string) bool { return validCanonicalUUID(id) }
+
+// validCanonicalUUID accepts the canonical lowercase UUID form this Store requires of every
+// identifier it turns into a file name: Cloud's `credential_refs.id` and the authorization id Cloud
+// mints. Anything else — an upper-case spelling, a short form, a path fragment — is refused, because
+// the same value has to be both a stable identifier and a safe file name.
+func validCanonicalUUID(id string) bool {
 	if len(id) != 36 {
 		return false
 	}

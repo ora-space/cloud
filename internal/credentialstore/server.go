@@ -25,6 +25,7 @@ const maxRequestBody = 16 << 10
 // into Cloud's or the Node's generated protocol.
 type Server struct {
 	store      *Store
+	resolver   *Resolver
 	identities *Identities
 	log        *zap.Logger
 }
@@ -58,7 +59,11 @@ func NewServer(store *Store, cfg ServerConfig) (*Server, error) {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Server{store: store, identities: identities, log: log}, nil
+	// The resolve capability is taken once, here, so the handlers below cannot disagree about whether
+	// this deployment can verify authorizations. A deployment with no verification key yields no
+	// resolver, and the resolve endpoint then refuses every request with the code it has always used.
+	resolver, _ := store.Resolver()
+	return &Server{store: store, resolver: resolver, identities: identities, log: log}, nil
 }
 
 // Handler returns the Store's HTTP surface. It is exported so the command can mount it on its own
@@ -164,22 +169,40 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID str
 	respond(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
-// resolve is refused unconditionally.
+// resolve delivers the token one single-use authorization names.
 //
-// Resolution needs two factors, and only one exists today: the `broker-resolver` identity is
-// enforced above, but the second factor — a Cloud-issued single-use authorization bound to a
-// tenant, owner, project, workspace, clone execution, credential id and version, repository
-// identity, Node instance and runtime generation — belongs to the Broker step of the approved
-// rollout order, which depends on the Node-side execution identity that is not settled. Until that
-// lands, D6 requires an explicit failure rather than a fallback, so this endpoint never delivers a
-// secret. It exists, and is authenticated, so the refusal is visible and auditable instead of
-// looking like a missing route.
+// Two factors must both hold, and neither is taken from the caller's assertion: the `broker-resolver`
+// service identity is enforced by the route above, and the authorization is verified against Cloud's
+// public key by the Store itself (D3). The Store additionally checks the authorization's binding, its
+// expiry against the Store's own clock, and whether it has already been spent, and it records the
+// consumption before the secret leaves the process (D10).
+//
+// When the deployment configured no verification key there is no resolver at all. The refusal is then
+// issued before the body is read, because a Store that cannot decide whether an authorization is
+// genuine must not act on one, and parsing input it can never accept would only invite a caller to
+// keep trying.
 func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID string) {
-	s.audit(r, "resolve", credentialID, "authorization_verification_unavailable")
-	respond(w, http.StatusConflict, map[string]string{
-		"code":    "authorization_verification_unavailable",
-		"message": "single-use broker authorization verification is not implemented",
-	})
+	if s.resolver == nil {
+		s.audit(r, "resolve", credentialID, "authorization_verification_unavailable")
+		respond(w, http.StatusConflict, map[string]string{
+			"code":    "authorization_verification_unavailable",
+			"message": "this deployment configured no authorization verification key",
+		})
+		return
+	}
+	var body ResolveRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	resolved, err := s.resolver.Resolve(r.Context(), credentialID, body)
+	// The authorization is a bearer secret; it must not survive into the audit line or the failure log.
+	body.Authorization = ""
+	if err != nil {
+		s.failure(w, r, "resolve", credentialID, err)
+		return
+	}
+	s.audit(r, "resolve", credentialID, "succeeded")
+	respond(w, http.StatusOK, map[string]any{"token": resolved.Token, "version": resolved.Version})
 }
 
 // decode reads a strict JSON body. Unknown fields, a malformed document, a second JSON value, and an
@@ -205,6 +228,11 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 // without revealing anything about the secret, so the error text never reaches the caller and the
 // message is fixed per outcome rather than derived from the error. A caller that went away is not a
 // Store failure and is not audited as one.
+//
+// The resolve outcomes are separate codes rather than one "resolve failed": a caller that was refused
+// because its authorization expired, because it already spent it, or because it is presenting the
+// wrong runtime has to be able to tell those apart to decide between asking for a new authorization
+// and investigating. None of them reveals anything about the secret, which is what D7 protects.
 func (s *Server) failure(w http.ResponseWriter, r *http.Request, operation, credentialID string, err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
@@ -219,6 +247,18 @@ func (s *Server) failure(w http.ResponseWriter, r *http.Request, operation, cred
 		status, code = http.StatusConflict, "credential_conflict"
 	case errors.Is(err, ErrNotFound):
 		status, code = http.StatusNotFound, "credential_not_found"
+	case errors.Is(err, ErrAuthorizationUnverifiable):
+		status, code = http.StatusConflict, "authorization_verification_unavailable"
+	case errors.Is(err, ErrAuthorizationInvalid):
+		status, code = http.StatusForbidden, "authorization_invalid"
+	case errors.Is(err, ErrAuthorizationExpired):
+		status, code = http.StatusForbidden, "authorization_expired"
+	case errors.Is(err, ErrAuthorizationBinding):
+		status, code = http.StatusForbidden, "authorization_binding_mismatch"
+	case errors.Is(err, ErrAuthorizationConsumed):
+		status, code = http.StatusConflict, "authorization_consumed"
+	case errors.Is(err, ErrVersionUnavailable):
+		status, code = http.StatusConflict, "credential_version_unavailable"
 	}
 	s.audit(r, operation, credentialID, code)
 	// The detail stays in the Store's own log; the caller receives the reason code only.

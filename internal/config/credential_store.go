@@ -73,6 +73,12 @@ type CredentialStoreServiceConfig struct {
 	// KEKFile is the deployment-delivered keyring. The Service never writes it and refuses to start
 	// without it (D2, D8).
 	KEKFile string `mapstructure:"kek_file"`
+	// AuthorizationPublicKeyFile is the deployment-delivered Ed25519 public key that Cloud signs
+	// single-use clone authorizations with. It is optional, and a deployment that configures none
+	// keeps the Service refusing every redemption: the Store cannot decide whether an authorization is
+	// genuine, so it delivers no secret. Only the public half is mounted here — a Service whose volume
+	// and process are both compromised still cannot mint an authorization (D10).
+	AuthorizationPublicKeyFile string `mapstructure:"authorization_public_key_file"`
 	// CertificateFile, PrivateKeyFile and ClientCAFile are the Service's server identity and the
 	// authority every client certificate must chain to.
 	CertificateFile string `mapstructure:"certificate_file"`
@@ -141,9 +147,10 @@ func (c *CredentialStoreServiceConfig) Store() (*credentialstore.Store, error) {
 		return nil, errors.New("credential store volume is required")
 	}
 	store, err := credentialstore.Open(credentialstore.Config{
-		Volume:    c.Volume,
-		KeyFile:   c.KEKFile,
-		Retention: c.SupersededRetention,
+		Volume:                     c.Volume,
+		KeyFile:                    c.KEKFile,
+		Retention:                  c.SupersededRetention,
+		AuthorizationPublicKeyFile: c.AuthorizationPublicKeyFile,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("credential store: %w", err)

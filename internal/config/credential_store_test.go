@@ -110,6 +110,25 @@ func writeKeyring(t *testing.T, dir string) string {
 	return path
 }
 
+// writeAuthorizationKey writes the Ed25519 public key the Store verifies Cloud's single-use
+// authorizations with. Only the public half is ever mounted here.
+func writeAuthorizationKey(t *testing.T, dir string) string {
+	t.Helper()
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate authorization key: %v", err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(public)
+	if err != nil {
+		t.Fatalf("marshal authorization key: %v", err)
+	}
+	path := filepath.Join(dir, "cloneauth.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("write authorization key: %v", err)
+	}
+	return path
+}
+
 // credentialService builds a deployment that is complete except where a case changes it.
 func credentialService(t *testing.T, dir string) CredentialStoreServiceConfig {
 	t.Helper()
@@ -208,6 +227,45 @@ func TestCredentialStoreServiceRefusesAnIncompleteDeployment(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCredentialStoreServiceResolveCapabilityFollowsItsKey pins how the resolve capability is
+// enabled: absent key means absent capability and every redemption refused, present key means the
+// capability exists, and a configured but unusable key is a startup refusal rather than a silently
+// degraded service. None of these states may look like the others (D3, D6, D10).
+func TestCredentialStoreServiceResolveCapabilityFollowsItsKey(t *testing.T) {
+	t.Run("unconfigured", func(t *testing.T) {
+		cfg := credentialService(t, t.TempDir())
+		store, err := cfg.Store()
+		if err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+		if _, ok := store.Resolver(); ok {
+			t.Fatal("a deployment with no verification key offered a resolve capability")
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := credentialService(t, dir)
+		cfg.AuthorizationPublicKeyFile = writeAuthorizationKey(t, dir)
+		store, err := cfg.Store()
+		if err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+		if _, ok := store.Resolver(); !ok {
+			t.Fatal("a deployment with a verification key offered no resolve capability")
+		}
+	})
+
+	t.Run("unusable", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := credentialService(t, dir)
+		cfg.AuthorizationPublicKeyFile = filepath.Join(dir, "absent.pem")
+		if _, err := cfg.Store(); err == nil {
+			t.Fatal("a deployment with an unreadable verification key started")
+		}
+	})
 }
 
 // TestLoadCredentialStoreConfigBindsOnlyItsOwnEnvironment pins the deployment separation D1 relies on:

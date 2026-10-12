@@ -2,6 +2,7 @@ package credentialstore
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wanglongan587/cloud/internal/cloneauth"
 )
 
 // Sentinel failures the Store distinguishes. D7 requires the wire reason codes to tell
@@ -55,6 +58,13 @@ type Config struct {
 	// Retention is how long a superseded version stays readable after a rotation, so an execution
 	// already admitted under the old version can still settle (D4). Zero selects the default.
 	Retention time.Duration
+	// AuthorizationPublicKeyFile is the deployment-delivered file of Ed25519 public keys that Cloud
+	// signs single-use authorizations with. It is optional: a deployment that configures none keeps the
+	// Store's original behavior, where every redemption is refused because the Store cannot decide
+	// whether an authorization is genuine. The Store holds only public halves, so a compromised Store
+	// still cannot mint one. The file may carry more than one key, which is what lets the deployment
+	// rotate the signing key without refusing authorizations signed by the outgoing one.
+	AuthorizationPublicKeyFile string
 	// Now supplies the clock. It is injected so tests can drive retention and ordering without
 	// sleeping.
 	Now func() time.Time
@@ -71,14 +81,20 @@ const DefaultRetention = time.Hour
 // and revoke. There is deliberately no resolve method and no listing method here — D3 gives the
 // resolving identity neither write nor enumerate power and gives this identity neither resolve nor
 // enumerate power, and a Store that offered them from one type would make the separation a matter of
-// caller discipline instead of a boundary.
+// caller discipline instead of a boundary. The resolve capability is a separate type, Resolver, and
+// the two are handed to different callers.
 type Store struct {
 	files     *fileStore
 	keys      *Keyring
 	retention time.Duration
-	now       func() time.Time
+	// authorizationKeys are Cloud's public keys for single-use authorizations. The slice is empty when
+	// the deployment configured none, which leaves Resolver unavailable and every redemption refused.
+	authorizationKeys []ed25519.PublicKey
+	now               func() time.Time
 	// mu serializes the read-modify-write of one record. Writes are rare and short, so one lock over
 	// the whole store keeps every cross-store idempotency decision atomic without a lock hierarchy.
+	// Redemption deliberately does not take it: its single-use decision is a filesystem create, which
+	// is already atomic and, unlike a lock, survives a restart.
 	mu sync.Mutex
 }
 
@@ -100,6 +116,17 @@ func Open(cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A configured but unusable verification key is a startup refusal, matching the KEK: a deployment
+	// that meant to enable redemption must not come up silently unable to perform it. An unconfigured
+	// key is not a failure — the capability is absent, and every redemption is refused per request.
+	var authorizationKeys []ed25519.PublicKey
+	if strings.TrimSpace(cfg.AuthorizationPublicKeyFile) != "" {
+		loaded, err := cloneauth.LoadVerificationKeys(cfg.AuthorizationPublicKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("credential store: %w", err)
+		}
+		authorizationKeys = loaded
+	}
 	retention := cfg.Retention
 	if retention <= 0 {
 		retention = DefaultRetention
@@ -108,7 +135,7 @@ func Open(cfg Config) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{files: files, keys: keys, retention: retention, now: now}, nil
+	return &Store{files: files, keys: keys, retention: retention, authorizationKeys: authorizationKeys, now: now}, nil
 }
 
 // Volume reports the directory this Store owns. It is safe to log: it names a location, never a
