@@ -23,6 +23,7 @@ function renderSettings() {
           { path: 'members', element: <div>Members screen</div> },
           { path: 'git-identity', element: <div>Git identity screen</div> },
           { path: 'model-connections', element: <div>Personal model connections</div> },
+          { path: 'git-credentials', element: <div>Git credentials screen</div> },
         ],
       },
     ],
@@ -56,5 +57,14 @@ describe('SettingsLayout', () => {
     await screen.findByDisplayValue('Cloud Dev')
     await user.click(screen.getByRole('link', { name: '模型连接' }))
     expect(await screen.findByText('Personal model connections')).toBeInTheDocument()
+  })
+
+  it('links the Git 凭据 tab to the git credentials route', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+
+    expect(await screen.findByDisplayValue('Cloud Dev')).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Git 凭据' }))
+    expect(await screen.findByText('Git credentials screen')).toBeInTheDocument()
   })
 })

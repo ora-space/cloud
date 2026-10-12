@@ -80,11 +80,17 @@ export function useProject(
   return { data: found ? cloudProjectToUI(found) : undefined, isPending: cloud.isLoading }
 }
 
-/** Input for creating a project; the repository URL is required by the cloud. */
+/**
+ * Input for creating a project; the repository URL is required by the cloud.
+ * `credentialRefId` is one of the caller's own available credentials, omitted
+ * for a public repository; the server refuses a frozen or scope-mismatched one
+ * with a dedicated reason code.
+ */
 export interface CreateProjectInput {
   title: string
   repositoryUrl: string
   defaultBranch: string
+  credentialRefId?: string
 }
 
 /** Creates a project in the current cloud space; creation is asynchronous (202). */
@@ -106,6 +112,10 @@ export function useCreateProject() {
           name: input.title,
           repositoryUrl: input.repositoryUrl,
           defaultBranch: input.defaultBranch,
+          // Omitted rather than sent as an empty string: the server rejects an
+          // unknown or empty credential id, and no credential means a public
+          // repository, which is a valid request without the field.
+          ...(input.credentialRefId ? { credentialRefId: input.credentialRefId } : {}),
         },
         { headers: mutationHeaders(keyFor(input)) },
       )

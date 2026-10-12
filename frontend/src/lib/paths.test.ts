@@ -50,6 +50,7 @@ describe('workspacePaths', () => {
     expect(p.repositories).toBe('/w/acme/repositories')
     expect(p.gitIdentity).toBe('/w/acme/settings/git-identity')
     expect(p.modelConnections).toBe('/w/acme/settings/model-connections')
+    expect(p.gitCredentials).toBe('/w/acme/settings/git-credentials')
     expect(workspaceUrlPrefix()).toBe('localhost:3000/w/')
   })
 })

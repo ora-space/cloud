@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { DialogFormField } from '@/components/common/dialog-form-field'
+import type { GitCredential } from '@/api/generated.schemas'
 import { CreateFormSubmit } from '@/components/common/create-form-submit'
+import { DialogFormField } from '@/components/common/dialog-form-field'
 import {
   Dialog,
   DialogContent,
@@ -8,7 +9,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useCreateProject } from '@/features/projects/api'
+import { useGitCredentials } from '@/features/settings/git-credentials-api'
+import { useCurrentSpace } from '@/features/spaces/current-space'
 
 /**
  * Accepts HTTPS or SSH repository URLs without embedded credentials; the
@@ -18,24 +29,95 @@ function looksLikeRepositoryUrl(value: string): boolean {
   return /^(https:\/\/|ssh:\/\/|git@)/.test(value.trim())
 }
 
-/** Form fields for a new project in the current space. */
+/** Sentinel for "no credential"; credential ids are UUIDs and never collide. */
+const NO_CREDENTIAL = 'none'
+
+// The server answers a refused credential with a reason code, not a sentence;
+// these two are actionable (pick another or fix the scope), so they get their
+// own copy instead of the generic "创建失败：<code>" line.
+const CREDENTIAL_REFUSALS: Record<string, string> = {
+  repository_credential_frozen:
+    '所选凭据当前不可用（已冻结或已撤销），请改用其他凭据，或选择“不使用凭据（公开仓库）”',
+  repository_credential_scope_mismatch:
+    '所选凭据的仓库范围与项目仓库 URL 不一致，请重新选择匹配的凭据',
+}
+
+/**
+ * Input the create form submits; `credentialRefId` is absent when the member
+ * chose a public repository, so the request never carries an empty id.
+ */
+interface CreateProjectDraft {
+  title: string
+  repositoryUrl: string
+  defaultBranch: string
+  credentialRefId?: string
+}
+
+/**
+ * Optional credential picker. It lists the caller's own credentials (name and
+ * repository scope) and defaults to a public repository; the backend refuses a
+ * credential that is not available or whose scope does not exactly match the
+ * project's repository URL, and the dialog turns those codes into advice.
+ */
+function CredentialPicker({
+  credentials,
+  value,
+  onChange,
+}: {
+  credentials: GitCredential[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="new-project-credential">凭据</Label>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (next !== null) onChange(next)
+        }}
+      >
+        <SelectTrigger id="new-project-credential" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_CREDENTIAL}>不使用凭据（公开仓库）</SelectItem>
+          {credentials.map((credential) => (
+            <SelectItem key={credential.id} value={credential.id}>
+              {credential.name}（{credential.repositoryScope}）
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        仅列出你自己的 Git 凭据；私有仓库需选择范围匹配的凭据。
+      </p>
+    </div>
+  )
+}
+
+/** Fields for a new project in the current space, including its credential. */
 function CreateProjectFields({
   onSubmit,
   pending,
   errorCode,
 }: {
-  onSubmit: (input: { title: string; repositoryUrl: string; defaultBranch: string }) => void
+  onSubmit: (input: CreateProjectDraft) => void
   pending: boolean
   errorCode: string | undefined
 }) {
+  const { tenantId } = useCurrentSpace()
+  const credentials = useGitCredentials(tenantId)
   const [title, setTitle] = useState('')
   const [repositoryUrl, setRepositoryUrl] = useState('')
   const [defaultBranch, setDefaultBranch] = useState('main')
+  const [credentialValue, setCredentialValue] = useState(NO_CREDENTIAL)
   const urlValid = repositoryUrl === '' || looksLikeRepositoryUrl(repositoryUrl)
   // Cloud clones only a literal branch and never reads the remote to resolve HEAD.
   const branchValid = defaultBranch.trim() !== '' && defaultBranch.trim() !== 'HEAD'
   const submittable =
     title.trim() !== '' && repositoryUrl.trim() !== '' && urlValid && branchValid && !pending
+  const credentialRefusal = errorCode ? CREDENTIAL_REFUSALS[errorCode] : undefined
 
   return (
     <form
@@ -46,6 +128,7 @@ function CreateProjectFields({
           title: title.trim(),
           repositoryUrl: repositoryUrl.trim(),
           defaultBranch: defaultBranch.trim(),
+          ...(credentialValue === NO_CREDENTIAL ? {} : { credentialRefId: credentialValue }),
         })
       }}
       className="space-y-4"
@@ -76,7 +159,21 @@ function CreateProjectFields({
         hint={branchValid ? undefined : '请填写具体分支名，不能为空或 HEAD'}
         required
       />
-      <CreateFormSubmit pending={pending} submittable={submittable} errorCode={errorCode} />
+      <CredentialPicker
+        credentials={credentials.data ?? []}
+        value={credentialValue}
+        onChange={setCredentialValue}
+      />
+      {credentialRefusal && (
+        <p role="alert" className="text-xs text-destructive">
+          {credentialRefusal}
+        </p>
+      )}
+      <CreateFormSubmit
+        pending={pending}
+        submittable={submittable}
+        errorCode={credentialRefusal ? undefined : errorCode}
+      />
     </form>
   )
 }
@@ -84,7 +181,8 @@ function CreateProjectFields({
 /**
  * Dialog for creating a project inside the current space. Creation is
  * asynchronous on the backend (202 + operation), so the dialog closes
- * immediately and the list invalidates when the operation lands.
+ * immediately and the list invalidates when the operation lands. The optional
+ * credential picker never sends an id for a public repository.
  */
 export function CreateProjectDialog({
   open,

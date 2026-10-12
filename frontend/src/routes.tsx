@@ -20,6 +20,7 @@ import { ProjectsPage } from '@/features/projects/projects-page'
 import { RepositoriesPage } from '@/features/clones/repositories-page'
 import { RuntimesPage } from '@/features/runtimes/runtimes-page'
 import { GeneralSettingsPage } from '@/features/settings/general-settings-page'
+import { GitCredentialsPage } from '@/features/settings/git-credentials-page'
 import { GitIdentityPage } from '@/features/settings/git-identity-page'
 import { ModelConnectionsPage } from '@/features/model-connections/model-connections-page'
 import { SettingsLayout } from '@/features/settings/settings-layout'
@@ -142,6 +143,7 @@ export const router = createBrowserRouter([
           { path: 'billing', element: <WithSlug component={BillingPage} /> },
           { path: 'git-identity', element: <GitIdentityPage /> },
           { path: 'model-connections', element: <ModelConnectionsPage /> },
+          { path: 'git-credentials', element: <GitCredentialsPage /> },
         ],
       },
     ],
