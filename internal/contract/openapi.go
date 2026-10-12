@@ -100,6 +100,22 @@ func Document() map[string]any {
 	s["ModelConnection"] = object(obj{"id": uuid(), "name": str(), "protocol": enumeration("openai-completions", "anthropic-messages"), "baseUrl": str(), "authMode": enumeration("bearer", "x-api-key"), "models": array(ref("ModelDefinition")), "enabled": boolean(), "credentialConfigured": boolean(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "id", "name", "protocol", "baseUrl", "authMode", "models", "enabled", "credentialConfigured", "version", "createdAt", "updatedAt")
 	s["ModelDefault"] = object(obj{"connectionId": str(), "modelId": str(), "version": number()}, "connectionId", "modelId", "version")
 	s["ThreadModel"] = object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")
+	// GitCredential is one of the caller's own personal HTTPS Git credentials (user-managed git
+	// credentials D1/D2), and it is metadata only. The token its owner supplied is held by the
+	// independent Credential Service; neither the token nor the opaque reference that locates it in
+	// that service appears here or anywhere else in this document, so no response can return
+	// credential material (D9).
+	//
+	// `repositoryScope` is the single normalized HTTPS repository the credential may be used against,
+	// and it is the whole of its authority: the name authorizes nothing. `availability` is the one
+	// source of truth about whether the credential may be used at all — `available`, `frozen` when a
+	// freeze trigger withdrew it, `invalid` after its owner revoked it — and `capabilities` is the
+	// fixed `["clone"]` V1 grants.
+	s["GitCredential"] = resource("id tenantId ownerUserId name repositoryScope attribution availability unavailableReason capabilities version createdAt revokedAt", "unavailableReason revokedAt")
+	gitCredential := properties(s, "GitCredential")
+	gitCredential["attribution"] = enumeration("personal")
+	gitCredential["availability"] = enumeration("available", "frozen", "invalid")
+	gitCredential["capabilities"] = array(enumeration("clone"))
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")
@@ -439,6 +455,10 @@ func tag(r router.Route) string {
 		return "internal"
 	case strings.HasPrefix(r.Path, "/api/v1/me"):
 		return "me"
+	case strings.Contains(r.Path, "/git-credentials"):
+		// Its own module rather than `tenants`: a credential is the signed-in user's own record, and
+		// the generated client groups operations by tag.
+		return "credentials"
 	case strings.Contains(r.Path, "/clones"):
 		return "clones"
 	case strings.Contains(r.Path, "/spaces"):
@@ -461,7 +481,7 @@ func isList(r router.Route) bool {
 	if r.Path == "/api/v1/me/model-connections" {
 		return r.Method == "GET"
 	}
-	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
+	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones") || strings.HasSuffix(r.Path, "/git-credentials"))
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
@@ -505,6 +525,17 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		default:
 			return ref("Operation"), "200"
 		}
+	}
+	if r.Path == router.GitCredentialPath || r.Path == router.GitCredentialItemPath {
+		if r.Method == "GET" {
+			return object(obj{"items": array(ref("GitCredential")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		}
+		if r.Method == "POST" {
+			// The only 201 among these: create is the only one that brings a credential into being.
+			// Rotate and revoke answer 200 with the same document, so a client renders one shape.
+			return ref("GitCredential"), "201"
+		}
+		return ref("GitCredential"), "200"
 	}
 	if r.Path == "/api/v1/tenants/:tid/people" {
 		return object(obj{"items": array(ref("DirectoryPerson"))}, "items"), "200"
@@ -807,8 +838,16 @@ func optionalField(name string, r router.Route) bool {
 	case "values":
 		// Confirm must state what it is confirming; assist may be asked with a still-empty form.
 		return strings.HasSuffix(r.Path, "/assist")
+	case "version":
+		if r.Path == router.GitCredentialItemPath {
+			// Every credential mutation is version-guarded, and the guard is not optional here: a
+			// rotate or revoke that named no version would be answered 428 version_required, so the
+			// schema must not let a client build one.
+			return false
+		}
+		return r.Method == "POST" && strings.HasSuffix(r.Path, "/plugins") || r.Method == "PUT"
 	}
-	return name == "version" && r.Method == "POST" && strings.HasSuffix(r.Path, "/plugins") || name == "credentialRefId" || name == "role" && strings.HasSuffix(r.Path, "/members/huawei") || name == "version" && r.Method == "PUT" || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
+	return name == "credentialRefId" || name == "role" && strings.HasSuffix(r.Path, "/members/huawei") || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
 }
 
 func inputSchema(name string, r router.Route) obj {
@@ -884,11 +923,24 @@ func inputSchema(name string, r router.Route) obj {
 		return number()
 	case "slug":
 		return obj{"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Lowercase, immutable, globally unique."}
+	case "repositoryScope":
+		return obj{"type": "string", "format": "uri", "minLength": 1, "maxLength": core.GitCredentialRepositoryScopeMax, "description": "The one HTTPS repository this credential authorizes. Stored normalized: scheme and host lowercased, port kept, path case preserved, one trailing slash and one trailing .git dropped. Userinfo, query, fragment and percent-encoding are refused, and at least one path segment is required, so a scope never widens past the one repository it names."}
+	case "token":
+		// writeOnly because the value travels in one direction only: the server stores it in the
+		// independent Credential Service and no response, read or list ever carries it back.
+		return obj{"type": "string", "minLength": 1, "maxLength": core.GitCredentialTokenMax, "writeOnly": true, "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it."}
 	case "workspaceId":
 		if r.Action == "plan" {
 			return str()
 		}
 		return uuid()
+	case "name":
+		if r.Path == router.GitCredentialPath {
+			// Characters, the unit the column's own `char_length` check measures, so the schema and
+			// the boundary cannot disagree about a name that sits exactly at the limit.
+			return obj{"type": "string", "minLength": 1, "maxLength": core.GitCredentialNameMax, "description": "The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope."}
+		}
+		return str()
 	case "targets":
 		return array(object(obj{"type": enumeration("user", "agent", "team", "workflow"), "id": uuid(), "task": str()}, "type", "id"))
 	case "content":
@@ -938,6 +990,16 @@ func description(r router.Route) string {
 		return "Tenant administrators search the fixed Tianzhou endpoint through Cloud. Machine credentials stay server-side; only employed people and limited directory fields are returned."
 	case "/api/v1/tenants/:tid/members/huawei":
 		return "Tenant administrators add a selected Huawei person by stable globalUserId. Cloud searches Tianzhou again and verifies current employment before creating or reactivating membership."
+	case router.GitCredentialPath, router.GitCredentialItemPath:
+		switch r.Method {
+		case "GET":
+			return "Lists the caller's own personal HTTPS Git credentials in this tenant, newest last by id. Only credentials attributed to the caller under this tenant are listed, so another member's credential — and a deployment-managed or team reference, which is not personal — cannot appear. No field of any entry is the token: Cloud does not hold it, and the opaque reference that locates it in the independent Credential Service is never returned. `availability` is the one source of truth about whether a credential may be used; a revoked credential stays listed, because its row is where the revocation is recorded."
+		case "POST":
+			return "Creates a personal HTTPS Git credential and hands its token to the independent Credential Service within this request. name is 1..120 characters with no surrounding whitespace and no line break or NUL, otherwise 400 invalid_credential_name. repositoryScope is the one HTTPS repository the credential authorizes, otherwise 400 invalid_repository_scope. token is 1..4096 bytes, sent in the body only and refused rather than trimmed, otherwise 400 invalid_credential_token; it is never persisted in, logged by, or returned by Cloud. The credential is attributed to the authenticated caller explicitly (attribution personal, capability clone) and to the tenant path parameter, and Cloud resolves the tenant from the caller's membership, so another user's ownership cannot be requested. The Idempotency-Key is required and also names the credential id, which is what makes the two-store create safe to retry: the same key with the same body replays the original response without touching the store again. Returns 201; when the deployment has no credential service, every create is 503 credential_store_unavailable and no metadata row is written."
+		case "PUT":
+			return "Rotates the material of one credential the caller owns, leaving its attribution, scope and capabilities unchanged. The new token is written to the independent Credential Service first and the metadata version is advanced afterwards, so a failure between the two leaves material newer than the metadata rather than a reference pointing at material that was never written; the credential keeps working and the version is simply one behind. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent), and a credential that is not available — frozen by a freeze trigger or already revoked — is 409 credential_not_available, because rotating it would leave its availability permanently disagreeing with its contents. Returns 200 with the credential document."
+		}
+		return "Revokes one credential the caller owns. Cloud's metadata change is authoritative and commits first, so the credential is unusable from that moment; the stored material is destroyed afterwards and best effort, and material that could not be confirmed as destroyed is recorded server-side as residue rather than reported as a failed revocation. Revocation is expressed through availability invalid with a revoked_by_owner reason, never by deleting the row, so the credential stays visible to its owner as revoked rather than absent. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent). Repeating a revocation that already happened is success and writes nothing, which is what makes the required Idempotency-Key's retry safe. Returns 200 with the credential document."
 	}
 	base := "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. "
 	if r.Action != "" {
@@ -1046,7 +1108,7 @@ func errorDescription(code string) string {
 	case "428":
 		return "Version precondition required"
 	case "503":
-		return "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+		return "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
 	default:
 		return "Internal error; no SQL or secret details are exposed"
 	}

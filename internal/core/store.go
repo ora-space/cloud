@@ -96,6 +96,14 @@ type Store struct {
 	// a safe reason, or skipped when storage is unconfigured. It runs after receipt/Revision writes.
 	OnDeliverySettled func(context.Context, *sql.Tx, string, string, Object) error
 
+	// Secrets is the independent Credential Service's ingress capability (see git_credentials.go).
+	// Cloud hands a user's token to it inside the request that received it and keeps only the reference
+	// it returns; there is no code path that resolves a token back out. Nil means the deployment
+	// configured no credential service, and every credential write then fails closed with
+	// `credential_store_unavailable` — D6 forbids substituting Cloud's own database for a store the
+	// deployment did not establish.
+	Secrets CredentialSecretWriter
+
 	// Collaboration ports (consuming-side seams; see collaboration.go). NewStore wires the real
 	// workflow-backed Directory and Forms, because Cloud owns the workflow document and needs no
 	// external backend to serve those two. The remaining three stay nil ("Unavailable") until a

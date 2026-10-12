@@ -452,6 +452,46 @@ export interface FormDescriptor {
   title?: string | null;
 }
 
+export type GitCredentialAttribution = typeof GitCredentialAttribution[keyof typeof GitCredentialAttribution];
+
+
+export const GitCredentialAttribution = {
+  personal: 'personal',
+} as const;
+
+export type GitCredentialAvailability = typeof GitCredentialAvailability[keyof typeof GitCredentialAvailability];
+
+
+export const GitCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type GitCredentialCapabilitiesItem = typeof GitCredentialCapabilitiesItem[keyof typeof GitCredentialCapabilitiesItem];
+
+
+export const GitCredentialCapabilitiesItem = {
+  clone: 'clone',
+} as const;
+
+export interface GitCredential {
+  attribution: GitCredentialAttribution;
+  availability: GitCredentialAvailability;
+  capabilities: GitCredentialCapabilitiesItem[];
+  createdAt: string;
+  id: string;
+  name: string;
+  ownerUserId: string;
+  repositoryScope: string;
+  /** @nullable */
+  revokedAt: string | null;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason: string | null;
+  version: number;
+}
+
 export interface GitIdentity {
   email: string;
   isDefault: boolean;
@@ -1658,10 +1698,20 @@ export interface WorkspaceListItem {
 }
 
 export type PostApiV1JoinInvitationsRedeemBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
 export type PostApiV1JoinRequestsBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
@@ -1901,6 +1951,60 @@ export type GetApiV1TenantsTidCollaborationTargets200 = {
   nextCursor: string;
 };
 
+export type GetApiV1TenantsTidGitCredentialsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidGitCredentials200 = {
+  items: GitCredential[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidGitCredentialsBody = {
+  /**
+     * The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope.
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  /**
+     * The one HTTPS repository this credential authorizes. Stored normalized: scheme and host lowercased, port kept, path case preserved, one trailing slash and one trailing .git dropped. Userinfo, query, fragment and percent-encoding are refused, and at least one path segment is required, so a scope never widens past the one repository it names.
+     * @minLength 1
+     * @maxLength 2048
+     */
+  repositoryScope: string;
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
+  token: string;
+};
+
+export type DeleteApiV1TenantsTidGitCredentialsCredIdBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PutApiV1TenantsTidGitCredentialsCredIdBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
+  token: string;
+  /** @minimum 0 */
+  version: number;
+};
+
 export type GetApiV1TenantsTidInvitationsParams = {
 /**
  * @minimum 1
@@ -1919,6 +2023,11 @@ export type GetApiV1TenantsTidInvitations200 = {
 };
 
 export type PostApiV1TenantsTidInvitationsBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
@@ -2481,6 +2590,11 @@ export type GetApiV1TenantsTidJoinLinks200 = {
 };
 
 export type PostApiV1TenantsTidJoinLinksBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 

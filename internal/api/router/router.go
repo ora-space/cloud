@@ -40,6 +40,28 @@ const ThreadPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread"
 // unknown field — so it takes the default request cap.
 const ThreadEndPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/end"
 
+// GitCredentialPath is the collection route for a user's personal HTTPS Git credentials. It is one of
+// exactly two routes that accept a raw user token, and the token travels only in the request body.
+const GitCredentialPath = "/api/v1/tenants/:tid/git-credentials"
+
+// GitCredentialItemPath is the one-credential route: a rotate (PUT) or a revoke (DELETE). The
+// identifier is in the path; the replacement token, when there is one, is in the body and nowhere
+// else.
+const GitCredentialItemPath = "/api/v1/tenants/:tid/git-credentials/:credId"
+
+// credentialIngressPath reports whether one request is a Git credential ingress mutation.
+//
+// Both spellings live in one predicate so the approved exception stays auditable: only these requests
+// may hand a user token onward, and a new route cannot join them by accident. The read is excluded
+// rather than merely ignored: the list carries no token, and routing it through the mutating handler
+// would answer a caller's GET with a method refusal instead of its credentials.
+func credentialIngressPath(method, path string) bool {
+	if method == "GET" {
+		return false
+	}
+	return path == GitCredentialPath || path == GitCredentialItemPath
+}
+
 // defaultBodyLimit is the request cap every other route keeps.
 const defaultBodyLimit = 64 << 10
 
@@ -72,6 +94,10 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants", "", []string{"name", "slug"}},
 		{"GET", "/api/v1/tenants/:tid/members", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/members/:uid", "", []string{"role", "status", "version"}},
+		{"GET", GitCredentialPath, "", nil},
+		{"POST", GitCredentialPath, "", []string{"name", "repositoryScope", "token"}},
+		{"PUT", GitCredentialItemPath, "", []string{"token", "version"}},
+		{"DELETE", GitCredentialItemPath, "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/collaboration/targets", "", nil},
 		{"GET", "/api/v1/tenants/:tid/collaboration/forms/:formRef", "", nil},
 		{"GET", "/api/v1/tenants/:tid/issues", "", nil},
@@ -333,6 +359,31 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 			}
 			var out core.Object
 			status := 200
+			if public && credentialIngressPath(c.Request.Method, route.Path) {
+				// The one place a raw user token is accepted. It is handled here rather than inside
+				// core.Public so the token leaves the decoded body before anything that outlives the
+				// request can see it: no structure the core stores, no idempotency hash it persists, and
+				// no value an error carries. What travels onward is a parameter of the handoff alone.
+				token := body.S("token")
+				delete(body, "token")
+				result, err := store.WriteGitCredential(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), CredentialID: c.Param("credId"), Key: c.GetHeader("Idempotency-Key"), Body: body, Identity: user}, token)
+				if err != nil {
+					f := core.ErrorCode(err)
+					if f.Status == 500 {
+						log.Error("credential ingress failed", zap.String("requestId", c.GetString("requestId")), zap.Error(err))
+					}
+					failure(c, f)
+					return
+				}
+				if result.Reconciliation != "" {
+					// Cloud reported the credential revoked and could not confirm the store destroyed the
+					// material. Only the identifier is recorded: D7 keeps peer text and secret content out
+					// of logs, and this row is the evidence a later sweep works from.
+					log.Warn("credential material remains after revocation", zap.String("requestId", c.GetString("requestId")), zap.String("credentialId", result.Reconciliation))
+				}
+				c.JSON(result.Status, result.Resource)
+				return
+			}
 			if public {
 				var person *core.DirectoryPerson
 				if route.Path == "/api/v1/tenants/:tid/members/huawei" {
