@@ -646,6 +646,45 @@ func TestGitFetcherRefusesAnUnusableRepository(t *testing.T) {
 	}
 }
 
+// TestAGitThatHangsDoesNotOutliveTheFetchersTimeout pins that GitConfig.Timeout is what ends a fetch
+// and not Git's own patience.
+//
+// The fake git starts a descendant that inherits its standard output and then replaces itself with
+// another sleep, so killing the process the fetcher started leaves the pipe open. A wait that ends
+// only when the pipe closes then waits for that descendant, and the declared timeout becomes
+// advisory: without the wait delay this fetch returns in about a minute, in about the timeout with
+// it. The bound is what the caller of Fetch relies on when it decides a repository is unreachable.
+func TestAGitThatHangsDoesNotOutliveTheFetchersTimeout(t *testing.T) {
+	gitPath := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nsleep 60 &\nexec sleep 60\n"), 0o700); err != nil {
+		t.Fatalf("write the fake git: %v", err)
+	}
+	fetcher, err := NewGitFetcher(GitConfig{
+		GitPath:      gitPath,
+		Home:         t.TempDir(),
+		HelperPath:   "/usr/local/bin/git-credential-ora",
+		MaterialRoot: t.TempDir(),
+		Timeout:      250 * time.Millisecond,
+	}, stubMaterial{})
+	if err != nil {
+		t.Fatalf("NewGitFetcher: %v", err)
+	}
+	reference := &Reference{
+		Key:      mirror.Key{ProjectID: testProject, Repository: testRepoA, Commit: testCommitA},
+		TenantID: testTenant,
+		Upstream: "main",
+	}
+	started := time.Now()
+	_, err = fetcher.Fetch(context.Background(), reference, filepath.Join(t.TempDir(), "mirror"))
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("the fetch reported success against a git that never exits")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the fetch took %s; the 250ms timeout did not end the wait", elapsed)
+	}
+}
+
 // stubMaterial is a credential source that stages nothing, for the tests that only exercise
 // configuration and command-line construction.
 type stubMaterial struct{}

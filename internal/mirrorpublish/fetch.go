@@ -45,6 +45,20 @@ const (
 	MirrorRef = "refs/heads/" + MirrorBranch
 )
 
+// reapDelay bounds how long a fetch may spend on I/O after the Git process it started is gone.
+//
+// A deadline kills the process, but it does not close the process's pipes. This fetch starts the
+// deployment-fixed credential helper, so a descendant that inherits the write ends is not
+// hypothetical here: the wait for the command then waits for that descendant rather than for Git,
+// and the declared Timeout becomes advisory — exactly the shape the clone executor was measured
+// against, where a 180-second bound ended at Git's own 300-second connect timeout instead. The
+// delay is what makes GitConfig.Timeout the thing that ends the fetch.
+//
+// It is deliberately the same five seconds the other two Git-running components use, and a second
+// copy rather than a shared constant for the same reason: this package and those two do not import
+// each other, and one value shared across them is how the three would drift back together.
+const reapDelay = 5 * time.Second
+
 // Material is one credential the deployment-fixed helper can read for the duration of one fetch.
 type Material struct {
 	// Identity names the staged material to the helper. It is a canonical lowercase UUID for the same
@@ -256,6 +270,9 @@ func (f *GitFetcher) run(ctx context.Context, directory string, arguments []stri
 	// https URL and a ref name that was checked against Git's own ref rules.
 	command := exec.CommandContext(ctx, f.config.GitPath, arguments...)
 	command.Dir = directory
+	// Set before Start, because exec reads it when it builds the reaping path. Without it the wait
+	// outlives the deadline whenever a descendant holds the pipes; see reapDelay.
+	command.WaitDelay = reapDelay
 	command.Env = []string{
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
