@@ -62,6 +62,98 @@ func TestGitCredentialIngressIsolatesOwnersAndTenants(t *testing.T) {
 	}
 }
 
+// TestGitCredentialIngressReachesOnlyPersonalCredentials pins the attribution half of condition 1
+// together with the "no scope expansion" clause of condition 5. The exception covers one kind of
+// secret — an HTTPS Git token the caller stated as their own — so a reference the deployment manages
+// and a team-owned one must be as unreachable through these routes as a stranger's credential is, even
+// when the caller is an active member of the tenant and really does own the row. Ownership is
+// necessary and not sufficient here, and the routes that carry a token are exactly the routes where
+// that has to hold, which is why this is asserted on the ingress rather than only on the
+// administrative paths that write those rows.
+func TestGitCredentialIngressReachesOnlyPersonalCredentials(t *testing.T) {
+	f := setup(t)
+	secrets := &recordingSecrets{}
+	f.store.Secrets = secrets
+
+	// Two references the caller owns that the ingress must not reach. The first is written through the
+	// administrative path and keeps the `unknown` attribution that path produces: the shape a
+	// deployment-managed or service-account reference has, which is what the exception's "no scope
+	// expansion" clause names. The second is the same row with its attribution moved to `team`, the
+	// shape a shared credential has.
+	managed, err := f.store.ConfigureCredential(context.Background(), f.tid, f.uid, "deployment-reference/managed")
+	must(t, err)
+	shared, err := f.store.ConfigureCredential(context.Background(), f.tid, f.uid, "deployment-reference/shared")
+	must(t, err)
+	_, err = f.store.Pool.Exec("UPDATE credential_refs SET attribution='team',attribution_basis='controlled deployment fixture' WHERE id=$1", shared.S("id"))
+	must(t, err)
+	unreachable := []struct{ what, id string }{
+		{"a deployment-managed reference", managed.S("id")},
+		{"a team-owned reference", shared.S("id")},
+	}
+	for _, row := range unreachable {
+		// The row is the caller's own and sits in the caller's own tenant, so nothing below can be
+		// explained by ownership or tenancy. What separates it from a reachable credential is the
+		// attribution alone.
+		if f.scalar("SELECT count(*) FROM credential_refs WHERE id=$1 AND owner_user_id=$2 AND tenant_id=$3", row.id, f.uid, f.tid) != 1 {
+			t.Fatalf("%s must be one the caller owns before its refusal is evidence of anything", row.what)
+		}
+	}
+
+	refuse := func(what, id string) {
+		t.Helper()
+		state := func() (string, int64, string) {
+			t.Helper()
+			var availability, reference string
+			var version int64
+			must(t, f.store.Pool.QueryRow("SELECT availability,version,secret_ref FROM credential_refs WHERE id=$1", id).
+				Scan(&availability, &version, &reference))
+			return availability, version, reference
+		}
+		availability, version, reference := state()
+		records := f.scalar("SELECT count(*) FROM idempotency_records")
+
+		// Both mutation routes, because the exception is a property of the credential rather than of one
+		// verb: a rotate would put material under a reference nothing authorized, and a revoke would
+		// withdraw authority the owner of that reference never delegated here.
+		f.failAs(f.user, "PUT", f.path("/git-credentials/"+id), core.Object{"token": credentialToken + "-stolen", "version": version}, "", 404, "not_found")
+		f.failAs(f.user, "DELETE", f.path("/git-credentials/"+id), core.Object{"version": version}, uuid.NewString(), 404, "not_found")
+
+		afterAvailability, afterVersion, afterReference := state()
+		if afterAvailability != availability || afterVersion != version || afterReference != reference {
+			t.Fatalf("%s: a refused mutation disturbed the row: %s/%d/%s, want %s/%d/%s",
+				what, afterAvailability, afterVersion, afterReference, availability, version, reference)
+		}
+		if f.scalar("SELECT count(*) FROM idempotency_records") != records {
+			t.Fatalf("%s: a refused mutation recorded a result", what)
+		}
+		// The refusal is decided before the handoff, so no material was asked for and none was
+		// destroyed. A row that answered 404 after replacing the secret would be the worst of both.
+		if writes, rotates, revokes := secrets.handoffs(); writes != 0 || rotates != 0 || revokes != 0 {
+			t.Fatalf("%s: a refused mutation reached the credential service: %d writes, %d rotates, %d revokes",
+				what, writes, rotates, revokes)
+		}
+	}
+	for _, row := range unreachable {
+		refuse(row.what, row.id)
+	}
+
+	// The control. The same two routes, on a credential the caller stated as its own, must still work —
+	// without it every assertion above would also pass if these routes refused everyone. The service
+	// counters are read last and are exactly one of each, so the arithmetic covers the whole test: the
+	// only traffic the service ever saw is the control's, and none of it can be attributed to a refused
+	// request above.
+	personal := f.createCredential(f.user, "personal", credentialScope)
+	if rotated := f.call("PUT", f.path("/git-credentials/"+personal.S("id")), core.Object{"token": credentialToken + "-rotated", "version": 1}, "", 200); rotated.S("attribution") != "personal" || rotated.N("version") != 2 {
+		t.Fatalf("the caller's own personal credential must remain rotatable: %v", rotated)
+	}
+	if revoked := f.call("DELETE", f.path("/git-credentials/"+personal.S("id")), core.Object{"version": 2}, uuid.NewString(), 200); revoked.S("availability") != "invalid" || revoked.N("version") != 3 {
+		t.Fatalf("the caller's own personal credential must remain revocable: %v", revoked)
+	}
+	if writes, rotates, revokes := secrets.handoffs(); writes != 1 || rotates != 1 || revokes != 1 {
+		t.Fatalf("the control must be all the traffic the service saw: %d writes, %d rotates, %d revokes", writes, rotates, revokes)
+	}
+}
+
 // TestGitCredentialCreateIsIdempotentOnItsKey pins the whole reason create takes an idempotency key:
 // the key names the credential id, so a retry after an ambiguous handoff reproduces the same id and
 // the service recognizes the write as a replay instead of sealing a second copy of the secret.

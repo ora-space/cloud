@@ -7,9 +7,10 @@ import (
 )
 
 // This file adds evidence for rules the admission guard and the `0023` triggers already enforce:
-// which reference a Project may reach, what a departure does to one, and what revocation does to one.
-// Nothing here changes behavior; every case drives the real `clone_dispatch` so the assertions are
-// about what admission does rather than about a restatement of it.
+// which reference a Project may reach, what a departure does to one, what disabling or deleting the
+// account itself does to one, and what revocation does to one. Nothing here changes behavior; every
+// case drives the real `clone_dispatch` so the assertions are about what admission does rather than
+// about a restatement of it.
 //
 // Two repository spellings, taken from the existing admission tests: the Project URL keeps whatever the
 // caller submitted, and the reference's scope is its normalized form.
@@ -304,5 +305,131 @@ func TestTheRecoveryScanFreezesWhatTheTriggersCouldNotSeeAndLeavesTeamAlone(t *t
 	}
 	if len(cloner.calls) != 0 {
 		t.Fatalf("a reference the scan froze reached the executor %d times", len(cloner.calls))
+	}
+}
+
+// TestADisabledOrDeletedAccountFreezesItsReferencesThroughTheTrigger covers the account half of the
+// same rule on the path the recovery scan cannot stand in for. The scan and the `users` trigger
+// withdraw the same rows for the same absence, but they are not interchangeable: the scan only sees
+// rows that already existed when it runs, while the trigger fires on the write that disables or
+// deletes the account. The scene is therefore the opposite of the sweep tests' — the reference is
+// written first and the account change afterwards, which is the order that reaches the trigger.
+//
+// Both spellings of "the account is gone" are driven, because the trigger watches two columns and they
+// arrive by different statements. The reason is what makes the evidence specific rather than merely
+// consistent with the outcome: the scan writes `associated_member_departed` for the same absence, so
+// reading back `associated_user_disabled` shows which writer acted, and a scene in which the trigger
+// never fired would fail here even though the row would still be frozen.
+func TestADisabledOrDeletedAccountFreezesItsReferencesThroughTheTrigger(t *testing.T) {
+	for _, gone := range []struct{ name, statement string }{
+		{"a disabled account", `UPDATE users SET status='disabled' WHERE id=$1`},
+		{"a soft-deleted account", `UPDATE users SET deleted_at=now() WHERE id=$1`},
+	} {
+		t.Run(gone.name, func(t *testing.T) {
+			store := dispatcherDB(t)
+			cloner := &recordingCloner{}
+			store.SetCredentialedCloner(cloner)
+			scene := seedCredentialedCloneScene(t, store, admittedRepository, admittedScope)
+
+			// Two staged facts, each forced by something other than this rule. The tenant keeps an active
+			// administrator — the account under test is its own — because disabling the last one is refused
+			// by the deferred tenant guard rather than reaching the credential trigger. And the Operation's
+			// actor moves to that member, because the control plane checks the actor's membership before it
+			// reads any credential rule: an actor whose own account is gone would be refused as a membership
+			// problem and never reach the freeze this case is about.
+			successor := stageMember(t, store, scene)
+			stagedExec(t, store, `UPDATE operations SET actor_user_id=$2 WHERE id=$1`, scene.operation, successor)
+			before := scalarOf(t, store, `SELECT version FROM credential_refs WHERE id=$1`, scene.credential)
+
+			stagedExec(t, store, gone.statement, scene.user)
+
+			if n := scalarOf(t, store, `SELECT count(*) FROM credential_refs WHERE id=$1 AND availability='frozen'`, scene.credential); n != 1 {
+				t.Fatal("writing the account change must freeze the reference the account owns")
+			}
+			if reason := scalarText(t, store, `SELECT coalesce(unavailable_reason,'') FROM credential_refs WHERE id=$1`, scene.credential); reason != "associated_user_disabled" {
+				t.Fatalf("the reference must carry the account's own reason, got %q", reason)
+			}
+			if got := scalarOf(t, store, `SELECT version FROM credential_refs WHERE id=$1`, scene.credential); got != before+1 {
+				t.Fatalf("the freeze must advance the reference's version from %d, got %d", before, got)
+			}
+			if _, err := scene.dispatch(store, "exec-account-gone"); faultCode(t, err) != "repository_credential_frozen" {
+				t.Fatalf("what the account trigger froze must be refused at admission, got %v", err)
+			}
+			if len(cloner.calls) != 0 {
+				t.Fatalf("a reference the account trigger froze reached the executor %d times", len(cloner.calls))
+			}
+			if n := scalarOf(t, store, `SELECT count(*) FROM clone_executions WHERE workspace_id=$1`, scene.workspace); n != 0 {
+				t.Fatalf("a refused credentialed clone left %d clone executions behind", n)
+			}
+		})
+	}
+}
+
+// TestADeploymentManagedReferenceIsRefusedForItsEmptyCapabilityOnceAnExecutorExists stages the case the
+// integration suite structurally cannot reach. There no executor is installed, so every credentialed
+// clone is refused at the deployment level and two very different obstacles produce the same answer: a
+// deployment that can serve nothing, and a reference that permits nothing. Installing the executor
+// removes the first refusal, and what remains is the capability clause reading the column the
+// deployment path actually writes — `ConfigureCredential` omits `capabilities`, so the reference it
+// creates carries the column's default, the empty set, which `CanonicalCapabilities` refuses rather than
+// reading as "no restriction".
+//
+// The reference is created through that path instead of being assembled with an UPDATE, because the
+// shape is the point. An empty set written by hand would only show that the guard refuses an empty set;
+// this shows what happens to the reference a deployment can really create.
+//
+// Two stores, because each seeded scene takes the schema's single global controller lease and a refused
+// dispatch settles its Operation as failed — neither the lease nor a terminal Operation can be reused,
+// so the control has to be its own scene. The control is the same write path with the one capability
+// granted, and it is admitted, which is what makes the refusal above about what the reference declares
+// rather than about deployment-managed references being unusable.
+func TestADeploymentManagedReferenceIsRefusedForItsEmptyCapabilityOnceAnExecutorExists(t *testing.T) {
+	refused := dispatcherDB(t)
+	refusedCloner := &recordingCloner{}
+	refused.SetCredentialedCloner(refusedCloner)
+	underTest := seedCredentialedCloneScene(t, refused, admittedRepository, admittedScope)
+	empty, err := refused.ConfigureCredential(context.Background(), underTest.tenant, underTest.user, "credential-ref/deployment-managed")
+	if err != nil {
+		t.Fatalf("stage the deployment-managed reference: %v", err)
+	}
+	stagedExec(t, refused, `UPDATE projects SET credential_ref_id=$2 WHERE id=$1`, underTest.project, empty.S("id"))
+
+	// The three facts that make this the deployment path's shape, read back rather than assumed: the
+	// write path sets none of them, so every default has to be the one the guard actually sees.
+	if n := scalarOf(t, refused, `SELECT count(*) FROM credential_refs WHERE id=$1 AND attribution='unknown' AND capabilities='[]'::jsonb AND repository_scope IS NULL AND availability='available' AND deleted_at IS NULL`, empty.S("id")); n != 1 {
+		t.Fatal("ConfigureCredential must write the attribution, capability set and scope this case is about")
+	}
+	// The owner is present and active and the executor is installed, so nothing but the capability set
+	// stands between this reference and admission.
+	if n := scalarOf(t, refused, `SELECT count(*) FROM credential_refs c JOIN tenant_memberships m ON m.tenant_id=c.tenant_id AND m.user_id=c.owner_user_id JOIN users u ON u.id=m.user_id WHERE c.id=$1 AND m.status='active' AND u.status='active' AND u.deleted_at IS NULL`, empty.S("id")); n != 1 {
+		t.Fatal("the reference's owner must be present, or the refusal below could be the freeze rule instead")
+	}
+
+	if _, err := underTest.dispatch(refused, "exec-managed-empty-capability"); faultCode(t, err) != repositoryCredentialCapabilityUnsupported {
+		t.Fatalf("a deployment-managed reference that permits no clone must be refused for its capability, got %v", err)
+	}
+	if len(refusedCloner.calls) != 0 {
+		t.Fatalf("a reference that permits no clone reached the executor %d times", len(refusedCloner.calls))
+	}
+	if n := scalarOf(t, refused, `SELECT count(*) FROM clone_executions WHERE workspace_id=$1`, underTest.workspace); n != 0 {
+		t.Fatalf("a refused credentialed clone left %d clone executions behind", n)
+	}
+
+	admitted := dispatcherDB(t)
+	admittedCloner := &recordingCloner{}
+	admitted.SetCredentialedCloner(admittedCloner)
+	control := seedCredentialedCloneScene(t, admitted, admittedRepository, admittedScope)
+	granted, err := admitted.ConfigureCredential(context.Background(), control.tenant, control.user, "credential-ref/deployment-managed")
+	if err != nil {
+		t.Fatalf("stage the control's deployment-managed reference: %v", err)
+	}
+	stagedExec(t, admitted, `UPDATE projects SET credential_ref_id=$2 WHERE id=$1`, control.project, granted.S("id"))
+	stagedExec(t, admitted, `UPDATE credential_refs SET capabilities='["clone"]'::jsonb WHERE id=$1`, granted.S("id"))
+
+	if _, err := control.dispatch(admitted, "exec-managed-capable"); err != nil {
+		t.Fatalf("the same deployment-managed reference must be admitted once it declares the capability, got %v", err)
+	}
+	if len(admittedCloner.calls) != 1 {
+		t.Fatalf("the admitted clone reached the executor %d times, want 1", len(admittedCloner.calls))
 	}
 }

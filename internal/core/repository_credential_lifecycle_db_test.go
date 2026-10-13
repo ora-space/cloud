@@ -20,6 +20,8 @@ package core
 //   - a create whose handoff succeeded but whose metadata commit failed reports failure rather than
 //     inferring success, and its retry reconciles onto the same derived identity instead of sealing a
 //     second credential;
+//   - a departure freezes its reference as a terminal state rather than as a cache of the membership
+//     that ended, so a rejoined member's reference stays frozen and the recovery scan leaves it alone;
 //   - the applied migrations that carry credential semantics are byte-for-byte immutable.
 
 import (
@@ -590,5 +592,83 @@ func TestTheAppliedCredentialMigrationsAreByteForByteImmutable(t *testing.T) {
 		if got := hex.EncodeToString(sum[:]); got != digest {
 			t.Fatalf("applied migration %s was edited: digest %s, want %s; add a forward migration instead", name, got, digest)
 		}
+	}
+}
+
+// TestARejoinedMemberDoesNotUnfreezeTheReferenceThatLeftWithThem is the direct evidence that freezing is
+// a recorded terminal state, not a cache of "the owner is not an active member".
+//
+// The order is what makes it discriminating. The departure runs first, so the `0023` trigger writes the
+// freeze — and the version it bumps is read back, because a refusal alone would also come from a row
+// that was never frozen. Only then does the member come back, which means that at the second dispatch
+// every relationship the departure predicate reads is satisfied again: the membership is active, the
+// user is active, nothing is soft-deleted. An implementation that *derived* frozen from the membership
+// would clear the condition and admit the clone; this one still refuses, and refuses with the
+// reference's own code rather than the deployment's, so the operator is told the reference is unusable
+// rather than that the deployment cannot clone.
+//
+// The recovery scan is driven directly as well. It is the second writer of this column and it runs on a
+// real path (`runtime_control.go`), so a scan that recomputed availability rather than only ever
+// freezing would undo the trigger's work here, and no other test in the suite would notice.
+//
+// The last step is the control that keeps the earlier ones honest: the freeze is cleared and the same
+// dispatch is run again, where it is admitted. Without that step a rejoin which silently failed to take
+// effect would produce the identical refusal, and the test would pass while proving nothing about
+// freezing — every assertion would be satisfied by the owner-absent rule instead.
+func TestARejoinedMemberDoesNotUnfreezeTheReferenceThatLeftWithThem(t *testing.T) {
+	store := dispatcherDB(t)
+	cloner := &recordingCloner{}
+	store.SetCredentialedCloner(cloner)
+	scene := seedCredentialedCloneScene(t, store, admittedRepository, admittedScope)
+	stageDeparture(t, store, scene, "personal")
+
+	frozen := scalarOf(t, store, `SELECT version FROM credential_refs WHERE id=$1`, scene.credential)
+	if n := scalarOf(t, store, `SELECT count(*) FROM credential_refs WHERE id=$1 AND availability='frozen' AND unavailable_reason='associated_member_departed'`, scene.credential); n != 1 {
+		t.Fatal("the departure did not freeze the reference, so a rejoin here would prove nothing")
+	}
+
+	// The member rejoins. Nothing else moves: the Project still names the reference, and the reference
+	// still names the repository the Project asks for, so the only thing left to refuse the clone is the
+	// freeze itself.
+	stagedExec(t, store, `UPDATE tenant_memberships SET status='active' WHERE tenant_id=$1 AND user_id=$2`, scene.tenant, scene.user)
+	if _, err := store.transact(context.Background(), func(t *transaction) Object {
+		freezeInactiveRepositoryCredentials(t)
+		return Object{}
+	}); err != nil {
+		t.Fatalf("run the departure recovery scan after the rejoin: %v", err)
+	}
+
+	if _, err := scene.dispatch(store, "exec-rejoined"); faultCode(t, err) != "repository_credential_frozen" {
+		t.Fatalf("a rejoined member's reference must stay frozen, got %v", err)
+	}
+	if got := scalarOf(t, store, `SELECT version FROM credential_refs WHERE id=$1`, scene.credential); got != frozen {
+		t.Fatalf("the rejoin moved the frozen reference's version from %d to %d", frozen, got)
+	}
+	if n := scalarOf(t, store, `SELECT count(*) FROM credential_refs WHERE id=$1 AND availability='frozen' AND unavailable_reason='associated_member_departed'`, scene.credential); n != 1 {
+		t.Fatal("the rejoin cleared the freeze or replaced the reason that records why it was frozen")
+	}
+	if len(cloner.calls) != 0 {
+		t.Fatalf("a refused reference reached the executor %d times", len(cloner.calls))
+	}
+	if n := scalarOf(t, store, `SELECT count(*) FROM clone_executions WHERE workspace_id=$1`, scene.workspace); n != 0 {
+		t.Fatalf("a refused credentialed clone left %d clone executions behind", n)
+	}
+
+	// The control that keeps the assertions above from passing for the wrong reason: the rejoin has to be
+	// real. The executor is installed, so once nothing refuses, the clone is admitted. Clearing the
+	// freeze is therefore the one change that should flip the outcome, and flipping it shows the
+	// membership predicate really is satisfied again — which is what makes the `repository_credential_frozen`
+	// above the work of the recorded freeze rather than of the owner-absent rule. A rejoin that silently
+	// did not take effect would leave the owner-absent rule refusing, and the test would have proved
+	// nothing about freezing being terminal.
+	stagedExec(t, store, `UPDATE credential_refs SET availability='available',unavailable_reason=NULL WHERE id=$1`, scene.credential)
+	if _, err := scene.dispatch(store, "exec-rejoined-unfrozen"); err != nil {
+		t.Fatalf("after the rejoin only the recorded freeze was refusing, so clearing it must admit the clone, got %v", err)
+	}
+	if len(cloner.calls) != 1 {
+		t.Fatalf("the admitted clone reached the executor %d times, want 1", len(cloner.calls))
+	}
+	if n := scalarOf(t, store, `SELECT count(*) FROM clone_executions WHERE workspace_id=$1`, scene.workspace); n != 1 {
+		t.Fatalf("the admitted clone recorded %d executions, want 1", n)
 	}
 }
