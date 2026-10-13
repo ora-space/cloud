@@ -1011,18 +1011,21 @@ func TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades(t *testing.T) {
 	wantPGError(t, e, "23503") // the identity belongs to a real user
 }
 
-// TestMigration0034MirrorPreparationAppliesFreshAndUpgrades proves the pre-clone mirror step and its
-// record exist on a fresh database and on an upgrade, and that the rules keeping a preparation from
-// naming a ref or a ready state it cannot support are held by the database rather than only by Cloud's
-// code. The step vocabulary is a CHECK constraint, so "the upgrade rebuilt it" is the thing to assert:
-// without the rebuild the step is unusable however the Go code is written.
+// TestMigration0034MirrorPreparationAppliesFreshAndUpgrades proves the mirror preparation's record
+// exists on a fresh database and on an upgrade, and that the rules keeping a preparation from naming a
+// ref or a ready state it cannot support are held by the database rather than only by Cloud's code.
+//
+// It asserts the step vocabulary does NOT admit a mirror step, because 0035 withdraws the one 0034
+// added: the step name crosses to the desktop Controller as a protobuf enum it has no arm for, so an
+// operation entering that step is one the Controller can neither name nor drive. The preparation runs
+// inside the existing node -> clone transition instead, which is why the step must stay out.
 func TestMigration0034MirrorPreparationAppliesFreshAndUpgrades(t *testing.T) {
 	freshPool, _ := testSchema(t, "test_mp34f_")
 	migratedTwice(t, newStoreOnSchema(t, freshPool))
 	if !tableExists(t, freshPool, "mirror_preparations") {
 		t.Fatal("a fresh database must have mirror_preparations")
 	}
-	assertMirrorStepIsAdmitted(t, freshPool)
+	assertMirrorIsNotAnOperationStep(t, freshPool)
 	assertMirrorPreparationConstraints(t, freshPool)
 
 	pool, _ := testSchema(t, "test_mp34_")
@@ -1034,24 +1037,57 @@ func TestMigration0034MirrorPreparationAppliesFreshAndUpgrades(t *testing.T) {
 	if !tableExists(t, pool, "mirror_preparations") {
 		t.Fatal("the upgrade must add mirror_preparations")
 	}
-	assertMirrorStepIsAdmitted(t, pool)
+	assertMirrorIsNotAnOperationStep(t, pool)
 	assertMirrorPreparationConstraints(t, pool)
 }
 
-// assertMirrorStepIsAdmitted checks the rebuilt step constraint rather than inserting an operation row.
-// An operation needs a tenant membership, a Project and a Workspace to exist at all, which would make
-// this a fixture test; the constraint definition is what the migration actually changes.
+// TestMigration0035WithdrawsTheMirrorStep proves the withdrawal is an upgrade and not a rewrite: a
+// database stopped at 0034 really did admit the mirror step, and applying 0035 removes it without
+// dropping the preparation record that 0034 created. Both halves matter, because a "withdrawal" that
+// only looked correct on a fresh database would leave every deployed database able to enter a step the
+// Controller cannot drive.
+func TestMigration0035WithdrawsTheMirrorStep(t *testing.T) {
+	pool, _ := testSchema(t, "test_mp35_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0035_mirror_is_not_an_operation_step.sql"))
+	assertMirrorStepIsAdmitted(t, pool)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertMirrorIsNotAnOperationStep(t, pool)
+	if !tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("withdrawing the step must not drop the preparation record")
+	}
+	assertMirrorPreparationConstraints(t, pool)
+}
+
+// stepVocabulary reads this schema's operations_step_check definition. The constraint is looked up in
+// the test's own schema because `pg_constraint` is cluster-wide: a query on the name alone could read
+// a sibling test schema's constraint and pass without this schema having been migrated at all.
+func stepVocabulary(t *testing.T, pool *sql.DB) string {
+	t.Helper()
+	var definition string
+	must(t, pool.QueryRow(`SELECT pg_get_constraintdef(c.oid)
+		FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+		WHERE c.conname='operations_step_check' AND n.nspname=current_schema()`).Scan(&definition))
+	return definition
+}
+
+// assertMirrorStepIsAdmitted checks the step constraint rather than inserting an operation row. An
+// operation needs a tenant membership, a Project and a Workspace to exist at all, which would make this
+// a fixture test; the constraint definition is what the migration actually changes.
 func assertMirrorStepIsAdmitted(t *testing.T, pool *sql.DB) {
 	t.Helper()
-	// The constraint is looked up in the test's own schema: `pg_constraint` is cluster-wide, so a
-	// query on the name alone could read a sibling test schema's constraint and pass without this
-	// schema having been migrated at all.
-	var admits bool
-	must(t, pool.QueryRow(`SELECT position('mirror' in pg_get_constraintdef(c.oid))>0
-		FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
-		WHERE c.conname='operations_step_check' AND n.nspname=current_schema()`).Scan(&admits))
-	if !admits {
-		t.Fatal("operations_step_check must admit the mirror step after 0034")
+	if definition := stepVocabulary(t, pool); !strings.Contains(definition, "'mirror'") {
+		t.Fatalf("operations_step_check must admit the mirror step at 0034, got %s", definition)
+	}
+}
+
+// assertMirrorIsNotAnOperationStep is the standing assertion: no schema may let an operation enter a
+// step the Controller cannot decode, so 'mirror' must be absent from the vocabulary in every schema
+// the full migration set produces.
+func assertMirrorIsNotAnOperationStep(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	if definition := stepVocabulary(t, pool); strings.Contains(definition, "'mirror'") {
+		t.Fatalf("operations_step_check must not admit a mirror step: the Controller maps an unknown step to Unspecified and fails the round, got %s", definition)
 	}
 }
 
