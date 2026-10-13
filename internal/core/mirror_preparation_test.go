@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/wanglongan587/cloud/internal/cloneauth"
@@ -248,6 +250,78 @@ func TestTheMirrorGateIsInertForAnonymousProjects(t *testing.T) {
 	}
 	if n := scalarOf(t, store, "SELECT count(*) FROM workspaces WHERE id=$1 AND base_commit_id IS NULL", scene.workspace); n != 1 {
 		t.Fatal("the gate pinned a baseline for an anonymous Workspace, which owns its own clone result")
+	}
+}
+
+// TestAnUnboundProjectsSnapshotIsNeverRedirectedAtItsOldMirror is the projection-level half of the
+// public-clone regression, and the state it stages is a supported one rather than a contrived one:
+// unbinding a Project's credential turns it back into an anonymous Project that dispatches and runs
+// (`TestSettlementRefusesToWriteOnceTheBindingIsGone` states that as the reason its fence exists).
+//
+// The window is what makes it worth pinning. A Project that was credentialed has a `ready`
+// preparation for this Operation, and nothing deletes that row when the binding goes: the reclaim
+// sweep withdraws the mirror *content* because the reference set no longer names it, but the
+// preparation row is the Operation's own history and stays `ready`. So the snapshot is derived in a
+// state where a credentialed-looking preparation and an anonymous Project are both present, and the
+// order in which the derivation consults them decides what the Controller is handed. Consulting the
+// preparation first — the natural way to write the projection if the anonymous branch is forgotten —
+// would hand the Controller the address of a mirror that the sweep has already withdrawn, and the
+// Workspace would dispatch a clone of content the Git Server no longer serves.
+//
+// The assertion is on the snapshot because that is what the Controller reads `repository_url` and
+// `requested_ref` from (`cloud/operations/steps.rs`, `dispatch_clone`), so an address that never
+// appears here can never become a clone.
+func TestAnUnboundProjectsSnapshotIsNeverRedirectedAtItsOldMirror(t *testing.T) {
+	store := dispatcherDB(t)
+	// The whole credentialed channel, staged: the deployment names the internal Git Server, the Project
+	// is bound, and a ready preparation exists for this Operation.
+	scene := publishedMirror(t, store, seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private"))
+	if scene.cloneRepository == "" {
+		t.Fatal("the scene must have a published mirror, or this case asserts nothing")
+	}
+	// Then the one change: the Project no longer names a credential. The mirror address above belongs
+	// to a binding that no longer exists.
+	execTest(t, store, `UPDATE projects SET credential_ref_id=NULL WHERE id=$1`, scene.project)
+
+	// The snapshot is read through the function the Controller's own path uses (`claim`, `operation`),
+	// rather than through `projectMirrorInput`'s two writes, so the assertion is about what is handed
+	// out and not about an intermediate.
+	snap, err := store.transact(context.Background(), func(tx *transaction) Object {
+		o := tx.one("SELECT * FROM operations WHERE id=$1", scene.operation)
+		if o == nil {
+			return Object{}
+		}
+		return snapshot(tx, o)
+	})
+	if err != nil {
+		t.Fatalf("read the snapshot: %v", err)
+	}
+	project, ok := snap["project"].(Object)
+	if !ok || project == nil {
+		t.Fatal("the snapshot carries no Project")
+	}
+	if got := project.S("repositoryUrl"); got != scene.repository {
+		t.Fatalf("an unbound Project's snapshot names %q, want its own upstream %q", got, scene.repository)
+	}
+	workspaces, ok := snap["workspaces"].([]Object)
+	if !ok || len(workspaces) != 1 {
+		t.Fatalf("the snapshot carries %d workspaces, want the one this Operation clones", len(workspaces))
+	}
+	// The Workspace's ref is the other half of the same decision: a mirrored clone is pinned to the
+	// mirror's single branch rather than to the ref the Workspace asked for, so a ref that still names
+	// `release/2026-10` is the second half of "this clone was not redirected".
+	if got := workspaces[0].S("requestedRef"); got != scene.ref {
+		t.Fatalf("the Workspace's requested ref became %q, want %q", got, scene.ref)
+	}
+	// And the stronger statement, which is the one the risk is actually about: no part of the snapshot
+	// names the artifact built for the credential the Project no longer has. The address cannot appear
+	// in a field this test did not think to check.
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("encode the snapshot: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(scene.cloneRepository)) {
+		t.Fatalf("the snapshot names the old mirror's address %q for a Project that no longer has a credential", scene.cloneRepository)
 	}
 }
 
