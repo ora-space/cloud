@@ -269,8 +269,34 @@ func TestMirrorPreparationOfARealPrivateRepository(t *testing.T) {
 	// A client can clone it, and what it gets is the file the upstream repository holds. This is the
 	// step that proves the published tree is a working bare repository rather than a directory of
 	// objects nothing can read.
+	//
+	// The command is the Node's own shape — no local shortcuts, one branch named explicitly, no tags,
+	// no submodules — and the assertions after it are the ones the Node performs on a checkout it is
+	// willing to adopt (desktop `apps/ora-node/src/repository/inspection.rs`). Reproducing them here is
+	// what makes this evidence about the *consumer*: a mirror whose single ref were not a branch under
+	// `refs/heads` would clone into a detached HEAD, and every one of these checks would fail.
 	clientCheckout := filepath.Join(t.TempDir(), "checkout")
-	runGit(t, filepath.Dir(clientCheckout), nil, "clone", "--quiet", handle.Dir, clientCheckout)
+	runGit(t, filepath.Dir(clientCheckout), nil, "clone", "--quiet", "--no-local", "--reject-shallow",
+		"--single-branch", "--no-tags", "--no-recurse-submodules", "--branch", mirrorpublish.MirrorBranch,
+		"--", handle.Dir, clientCheckout)
+	if head := runGit(t, clientCheckout, nil, "symbolic-ref", "HEAD"); head != mirrorpublish.MirrorRef {
+		t.Fatalf("the checkout's HEAD is %q, want the mirror's branch %q", head, mirrorpublish.MirrorRef)
+	}
+	if got := runGit(t, clientCheckout, nil, "rev-parse", "--verify", "HEAD^{commit}"); got != repository.Commit {
+		t.Fatalf("the checkout is at %q, want the mirrored commit %q", got, repository.Commit)
+	}
+	if got := runGit(t, clientCheckout, nil, "rev-parse", "--verify", "refs/remotes/origin/"+mirrorpublish.MirrorBranch+"^{commit}"); got != repository.Commit {
+		t.Fatalf("the remote-tracking ref is at %q, want the mirrored commit %q", got, repository.Commit)
+	}
+	if got := runGit(t, clientCheckout, nil, "rev-parse", "--is-bare-repository"); got != "false" {
+		t.Fatalf("the checkout reports --is-bare-repository=%q", got)
+	}
+	if got := runGit(t, clientCheckout, nil, "config", "--get", "remote.origin.url"); got != handle.Dir {
+		t.Fatalf("the checkout's origin is %q, want the mirror it was cloned from %q", got, handle.Dir)
+	}
+	if dirty := runGit(t, clientCheckout, nil, "status", "--porcelain", "--untracked-files=no"); dirty != "" {
+		t.Fatalf("the fresh checkout is not clean:\n%s", dirty)
+	}
 	content, err := os.ReadFile(filepath.Join(clientCheckout, acceptanceFileName))
 	if err != nil {
 		t.Fatalf("read the mirrored file: %v", err)

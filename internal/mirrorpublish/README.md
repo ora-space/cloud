@@ -19,7 +19,12 @@
   不做任何改动并返回错误。
 - **抓取**（[`fetch.go`](fetch.go)）：`GitFetcher` 是本包唯一触网的组件。它执行一次加固后的 `git fetch`——与
   带凭据 clone 相同的封闭协议集合、拒绝重定向与固定凭据 helper——只抓取一个分支到唯一一个 ref
-  （`refs/ora/mirror`），并从仓库里**读回**提交，使存储的核验比较的是两个独立取得的值。
+  （`refs/heads/ora-mirror`），并从仓库里**读回**提交，使存储的核验比较的是两个独立取得的值。这一点必须是
+  `refs/heads` 下的分支：Node 用 `git clone --branch <名字>` 克隆，并在克隆后要求 `refs/heads/<名字>` 存在、
+  `HEAD` 符号指向它、`refs/remotes/origin/<名字>` 指向同一提交；而 Git 的 `--branch` 只按 `refs/heads/<名字>`
+  与 `refs/tags/<名字>` 解析，落在别处的单 ref 会让每一次镜像克隆以 "Remote branch not found" 失败。名字由部署
+  侧固定（`mirrorpublish.MirrorBranch`），因为镜像以 `(project, repository, commit)` 为键、不以 ref 为键：同名
+  提交的两个不同 ref 共用一份镜像，若按先到者的 ref 命名，第二个读者拿到的检出就取决于第一个读者的请求。
 
 ## 不变量
 

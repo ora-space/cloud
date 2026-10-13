@@ -76,8 +76,10 @@ executorIdentity,对镜像要求这三项且**禁止**三个 node id。若合成
 3. **物化**:目录名取**授权 id**(`mirrorMaterialIdentity`),不是 operation id——授权只花一次,所以同一
    operation 的两次尝试(包括 Cloud 已经重试的那次)不可能撞进同一个目录。
 4. **一次受约束的 fetch**:`init --bare` 后只 fetch 那一个签名 ref,再
-   `rev-parse --verify --quiet refs/ora/mirror^{commit}` 把 commit 读回来;`for-each-ref` 必须**恰好**只有
-   `refs/ora/mirror` 一条(`mirrorpublish.MirrorRef`),并 `symbolic-ref HEAD refs/ora/mirror`。
+   `rev-parse --verify --quiet refs/heads/ora-mirror^{commit}` 把 commit 读回来;`for-each-ref` 必须**恰好**只有
+   `refs/heads/ora-mirror` 一条(`mirrorpublish.MirrorRef`),并 `symbolic-ref HEAD refs/heads/ora-mirror`
+   ——它必须是 `refs/heads` 下的分支,否则 Node 的 `git clone --branch` 找不到它(理由见
+   [`mirrorpublish`](../mirrorpublish/README.md))。
 5. **发布并销毁**:`Preparation.Begin` →若该 commit 已发布则返回既有记录(按 commit 幂等)→ 否则 `Adopt`
    移入 store 的 staging 后再 `Publish`;物化的销毁与 fetch 目录的移除在**每一条**出口上执行,销毁失败照样
    报错——凭据可能还在盘上的准备不是一次成功的准备。
@@ -164,7 +166,7 @@ executorIdentity,对镜像要求这三项且**禁止**三个 node id。若合成
   "把 clone 的作业发到镜像路由"不会换来一份镜像,也不会替 Node 花掉那次 clone——它换来的是 400
   `binding_mismatch`,而那份授权仍然可以在它本该走的路由上兑换成功。
 - **只 fetch 签名里的那一个 ref**:ref 由授权签名携带并经 `cloneauth.ValidateRef` 校验,发布的镜像又用
-  `for-each-ref` 断言**恰好**只有 `refs/ora/mirror` 一条,所以读镜像的人拿到的 commit 就是 Cloud 行里那个
+  `for-each-ref` 断言**恰好**只有 `refs/heads/ora-mirror` 一条,所以读镜像的人拿到的 commit 就是 Cloud 行里那个
   commit,而不是派发方想让它是的那个。
 - **fetch 目录生活在 mirror store 之内、由构造推导而非配置**:`fetchRoot = <mirror root>/fetch`,于是它移入
   store staging 的动作按构造是同文件系统内的 rename;而部署若把镜像根与物化根互相嵌套,`NewMirrorExecutor`
@@ -198,9 +200,12 @@ executorIdentity,对镜像要求这三项且**禁止**三个 node id。若合成
 - 调用方:`cmd/clone-executor` 是它的部署入口;`cmd/git-credential-ora` 是它固定的 helper(只共享
   `credentialmaterial`,不共享作业逻辑)。Cloud 一侧经 `internal/core` 的 `CloneDispatcher` 调用
   `client.go` 的 `Dispatch`。
-- **今天没有生产调用方被启用**:`CLOUD_CLONE_DISPATCH_ENABLED` 默认 `false`,Cloud 既不签发也不派发,执行器
-  因此拒绝每一个作业。这是 fail-closed 的默认,不是待办。**镜像这条路一样**:`Client.PrepareMirror` 今天只在
-  本包的验收测试里被驱动,Cloud 侧的镜像派发器尚未接线,`internal/mirrorpublish` 也还没有本包之外的生产调用方。
+- **默认没有任何调用方被启用**:`CLOUD_CLONE_DISPATCH_ENABLED` 与 `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` 默认
+  都是 `false`。两个都关时 Cloud 既不签发也不派发,执行器因此拒绝每一个作业——这是 fail-closed 的默认,不是待办。
+  打开 `mirror_enabled` 后 Cloud 会为每一次已领取的镜像准备尝试签发并派发(见 `internal/core` 的
+  `MirrorDispatcher` 与 `PrepareMirrorsOnce`);但**镜像内容今天仍无读者**:Cloud 尚未被告知沙盒从哪里读镜像
+  (`git_server.sandbox_base_url` 为空),因此没有任何 Workspace 会从镜像 clone,`internal/mirrorpublish`
+  也仍没有本包之外的生产调用方。
 
 ## 测试
 
@@ -228,7 +233,7 @@ executorIdentity,对镜像要求这三项且**禁止**三个 node id。若合成
   Credential Service 与卷与 KEK、真实双向 TLS、现场编译的真实 `git-credential-ora`、真实 mirror store),并把
   **两个执行器装在同一台服务器上**,于是一个派发身份出示同一张证书时,两条路由给出不同答案——这就是用途判据
   的可观测形式。四个用例:真实私有仓库准备成功,发布出来的裸仓库能被真实 `git clone` 读出 README 的字节,
-  `ls-remote` 在同一个 commit 上报出 `HEAD` 与 `refs/ora/mirror`(`HEAD` 是那条 ref 经符号引用看到的同一件事,
+  `ls-remote` 在同一个 commit 上报出 `HEAD` 与 `refs/heads/ora-mirror`(`HEAD` 是那条 ref 经符号引用看到的同一件事,
   不是第二条 ref),且授权不能再用第二次、物化根下 Token 不出现、条目为 0;**镜像路由拒绝 clone 授权**(400
   `binding_mismatch`、零记录,随后那份 clone 授权仍能经 `Resolve` 兑换成功);**clone 路由拒绝镜像授权**
   (同样 400,随后那份镜像授权仍能经 `ResolveMirror` 兑换成功);服务端建为 `Mirror: nil` 时报的是

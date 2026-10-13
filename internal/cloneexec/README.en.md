@@ -98,9 +98,10 @@ instead of a checkout at the end:
    operation's: an authorization is spent exactly once, so two attempts of one operation — including an
    attempt Cloud has already retried while this one was still running — cannot collide on one directory.
 4. **One constrained fetch**: `init --bare`, fetch the one signed ref, read the commit back out with
-   `rev-parse --verify --quiet refs/ora/mirror^{commit}`, assert with `for-each-ref` that the repository
-   exposes **exactly** `refs/ora/mirror` (`mirrorpublish.MirrorRef`), and `symbolic-ref HEAD
-   refs/ora/mirror`.
+   `rev-parse --verify --quiet refs/heads/ora-mirror^{commit}`, assert with `for-each-ref` that the
+   repository exposes **exactly** `refs/heads/ora-mirror` (`mirrorpublish.MirrorRef`), and
+   `symbolic-ref HEAD refs/heads/ora-mirror`. It has to be a branch under `refs/heads`, or the Node's
+   `git clone --branch` cannot find it (see [`mirrorpublish`](../mirrorpublish/README.en.md)).
 5. **Publish and destroy.** `Preparation.Begin`, an already-published commit returns its existing record
    (idempotence by commit), otherwise `Adopt` moves the fetch into the store's staging area and
    `Publish` publishes it. The material's destruction and the fetch directory's removal run on **every**
@@ -217,7 +218,7 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   `binding_mismatch`, and the authorization still redeems on the route that owns it.
 - **Only the ref the authorization signed is fetched**: the ref travels inside the signed authorization
   and is validated by `cloneauth.ValidateRef`, and the published mirror is asserted with `for-each-ref`
-  to expose **exactly** `refs/ora/mirror`, so a reader gets the commit Cloud's rows name rather than the
+  to expose **exactly** `refs/heads/ora-mirror`, so a reader gets the commit Cloud's rows name rather than the
   commit whoever dispatched would prefer.
 - **The fetch directory lives inside the mirror store and is derived, not configured**:
   `fetchRoot = <mirror root>/fetch`, which is what makes the move into the store's staging area a rename
@@ -267,10 +268,13 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
 - Called by: `cmd/clone-executor` is its deployment entry point, and `cmd/git-credential-ora` is the
   helper it fixes (sharing only `credentialmaterial`, never the job logic). On the Cloud side,
   `CloneDispatcher` in `internal/core` calls `Dispatch` in `client.go`.
-- **No production caller is enabled today**: `CLOUD_CLONE_DISPATCH_ENABLED` defaults to `false`, so Cloud
-  neither signs nor dispatches and the executor refuses every job. That is the fail-closed default, not
-  a pending task. **The mirror path is in the same state**: `Client.PrepareMirror` is driven only by
-  this package's acceptance test, Cloud's mirror dispatcher is not wired yet, and
+- **No caller is enabled by default**: both `CLOUD_CLONE_DISPATCH_ENABLED` and
+  `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` default to `false`. With both off, Cloud neither signs nor
+  dispatches and the executor refuses every job. That is the fail-closed default, not a pending task.
+  With `mirror_enabled` on, Cloud does sign and dispatch for every claimed mirror-preparation attempt
+  (see `MirrorDispatcher` and `PrepareMirrorsOnce` in `internal/core`) — but **published mirror content
+  still has no reader**: Cloud has not been told where a sandbox reads a mirror from
+  (`git_server.sandbox_base_url` is empty), so no Workspace clones from a mirror, and
   `internal/mirrorpublish` still has no production caller outside this package.
 
 ## Tests
@@ -316,7 +320,7 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   presenting one certificate is answered differently by each route — the observable form of "the rule is
   the operation, not the route". Its four cases: a real private repository prepares successfully, the
   published bare repository can be read back by a real `git clone` yielding the README's bytes,
-  `ls-remote` advertises `HEAD` and `refs/ora/mirror` at the same commit (`HEAD` is that one ref seen
+  `ls-remote` advertises `HEAD` and `refs/heads/ora-mirror` at the same commit (`HEAD` is that one ref seen
   through a symbolic ref, not a second ref), and afterwards the authorization cannot prepare a second
   mirror, no token appears under the materialization root and it holds zero entries; **the mirror route
   refuses a clone authorization** (400 `binding_mismatch`, zero records, and that clone authorization

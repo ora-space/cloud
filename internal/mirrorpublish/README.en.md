@@ -25,8 +25,16 @@ should exist, which is a question only Cloud's own rows can answer.
 - **Fetching** ([`fetch.go`](fetch.go)): `GitFetcher` is the only component that reaches the network.
   It runs one hardened `git fetch` — the same closed protocol set, redirect refusal and fixed
   credential helper the credentialed clone uses — fetches one branch into exactly one ref
-  (`refs/ora/mirror`), and reads the commit back out of the repository so the store's verification
-  compares two independently obtained values.
+  (`refs/heads/ora-mirror`), and reads the commit back out of the repository so the store's
+  verification compares two independently obtained values. That ref has to be a branch under
+  `refs/heads`: the Node clones with `git clone --branch <name>` and then requires `refs/heads/<name>`
+  to exist, `HEAD` to be symbolic to it, and `refs/remotes/origin/<name>` to name the same commit,
+  while Git resolves `--branch` only as `refs/heads/<name>` or `refs/tags/<name>` — a single ref
+  anywhere else makes every mirrored clone fail with "Remote branch not found". The name is fixed by
+  the deployment (`mirrorpublish.MirrorBranch`) because a mirror is keyed by
+  `(project, repository, commit)` and not by a ref: two different refs at one commit share a mirror,
+  and naming the branch after whichever arrived first would make the second reader's checkout depend
+  on the first reader's request.
 
 ## Invariants
 

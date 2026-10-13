@@ -15,7 +15,7 @@ const (
 	testRepository = "https://github.com/ora-space/demo"
 	testCommitA    = "1111111111111111111111111111111111111111"
 	testCommitB    = "2222222222222222222222222222222222222222"
-	testRef        = "refs/ora/mirror"
+	testRef        = "refs/heads/ora-mirror"
 )
 
 // testClock is a clock a test moves by hand, so grace periods and generations are judged on the

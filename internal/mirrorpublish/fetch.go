@@ -15,13 +15,35 @@ import (
 	"github.com/wanglongan587/cloud/internal/mirror"
 )
 
-// MirrorRef is the one ref a mirror exposes.
+// MirrorBranch is the short name of the one branch a mirror exposes, and MirrorRef is that branch.
 //
 // A mirror carries exactly this ref and no other, which is what makes a clone of it deterministic
 // (D7): there is no branch that could have moved, and a Workspace asking for one does not get
-// whatever is at the tip today. It is deliberately not under `refs/heads`, so nothing can mistake it
-// for a branch a user named, and a Git client cannot check it out by name by accident.
-const MirrorRef = "refs/ora/mirror"
+// whatever is at the tip today.
+//
+// It has to live under `refs/heads`, and the Node is why. The Node clones with
+// `git clone --branch <name>` and its post-clone verification then requires `refs/heads/<name>` to
+// exist locally, `HEAD` to be symbolic to it, and `refs/remotes/origin/<name>` to name the same
+// commit (desktop `apps/ora-node/src/repository/inspection.rs`). Git's `--branch` resolves a name
+// only as `refs/heads/<name>` or `refs/tags/<name>`, so a mirror whose single ref sat anywhere else
+// would make every mirrored clone fail with "Remote branch not found" — measured against git 2.43,
+// not assumed. The name is therefore fixed here and never taken from a caller.
+//
+// A fixed name is what the mirror's own identity requires. A mirror is keyed by
+// `(project, repository, commit)` and not by a ref, so two Workspaces that asked for different refs
+// resolving to the same commit share one mirror; naming the branch after whichever ref arrived first
+// would make the second reader's checkout depend on the first reader's request, and re-pointing the
+// ref for the second would republish content that is supposed to be immutable while readable.
+//
+// It is deliberately not the Workspace's own `requestedRef`: a client that checked this branch out
+// cannot mistake it for the user's branch, and it cannot collide with one either, because the mirror
+// repository holds nothing but the commit this branch points at.
+const (
+	// MirrorBranch is the name a clone of the mirror asks for.
+	MirrorBranch = "ora-mirror"
+	// MirrorRef is the single ref a mirror exposes, which points at the key's commit.
+	MirrorRef = "refs/heads/" + MirrorBranch
+)
 
 // Material is one credential the deployment-fixed helper can read for the duration of one fetch.
 type Material struct {

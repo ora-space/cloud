@@ -157,7 +157,7 @@ func (r *Record) Readable() bool { return r.State == StateReady }
 type PublishVerification struct {
 	// Commit must equal the key's commit.
 	Commit string
-	// Ref is the single ref the published tree exposes, in full (for example refs/ora/mirror).
+	// Ref is the single ref the published tree exposes, in full (for example refs/heads/ora-mirror).
 	Ref string
 }
 
