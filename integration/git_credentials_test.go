@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -167,29 +165,7 @@ func (f *fixture) failAs(user core.Claims, method, path string, body core.Object
 // the whole response rather than a list of remembered keys.
 func (f *fixture) rawAs(user core.Claims, method, path, key, body string) (int, string) {
 	f.t.Helper()
-	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
-	}
-	req, e := http.NewRequestWithContext(context.Background(), method, f.cloud.URL+path, reader)
-	must(f.t, e)
-	req.Header.Set("Content-Type", "application/json")
-	service, e := f.client.Credentials.Token("gateway", core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "gateway-a"}})
-	must(f.t, e)
-	req.Header.Set("Authorization", "Bearer "+service)
-	user.Caller = "gateway-a"
-	token, e := f.client.Credentials.Token("user", user)
-	must(f.t, e)
-	req.Header.Set("X-Ora-User-Token", token)
-	if key != "" {
-		req.Header.Set("Idempotency-Key", key)
-	}
-	res, e := http.DefaultClient.Do(req)
-	must(f.t, e)
-	defer res.Body.Close()
-	raw, e := io.ReadAll(res.Body)
-	must(f.t, e)
-	return res.StatusCode, string(raw)
+	return f.rawAt(f.cloud.URL, user, method, path, key, body)
 }
 
 func (f *fixture) raw(method, path, key, body string) (int, string) {
