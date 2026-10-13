@@ -1010,3 +1010,77 @@ func TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades(t *testing.T) {
 	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ghost','g@x')`, uuid.NewString())
 	wantPGError(t, e, "23503") // the identity belongs to a real user
 }
+
+// TestMigration0034MirrorPreparationAppliesFreshAndUpgrades proves the pre-clone mirror step and its
+// record exist on a fresh database and on an upgrade, and that the rules keeping a preparation from
+// naming a ref or a ready state it cannot support are held by the database rather than only by Cloud's
+// code. The step vocabulary is a CHECK constraint, so "the upgrade rebuilt it" is the thing to assert:
+// without the rebuild the step is unusable however the Go code is written.
+func TestMigration0034MirrorPreparationAppliesFreshAndUpgrades(t *testing.T) {
+	freshPool, _ := testSchema(t, "test_mp34f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !tableExists(t, freshPool, "mirror_preparations") {
+		t.Fatal("a fresh database must have mirror_preparations")
+	}
+	assertMirrorStepIsAdmitted(t, freshPool)
+	assertMirrorPreparationConstraints(t, freshPool)
+
+	pool, _ := testSchema(t, "test_mp34_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0034_mirror_preparation.sql"))
+	if tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("mirror_preparations must not exist before 0034")
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("the upgrade must add mirror_preparations")
+	}
+	assertMirrorStepIsAdmitted(t, pool)
+	assertMirrorPreparationConstraints(t, pool)
+}
+
+// assertMirrorStepIsAdmitted checks the rebuilt step constraint rather than inserting an operation row.
+// An operation needs a tenant membership, a Project and a Workspace to exist at all, which would make
+// this a fixture test; the constraint definition is what the migration actually changes.
+func assertMirrorStepIsAdmitted(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	// The constraint is looked up in the test's own schema: `pg_constraint` is cluster-wide, so a
+	// query on the name alone could read a sibling test schema's constraint and pass without this
+	// schema having been migrated at all.
+	var admits bool
+	must(t, pool.QueryRow(`SELECT position('mirror' in pg_get_constraintdef(c.oid))>0
+		FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+		WHERE c.conname='operations_step_check' AND n.nspname=current_schema()`).Scan(&admits))
+	if !admits {
+		t.Fatal("operations_step_check must admit the mirror step after 0034")
+	}
+}
+
+// assertMirrorPreparationConstraints drives the row-level checks with no referents at all. Every
+// rejection below has to come from a CHECK (23514); the deliberate exception is the last case, where
+// reaching the foreign key (23503) is the point — it proves a well-formed row passes every CHECK.
+func assertMirrorPreparationConstraints(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	insert := func(pinnedRef, state, commit string, mirrorGeneration any) error {
+		_, e := pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
+			repository_url,pinned_ref,runtime_generation,control_epoch,state,commit_id,mirror_generation)
+			VALUES($1,$2,$3,$4,'https://example.invalid/r.git',$5,1,0,$6,$7,$8)`,
+			uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), pinnedRef, state, commit, mirrorGeneration)
+		return e
+	}
+	// A short branch name is refused here as well as in cloneauth.ValidateRef, so the two spellings of
+	// one ref cannot both come to exist.
+	wantPGError(t, insert("main", "admitting", "", nil), "23514")
+	// A tag is outside what the mirror purpose may pin.
+	wantPGError(t, insert("refs/tags/v1.0.0", "admitting", "", nil), "23514")
+	// A ready preparation with no commit names no immutable content.
+	wantPGError(t, insert("refs/heads/main", "ready", "", nil), "23514")
+	// A ready preparation with no mirror generation names no artifact a reader could accept.
+	wantPGError(t, insert("refs/heads/main", "ready", "0123456789abcdef0123456789abcdef01234567", nil), "23514")
+	// An abbreviated commit is not a full object name.
+	wantPGError(t, insert("refs/heads/main", "ready", "01234567", 1), "23514")
+	// A state outside the vocabulary is not a state.
+	wantPGError(t, insert("refs/heads/main", "pending", "", nil), "23514")
+	// The well-formed row passes every CHECK and stops at the foreign keys, which is the proof that it
+	// was the checks that rejected the rows above rather than the missing referents.
+	wantPGError(t, insert("refs/heads/main", "ready", "0123456789abcdef0123456789abcdef01234567", 1), "23503")
+}
