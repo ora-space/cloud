@@ -492,6 +492,12 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			}
 		}
 	} else {
+		// The mirror gate hangs on the transition itself rather than on the steps that reach it, so every
+		// way into `clone` — create, start and restart alike — passes through it. A gate placed on one of
+		// those branches would be one more thing to remember when a branch is added.
+		if next == "clone" {
+			requireMirrorPrepared(t, o, wid)
+		}
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
 	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
