@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // stderrLimit bounds how much of git's standard error is kept for the log. The limit exists because
@@ -15,16 +16,29 @@ import (
 // budget handed to whatever the child decides to print.
 const stderrLimit = 8 << 10
 
+// reapDelay bounds how long Wait may spend on I/O after the process it waited for is gone.
+//
+// The process exiting does not close its pipes if a descendant inherited them, and Wait waits for
+// the pipes. Killing git is therefore not enough on its own, and this is the backstop that keeps a
+// descendant that outlives its parent from holding the handler open.
+const reapDelay = 5 * time.Second
+
 // gitStream is one running upload-pack: its stdout, a bounded copy of its stderr, and the process.
 type gitStream struct {
 	*bufio.Reader
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr *boundedBuffer
+	// release stops the context callback that ends the read. It is called by Close so a stream that
+	// finished on its own does not fire it afterwards.
+	release func() bool
 }
 
 // Close kills and reaps the process. It is safe to call on a stream that already finished.
 func (g *gitStream) Close() error {
+	if g.release != nil {
+		g.release()
+	}
 	_ = g.stdout.Close()
 	if g.cmd.Process != nil {
 		_ = g.cmd.Process.Kill()
@@ -73,10 +87,20 @@ func (s *Server) startGit(ctx context.Context, repoDir, protocol string, stdin i
 	if err != nil {
 		return nil, fmt.Errorf("connect to git's stdout: %w", err)
 	}
+	// The delay is set before Start because exec reads it when it builds the reaping path.
+	cmd.WaitDelay = reapDelay
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start git: %w", err)
 	}
-	return &gitStream{Reader: bufio.NewReaderSize(stdout, 32<<10), cmd: cmd, stdout: stdout, stderr: stderr}, nil
+	// Ending the deadline has to end the read, not only the process. CommandContext kills git, but a
+	// descendant that inherited stdout keeps the write end open, so a reader that waits for EOF waits
+	// for that descendant — which is how a 250ms bound turns into a minute-long request. Closing the
+	// read end is what makes the bound real: the copy fails immediately instead of waiting.
+	release := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+	return &gitStream{
+		Reader: bufio.NewReaderSize(stdout, 32<<10), cmd: cmd, stdout: stdout, stderr: stderr,
+		release: release,
+	}, nil
 }
 
 // gitEnv is the whole environment a git child process gets.

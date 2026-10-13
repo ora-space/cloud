@@ -9,9 +9,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 )
+
+// reapDelay bounds how long a Git invocation may spend on I/O after the process it started is gone.
+//
+// A deadline kills the process, but it does not close the process's pipes: a descendant that
+// inherited them — `git fetch` starts helpers and index-pack — keeps the write ends open, and the
+// wait for the command then waits for that descendant rather than for Git. Without this the
+// executor's own Timeout would be advisory, which matters here more than in a read-only server: the
+// cleanup that destroys the staged credential material is deferred, so a wait that never returns is
+// also a credential that outlives the execution that was supposed to end it.
+const reapDelay = 5 * time.Second
 
 // gitDeployment is the part of C's deployment that every path running Git shares: where credential
 // material is staged, which Git and which helper run, and what Git trusts.
@@ -307,6 +318,7 @@ func runGit(ctx context.Context, gitPath, home string, arguments []string, worki
 	command := exec.CommandContext(ctx, gitPath, arguments...)
 	command.Dir = workingDirectory
 	command.Env = gitEnvironment(home, nil)
+	command.WaitDelay = reapDelay
 	// Git has no stdin. It would otherwise be able to read a credential or a confirmation from
 	// whatever the executor's standard input happens to be attached to.
 	command.Stdin = nil
@@ -360,6 +372,7 @@ func headCommit(ctx context.Context, gitPath, home, repository string) (string, 
 	command.Dir = repository
 	command.Env = gitEnvironment(home, nil)
 	command.Stdin = nil
+	command.WaitDelay = reapDelay
 	output, err := command.Output()
 	if err != nil {
 		return "", fmt.Errorf("read the cloned revision: %w", err)

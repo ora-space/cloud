@@ -203,10 +203,18 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureWithGit(t, "", 0)
+}
+
+// newFixtureWithGit is newFixture with the two settings that decide what the git child process is:
+// the binary to run and the bound on one invocation. Both are deployment configuration, so a test
+// injects a git that is missing, hangs, or dies partway by pointing GitPath at a script.
+func newFixtureWithGit(t *testing.T, gitPath string, timeout time.Duration) *fixture {
+	t.Helper()
 	store := newMirrorStore(t)
 	resolver := &stubResolver{origin: testOrigin()}
 	state := &stubState{}
-	server, err := New(Config{Mirrors: store, Origins: resolver, State: state})
+	server, err := New(Config{Mirrors: store, Origins: resolver, State: state, GitPath: gitPath, Timeout: timeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
