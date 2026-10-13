@@ -530,7 +530,11 @@ func TestExecuteRefusesBeforeSpendingAnything(t *testing.T) {
 			job:  func(job *Job) { job.Capabilities = nil },
 		},
 		{
-			name: "a job that asks for a capability outside the vocabulary",
+			// Second vocabulary member, wrong direction: `push` is a capability this build defines, and
+			// the read executor still holds none of it. It is refused because the job does not ask for the
+			// capability this work requires, not because the value is unrecognized — the executor has no
+			// write path at all, so a job naming only the write direction can never be served here.
+			name: "a job that asks only for the write capability",
 			code: ReasonCodeInvalidJob,
 			job:  func(job *Job) { job.Capabilities = []string{"push"} },
 		},

@@ -27,12 +27,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ProjectIcon } from '@/features/projects/components/project-icon'
+import { ProvisioningFailureNotice } from '@/features/projects/components/provisioning-failure-notice'
 import {
   useCloudProject,
   useDeleteProject,
   useProject,
   useUpdateProject,
 } from '@/features/projects/api'
+import { useProjectProvisioningFailure } from '@/features/projects/provisioning'
 import { PROJECT_STATUS_LABELS, PROJECT_STATUS_VARIANT } from '@/features/projects/status'
 import { useIssues, useMembers } from '@/features/issues/api'
 import { IssueRow } from '@/features/issues/components/issue-row'
@@ -74,7 +76,7 @@ export function ProjectDetailPage({ slug }: { slug: string }) {
           <Skeleton className="h-20 w-full" />
         </div>
       ) : (
-        <ProjectDetailBody slug={slug} project={project} />
+        <ProjectDetailBody slug={slug} project={project} cloudMode={cloudMode} />
       )}
     </div>
   )
@@ -155,9 +157,20 @@ function canDeleteProject(role: SpaceRole): boolean {
  * free-text query), so cloud mode filters the tenant board client-side by
  * `projectRef`; demo mode reads the mock store's per-project issues.
  */
-function ProjectDetailBody({ slug, project }: { slug: string; project: Project }) {
+function ProjectDetailBody({
+  slug,
+  project,
+  cloudMode,
+}: {
+  slug: string
+  project: Project
+  cloudMode: boolean
+}) {
   const { tenantId } = useCurrentSpace()
-  const cloudMode = tenantId != null
+  const { failure: provisioningFailure } = useProjectProvisioningFailure(
+    cloudMode ? tenantId : undefined,
+    cloudMode ? project.id : undefined,
+  )
   const { data: issues = [] } = useIssues(tenantId ?? '', '')
   const { data: members = [] } = useMembers(tenantId ?? '')
   const memberNames = memberNameById(members)
@@ -187,6 +200,7 @@ function ProjectDetailBody({ slug, project }: { slug: string; project: Project }
             </span>
           )}
         </div>
+        {provisioningFailure && <ProvisioningFailureNotice failure={provisioningFailure} />}
       </div>
       {cloudMode ? (
         <div>

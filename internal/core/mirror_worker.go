@@ -71,10 +71,11 @@ type MirrorPreparation struct {
 	// version validated when this attempt was claimed.
 	CredentialID      string
 	CredentialVersion int64
-	// Capabilities is the set admission required and found on the reference, in canonical order. It is
+	// Capabilities is the capability set admission required of the reference, in canonical order. It is
 	// carried for the same reason a credentialed clone carries it: the continuity decision's D4 fixes the
 	// capability in the execution plan, so the authorization must bind the set the guard approved rather
-	// than a set the dispatcher decides at signing time.
+	// than a set the dispatcher decides at signing time. It is the requirement — reading one repository —
+	// and not the reference's whole set, which may permit work this preparation does not do.
 	Capabilities []string
 	// RuntimeGeneration is the Workspace runtime generation this preparation serves.
 	RuntimeGeneration int64

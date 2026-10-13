@@ -13,26 +13,53 @@ import (
 // name a credential and a repository and leave "what may be done with them" to whatever the executor
 // happens to support.
 //
-// The vocabulary is deliberately tiny because it is fixed by decision rather than by this package.
-// The credentials decision's D2 states V1 in as many words: "`capabilities` 第一版只有 `["clone"]`；
-// 它不蕴含 fetch／pull／push." A push capability is therefore not merely unimplemented — it is
-// outside the approved vocabulary, and adding it is a decision to be taken rather than a constant to
-// be appended here. A reader who finds only one value in this list is looking at the decision, not at
-// an unfinished enum.
+// The vocabulary is fixed by decision rather than by this package, and since 2026-10-13 it has exactly
+// two members. The credentials decision's D2 wrote V1 as "`capabilities` 第一版只有 `["clone"]`；它不
+// 蕴含 fetch／pull／push", and the push decision
+// (`20261013-push-capability-vocabulary-extension`, `approved` 2026-10-13) added the second: `push`,
+// with `clone` still first. Widening this list, or changing its order, is therefore a decision to be
+// taken rather than a constant to be appended here — `TestCapabilityVocabularyIsClosedToWhatTheDecisionFixes`
+// fails until the decision exists.
 type Capability string
 
-// CapabilityClone permits reading one repository into one checkout. It is the only capability V1
-// defines, and the only one the credentialed-clone path exercises.
+// CapabilityClone permits reading one repository into one checkout.
 //
 // The spelling matches `credential_refs.capabilities` and the published contract's enumeration, so
 // the value a credential declares, the value the authorization binds and the value the executor
 // checks are one string rather than three that have to be kept in step.
 const CapabilityClone Capability = "clone"
 
-// capabilities is the complete vocabulary in its canonical order.
-var capabilities = []Capability{CapabilityClone}
+// CapabilityPush permits one remote write: updating one fully qualified ref of one upstream
+// repository from one commit to another.
+//
+// It is a separate member rather than a write flag on CapabilityClone because a capability is a
+// property of the reference and is the surface every later operation is authorized against. Folding
+// read and write into one member would give every reference that needs only a clone a write grant as
+// well, and a revocation could not say which half it withdrew (push decision D1).
+//
+// Its existence changes nothing about any reference. A row that says `["clone"]` still says
+// `["clone"]`: no default, migration or deployment-managed reference gains this member, and every
+// enforcement point — admission (`internal/core`, which admits only work whose required capability
+// the reference permits), signing (`permittedCapabilities`, which permits `push` to `OperationPush`
+// alone), execution (`internal/cloneexec`, which has no write path) and redemption
+// (`internal/credentialstore`, which refuses a purpose it does not serve) — still refuses what it
+// does not serve.
+const CapabilityPush Capability = "push"
 
-// KnownCapability reports whether a value names a capability this build implements.
+// capabilities is the complete vocabulary in its canonical order.
+//
+// The order is part of the signed payload's spelling rather than a presentation choice:
+// `canonicalCapabilities` refuses a set that is not in this order, so "the capabilities the issuer
+// signed" and "the capabilities the executor compares" are one value rather than two that a
+// normalization step could disagree about.
+var capabilities = []Capability{CapabilityClone, CapabilityPush}
+
+// KnownCapability reports whether a value names a capability this vocabulary defines.
+//
+// It answers membership in the vocabulary, not whether the work the capability describes can be
+// performed by any particular component: `push` is a defined capability that no executor performs
+// yet, and the components that do not perform it refuse it on their own terms rather than by this
+// function answering false.
 func KnownCapability(value Capability) bool {
 	return slices.Contains(capabilities, value)
 }

@@ -473,6 +473,7 @@ export type GitCredentialCapabilitiesItem = typeof GitCredentialCapabilitiesItem
 
 export const GitCredentialCapabilitiesItem = {
   clone: 'clone',
+  push: 'push',
 } as const;
 
 export interface GitCredential {

@@ -13,6 +13,8 @@ import { renderAtRoute } from '@/test/render'
 import { server } from '@/test/msw-server'
 
 const PROJECT_ID = '55555555-5555-5555-5555-555555555555'
+const WORKSPACE_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const OPERATION_ID = '99999999-9999-9999-9999-999999999999'
 const OTHER_USER_ID = '44444444-4444-4444-4444-444444444444'
 
 function cloudProject(name: string, lifecycle = 'active', version = 1, ownerUserId = 'u1') {
@@ -41,7 +43,13 @@ function installProjectHandlers(role: string, project = cloudProject('Demo')) {
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}`, () =>
       HttpResponse.json(project),
     ),
-    // The detail body also loads the tenant issues and members lists.
+    // The detail body also loads the project's Workspaces (to reach the
+    // provisioning Operation), the tenant issues and the members list. No
+    // Workspace means no provisioning answer to render, which is the state
+    // every test here except the failure case is about.
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/issues`, () =>
       HttpResponse.json({ items: [], nextCursor: '' }),
     ),
@@ -107,6 +115,34 @@ describe('ProjectDetailPage', () => {
     await user.click(await screen.findByRole('button', { name: '确认删除' }))
 
     await waitFor(() => expect(deleted).toBe(true))
+  })
+
+  it('shows why provisioning failed instead of leaving the project looking unfinished', async () => {
+    installProjectHandlers('member', cloudProject('Demo', 'provisioning'))
+    server.use(
+      http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
+        HttpResponse.json({ items: [{ id: WORKSPACE_ID, creatorOperationId: OPERATION_ID }] }),
+      ),
+      http.get(`/api/v1/tenants/${TEST_TENANT_ID}/operations/${OPERATION_ID}`, () =>
+        HttpResponse.json({
+          id: OPERATION_ID,
+          tenantId: TEST_TENANT_ID,
+          projectId: PROJECT_ID,
+          workspaceId: WORKSPACE_ID,
+          kind: 'create_project',
+          state: 'failed',
+          step: 'clone',
+          errorCode: 'repository_credential_executor_unavailable',
+          version: 2,
+        }),
+      ),
+    )
+    renderDetail()
+
+    const notice = await screen.findByRole('alert')
+    expect(notice).toHaveTextContent('项目创建失败')
+    expect(notice).toHaveTextContent('本部署未安装仓库凭据执行器')
+    expect(notice).toHaveTextContent('repository_credential_executor_unavailable')
   })
 
   it('hides delete from a member even when they created the project', async () => {

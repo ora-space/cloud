@@ -94,7 +94,7 @@ func TestIssueRejectsIncompleteBindings(t *testing.T) {
 	}{
 		{"no authorization id", func(b *Binding) { b.AuthorizationID = "" }, ErrIncomplete},
 		{"no operation", func(b *Binding) { b.Operation = "" }, ErrIncomplete},
-		{"wrong operation", func(b *Binding) { b.Operation = "push" }, ErrIncomplete},
+		{"an operation this build does not define", func(b *Binding) { b.Operation = "fetch" }, ErrIncomplete},
 		{"a clone carrying a ref", func(b *Binding) { b.Ref = "refs/heads/main" }, ErrIncomplete},
 		{"a mirror preparation without a ref", func(b *Binding) { b.Operation = OperationMirrorPrepare }, ErrIncomplete},
 		{"a mirror preparation with an unqualified ref", func(b *Binding) {
@@ -116,7 +116,7 @@ func TestIssueRejectsIncompleteBindings(t *testing.T) {
 		{"empty capability set", func(b *Binding) { b.Capabilities = []string{} }, ErrIncomplete},
 		{"unknown capability", func(b *Binding) { b.Capabilities = []string{"fetch"} }, ErrIncomplete},
 		{"repeated capability", func(b *Binding) { b.Capabilities = []string{"clone", "clone"} }, ErrIncomplete},
-		{"a capability outside the V1 vocabulary", func(b *Binding) { b.Capabilities = []string{"clone", "push"} }, ErrIncomplete},
+		{"a set the clone operation does not permit", func(b *Binding) { b.Capabilities = []string{"clone", "push"} }, ErrIncomplete},
 		{"no node", func(b *Binding) { b.NodeID = "" }, ErrIncomplete},
 		{"no node instance", func(b *Binding) { b.NodeInstanceID = "" }, ErrIncomplete},
 		{"no node incarnation", func(b *Binding) { b.NodeIncarnationID = "" }, ErrIncomplete},

@@ -378,14 +378,21 @@ func TestCredentialedCloneAdmissionRefusesEverySpellingThatIsNotTheProjectsRepos
 // rather than inferred.
 //
 // The column is the one place the capability is durable, and the rows below are the values it can
-// hold. `clone` is what the product path writes and the only value the V1 vocabulary defines; the
-// empty set is the column's own default, which is what a deployment-managed reference written before
-// the column existed carries; and the remaining rows are sets a credential cannot have been created
-// with on any product path but that durable state can still hold. All of them permit no clone, and an
-// empty set in particular must not be read as "no restriction" — that reading is what would turn an
-// unclassified reference into an unrestricted one.
+// hold. `clone` is what the product path writes; the empty set is the column's own default, which is
+// what a deployment-managed reference written before the column existed carries; and the remaining
+// rows are sets a credential cannot have been created with on any product path but that durable state
+// can still hold. Everything that does not contain `clone` permits no clone, and an empty set in
+// particular must not be read as "no restriction" — that reading is what would turn an unclassified
+// reference into an unrestricted one.
 //
-// The admitted row also pins what the plan carries, because the value has to survive from the
+// Two rows pin the boundary the push decision moved, in both directions. A reference that permits
+// `push` alone is still refused here: admission requires the capability *this* work needs, and a
+// reference's whole authority belongs to whatever work exercises it. A reference that permits both is
+// admitted, and the plan it produces carries `clone` alone — the requirement, not the row's set —
+// because `cloneauth` signs exactly what one operation permits and a plan carrying the wider set would
+// be an authorization no operation could sign.
+//
+// The admitted rows also pin what the plan carries, because the value has to survive from the
 // credential row to the executor: a guard that checked the capability and then let the binding name
 // nothing would enforce the vocabulary nowhere.
 func TestCredentialedCloneAdmissionRequiresTheReferencesCloneCapability(t *testing.T) {
@@ -395,9 +402,10 @@ func TestCredentialedCloneAdmissionRequiresTheReferencesCloneCapability(t *testi
 		admitted     bool
 	}{
 		{name: "the one capability the product path writes", capabilities: `["clone"]`, admitted: true},
+		{name: "a reference that permits the write direction as well", capabilities: `["clone","push"]`, admitted: true},
 		{name: "the column's own default", capabilities: `[]`},
-		{name: "a capability V1 does not define", capabilities: `["fetch"]`},
-		{name: "a capability the vocabulary reserves for other work", capabilities: `["push"]`},
+		{name: "a capability the vocabulary does not define", capabilities: `["fetch"]`},
+		{name: "a reference that permits only the write direction", capabilities: `["push"]`},
 		{name: "a differently cased spelling", capabilities: `["Clone"]`},
 		{name: "the same capability twice", capabilities: `["clone","clone"]`},
 		{name: "a member that is not a capability at all", capabilities: `["clone",7]`},

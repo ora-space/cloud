@@ -127,7 +127,10 @@ func TestAForbiddenFieldIsRefusedEvenWhenTheSignatureIsValid(t *testing.T) {
 	substituted := mirrorBinding()
 	substituted.ExecutionID = substituted.OperationID
 	unknown := testBinding()
-	unknown.Operation = "push"
+	// An operation this build does not define. It is deliberately not `push`: that value is now a
+	// defined operation with a binding shape of its own, so it would fail these cases for a reason this
+	// test is not about (see TestPushRefusesTheOtherOperationsFields).
+	unknown.Operation = "fetch"
 
 	for _, binding := range []Binding{mixed, substituted, unknown} {
 		payload, err := json.Marshal(binding)
@@ -188,9 +191,13 @@ func TestAMirrorPreparationCannotBeSpentAsAClone(t *testing.T) {
 // naming an operation this build does not define is refused rather than defaulted to the one that is.
 // The empty operation is the case that matters most, because a zero value is what a payload omitting
 // the field carries.
+//
+// The list holds no defined operation, which is what keeps the test about resolution rather than about
+// any one purpose's binding rules: `push` in particular is a defined operation now, and it is refused
+// on its own terms — see TestAnUnknownOperationIsNotReadAsAPush.
 func TestAnUnknownOperationIsNotReadAsAClone(t *testing.T) {
 	_, private := testKeys(t)
-	for _, operation := range []string{"", "push", "CLONE", "mirror-prepare", "clone "} {
+	for _, operation := range []string{"", "fetch", "CLONE", "mirror-prepare", "clone "} {
 		binding := testBinding()
 		binding.Operation = operation
 		_, err := Issue(private, binding)

@@ -105,13 +105,21 @@ func Document() map[string]any {
 	// `repositoryScope` is the single normalized HTTPS repository the credential may be used against,
 	// and it is the whole of its authority: the name authorizes nothing. `availability` is the one
 	// source of truth about whether the credential may be used at all — `available`, `frozen` when a
-	// freeze trigger withdrew it, `invalid` after its owner revoked it — and `capabilities` is the
-	// fixed `["clone"]` V1 grants.
+	// freeze trigger withdrew it, `invalid` after its owner revoked it — and `capabilities` is the set
+	// of repository operations this credential may be used for.
+	//
+	// The enumeration has two members as of the push decision
+	// (`20261013-push-capability-vocabulary-extension`, approved 2026-10-13): `clone` reads one
+	// repository into one checkout, and `push` writes one ref of one repository. The set is the
+	// reference's own authority and is server-owned — no request in this document sets it — so the
+	// second member being published does not grant anything to anything: a credential that granted
+	// only `clone` still grants only `clone`, and a `push` grant only becomes usable once the write
+	// path that requires it exists.
 	s["GitCredential"] = resource("id tenantId ownerUserId name repositoryScope attribution availability unavailableReason capabilities version createdAt revokedAt", "unavailableReason revokedAt")
 	gitCredential := properties(s, "GitCredential")
 	gitCredential["attribution"] = enumeration("personal")
 	gitCredential["availability"] = enumeration("available", "frozen", "invalid")
-	gitCredential["capabilities"] = array(enumeration("clone"))
+	gitCredential["capabilities"] = array(enumeration("clone", "push"))
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")

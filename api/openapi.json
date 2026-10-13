@@ -1053,7 +1053,8 @@
           "capabilities": {
             "items": {
               "enum": [
-                "clone"
+                "clone",
+                "push"
               ],
               "type": "string"
             },

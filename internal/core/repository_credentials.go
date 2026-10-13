@@ -103,8 +103,12 @@ func requireRepositoryAccess(t *transaction, pid string) {
 	}
 	// The reference has to permit the work, not merely exist. D4 requires the execution plan to fix
 	// "引用身份、版本、仓库与所需能力" and requires an unsupported capability to be refused explicitly, so
-	// the capability the clone needs is compared against the one the reference declares, here, before
+	// the capability the clone needs is compared against the ones the reference declares, here, before
 	// any authorization can name it.
+	//
+	// Neither side of the comparison comes from the request. The requirement is this guard's — every
+	// path that reaches it reads one repository — and the available set is read from the reference's
+	// current row, so a caller cannot widen what its credential may do by asking for more.
 	//
 	// This check sits after the deployment-level one on purpose. A deployment with no executor refuses
 	// every credentialed clone whatever the reference says, and that refusal is the one the fail-closed
@@ -117,8 +121,15 @@ func requireRepositoryAccess(t *transaction, pid string) {
 	// error. `CanonicalCapabilities` also refuses the empty set, which is what a reference written
 	// before the column existed carries: it permits nothing, and reading it as "no restriction" would
 	// turn an unclassified reference into an unrestricted one.
-	capabilities, err := cloneauth.CanonicalCapabilities(credentialCapabilities(c))
-	require(err == nil && cloneauth.HasCapability(capabilities, cloneauth.CapabilityClone), 409, repositoryCredentialCapabilityUnsupported)
+	declared, err := cloneauth.CanonicalCapabilities(credentialCapabilities(c))
+	require(err == nil && cloneauth.HasCapability(declared, cloneauth.CapabilityClone), 409, repositoryCredentialCapabilityUnsupported)
+	// The plan carries the capability this work requires rather than everything the reference declares.
+	// A reference that permitted more than this work needs is not refused — the capability set is the
+	// reference's whole authority, and it belongs to whatever work exercises it — but the extra grants
+	// are not carried into this plan either: `cloneauth` signs exactly what an operation permits, so a
+	// plan built from the reference's whole set would be an authorization no operation could sign,
+	// which is a server error where the reference was in fact usable for this work.
+	required := []string{string(cloneauth.CapabilityClone)}
 	// The admission is recorded rather than returned, because the caller that acts on it runs outside
 	// this transaction: a clone takes minutes and the execution contract forbids holding the control
 	// plane's lock across it.
@@ -127,7 +138,7 @@ func requireRepositoryAccess(t *transaction, pid string) {
 		CredentialVersion: c.N("version"),
 		OwnerUserID:       c.S("ownerUserId"),
 		Repository:        c.S("repositoryScope"),
-		Capabilities:      capabilities,
+		Capabilities:      required,
 	}
 }
 
@@ -163,8 +174,11 @@ type admittedCredential struct {
 	CredentialVersion int64
 	OwnerUserID       string
 	Repository        string
-	// Capabilities is the canonical capability set admission required and found, so the dispatch binds
-	// the same set the guard approved rather than reading the column a second time.
+	// Capabilities is the canonical capability set the work requires — the set the guard compared the
+	// reference against and the set the dispatch binds, so the plan carries what admission approved
+	// rather than reading the column a second time. It is the requirement and not the reference's whole
+	// set: a reference may permit more than one piece of work needs, and a plan may only carry what its
+	// operation permits.
 	Capabilities []string
 }
 
