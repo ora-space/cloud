@@ -155,6 +155,13 @@ type Store struct {
 	// `repository_credential_executor_unavailable`, which is the approved fail-closed state. It is not
 	// exported because "which executor" is a deployment fact that must not be settable per request.
 	credentialedCloner CredentialedCloner
+
+	// mirrorPreparer is the mirror-preparation executor boundary, installed once at startup by
+	// SetMirrorPreparer. While it is nil — the default — no preparation is ever claimed, so a
+	// credentialed Workspace keeps meeting the `mirror_not_ready` gate rather than entering `clone`
+	// without a published mirror. It is a separate field from credentialedCloner because the two
+	// authorize different work and a deployment may enable one without the other.
+	mirrorPreparer MirrorPreparer
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no

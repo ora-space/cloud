@@ -64,8 +64,9 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 			name: "a preparation that has not finished",
 			apply: func(t *testing.T, store *Store, s credentialedScene) {
 				// A dispatched preparation has no published artifact yet, so it names no immutable
-				// content a clone could be pinned to.
-				execTest(t, store, `UPDATE mirror_preparations SET state='dispatched',commit_id=NULL,mirror_generation=NULL WHERE operation_id=$1`, s.operation)
+				// content a clone could be pinned to. It holds a live lease, because an attempt in
+				// flight is exactly what `dispatched` means — 0036 refuses the state without one.
+				execTest(t, store, `UPDATE mirror_preparations SET state='dispatched',lease_expires_at=now()+interval '5 minutes',commit_id=NULL,mirror_generation=NULL WHERE operation_id=$1`, s.operation)
 			},
 			want: mirrorNotReady,
 		},

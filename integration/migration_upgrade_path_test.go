@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -1119,4 +1120,62 @@ func assertMirrorPreparationConstraints(t *testing.T, pool *sql.DB) {
 	// The well-formed row passes every CHECK and stops at the foreign keys, which is the proof that it
 	// was the checks that rejected the rows above rather than the missing referents.
 	wantPGError(t, insert("refs/heads/main", "ready", "0123456789abcdef0123456789abcdef01234567", 1), "23503")
+}
+
+// TestMigration0036AddsTheMirrorPreparationClaim proves the claim protocol's columns and constraints
+// arrive by forward migration, on a fresh schema and on one upgraded from 0035.
+//
+// The two constraints are the migration's whole point, so they are driven rather than described: a
+// preparation C was asked to fetch has to carry the lease that bounds the attempt, and a settled one
+// has to carry none, or a finished preparation would look claimable to the next pass.
+func TestMigration0036AddsTheMirrorPreparationClaim(t *testing.T) {
+	pool, _ := testSchema(t, "test_mp36_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0036_mirror_preparation_claim.sql"))
+	for _, column := range []string{"lease_expires_at", "retry_at"} {
+		if columnExists(t, pool, "mirror_preparations", column) {
+			t.Fatalf("%s must not exist before 0036", column)
+		}
+	}
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	for _, column := range []string{"lease_expires_at", "retry_at"} {
+		if !columnExists(t, pool, "mirror_preparations", column) {
+			t.Fatalf("0036 must add %s", column)
+		}
+	}
+	assertMirrorPreparationClaimConstraints(t, pool)
+}
+
+// columnExists reads this schema's own column list rather than a shared catalogue, for the same reason
+// stepVocabulary reads the constraint definition in `current_schema()`: the catalogue is cluster-wide,
+// so a query without the schema filter could read a sibling test schema's column.
+func columnExists(t *testing.T, pool *sql.DB, table, column string) bool {
+	t.Helper()
+	var found bool
+	must(t, pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2)`, table, column).Scan(&found))
+	return found
+}
+
+// assertMirrorPreparationClaimConstraints drives the two constraints 0036 adds. Each rejection has to
+// be a CHECK (23514), and the last case reaching the foreign key (23503) is what proves a well-formed
+// in-flight row passes them.
+func assertMirrorPreparationClaimConstraints(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	insert := func(state string, lease any, retry any) error {
+		_, e := pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
+			repository_url,pinned_ref,runtime_generation,control_epoch,state,lease_expires_at,retry_at)
+			VALUES($1,$2,$3,$4,'https://example.invalid/r.git','refs/heads/main',1,0,$5,$6,$7)`,
+			uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), state, lease, retry)
+		return e
+	}
+	// An attempt C was asked to fetch with no deadline on it is the state the lease exists to make
+	// impossible: nothing would ever retry it.
+	wantPGError(t, insert("dispatched", nil, nil), "23514")
+	// A finished preparation that still holds a lease would be claimed again by the next pass.
+	wantPGError(t, insert("ready", time.Now(), nil), "23514")
+	wantPGError(t, insert("failed", nil, time.Now()), "23514")
+	wantPGError(t, insert("superseded", time.Now(), nil), "23514")
+	// A well-formed attempt in flight passes every CHECK and stops at the foreign keys.
+	wantPGError(t, insert("dispatched", time.Now(), nil), "23503")
 }
