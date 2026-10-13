@@ -36,7 +36,8 @@ func mirrorPreparationOf(t *testing.T, store *Store, operation string) *preparat
 	rows, err := store.Pool.Query(
 		`SELECT state,COALESCE(error_code,''),COALESCE(commit_id,''),generation,
 			COALESCE(mirror_generation,0),lease_expires_at
-		 FROM mirror_preparations WHERE operation_id=$1`, operation)
+		 FROM mirror_preparations WHERE operation_id=$1`, operation,
+	)
 	if err != nil {
 		t.Fatalf("read the preparation for %s: %v", operation, err)
 	}

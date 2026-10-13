@@ -204,6 +204,8 @@ func (s *Store) claimMirrorPreparation(ctx context.Context, operation string) (*
 // claimed belongs to an attempt that is over, and applying it would let a slow or replayed reply
 // overwrite the result of the attempt that replaced it — so it is refused and reported, not written.
 // The caller learns which of the two happened from the returned bool.
+//
+//nolint:gocritic // The claim is passed by value on purpose: the generation this settles is the one the attempt was claimed under, so it must not be reachable for writing from here.
 func (s *Store) settleMirrorPreparation(ctx context.Context, p MirrorPreparation, outcome MirrorPreparationOutcome, cause error) (bool, error) {
 	applied := false
 	_, err := s.transact(ctx, func(t *transaction) Object {

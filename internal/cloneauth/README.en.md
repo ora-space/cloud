@@ -1,12 +1,18 @@
-# internal/cloneauth: issuing and verifying the single-use clone authorization
+# internal/cloneauth: issuing and verifying the single-use authorization
 
 [English](README.en.md) | [中文](README.md)
 
-`internal/cloneauth` defines the shape of the **single-use clone authorization**, plus the two functions
-that let Cloud sign one and the Credential Service verify it. It carries out D3 and D10 of
+`internal/cloneauth` defines the shape of the **single-use authorization**, plus the two functions that
+let Cloud sign one and the Credential Service verify it. It carries out D3 and D10 of
 `specs/decisions/cloud/identity-access/20261010-user-managed-git-secret-store.md`: the Store has to be
 able to decide **on its own** that an authorization is genuine, while D10 forbids the issuer from
 planting anything in the Store at issuance time ("Cloud 只做绑定与签发,不做任何'已用'标记,也不预留消费记录").
+
+The carrier names two purposes today: `OperationClone` (one clone execution fetching its own checkout)
+and `OperationMirrorPrepare` (fetching one upstream branch for one Project Operation, so that an
+internal mirror can be published). They are **two operations on one carrier**, not a flag on one
+operation: they authorize different work, so the binding's fields split into two mutually exclusive
+groups along the operation.
 
 ## Why this form
 
@@ -27,23 +33,56 @@ PKCS#8 private key and PKIX public key that `openssl genpkey -algorithm ED25519`
 
 ## Files
 
-- `authorization.go`: `OperationClone`, `MaxLifetime` (15 minutes), six sentinel errors, `Binding`,
-  `Issue`, `Verify`, `split`, `LoadSigningKey`, `LoadVerificationKeys`.
+- `authorization.go`: `OperationClone`, `OperationMirrorPrepare`, `MaxLifetime` (15 minutes), six
+  sentinel errors, `Binding`, `validate` with the operation-specific `validateClone` and
+  `validateMirrorPrepare`, `Issue`, `Verify`, `split`, `LoadSigningKey`, `LoadVerificationKeys`.
+- `capability.go`: the capability vocabulary (`clone`), `CanonicalCapabilities`/`HasCapability`, and
+  `permittedCapabilities`, which maps an operation to the one capability set it permits.
+- `ref.go`: `ValidateRef` — the branch the mirror purpose pins, which must be `refs/heads/...` and
+  nothing else.
+- `repository.go`: `CanonicalRepository` — the normalized repository identity.
 - `authorization_test.go`: the issue/verify round trip, a 20-case table of incomplete bindings, the
   lifetime boundary, 8 malformed tokens, a tampered payload, another issuer's key, the verifier's clock
   deciding expiry, unusable keys, and key-file round trips with 9 unusable key files.
+- `ref_test.go`: 22 ref shapes, the mirror binding's round trip, and the ref being inside the signed
+  payload.
+- `purpose_test.go`: the two-way negative matrix over the mutually exclusive fields, a mixed or unknown
+  payload being refused even under a valid signature, and each purpose carrying its own identity fields.
 
 ## Interface
 
-- `Binding`: everything one authorization is bound to — its id, `operation=clone`, tenant and owner,
-  Project, workspace, clone execution, credential id and version, normalized repository identity, and
-  the issuance and expiry instants; plus the **fencing values of the receiving runtime**: `nodeId`,
-  `nodeInstanceId` (`node_instances.id`), `nodeIncarnationId` (one per Node process),
-  `runtimeGeneration` (`sandbox_instances.generation`) and `controlEpoch`
-  (`runtime_controls.control_epoch`). Cloud already delivers these to the Node through
-  `runtimeBinding`, so the presenting side can declare them truthfully. It deliberately does **not** use
-  the Controller lease's `controller_leases.epoch`, which identifies the lease holder rather than a Node
-  instance; conflating the two would fence against the wrong generation.
+- `Binding`: everything one authorization is bound to — its id, `operation`, tenant and owner, Project,
+  workspace, credential id and version, normalized repository identity, and the issuance and expiry
+  instants. **Every other field is decided by the operation, and enforced in both directions**:
+  - `OperationClone` **requires** `executionId` and the whole Node runtime fence: `nodeId`,
+    `nodeInstanceId` (`node_instances.id`) and `nodeIncarnationId` (one per Node process); it
+    **forbids** `ref`, `operationId`, `preparationGeneration` and `executorIdentity`.
+  - `OperationMirrorPrepare` **requires** `operationId` (the Project Operation), `preparationGeneration`
+    (≥ 1), `executorIdentity` (SPIFFE) and `ref` (`refs/heads/...`); it **forbids** `executionId` and
+    the whole Node runtime set.
+  - Both operations **share** `runtimeGeneration` (`sandbox_instances.generation`) and `controlEpoch`
+    (`runtime_controls.control_epoch`): a mirror preparation is fenced by the Workspace's runtime
+    generation too, so a late preparation cannot publish under a runtime that has moved on.
+
+  The two groups may not appear together. "Ignore the other purpose's fields" is not enough: a payload
+  carrying an execution and a Node runtime *and* an operation id and a preparation attempt reads as
+  either work, and the operation degrades into a label. That is not a matter of wording — it is why
+  compatibility shortcuts such as filling the execution field with an operation id have to be ruled out
+  structurally. The same reasoning is why the clone purpose deliberately does **not** sign the branch
+  (it travels in the job's own field) while the mirror purpose must: the published mirror is keyed by
+  the commit the ref resolved to and readers compare it against Cloud's rows, so the ref has to be the
+  one the issuer pinned.
+
+  The fencing values deliberately do **not** use the Controller lease's `controller_leases.epoch`,
+  which identifies the lease holder rather than a Node instance; conflating the two would fence against
+  the wrong generation.
+- **Who may spend the authorization is decided by the operation, and the two answers come from
+  different places.** The clone purpose binds a Node runtime, and Cloud already delivers those values
+  to the Node through `runtimeBinding`, so the presenting side can declare them truthfully and the
+  Store compares values the **request states**. The mirror purpose has no such premise: C runs outside
+  any Node and has no runtime to declare, so it binds `executorIdentity` instead — the Store resolves
+  the peer identity from the **verified client certificate**, so the party that may spend it is the one
+  the deployment issued a certificate to, not a name written in a request body.
 - `Issue(key, Binding) (string, error)`: the carrier is
   `base64url(payload) + "." + base64url(Ed25519(payload))`. The signature covers the **exact transmitted
   bytes**, so verification depends on no JSON canonicalization: a field-ordering or escaping difference
@@ -76,10 +115,16 @@ PKCS#8 private key and PKIX public key that `openssl genpkey -algorithm ED25519`
   take the payload's account of itself. If the issuer's and the Store's clocks drift, the conclusion
   lands on the Store's side — the Store is the party deciding whether to deliver the secret, and that is
   the fail-closed direction.
+- **Purpose confusion is structural, not a check.** An authorization cannot be a clone and a mirror
+  preparation at once: the two identity groups are mutually exclusive, missing and mixed fields are
+  refused on both issue and verify, and an unknown operation is refused rather than defaulting to
+  `clone`. A consumer must therefore compare the operation to decide whether to spend it, and cannot
+  infer the purpose from which route the request arrived on.
 - **Incomplete means refused**: `validate` runs on both issue and verify. On issue it stops a caller
   from minting a malformed authorization; on verify it stops a signed but malformed payload from
   reaching the Store's checks. The Store therefore never has to decide what an empty tenant or a zero
-  generation means.
+  generation means. Both sides are necessary: what reaches the Store is bytes someone else produced,
+  and a token minted by a build with laxer rules can only be stopped there.
 - **The authorization is a bearer secret**: this package never prints, logs or caches it, and callers
   must keep it out of logs, audits and every durable medium (the Store's consumption record keeps the
   authorization id only, never the carrier).
@@ -108,11 +153,13 @@ PKCS#8 private key and PKIX public key that `openssl genpkey -algorithm ED25519`
 ## Dependencies and callers
 
 - Depends only on the standard library (`crypto/ed25519`, `crypto/x509`, `encoding/base64`,
-  `encoding/json`, `encoding/pem`, `errors`, `fmt`, `os`, `strings`, `time`). It depends on neither
-  `internal/core` nor any transport.
+  `encoding/json`, `encoding/pem`, `errors`, `fmt`, `os`, `slices`, `strings`, `time`). It depends on
+  neither `internal/core` nor any transport.
 - Called by: `internal/credentialstore`, which uses `Verify` and `LoadVerificationKeys` to implement
   redemption, and `internal/cloneexec` (the credential executor C), which uses the same two functions to
-  refuse an authorization it does not recognise **locally**, before spending anything.
+  refuse an authorization it does not recognise **locally**, before spending anything, and compares
+  `binding.Operation != OperationClone` in `matchBinding` — the point where the clone route refuses a
+  mirror authorization, before the Store is asked anything.
 - The issuing half's production call site is `CloneDispatcher.Execute` in `internal/core`, wired by
   `cmd/server` from the `CloneDispatch` configuration section. **It is not wired by default**:
   `CLOUD_CLONE_DISPATCH_ENABLED` is `false`, so `requireRepositoryAccess` still refuses before dispatch and
@@ -134,3 +181,13 @@ trips alongside 9 unusable key files (including an ECDSA key of another algorith
 behaviour is covered directly: a token signed by either key of a two-key set verifies, a key withdrawn
 from the set no longer verifies anything it signed, a mounted file's every block is read, one unusable
 block refuses the whole file, and a signing-key file holding more than one block is refused.
+
+Purpose separation is covered by `purpose_test.go`: 14 one-field-at-a-time cases prove the two purposes
+are mutually exclusive in both directions (including filling the execution field with the operation
+id), and three further cases sign a payload by hand — bypassing `Issue` and keeping a genuine signature
+— to prove that **a valid signature cannot get a mixed or unknown operation past `Verify`**.
+`OperationClone` and `OperationMirrorPrepare` each carrying their own identity fields and none of the
+other's is what lets a consumer tell the purposes apart by operation. The `cloneexec` side adds
+`TestExecuteRefusesAMirrorAuthorizationOnTheCloneRoute`: a mirror authorization that is validly signed
+and names the same repository, credential, version and generation as the job must be refused with
+`binding_mismatch`, with the Store never asked.

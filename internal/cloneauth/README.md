@@ -1,11 +1,16 @@
-# internal/cloneauth: 单次 Clone 授权的签发与验签
+# internal/cloneauth: 单次授权的签发与验签
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/cloneauth` 定义**单次 Clone 授权**这一载体的形状,以及 Cloud 签发、Credential Service 验签的两个
+`internal/cloneauth` 定义**单次授权**这一载体的形状,以及 Cloud 签发、Credential Service 验签的两个
 函数。它落实 `specs/decisions/cloud/identity-access/20261010-user-managed-git-secret-store.md` 的 D3 与 D10:
 Store 必须能**自己**判定一份授权是否真实,而 D10 又禁止签发方在签发阶段往 Store 里预登记任何东西
 ("Cloud 只做绑定与签发,不做任何'已用'标记,也不预留消费记录")。
+
+载体目前承载两种用途:`OperationClone`(一次 clone 执行取回自己的检出)与 `OperationMirrorPrepare`
+(为一次 Project Operation 取回上游仓库的一个分支,用于发布内部镜像)。两者是**同一个载体上的两种
+operation**,不是同一个 operation 上的一个开关:它们授权的对象不同,因此绑定字段也按 operation 分成
+互斥的两组。
 
 ## 为什么是这个形态
 
@@ -21,19 +26,45 @@ Store 只持有公钥验签**。Store 的卷与进程同时被攻破也造不出
 
 ## 文件
 
-- `authorization.go`:`OperationClone`、`MaxLifetime`(15 分钟)、六个哨兵错误、`Binding`、`Issue`、
+- `authorization.go`:`OperationClone`、`OperationMirrorPrepare`、`MaxLifetime`(15 分钟)、六个哨兵错误、
+  `Binding`、`validate` 与按 operation 拆分的 `validateClone`/`validateMirrorPrepare`、`Issue`、
   `Verify`、`split`、`LoadSigningKey`、`LoadVerificationKeys`。
+- `capability.go`:capability 词表(`clone`)、`CanonicalCapabilities`/`HasCapability`,以及
+  `permittedCapabilities`——它把 operation 映射到**唯一**允许的 capability 集合。
+- `ref.go`:`ValidateRef`——镜像用途钉住的分支名,必须且只能是 `refs/heads/...`。
+- `repository.go`:`CanonicalRepository`——规范化仓库身份。
 - `authorization_test.go`:签发/验签往返、20 个不完整绑定的表驱动用例、上限边界、8 种畸形 token、
   篡改载荷、他人密钥、时钟由验签方决定、不可用的密钥、密钥文件往返与 9 种不可用密钥文件。
+- `ref_test.go`:22 个 ref 形状、镜像绑定往返、ref 确实在签名载荷之内。
+- `purpose_test.go`:两种用途互斥字段的双向负向矩阵、有效签名下的混用载荷仍被拒、未知 operation、
+  以及两种用途各自携带的身份字段。
 
 ## 接口
 
-- `Binding`:授权绑定的一切——授权标识、`operation=clone`、租户与所有者、Project、workspace、clone
-  execution、凭据 id 与版本、规范化仓库身份、签发与到期时刻;外加**接收方运行时的 fencing 值**:
-  `nodeId`、`nodeInstanceId`(`node_instances.id`)、`nodeIncarnationId`(每个 Node 进程一个)、
-  `runtimeGeneration`(`sandbox_instances.generation`)、`controlEpoch`(`runtime_controls.control_epoch`)。
-  这几个值 Cloud 已经通过 `runtimeBinding` 下发给 Node,所以出示方能如实自述;刻意**不用** Controller 租约的
-  `controller_leases.epoch`,它标识的是租约持有者,与 Node 实例无关,混用会让 fencing 指向错误的代次。
+- `Binding`:授权绑定的一切——授权标识、`operation`、租户与所有者、Project、workspace、凭据 id 与版本、
+  规范化仓库身份、签发与到期时刻。**其余字段由 operation 决定,并且是双向强制的**:
+  - `OperationClone` **要求** `executionId` 与整组 Node 运行时 fencing 值:`nodeId`、
+    `nodeInstanceId`(`node_instances.id`)、`nodeIncarnationId`(每个 Node 进程一个);
+    **禁止** `ref`、`operationId`、`preparationGeneration`、`executorIdentity`。
+  - `OperationMirrorPrepare` **要求** `operationId`(Project Operation)、`preparationGeneration`(≥1)、
+    `executorIdentity`(SPIFFE)、`ref`(`refs/heads/...`);**禁止** `executionId` 与整组 Node 运行时值。
+  - 两种 operation **共用** `runtimeGeneration`(`sandbox_instances.generation`)与 `controlEpoch`
+    (`runtime_controls.control_epoch`):镜像准备同样被 Workspace 的运行时代次栅栏,迟到的准备不得在已经
+    前移的运行时下发布。
+
+  两组字段**不允许同时出现**。"忽略另一个用途的字段"是不够的:一份同时带着 execution 与 Node 运行时、
+  又带着 operation id 与准备代次的载荷,读起来两种解释都成立,operation 就退化成一个标签。这不是措辞
+  问题,而是"把 Operation ID 填进 execution 字段"这类兼容捷径必须被结构性排除的原因。同样是这个理由,
+  clone 用途刻意**不签**分支名(它放在 job 自己的字段里),镜像用途则必须签——发布的镜像以 ref 解析出的
+  commit 为键,读者拿它和 Cloud 的行比对,ref 因此必须是签发方钉住的那一个。
+
+  fencing 值刻意**不用** Controller 租约的 `controller_leases.epoch`:它标识的是租约持有者,与 Node 实例无关,
+  混用会让 fencing 指向错误的代次。
+
+- **"谁可以花掉它"由 operation 决定,而且两个用途的答案来源不同。** clone 用途绑定一个 Node 运行时,那几个值
+  Cloud 已经通过 `runtimeBinding` 下发给 Node,所以出示方能如实自述,Store 比对的是**请求自述**的值。镜像用途
+  没有这个前提:C 跑在 Node 之外,没有运行时可自述,所以它绑定的是 `executorIdentity`——Store 从**验过的客户端
+  证书**里解析对端身份,能花掉这份授权的因此是部署签发了证书的那一方,而不是请求体里写着的名字。
 - `Issue(key, Binding) (string, error)`:载体是 `base64url(payload) + "." + base64url(Ed25519(payload))`。
   签名覆盖**实际传输的字节**,因此验签不依赖任何 JSON 规范化,字段顺序或转义差异既不会让一份真实授权失败,
   更不会让两份不同的载荷验成同一份。
@@ -54,8 +85,12 @@ Store 只持有公钥验签**。Store 的卷与进程同时被攻破也造不出
   真实值由调用方选,而一个 bug 或一次配错不能把单次授权变成长期 bearer token。
 - **过期由验签方的时钟判定**:`Verify` 用调用方传入的 `now`,不采信载荷里的自述。签发方与 Store 的时钟若有
   漂移,结论落在 Store 一侧——决定是否交付秘密的是 Store,这个方向是 fail-closed 的方向。
+- **用途混淆是结构性的,不是靠一次检查。** 一份授权不可能同时是 clone 和镜像准备:两组身份字段互斥,缺字段
+  与混字段都在签发与验签两侧被拒,未知 operation 也被拒而不是回落到 `clone`。因此消费方必须**比对 operation**
+  才能决定要不要花掉它,而不能靠"请求是从哪条路由进来的"来推断用途。
 - **不完整即拒签**:`validate` 在签发与验签两侧都跑。签发侧挡住"造一份畸形授权",验签侧挡住"一份签过名但
-  畸形的载荷"进入 Store 的校验流程;因此 Store 永远不必判断空的租户或零代次意味着什么。
+  畸形的载荷"进入 Store 的校验流程;因此 Store 永远不必判断空的租户或零代次意味着什么。两侧都跑是必需的:
+  到达 Store 的是一串别人产生的字节,一份由规则更宽的构建签出的 token 只能在这一侧被挡住。
 - **授权是 bearer,是秘密**:本包不打印、不记录、不缓存它;调用方必须保证它不进日志、审计与任何持久介质
   (Store 侧的消费记录只保存授权标识,不保存载体)。
 
@@ -76,9 +111,11 @@ Store 只持有公钥验签**。Store 的卷与进程同时被攻破也造不出
 ## 依赖与调用方
 
 - 依赖:仅标准库(`crypto/ed25519`、`crypto/x509`、`encoding/base64`、`encoding/json`、`encoding/pem`、
-  `errors`、`fmt`、`os`、`strings`、`time`)。不依赖 `internal/core`,也不依赖任何传输层。
+  `errors`、`fmt`、`os`、`slices`、`strings`、`time`)。不依赖 `internal/core`,也不依赖任何传输层。
 - 调用方:`internal/credentialstore` 用 `Verify` 与 `LoadVerificationKeys` 实现兑换;
-  `internal/cloneexec`(凭据执行器 C)用同一组函数在花掉任何东西之前**本地**拒掉一份它不认的授权。
+  `internal/cloneexec`(凭据执行器 C)用同一组函数在花掉任何东西之前**本地**拒掉一份它不认的授权,并在
+  `matchBinding` 里比对 `binding.Operation != OperationClone`——这是 clone 路由拒绝镜像授权的落点,发生在
+  Store 被询问之前。
 - 签发侧(`Issue`/`LoadSigningKey`)的生产调用点是 `internal/core` 的 `CloneDispatcher.Execute`,
   由 `cmd/server` 从 `CloneDispatch` 配置段装配。**默认不装配**:`CLOUD_CLONE_DISPATCH_ENABLED` 为 `false`
   时 `requireRepositoryAccess` 仍在派发之前无条件拒绝,因此一次也不会签发;私钥文件也因此不是必需配置,
@@ -94,3 +131,10 @@ Store 只持有公钥验签**。Store 的卷与进程同时被攻破也造不出
 9 种不可用密钥文件(含另一种算法的 ECDSA 密钥)。轮换行为有直接覆盖:两把钥的集合里任一把签的 token 都能
 验过、从集合中撤下的钥不再能验过它签过的任何东西、挂载文件的每一块都被读取、只要有一块不可用就拒绝整个
 文件、签名私钥文件含多于一块时被拒。
+
+用途分离由 `purpose_test.go` 覆盖:14 个"改一个字段"的用例证明两种用途双向互斥(含把 Operation ID 填进
+execution 字段这一种),另有三个用例手工签名——不经 `Issue`、只保留真实签名——证明**有效签名也不能让一份
+混用或未知 operation 的载荷通过 `Verify`;`OperationClone` 与 `OperationMirrorPrepare` 各自携带本用途的
+身份字段而不携带对方的,则是消费方能靠 operation 分辨用途的前提。`cloneexec` 侧另有
+`TestExecuteRefusesAMirrorAuthorizationOnTheCloneRoute`:一份合法签发、且仓库/凭据/版本/代次都与 job 一致的
+镜像授权,在 clone 路由上必须以 `binding_mismatch` 被拒,且 Store 一次都没有被询问。

@@ -51,10 +51,21 @@ func TestValidateRef(t *testing.T) {
 
 // mirrorBinding returns the one valid binding for the mirror purpose, so each mirror test states only
 // what it changes about the purpose rather than restating the whole scope.
+//
+// The identity fields swap outright rather than being added to: a mirror preparation is a step of a
+// Project Operation executed by a named service identity, so it carries no execution and no Node
+// runtime, and the clone fields are cleared to say so.
 func mirrorBinding() Binding {
 	binding := testBinding()
 	binding.Operation = OperationMirrorPrepare
 	binding.Ref = "refs/heads/main"
+	binding.OperationID = "operation-1"
+	binding.PreparationGeneration = 1
+	binding.ExecutorIdentity = "spiffe://ora.test/executor/mirror"
+	binding.ExecutionID = ""
+	binding.NodeID = ""
+	binding.NodeInstanceID = ""
+	binding.NodeIncarnationID = ""
 	return binding
 }
 

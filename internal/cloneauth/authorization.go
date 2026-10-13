@@ -129,9 +129,15 @@ var (
 // instance, incarnation, runtime generation and control epoch are the fencing values that must match
 // the runtime the clone was admitted under.
 //
-// Operation and Ref are the pair that carries the purpose. The operation says which work the
-// authorization permits, and the ref is present for exactly the operation that needs one, so the
-// binding is never wider than the work it authorizes — see Binding.Ref.
+// Operation and the identity fields are the pair that carries the purpose. The operation says which
+// work the authorization permits, and each field is present for exactly the operation that needs it,
+// so the binding is never wider than the work it authorizes — see Binding.Ref, Binding.OperationID and
+// Binding.ExecutorIdentity.
+//
+// The presence rules are enforced in both directions, and that is what keeps the purpose from being a
+// label: a payload carrying both a clone's execution-and-runtime identity and a mirror's
+// operation-and-attempt identity would be readable as either, so each operation forbids the other's
+// fields outright rather than ignoring them.
 type Binding struct {
 	// AuthorizationID is the identifier the Store records consumption under. Cloud mints it once and
 	// it must be a canonical UUID, because the Store turns it into a file name.
@@ -143,10 +149,41 @@ type Binding struct {
 	// credential id is already tenant-scoped on Cloud's side.
 	TenantID    string `json:"tenantId"`
 	OwnerUserID string `json:"ownerUserId"`
-	// ProjectID, WorkspaceID and ExecutionID name the clone this authorization was issued for.
+	// ProjectID and WorkspaceID scope the work to one Project and one Workspace, whichever operation
+	// this authorization carries. The identity of the work itself is operation-dependent — see
+	// ExecutionID and OperationID.
 	ProjectID   string `json:"projectId"`
 	WorkspaceID string `json:"workspaceId"`
-	ExecutionID string `json:"executionId"`
+	// ExecutionID names the clone execution. It is required by OperationClone and forbidden for
+	// OperationMirrorPrepare — see OperationID.
+	ExecutionID string `json:"executionId,omitempty"`
+	// OperationID names the Cloud Project Operation a mirror preparation belongs to. It is required by
+	// OperationMirrorPrepare and forbidden for OperationClone, by the same rule that governs Ref.
+	//
+	// The two operations are identified differently because they are different subjects. A clone is one
+	// execution's checkout, so its identity is the execution. A mirror preparation is a step of a
+	// Project Operation and has no execution at all — `mirror_preparations` is keyed by `operation_id`
+	// and carries no execution column — so a payload that filled this field with an operation id would
+	// be claiming one identity under another's name, which is the substitution the operation dimension
+	// exists to prevent.
+	OperationID string `json:"operationId,omitempty"`
+	// PreparationGeneration is the monotonic attempt this authorization was issued for. It is required
+	// by OperationMirrorPrepare and forbidden for OperationClone.
+	//
+	// A clone needs none: it happens once, under an execution the Node reports a result for. A mirror
+	// preparation is retried, and only the attempt that is still current may publish — so the attempt
+	// number has to travel inside the signed payload, where an executor cannot be handed a different one
+	// than the issuer pinned.
+	PreparationGeneration int64 `json:"preparationGeneration,omitempty"`
+	// ExecutorIdentity is the SPIFFE identity permitted to redeem this authorization. It is required by
+	// OperationMirrorPrepare and forbidden for OperationClone.
+	//
+	// This is what replaces the runtime self-declaration for mirror work. A clone binds a Node runtime
+	// and the Store compares values the *request* states; a mirror preparation is executed by C, which
+	// runs on no Node and has no runtime to state. The Store resolves the peer identity from the
+	// verified client certificate instead, so the party that may spend this authorization is the one
+	// the deployment issued a certificate to — not one a request body can name.
+	ExecutorIdentity string `json:"executorIdentity,omitempty"`
 	// CredentialID and CredentialVersion name the exact material. The version is checked against the
 	// Store's own record, so an authorization for a rotated-away version cannot be used to fetch the
 	// version that replaced it.
@@ -193,6 +230,9 @@ type Binding struct {
 //
 //nolint:gocritic // Value receiver on purpose: the snapshot that is validated has to be the snapshot that is signed or checked, so no caller can change the binding between the two.
 func (b Binding) validate() error {
+	// The fields every operation binds. What is *not* here is the point: the identity fields are
+	// operation-dependent, and requiring them unconditionally is what previously made a mirror
+	// preparation inexpressible.
 	for _, required := range []struct {
 		name  string
 		value string
@@ -203,12 +243,8 @@ func (b Binding) validate() error {
 		{"owner user id", b.OwnerUserID},
 		{"project id", b.ProjectID},
 		{"workspace id", b.WorkspaceID},
-		{"execution id", b.ExecutionID},
 		{"credential id", b.CredentialID},
 		{"repository", b.Repository},
-		{"node id", b.NodeID},
-		{"node instance id", b.NodeInstanceID},
-		{"node incarnation id", b.NodeIncarnationID},
 	} {
 		if strings.TrimSpace(required.value) == "" {
 			return fmt.Errorf("%w: %s is missing", ErrIncomplete, required.name)
@@ -221,15 +257,13 @@ func (b Binding) validate() error {
 	if !known {
 		return fmt.Errorf("%w: operation %q is not one this package defines", ErrIncomplete, b.Operation)
 	}
-	// The ref's presence is fixed by the operation in both directions, for the reason Binding.Ref
-	// gives: a value one operation ignores must be absent rather than signed and never checked.
 	switch b.Operation {
 	case OperationClone:
-		if b.Ref != "" {
-			return fmt.Errorf("%w: operation %q does not carry a ref", ErrIncomplete, b.Operation)
+		if err := b.validateClone(); err != nil {
+			return err
 		}
 	case OperationMirrorPrepare:
-		if err := ValidateRef(b.Ref); err != nil {
+		if err := b.validateMirrorPrepare(); err != nil {
 			return err
 		}
 	}
@@ -272,6 +306,82 @@ func (b Binding) validate() error {
 	}
 	if b.ExpiresAt.Sub(b.IssuedAt) > MaxLifetime {
 		return fmt.Errorf("%w: lifetime exceeds %s", ErrLifetime, MaxLifetime)
+	}
+	return nil
+}
+
+// validateClone applies OperationClone's half of the purpose separation.
+//
+// A clone is one execution's checkout on one Node, so the execution and the whole runtime triple are
+// required. The mirror's identity fields are forbidden in the other direction: a payload that carried
+// both sets would be spendable as either, which would make the operation a label rather than a
+// boundary.
+//
+//nolint:gocritic // Value receiver for the same reason validate has one: this reads a snapshot and must not be able to write through it.
+func (b Binding) validateClone() error {
+	for _, required := range []struct {
+		name  string
+		value string
+	}{
+		{"execution id", b.ExecutionID},
+		{"node id", b.NodeID},
+		{"node instance id", b.NodeInstanceID},
+		{"node incarnation id", b.NodeIncarnationID},
+	} {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("%w: %s is missing", ErrIncomplete, required.name)
+		}
+	}
+	for _, forbidden := range []struct {
+		name    string
+		present bool
+	}{
+		{"ref", b.Ref != ""},
+		{"operation id", strings.TrimSpace(b.OperationID) != ""},
+		{"preparation generation", b.PreparationGeneration != 0},
+		{"executor identity", strings.TrimSpace(b.ExecutorIdentity) != ""},
+	} {
+		if forbidden.present {
+			return fmt.Errorf("%w: operation %q does not carry a %s", ErrIncomplete, OperationClone, forbidden.name)
+		}
+	}
+	return nil
+}
+
+// validateMirrorPrepare applies OperationMirrorPrepare's half.
+//
+// The subject is a Project Operation and one preparation attempt, and the party permitted to spend it
+// is named by identity rather than by a runtime it would have to self-declare. The clone's identity
+// fields are forbidden: an authorization that named an execution and a Node as well would be readable
+// as a clone of that execution, which is exactly the confusion the two operations exist to make
+// impossible.
+//
+//nolint:gocritic // Value receiver for the same reason validate has one: this reads a snapshot and must not be able to write through it.
+func (b Binding) validateMirrorPrepare() error {
+	if strings.TrimSpace(b.OperationID) == "" {
+		return fmt.Errorf("%w: operation id is missing", ErrIncomplete)
+	}
+	if b.PreparationGeneration < 1 {
+		return fmt.Errorf("%w: preparation generation must be positive", ErrIncomplete)
+	}
+	if strings.TrimSpace(b.ExecutorIdentity) == "" {
+		return fmt.Errorf("%w: executor identity is missing", ErrIncomplete)
+	}
+	if err := ValidateRef(b.Ref); err != nil {
+		return err
+	}
+	for _, forbidden := range []struct {
+		name    string
+		present bool
+	}{
+		{"execution id", strings.TrimSpace(b.ExecutionID) != ""},
+		{"node id", strings.TrimSpace(b.NodeID) != ""},
+		{"node instance id", strings.TrimSpace(b.NodeInstanceID) != ""},
+		{"node incarnation id", strings.TrimSpace(b.NodeIncarnationID) != ""},
+	} {
+		if forbidden.present {
+			return fmt.Errorf("%w: operation %q does not carry a %s", ErrIncomplete, OperationMirrorPrepare, forbidden.name)
+		}
 	}
 	return nil
 }

@@ -646,6 +646,57 @@ func TestExecuteRefusesAnAuthorizationSignedByAnotherKey(t *testing.T) {
 	}
 }
 
+// TestExecuteRefusesAMirrorAuthorizationOnTheCloneRoute is the clone route's half of the purpose
+// separation.
+//
+// A mirror preparation is genuine authority — correctly signed, unexpired, and naming the same
+// repository, credential, version and runtime generation this job asks for — so nothing but the
+// operation distinguishes it from a clone. Presenting it here is the confusion the two operations
+// exist to make impossible: a mirror reads a branch to publish an artifact, and spending it as a
+// clone would turn the one authorization a preparation is given into a checkout on a Node that was
+// never authorized for it.
+//
+// The token is minted through the same issuer and key as a real one, because the point is not that a
+// forgery is rejected — it is that a *valid* authorization for other work is.
+func TestExecuteRefusesAMirrorAuthorizationOnTheCloneRoute(t *testing.T) {
+	fixture := newTestFixture(t, nil)
+	job := fixture.issue(t, nil)
+	mirror, err := cloneauth.Issue(fixture.key, cloneauth.Binding{
+		AuthorizationID:       "3e5a7c91-6d24-4f08-b3a7-2c9e1f4d8b60",
+		Operation:             cloneauth.OperationMirrorPrepare,
+		TenantID:              "tenant-a",
+		OwnerUserID:           "user-a",
+		ProjectID:             "project-a",
+		WorkspaceID:           "workspace-a",
+		OperationID:           "5b8d0f32-7a46-4c19-8e05-1d3b6a9f2c74",
+		PreparationGeneration: 1,
+		ExecutorIdentity:      "spiffe://ora.test/executor/mirror",
+		CredentialID:          testCredentialID,
+		CredentialVersion:     3,
+		Repository:            testRepository,
+		Ref:                   "refs/heads/main",
+		Capabilities:          []string{string(cloneauth.CapabilityClone)},
+		RuntimeGeneration:     job.Runtime.RuntimeGeneration,
+		ControlEpoch:          job.Runtime.ControlEpoch,
+		IssuedAt:              testNow.Add(-time.Minute),
+		ExpiresAt:             testNow.Add(9 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("sign the mirror authorization: %v", err)
+	}
+	job.Authorization = mirror
+	_, err = fixture.executor.Execute(context.Background(), job)
+	if got := reasonCode(err); got != ReasonCodeBindingMismatch {
+		t.Fatalf("reason code = %q, want %q (error: %v)", got, ReasonCodeBindingMismatch, err)
+	}
+	// The refusal has to land before the authorization is spent: the Store must never see it, or the
+	// preparation's single use would be consumed by the route that refused it.
+	if fixture.store.calls != 0 {
+		t.Fatalf("the credential service was asked %d times for a mirror authorization", fixture.store.calls)
+	}
+	assertNoMaterial(t, fixture)
+}
+
 func TestExecuteReportsARedemptionRefusalWithTheStoreCode(t *testing.T) {
 	fixture := newTestFixture(t, nil)
 	fixture.store.err = &StoreRefusal{Code: ReasonCodeAuthorizationConsumed, Status: 409}

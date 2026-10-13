@@ -1146,8 +1146,8 @@ func TestMigration0036AddsTheMirrorPreparationClaim(t *testing.T) {
 	assertMirrorPreparationClaimConstraints(t, pool)
 }
 
-// columnExists reads this schema's own column list rather than a shared catalogue, for the same reason
-// stepVocabulary reads the constraint definition in `current_schema()`: the catalogue is cluster-wide,
+// columnExists reads this schema's own column list rather than a shared catalog, for the same reason
+// stepVocabulary reads the constraint definition in `current_schema()`: the catalog is cluster-wide,
 // so a query without the schema filter could read a sibling test schema's column.
 func columnExists(t *testing.T, pool *sql.DB, table, column string) bool {
 	t.Helper()
@@ -1162,7 +1162,7 @@ func columnExists(t *testing.T, pool *sql.DB, table, column string) bool {
 // in-flight row passes them.
 func assertMirrorPreparationClaimConstraints(t *testing.T, pool *sql.DB) {
 	t.Helper()
-	insert := func(state string, lease any, retry any) error {
+	insert := func(state string, lease, retry any) error {
 		_, e := pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
 			repository_url,pinned_ref,runtime_generation,control_epoch,state,lease_expires_at,retry_at)
 			VALUES($1,$2,$3,$4,'https://example.invalid/r.git','refs/heads/main',1,0,$5,$6,$7)`,
