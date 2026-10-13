@@ -36,22 +36,27 @@ Cloud 在同一次请求内交出 Token,此后只保留 `credential_refs` 元数
   三个身份必须存在、互不相同且形如 `spiffe://<信任域>/<kind>/<name>`;`PresentedIdentity` 从已被客户端 CA
   验证过的叶子证书 URI SAN 中取出身份,验证通过但不在表内的证书被拒绝,而不是当作匿名。
 - `server.go`:`Server`——mTLS 加能力门控的 HTTP 面。`POST /v1/credentials`、`.../{id}/rotate`、`.../{id}/revoke`
-  需要 `write` 能力,`.../{id}/resolve` 需要 `resolve` 能力;严格 JSON 解码(未知字段、非单一 JSON 对象、
-  尾随内容都拒绝);`failure` 把 Store 错误映射为固定原因码,错误文本只进本服务日志;`audit` 每次操作记录
-  operation/credentialId/serviceIdentity/result。`resolve` 在部署配置了验签公钥时执行真实兑换,未配置时
-  仍以 409 `authorization_verification_unavailable` 拒绝,且拒绝发生在读取请求体之前。
+  需要 `write` 能力,`.../{id}/resolve` 与 `.../{id}/resolve-mirror` 需要 `resolve` 能力;严格 JSON 解码
+  (未知字段、非单一 JSON 对象、尾随内容都拒绝);`failure` 把 Store 错误映射为固定原因码,错误文本只进本服务
+  日志;`audit` 每次操作记录 operation/credentialId/serviceIdentity/result。两个兑换端点各自对应一种用途,
+  `resolve` 在部署配置了验签公钥时执行真实兑换,未配置时仍以 409 `authorization_verification_unavailable`
+  拒绝,且拒绝发生在读取请求体之前;`resolve-mirror` 同样。`operation` 处理器签名把**已从证书解析出的服务身份**
+  作为可信值向内传递,因此需要知道"谁在调用"的处理器不会再去读请求——镜像绑定的出示方身份就是这么决定的。
 - `authorization.go`:`Resolver` 与兑换路径。`ResolveRequest`(授权载体加出示方自述的 Node 实例与运行代次)、
-  `ResolvedCredential`(Token 与版本)与六个可区分的原因错误(`ErrAuthorizationUnverifiable`/
-  `ErrAuthorizationInvalid`/`ErrAuthorizationExpired`/`ErrAuthorizationConsumed`/`ErrAuthorizationBinding`/
-  `ErrVersionUnavailable`)。`Store.Resolver()` 返回 `(*Resolver, bool)`:没有验签公钥就没有兑换能力。
-  `Resolver` 持有整个**密钥集合**并交给 `cloneauth.Verify`,因此任何一把挂载的钥签发的授权都能被交付。
-  `claimAuthorization` 以 `O_CREATE|O_EXCL` 创建消费记录,创建成功即原子单次消费判定;`markAuthorizationDelivered`
-  在秘密交付前把结果从"已消费未交付"改成"已交付"。
+  `MirrorResolveRequest`(只有授权载体)、`ResolvedCredential`(Token 与版本)与可区分的原因错误
+  (`ErrAuthorizationUnverifiable`/`ErrAuthorizationInvalid`/`ErrAuthorizationExpired`/`ErrAuthorizationConsumed`/
+  `ErrAuthorizationBinding`/`ErrAuthorizationPurpose`/`ErrVersionUnavailable`)。`Store.Resolver()` 返回
+  `(*Resolver, bool)`:没有验签公钥就没有兑换能力。`Resolver` 持有整个**密钥集合**并交给 `cloneauth.Verify`,
+  因此任何一把挂载的钥签发的授权都能被交付。`Resolve`(clone 用途)与 `ResolveMirror`(mirror_prepare 用途)
+  各自先确认授权确实是为本用途签发的,才进入共用的 `deliver`:校验凭据状态、`claimAuthorization` 以
+  `O_CREATE|O_EXCL` 创建消费记录(创建成功即原子单次消费判定)、`markAuthorizationDelivered` 在秘密交付前把
+  结果从"已消费未交付"改成"已交付"。`deliver` 是**只有一份**的实现,因为"先交付后记录"这种顺序错误正是会在
+  第二份副本里出现的。
 - `client.go`:Cloud 侧 `ingress-writer` 客户端。`ClientConfig`(Endpoint 必须 `https`、不带 query 与
   fragment;TLS 必须带客户端证书与信任池)、`Failure`(带 `ReasonCode()`)、`Write`/`Rotate`/`Revoke`。
   刻意不重试:超时的写可能已经成功,恢复方式是调用方用同一个幂等键重发整个请求(D4)。
-- 测试:`store_test.go`、`keystore_test.go`、`server_test.go`、`client_test.go`、`authorization_test.go`,
-  以及 `process_test.go`(跨进程验收,见下)。
+- 测试:`store_test.go`、`keystore_test.go`、`server_test.go`、`client_test.go`、`authorization_test.go`、
+  `mirror_authorization_test.go`,以及 `process_test.go`(跨进程验收,见下)。
 
 ## 依赖与调用方
 
@@ -94,7 +99,8 @@ Cloud 在同一次请求内交出 Token,此后只保留 `credential_refs` 元数
   (D10)。消费判定是消费记录文件的 `O_CREATE|O_EXCL` 创建,因此它是原子的、无需锁,也不依赖进程内存——
   同一授权并发兑换至多一次成功,Store 重启后仍然如此。交付前失败只留下"已消费未交付";反向的
   "已交付但消费记录缺失"不可能出现,因为交付前必然已经落盘。授权本身是 bearer 秘密:请求体里的授权在进入
-  审计与失败日志之前被清零,消费记录只保存授权标识、消费时刻、出示它的 Node 实例与运行代次和结果。
+  审计与失败日志之前被清零,消费记录只保存授权标识、用途、消费时刻、出示它的 Node 实例与运行代次(镜像用途则
+  是执行器身份)和结果。
 - **过期的判定权在 Store**:`Resolve` 用 Store 自己的时钟判断授权是否过期,不采信载荷里的自述;两处时钟若有
   漂移,实际生效的是 Store 的时钟。这一点对 Store 有利是刻意的——决定是否交付秘密的是 Store。
 - **运行时字段是一致性校验,不是身份校验**:`nodeId`、`nodeInstanceId`、`nodeIncarnationId`、
@@ -108,6 +114,19 @@ Cloud 在同一次请求内交出 Token,此后只保留 `credential_refs` 元数
   在消费判定与交付之间崩溃或断电,留下的是保守读数 `consumed_not_delivered`,且是终态。`syncDirectory`
   在 `openToken` 之前返回,所以"丢失了记录"的那次断电同时意味着秘密从未离开进程——"已交付却无记录"这个状态
   在两个方向上都不可达。
+- **两个用途不可互换,而且这个结论来自签名而不是路由**:`clone` 与 `mirror_prepare` 各自只能在自己的端点兑换,
+  拒绝发生在签名载荷里的 operation 上,因此把镜像授权发到 clone 端点得到的不是"路由不对",而是
+  `authorization_purpose_mismatch`(403),且**不消耗**那份授权。这一条不是洁癖:镜像绑定按定义不带 Node 运行时
+  (它不在任何 Node 上运行),所以一个把运行时字段全部留空的调用方逐字段比对时**会**匹配上镜像绑定——没有这道
+  检查,一次准备被授予的唯一一次兑换就会被一次 clone 用掉。反向同样成立:`Resolve` 只接受 `clone`。
+- **镜像兑换的出示方身份来自证书,不来自请求体**:`ResolveMirror` 把授权绑定里的 `executorIdentity` 与
+  `PresentedIdentity` 从已验证客户端证书读出的 SPIFFE 身份比对,`MirrorResolveRequest` 里根本没有身份字段
+  (提供了会被严格解码拒绝)。因此"谁可以花掉这份镜像授权"由 Cloud 在签名里指定、由部署的身份表在传输层保证,
+  Store 不需要知道哪个身份是镜像执行器。
+- **Store 无法核实 Cloud 的事实,这一点如实写在代码里**:Store 不持有 Cloud 的任何行,因此它**不能**判断
+  operation 是否仍然当前、preparation generation 是否仍然有效、Project 的凭据绑定是否仍然成立。撤销因此
+  在兑换这一刻**不是即时生效**的:它生效于 Cloud 接收镜像结果与 Cloud 判定 Workspace 可以离开 `node` 这两处
+  重新校验,以及授权自身的到期时间。`ResolveMirror` 的文档注释用这段原话写明,不允许被描述成"兑换阶段即时撤销"。
 - **失败是显式的**:客户端把"不可达"与"被拒绝"分成两种错误;`ErrRevoked`、`ErrConflict`、`ErrNotFound`、
   `ErrInvalidRequest` 各自映射到固定原因码,兑换的六种拒绝也各有独立原因码——被拒绝的调用方要能区分"换一份
   新授权"和"去查问题",而合并成一个 `resolve_failed` 就做不到(D7)。响应文本从不包含错误详情,日志从不包含
@@ -132,6 +151,13 @@ Cloud 在同一次请求内交出 Token,此后只保留 `credential_refs` 元数
   与"审计行不含秘密"。上面那些失败语义各有专门用例:消费记录无法解析时读作已消费、卷写不下消费记录时不交付
   任何秘密、秘密打不开时留下 `consumed_not_delivered` 且第二次尝试被拒。轮换则跨真实重开覆盖:两把钥都在时
   任一把签发的授权都能交付,从文件里撤下的钥不再能验过它签过的任何东西。
+- `mirror_authorization_test.go` 覆盖镜像用途的兑换路径,同样用真实文件卷、真实 KEK、真实 mTLS 与真实签名:
+  交付并断言消费记录写的是 `mirror_prepare`、执行器身份与**没有**任何运行时字段(记了运行时就是"发生过一次
+  并不存在的校验"的证据);两个用途互相发到对方端点的双向拒绝,且拒绝后授权仍能在正确端点兑换(证明拒绝没有
+  消耗掉它);出示方身份不符的四种情形(另一个服务身份、表内不存在的身份、没有身份、只有空白);授权指向别的
+  凭据、过期、凭据不存在、已撤销、保留窗口已过的旧版本各自的原因码;伪造签名;同一份授权重放被拒,以及
+  **关闭并重开 Store 后同一重放仍被拒**;跨真实 TLS 的交付与重放、跨用途的 403、调用方自带身份字段被 400 拒绝、
+  审计行按 `resolve-mirror` 记名且不含 Token 与授权。
 - `process_test.go` 是跨进程验收。它编译真实的 `cmd/credential-store`,把真实配置文件、真实 PKI、真实 KEK
   keyring 与真实 Ed25519 密钥对写到磁盘,以自带环境变量的子进程方式启动该二进制,并通过真实的双向认证监听
   驱动它:一份授权恰好换到一个 Token、重放是 `authorization_consumed`、**进程重启后同一重放仍被拒**、之后

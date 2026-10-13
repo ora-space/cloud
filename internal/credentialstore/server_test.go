@@ -351,11 +351,13 @@ func TestServerEnforcesCapabilitySeparation(t *testing.T) {
 	}{
 		{"ingress writes", testIngressIdentity, http.MethodPost, "/v1/credentials", writeBody, http.StatusOK, ""},
 		{"ingress resolve denied", testIngressIdentity, http.MethodPost, "/v1/credentials/" + id + "/resolve", "", http.StatusForbidden, "capability_denied"},
+		{"ingress resolve-mirror denied", testIngressIdentity, http.MethodPost, "/v1/credentials/" + id + "/resolve-mirror", "", http.StatusForbidden, "capability_denied"},
 		{"resolver write denied", testResolverIdentity, http.MethodPost, "/v1/credentials", writeBody, http.StatusForbidden, "capability_denied"},
 		{"resolver rotate denied", testResolverIdentity, http.MethodPost, "/v1/credentials/" + id + "/rotate", `{"token":"next"}`, http.StatusForbidden, "capability_denied"},
 		{"resolver revoke denied", testResolverIdentity, http.MethodPost, "/v1/credentials/" + id + "/revoke", "{}", http.StatusForbidden, "capability_denied"},
 		{"operator write denied", testOperatorIdentity, http.MethodPost, "/v1/credentials", writeBody, http.StatusForbidden, "capability_denied"},
 		{"resolver resolve unimplemented", testResolverIdentity, http.MethodPost, "/v1/credentials/" + id + "/resolve", "", http.StatusConflict, "authorization_verification_unavailable"},
+		{"resolver resolve-mirror unimplemented", testResolverIdentity, http.MethodPost, "/v1/credentials/" + id + "/resolve-mirror", "", http.StatusConflict, "authorization_verification_unavailable"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

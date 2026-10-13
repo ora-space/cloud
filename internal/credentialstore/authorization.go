@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wanglongan587/cloud/internal/cloneauth"
@@ -34,6 +35,12 @@ var (
 	// ErrAuthorizationBinding reports an authorization that does not match the credential it names or
 	// the runtime presenting it.
 	ErrAuthorizationBinding = errors.New("authorization does not match the presented binding")
+	// ErrAuthorizationPurpose reports an authorization minted for other work than the path it was
+	// presented to. It is separate from ErrAuthorizationBinding because the two call for different
+	// responses: a binding mismatch is a caller that presented the wrong values, while a purpose
+	// mismatch is a caller presenting an authorization it was never meant to hold — and the operation
+	// is signed, so a mismatch means either a bug in the issuer or an attempt at confusion.
+	ErrAuthorizationPurpose = errors.New("authorization was issued for a different purpose")
 	// ErrVersionUnavailable reports that the bound credential version is not readable here. D4 bounds
 	// how long a rotated-away version stays readable, so this is the "version mismatch" outcome D7
 	// requires to be distinguishable from "revoked".
@@ -63,6 +70,22 @@ type ResolveRequest struct {
 	ControlEpoch      int64  `json:"controlEpoch"`
 }
 
+// MirrorResolveRequest is what the credential-executing identity presents to redeem a
+// `mirror_prepare` authorization.
+//
+// It carries the bearer token and nothing else, and that emptiness is the design. A clone redemption
+// takes a runtime declaration because a clone runs on a Node whose identity the Store cannot see
+// through the deployment's single `broker-resolver` certificate (see ResolveRequest). A mirror
+// preparation is executed by C, which runs on no Node at all, so there is no runtime to declare — and
+// declaring one would put the party that spends the authorization back in charge of saying who it is.
+// Who may spend it comes from two places the request cannot reach: the operation, which is signed, and
+// the caller's identity, which the transport resolves from the verified client certificate.
+type MirrorResolveRequest struct {
+	// Authorization is the bearer token Cloud issued. It is a secret: it is never logged, audited, or
+	// persisted, and the transport clears it before any of those happen.
+	Authorization string `json:"authorization"`
+}
+
 // ResolvedCredential is one delivered secret.
 //
 // The token leaves the Store only through this value and only after the consumption record is
@@ -90,18 +113,29 @@ const (
 // It lives in the Store's volume rather than in Cloud's database, the Node's database, or a process
 // journal: the decision it records is the Store's, and a party that could edit the record could
 // un-spend an authorization. It carries no secret and nothing from which the secret can be
-// recovered — only which authorization was spent, when, by which runtime, and with what outcome.
+// recovered — only which authorization was spent, for which purpose, when, by which runtime or
+// identity, and with what outcome.
 type consumptionRecord struct {
 	AuthorizationID string `json:"authorizationId"`
 	CredentialID    string `json:"credentialId"`
 	// CredentialVersion is recorded so the audit trail names the material, not just the reference.
-	CredentialVersion int64     `json:"credentialVersion"`
-	ConsumedAt        time.Time `json:"consumedAt"`
-	NodeID            string    `json:"nodeId"`
-	NodeInstanceID    string    `json:"nodeInstanceId"`
-	NodeIncarnationID string    `json:"nodeIncarnationId"`
-	RuntimeGeneration int64     `json:"runtimeGeneration"`
-	ControlEpoch      int64     `json:"controlEpoch"`
+	CredentialVersion int64 `json:"credentialVersion"`
+	// Operation is the purpose the authorization was minted for. It is recorded rather than inferred
+	// from which fields are populated, because the two purposes leave different traces and an operator
+	// reading the record should not have to work out which one it is holding.
+	Operation  string    `json:"operation"`
+	ConsumedAt time.Time `json:"consumedAt"`
+	// NodeID, NodeInstanceID, NodeIncarnationID, RuntimeGeneration and ControlEpoch are the runtime a
+	// clone declared. They are empty for a mirror preparation, which runs on no Node.
+	NodeID            string `json:"nodeId,omitempty"`
+	NodeInstanceID    string `json:"nodeInstanceId,omitempty"`
+	NodeIncarnationID string `json:"nodeIncarnationId,omitempty"`
+	RuntimeGeneration int64  `json:"runtimeGeneration,omitempty"`
+	ControlEpoch      int64  `json:"controlEpoch,omitempty"`
+	// ExecutorIdentity is the identity the transport proved from the client certificate for a mirror
+	// preparation. It is empty for a clone, whose binding carries a Node runtime instead: recording
+	// which of the two identified the caller is the point, because they are established differently.
+	ExecutorIdentity string `json:"executorIdentity,omitempty"`
 	// ExpiresAt is the authorization's own expiry. It is retained so an operator can tell a spent
 	// authorization from a live one without the token, and so a future sweep can drop records that
 	// can no longer be replayed.
@@ -137,14 +171,14 @@ func (s *Store) Resolver() (*Resolver, bool) {
 	return &Resolver{store: s, keys: s.authorizationKeys}, true
 }
 
-// Resolve delivers the token one authorization names, consuming that authorization on the way.
+// Resolve delivers the token one clone authorization names, consuming that authorization on the way.
 //
 // The order of operations is the whole point of this method, and D3 and D10 fix it:
 //
 //  1. Authenticate the authorization against the Store's own verification key, and check it against
 //     the Store's own clock. The Store does not take the caller's word that either already happened.
-//  2. Check every binding the Store can check without spending anything: the credential the
-//     authorization names, the version, the runtime presenting it. A failure here leaves the
+//  2. Check every binding the Store can check without spending anything: the purpose it was minted
+//     for, the credential it names, the version, the runtime presenting it. A failure here leaves the
 //     authorization unspent, which is what D5 means by "a failure that did not obtain the secret is
 //     always a new authorization" — here it need not even be new.
 //  3. Spend the authorization by creating its consumption record, atomically and durably.
@@ -152,6 +186,12 @@ func (s *Store) Resolver() (*Resolver, bool) {
 //
 // Reversing 3 and 4 would create the one state the decisions forbid: a secret that left the Store
 // while the record that proves it was spent is missing, which is exactly a replayable authorization.
+//
+// The purpose check is first because it is the one refusal that is about the caller rather than about
+// the request's contents. A `mirror_prepare` authorization presented here would otherwise be spent on
+// a clone: its binding carries no Node runtime at all, so a caller presenting empty runtime values
+// would match it field for field, and the single use a preparation is given would be consumed on
+// work it was never issued for.
 //
 //nolint:gocritic // Value parameter on purpose: the runtime declaration checked against the binding has to be the same snapshot that is written into the consumption record.
 func (r *Resolver) Resolve(ctx context.Context, credentialID string, request ResolveRequest) (ResolvedCredential, error) {
@@ -167,6 +207,9 @@ func (r *Resolver) Resolve(ctx context.Context, credentialID string, request Res
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
+	if binding.Operation != cloneauth.OperationClone {
+		return ResolvedCredential{}, ErrAuthorizationPurpose
+	}
 	// Every binding this request can contradict. The credential id is checked against the path rather
 	// than the body, so an authorization for one credential can never be spent on another even if the
 	// caller rewrites its own request.
@@ -178,6 +221,88 @@ func (r *Resolver) Resolve(ctx context.Context, credentialID string, request Res
 		binding.ControlEpoch != request.ControlEpoch {
 		return ResolvedCredential{}, ErrAuthorizationBinding
 	}
+	return r.deliver(credentialID, binding, now, &consumptionRecord{
+		Operation:         cloneauth.OperationClone,
+		NodeID:            request.NodeID,
+		NodeInstanceID:    request.NodeInstanceID,
+		NodeIncarnationID: request.NodeIncarnationID,
+		RuntimeGeneration: request.RuntimeGeneration,
+		ControlEpoch:      request.ControlEpoch,
+	})
+}
+
+// ResolveMirror delivers the token one `mirror_prepare` authorization names, consuming that
+// authorization on the way.
+//
+// The steps are Resolve's, and the differences are the point:
+//
+//  1. The purpose must be `mirror_prepare`. A clone authorization presented here is refused rather
+//     than spent, so neither route can consume what the other was given.
+//  2. The caller's identity is compared against the binding's `executorIdentity`. `presented` is not a
+//     value from the request: the transport resolves it from the verified client certificate, so the
+//     party that may spend this authorization is the one the deployment issued a certificate to.
+//     Nothing in the body can name it, which is why the request carries only the token.
+//  3. The requested version is checked against the Store's own record and the credential's revocation
+//     state, exactly as for a clone.
+//
+// # What this method cannot decide, stated plainly
+//
+// The Store holds no copy of Cloud's rows and never queries Cloud, so it cannot decide whether the
+// Project Operation is still current, whether `preparationGeneration` is still the live attempt, or
+// whether the Project's credential binding is still in force. Those are Cloud's facts, and Cloud
+// re-checks all of them — against live state, not against this outcome — when it accepts a published
+// mirror and when it decides a Workspace may leave the `node` step. Revocation therefore takes effect
+// at the next of those checks and at the authorization's own expiry, whichever comes first; it is not
+// instantaneous here, and this method must not be described as if it were. What the Store does decide,
+// on its own and with its own clock, is that this token was signed by Cloud for this purpose, is
+// unspent, is unexpired, names a version it can still read and has not revoked, and is being presented
+// by the identity Cloud named. That is the whole of what it claims.
+func (r *Resolver) ResolveMirror(ctx context.Context, credentialID, presented string, request MirrorResolveRequest) (ResolvedCredential, error) {
+	store := r.store
+	if !validCredentialID(credentialID) {
+		return ResolvedCredential{}, fmt.Errorf("%w: credential id is not a canonical identifier", ErrInvalidRequest)
+	}
+	if err := ctx.Err(); err != nil {
+		return ResolvedCredential{}, err
+	}
+	now := store.now().UTC()
+	binding, err := r.verify(request.Authorization, now)
+	if err != nil {
+		return ResolvedCredential{}, err
+	}
+	if binding.Operation != cloneauth.OperationMirrorPrepare {
+		return ResolvedCredential{}, ErrAuthorizationPurpose
+	}
+	// An empty `presented` is refused rather than compared: a transport that could not establish an
+	// identity must not be able to match a binding whose identity happens to be unset, and refusing
+	// here means the comparison never depends on that field being populated for the wrong reason.
+	if strings.TrimSpace(presented) == "" {
+		return ResolvedCredential{}, fmt.Errorf("%w: the caller's service identity was not established", ErrAuthorizationBinding)
+	}
+	if binding.CredentialID != credentialID || binding.ExecutorIdentity != presented {
+		return ResolvedCredential{}, ErrAuthorizationBinding
+	}
+	return r.deliver(credentialID, binding, now, &consumptionRecord{
+		Operation:        cloneauth.OperationMirrorPrepare,
+		ExecutorIdentity: presented,
+	})
+}
+
+// deliver performs the steps both purposes share once the purpose and the binding have been
+// established: read the credential, refuse a revoked one or an unavailable version, spend the
+// authorization durably, and only then open the secret.
+//
+// It exists so the order D3 and D10 fix has one implementation rather than two. The two entry points
+// differ in what they check before spending — which is where the purpose separation lives — and not in
+// what they do afterwards, and a second copy of this sequence is precisely where "validate, then
+// spend, then deliver" would eventually be written down in the wrong order.
+//
+// `record` arrives with only the purpose-specific fields set; everything the record shares is filled
+// in here, from the same `binding` and `now` the checks above used.
+//
+//nolint:gocritic // The binding is passed by value on purpose: the values this spends against are the ones the caller already verified and must not be reachable for writing from here.
+func (r *Resolver) deliver(credentialID string, binding cloneauth.Binding, now time.Time, record *consumptionRecord) (ResolvedCredential, error) {
+	store := r.store
 	stored, found, err := store.files.read(credentialID)
 	if err != nil {
 		return ResolvedCredential{}, err
@@ -192,20 +317,13 @@ func (r *Resolver) Resolve(ctx context.Context, credentialID string, request Res
 	if !available {
 		return ResolvedCredential{}, ErrVersionUnavailable
 	}
-	claim := &consumptionRecord{
-		AuthorizationID:   binding.AuthorizationID,
-		CredentialID:      credentialID,
-		CredentialVersion: binding.CredentialVersion,
-		ConsumedAt:        now,
-		NodeID:            request.NodeID,
-		NodeInstanceID:    request.NodeInstanceID,
-		NodeIncarnationID: request.NodeIncarnationID,
-		RuntimeGeneration: request.RuntimeGeneration,
-		ControlEpoch:      request.ControlEpoch,
-		ExpiresAt:         binding.ExpiresAt,
-		Result:            consumptionConsumed,
-	}
-	if err := store.claimAuthorization(claim); err != nil {
+	record.AuthorizationID = binding.AuthorizationID
+	record.CredentialID = credentialID
+	record.CredentialVersion = binding.CredentialVersion
+	record.ConsumedAt = now
+	record.ExpiresAt = binding.ExpiresAt
+	record.Result = consumptionConsumed
+	if err := store.claimAuthorization(record); err != nil {
 		return ResolvedCredential{}, err
 	}
 	token, err := store.keys.openToken(credentialID, material)
@@ -215,8 +333,8 @@ func (r *Resolver) Resolve(ctx context.Context, credentialID string, request Res
 		// one (D5).
 		return ResolvedCredential{}, err
 	}
-	claim.Result = consumptionDelivered
-	if err := store.markAuthorizationDelivered(claim); err != nil {
+	record.Result = consumptionDelivered
+	if err := store.markAuthorizationDelivered(record); err != nil {
 		// The secret is already in memory, but returning it would leave a delivered secret whose
 		// record still reads "not delivered". Burning the authorization is the conservative outcome
 		// and matches D5: a caller that did not obtain the secret asks for a new authorization.

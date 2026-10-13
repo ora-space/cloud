@@ -68,17 +68,26 @@ func NewServer(store *Store, cfg ServerConfig) (*Server, error) {
 
 // Handler returns the Store's HTTP surface. It is exported so the command can mount it on its own
 // listener and so tests can drive it through a real TLS connection.
+//
+// Each purpose has exactly one redemption endpoint. A `mirror_prepare` authorization presented to the
+// clone endpoint is refused by the operation check the resolver performs, and a clone authorization
+// presented to the mirror endpoint likewise — the separation is enforced on the signed payload rather
+// than by the routes being distinct.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/credentials", s.route(CapabilityWrite, s.write))
 	mux.HandleFunc("POST /v1/credentials/{credentialID}/rotate", s.route(CapabilityWrite, s.rotate))
 	mux.HandleFunc("POST /v1/credentials/{credentialID}/revoke", s.route(CapabilityWrite, s.revoke))
 	mux.HandleFunc("POST /v1/credentials/{credentialID}/resolve", s.route(CapabilityResolve, s.resolve))
+	mux.HandleFunc("POST /v1/credentials/{credentialID}/resolve-mirror", s.route(CapabilityResolve, s.resolveMirror))
 	return mux
 }
 
-// operation is one capability-gated handler. It receives the credential id from the path.
-type operation func(w http.ResponseWriter, r *http.Request, credentialID string)
+// operation is one capability-gated handler. It receives the credential id from the path and the
+// service identity the route already proved, so a handler that needs to know who is calling never
+// reads the request for it: the identity is resolved from the verified client certificate once, at
+// the boundary, and handed inward as a trusted value.
+type operation func(w http.ResponseWriter, r *http.Request, credentialID, identity string)
 
 // route builds the authentication and capability check every operation shares.
 //
@@ -109,7 +118,7 @@ func (s *Server) route(required Capability, next operation) http.HandlerFunc {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-		next(w, r, r.PathValue("credentialID"))
+		next(w, r, r.PathValue("credentialID"), identity)
 	}
 }
 
@@ -128,7 +137,7 @@ type credentialRequest struct {
 }
 
 // write stores a new token and returns the reference the Store generated for it.
-func (s *Server) write(w http.ResponseWriter, r *http.Request, _ string) {
+func (s *Server) write(w http.ResponseWriter, r *http.Request, _, _ string) {
 	var body writeRequest
 	if !decode(w, r, &body) {
 		return
@@ -144,7 +153,7 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, _ string) {
 }
 
 // rotate replaces the material of an existing credential.
-func (s *Server) rotate(w http.ResponseWriter, r *http.Request, credentialID string) {
+func (s *Server) rotate(w http.ResponseWriter, r *http.Request, credentialID, _ string) {
 	var body credentialRequest
 	if !decode(w, r, &body) {
 		return
@@ -160,7 +169,7 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request, credentialID str
 }
 
 // revoke destroys the material of an existing credential.
-func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID string) {
+func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID, _ string) {
 	if err := s.store.Revoke(r.Context(), credentialID); err != nil {
 		s.failure(w, r, "revoke", credentialID, err)
 		return
@@ -181,7 +190,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID str
 // issued before the body is read, because a Store that cannot decide whether an authorization is
 // genuine must not act on one, and parsing input it can never accept would only invite a caller to
 // keep trying.
-func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID string) {
+func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID, _ string) {
 	if s.resolver == nil {
 		s.audit(r, "resolve", credentialID, "authorization_verification_unavailable")
 		respond(w, http.StatusConflict, map[string]string{
@@ -202,6 +211,41 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID st
 		return
 	}
 	s.audit(r, "resolve", credentialID, "succeeded")
+	respond(w, http.StatusOK, map[string]any{"token": resolved.Token, "version": resolved.Version})
+}
+
+// resolveMirror delivers the token one `mirror_prepare` authorization names.
+//
+// It reads no identity from the body, because there is none to read: `MirrorResolveRequest` carries
+// the authorization and nothing else. The identity the resolver compares against the binding is the
+// one the route above proved from the verified client certificate, which is why the handler takes it
+// as an argument rather than looking it up again — a second lookup could only disagree with the first
+// if the state changed underneath, and there is no reason to leave that possibility open.
+//
+// This endpoint spends a mirror authorization exactly once, durably, before any secret leaves the
+// process, and it cannot decide Cloud's facts (see Resolver.ResolveMirror). Cloud re-checks those
+// where the content is used.
+func (s *Server) resolveMirror(w http.ResponseWriter, r *http.Request, credentialID, identity string) {
+	if s.resolver == nil {
+		s.audit(r, "resolve-mirror", credentialID, "authorization_verification_unavailable")
+		respond(w, http.StatusConflict, map[string]string{
+			"code":    "authorization_verification_unavailable",
+			"message": "this deployment configured no authorization verification key",
+		})
+		return
+	}
+	var body MirrorResolveRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	resolved, err := s.resolver.ResolveMirror(r.Context(), credentialID, identity, body)
+	// The authorization is a bearer secret; it must not survive into the audit line or the failure log.
+	body.Authorization = ""
+	if err != nil {
+		s.failure(w, r, "resolve-mirror", credentialID, err)
+		return
+	}
+	s.audit(r, "resolve-mirror", credentialID, "succeeded")
 	respond(w, http.StatusOK, map[string]any{"token": resolved.Token, "version": resolved.Version})
 }
 
@@ -255,6 +299,8 @@ func (s *Server) failure(w http.ResponseWriter, r *http.Request, operation, cred
 		status, code = http.StatusForbidden, "authorization_expired"
 	case errors.Is(err, ErrAuthorizationBinding):
 		status, code = http.StatusForbidden, "authorization_binding_mismatch"
+	case errors.Is(err, ErrAuthorizationPurpose):
+		status, code = http.StatusForbidden, "authorization_purpose_mismatch"
 	case errors.Is(err, ErrAuthorizationConsumed):
 		status, code = http.StatusConflict, "authorization_consumed"
 	case errors.Is(err, ErrVersionUnavailable):

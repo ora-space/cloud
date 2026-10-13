@@ -53,28 +53,38 @@ service identities" right.
   verified, and a certificate that verified but names no known identity is rejected rather than treated
   as anonymous.
 - `server.go`: `Server`, the mutual-TLS, capability-gated HTTP surface. `POST /v1/credentials`,
-  `.../{id}/rotate` and `.../{id}/revoke` require `write`; `.../{id}/resolve` requires `resolve`. Bodies
-  are decoded strictly (unknown fields, a document that is not a single JSON object, and trailing
-  content are refused). `failure` maps a Store error to a fixed reason code and leaves the error text in
-  this service's own log; `audit` records operation/credentialId/serviceIdentity/result for every
-  operation. `resolve` performs a real redemption when the deployment configured a verification key,
-  and otherwise still answers 409 `authorization_verification_unavailable` — before reading the body.
+  `.../{id}/rotate` and `.../{id}/revoke` require `write`; `.../{id}/resolve` and
+  `.../{id}/resolve-mirror` require `resolve`. Bodies are decoded strictly (unknown fields, a document
+  that is not a single JSON object, and trailing content are refused). `failure` maps a Store error to a
+  fixed reason code and leaves the error text in this service's own log; `audit` records
+  operation/credentialId/serviceIdentity/result for every operation. The two redemption endpoints
+  correspond to the two purposes. `resolve` performs a real redemption when the deployment configured a
+  verification key, and otherwise still answers 409 `authorization_verification_unavailable` — before
+  reading the body; `resolve-mirror` does the same. The `operation` handler signature carries the
+  **service identity already resolved from the certificate** inward as a trusted value, so a handler
+  that needs to know who is calling never reads the request for it — which is how a mirror binding's
+  presenter is decided.
 - `authorization.go`: the `Resolver` and the redemption path. `ResolveRequest` (the authorization
   carrier plus the presenting side's own account of its Node instance and runtime generation),
-  `ResolvedCredential` (the token and its version), and six distinguishable reason errors
-  (`ErrAuthorizationUnverifiable`, `ErrAuthorizationInvalid`, `ErrAuthorizationExpired`,
-  `ErrAuthorizationConsumed`, `ErrAuthorizationBinding`, `ErrVersionUnavailable`). `Store.Resolver()`
+  `MirrorResolveRequest` (the authorization carrier and nothing else), `ResolvedCredential` (the token
+  and its version), and the distinguishable reason errors (`ErrAuthorizationUnverifiable`,
+  `ErrAuthorizationInvalid`, `ErrAuthorizationExpired`, `ErrAuthorizationConsumed`,
+  `ErrAuthorizationBinding`, `ErrAuthorizationPurpose`, `ErrVersionUnavailable`). `Store.Resolver()`
   returns `(*Resolver, bool)`: no verification key means no redemption capability. `Resolver` holds the
   whole **key set** and passes it to `cloneauth.Verify`, so an authorization signed by any mounted key
-  is delivered. `claimAuthorization` creates the consumption record with `O_CREATE|O_EXCL`, and that
-  create *is* the atomic single-use decision; `markAuthorizationDelivered` moves the result from
-  "consumed, not delivered" to "delivered" before the secret leaves the process.
+  is delivered. `Resolve` (the clone purpose) and `ResolveMirror` (the mirror_prepare purpose) each
+  first confirm the authorization really was issued for that purpose, and only then enter the shared
+  `deliver`: check the credential's state, `claimAuthorization` creating the consumption record with
+  `O_CREATE|O_EXCL` — that create *is* the atomic single-use decision — and `markAuthorizationDelivered`
+  moving the result from "consumed, not delivered" to "delivered" before the secret leaves the process.
+  `deliver` has exactly **one** implementation, because "deliver first, record later" is precisely the
+  ordering mistake a second copy would eventually write down.
 - `client.go`: Cloud's `ingress-writer` client — `ClientConfig` (an `https` endpoint with no query or
   fragment; TLS carrying a client certificate and a trust pool), `Failure` (with `ReasonCode()`), and
   `Write`/`Rotate`/`Revoke`. It deliberately does not retry: a write that timed out may have succeeded,
   and recovery is the caller re-issuing the whole request under the same idempotency key (D4).
 - Tests: `store_test.go`, `keystore_test.go`, `server_test.go`, `client_test.go`, `authorization_test.go`,
-  `process_test.go` (the cross-process acceptance; see Tests below).
+  `mirror_authorization_test.go`, `process_test.go` (the cross-process acceptance; see Tests below).
 
 ## Dependencies and callers
 
@@ -138,7 +148,29 @@ service identities" right.
   leaves "consumed, not delivered" behind; the reverse — "delivered with no consumption record" — cannot
   occur, because the record is on disk before delivery. The authorization is itself a bearer secret: the
   body's copy is cleared before the audit line or the failure log, and the consumption record keeps only
-  the authorization id, the instant, the presenting Node instance and runtime generation, and the result.
+  the authorization id, the purpose, the instant, the presenting Node instance and runtime generation
+  (the executor identity, for the mirror purpose), and the result.
+- **The two purposes are not interchangeable, and the conclusion comes from the signature rather than
+  from the routes**: `clone` and `mirror_prepare` can each be redeemed only at their own endpoint, and
+  the refusal happens on the operation inside the signed payload, so presenting a mirror authorization to
+  the clone endpoint yields `authorization_purpose_mismatch` (403) rather than a routing accident — and
+  **does not consume** the authorization. This is not fastidiousness: a mirror binding by definition
+  carries no Node runtime (it does not run on one), so a caller presenting empty runtime values would
+  match it field for field — without this check the single redemption a preparation is granted would be
+  spent on a clone. The reverse holds too: `Resolve` accepts only `clone`.
+- **The mirror presenter's identity comes from the certificate, not from the request body**:
+  `ResolveMirror` compares the binding's `executorIdentity` against the SPIFFE identity
+  `PresentedIdentity` read from the verified client certificate, and `MirrorResolveRequest` has no
+  identity field at all (supplying one is refused by strict decoding). So who may spend a mirror
+  authorization is named by Cloud in the signature and guaranteed at the transport by the deployment's
+  identity table; the Store needs no knowledge of which identity is the mirror executor.
+- **The Store cannot verify Cloud's facts, and its code says so**: it holds none of Cloud's rows, so it
+  cannot decide whether the operation is still current, whether the preparation generation is still
+  live, or whether the Project's credential binding is still in force. Revocation is therefore **not
+  instantaneous** at redemption: it takes effect at Cloud's re-checks when it accepts a published mirror
+  and when it decides a Workspace may leave the `node` step, and at the authorization's own expiry.
+  `ResolveMirror`'s doc comment states this in those words, and it must not be described as if
+  revocation were instantaneous here.
 - **The Store owns the expiry decision**: `Resolve` judges expiry with the Store's own clock and does not
   take the payload's account of itself; if the two clocks drift, the Store's clock is what takes effect.
   That it resolves in the Store's favour is deliberate — the Store is the party deciding whether to hand
@@ -162,7 +194,7 @@ service identities" right.
   process — the state "delivered without a record" is unreachable in both directions.
 - **Failures are explicit**: the client separates "unreachable" from "refused" into two error types;
   `ErrRevoked`, `ErrConflict`, `ErrNotFound` and `ErrInvalidRequest` each map to a fixed reason code, and
-  each of the six redemption refusals has its own — a refused caller has to be able to tell "ask for a
+  each of the redemption refusals has its own — a refused caller has to be able to tell "ask for a
   new authorization" from "go investigate", which a single `resolve_failed` would not allow (D7). No
   response text carries error detail and no log line carries a token, ciphertext, wrapped data key or
   KEK.
@@ -199,6 +231,18 @@ service identities" right.
   second attempt refused. Rotation is covered across a real reopen: an authorization from either mounted
   key is delivered while both are present, and a key withdrawn from the file no longer verifies anything
   it signed.
+- `mirror_authorization_test.go` covers the mirror purpose's redemption path, again over a real file
+  volume, a real KEK, real mutual TLS and real signatures: delivery with the consumption record asserting
+  the `mirror_prepare` operation, the executor identity, and **no** runtime fields at all (a record that
+  named a runtime would be evidence of a check that never happened); each purpose presented to the other's
+  endpoint being refused in both directions, with the authorization still redeemable at the right
+  endpoint afterwards, which proves the refusal spent nothing; four ways a presenter's identity can fail
+  to match (another service identity, an identity in no table, no identity, whitespace); the reason codes
+  for an authorization naming another credential, expiry, a credential the Store does not hold,
+  revocation, and a superseded version past its retention window; a forged signature; a replay refused,
+  including **after the Store is closed and reopened**; and, across real TLS, delivery and replay,
+  the cross-purpose 403, a caller-supplied identity field refused with 400, and audit lines recorded
+  under `resolve-mirror` carrying neither token nor authorization.
 - `process_test.go` is the cross-process acceptance. It builds the real `cmd/credential-store`, writes a
   real configuration file, a real PKI, a real KEK keyring and a real Ed25519 key pair to disk, starts the
   binary as a child process with an environment of its own, and drives it over the real mutually
