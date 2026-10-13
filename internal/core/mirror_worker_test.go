@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -211,9 +212,21 @@ func TestTheClaimedBindingIsTheOneTheGateWillReCheck(t *testing.T) {
 		Ref:               "refs/heads/" + scene.ref,
 		CredentialID:      scene.credential,
 		CredentialVersion: 1,
+		// The capability set admission found on the reference, carried so the authorization binds what
+		// the guard approved rather than a set the dispatcher would decide at signing time.
+		Capabilities:      []string{"clone"},
 		RuntimeGeneration: scalarOf(t, store, `SELECT runtime_generation FROM workspaces WHERE id=$1`, scene.workspace),
 	}
-	if got != want {
+	// Compared field by field rather than as a whole value: the claim carries a slice, so the struct is
+	// no longer comparable, and `reflect.DeepEqual` would report only that something differs.
+	if got.OperationID != want.OperationID || got.AuthorizationID != want.AuthorizationID ||
+		got.Generation != want.Generation || got.ControlEpoch != want.ControlEpoch ||
+		got.TenantID != want.TenantID || got.OwnerUserID != want.OwnerUserID ||
+		got.ProjectID != want.ProjectID || got.WorkspaceID != want.WorkspaceID ||
+		got.Repository != want.Repository || got.Ref != want.Ref ||
+		got.CredentialID != want.CredentialID || got.CredentialVersion != want.CredentialVersion ||
+		got.RuntimeGeneration != want.RuntimeGeneration ||
+		!slices.Equal(got.Capabilities, want.Capabilities) {
 		t.Fatalf("the claimed binding is\n%+v\nwant\n%+v", got, want)
 	}
 

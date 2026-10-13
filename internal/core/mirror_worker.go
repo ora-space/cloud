@@ -18,7 +18,12 @@ import (
 // worker's own clock would let a worker whose clock runs fast steal an attempt from a slower one that
 // is still working, which is the failure the lease exists to prevent.
 const (
-	mirrorPreparationLease    = 5 * time.Minute
+	// MirrorPreparationLease bounds one attempt, and it is exported because it is also the ceiling on how
+	// long an authorization for that attempt may live: an authorization outliving its attempt's lease
+	// would permit a fetch whose result the generation fence will refuse, and the deployment has no
+	// honest reason to want one. `internal/config` checks the configured mirror lifetime against it, so
+	// the two bounds cannot drift apart in a deployment file.
+	MirrorPreparationLease    = 5 * time.Minute
 	mirrorPreparationAttempts = 3
 	mirrorPreparationBackoff  = 30 * time.Second
 	// mirrorPreparationBatch bounds one pass. It is a batch rather than a drain so that a backlog is
@@ -63,6 +68,11 @@ type MirrorPreparation struct {
 	// version validated when this attempt was claimed.
 	CredentialID      string
 	CredentialVersion int64
+	// Capabilities is the set admission required and found on the reference, in canonical order. It is
+	// carried for the same reason a credentialed clone carries it: the continuity decision's D4 fixes the
+	// capability in the execution plan, so the authorization must bind the set the guard approved rather
+	// than a set the dispatcher decides at signing time.
+	Capabilities []string
 	// RuntimeGeneration is the Workspace runtime generation this preparation serves.
 	RuntimeGeneration int64
 }
@@ -176,7 +186,7 @@ func (s *Store) claimMirrorPreparation(ctx context.Context, operation string) (*
 			o.S("id"), p.S("tenantId"), o.S("projectId"), w.S("id"), p.S("repositoryUrl"),
 			"refs/heads/"+w.S("requestedRef"), w.N("runtimeGeneration"), o.N("controllerEpoch"),
 			p.S("credentialRefId"), c.CredentialVersion, authorization, generation,
-			mirrorPreparationLease.Seconds())
+			MirrorPreparationLease.Seconds())
 		claimed = &MirrorPreparation{
 			OperationID:       o.S("id"),
 			AuthorizationID:   authorization,
@@ -190,6 +200,7 @@ func (s *Store) claimMirrorPreparation(ctx context.Context, operation string) (*
 			Ref:               "refs/heads/" + w.S("requestedRef"),
 			CredentialID:      c.CredentialID,
 			CredentialVersion: c.CredentialVersion,
+			Capabilities:      c.Capabilities,
 			RuntimeGeneration: w.N("runtimeGeneration"),
 		}
 		return Object{}

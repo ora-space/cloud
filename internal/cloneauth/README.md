@@ -116,11 +116,20 @@ Store 只持有公钥验签**。Store 的卷与进程同时被攻破也造不出
   `internal/cloneexec`(凭据执行器 C)用同一组函数在花掉任何东西之前**本地**拒掉一份它不认的授权,并在
   `matchBinding` 里比对 `binding.Operation != OperationClone`——这是 clone 路由拒绝镜像授权的落点,发生在
   Store 被询问之前。
-- 签发侧(`Issue`/`LoadSigningKey`)的生产调用点是 `internal/core` 的 `CloneDispatcher.Execute`,
-  由 `cmd/server` 从 `CloneDispatch` 配置段装配。**默认不装配**:`CLOUD_CLONE_DISPATCH_ENABLED` 为 `false`
-  时 `requireRepositoryAccess` 仍在派发之前无条件拒绝,因此一次也不会签发;私钥文件也因此不是必需配置,
-  缺它时 Cloud 照常启动并保持 fail-closed。**配了就必须可用**:`CloneDispatch.Open()` 在"启用但不可用"
-  (缺端点、缺私钥、缺证书)时让进程启动失败,而不是运行期降级。
+- 签发侧(`Issue`/`LoadSigningKey`)的生产调用点有两个,都由 `cmd/server` 从同一段配置
+  (`clone_dispatch`,Go 类型 `ExecutorDispatchConfig`)装配,因为两者共用同一个 executor 端点、
+  同一张 dispatcher 证书和同一把签名私钥:clone 走 `internal/core` 的 `CloneDispatcher.Execute`,
+  mirror 走 `MirrorDispatcher.Prepare`。
+- **两个能力各自独立开关、默认都关**:`CLOUD_CLONE_DISPATCH_ENABLED` 为 `false` 时
+  `requireRepositoryAccess` 仍在派发之前无条件拒绝,因此一次也不会签发;私钥文件也因此不是必需配置,
+  缺它时 Cloud 照常启动并保持 fail-closed。`CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` 只装配镜像准备,
+  不改变 clone 路径的行为——这样镜像链路可以先行接通,而每一次带凭据的 clone 依旧被拒。
+  **配了就必须可用**:`ExecutorDispatch.Open()` 在"启用但不可用"(缺端点、缺私钥、缺证书、缺执行器身份)
+  时让进程启动失败,而不是运行期降级。
+- 镜像用途多一项部署事实:`CLOUD_CLONE_DISPATCH_EXECUTOR_IDENTITY` 必须与
+  `CREDENTIAL_STORE_BROKER_RESOLVER_IDENTITY` 逐字一致,因为 Store 比对的不是载荷里的自述,而是它从
+  **已验证客户端证书**解析出的身份。写错不会静默通过:兑换被拒,凭据一次也不会被交付。
+  镜像授权寿命另受 `core.MirrorPreparationLease` 约束,因为授权不该比它服务的尝试租约活得更久。
 
 ## 测试
 

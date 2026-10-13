@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/wanglongan587/cloud/internal/cloneauth"
 	"github.com/wanglongan587/cloud/internal/cloneexec"
+	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/mirror"
 )
@@ -298,15 +300,31 @@ func (c *CloneExecutorServiceConfig) ServerTLS() (*tls.Config, error) {
 	return cfg, nil
 }
 
-// CloneDispatchConfig is Cloud's half of the credentialed-clone boundary: the executor it dispatches
-// jobs to, the identity it authenticates as, and the key it signs authorizations with.
+// ExecutorDispatchConfig is Cloud's half of the credentialed-executor boundary: the executor it
+// dispatches jobs to, the identity it authenticates as, and the key it signs authorizations with.
 //
-// Disabling this section is the approved fail-closed state and the default. A deployment that
-// configures no executor admits no credentialed clone at all: `requireRepositoryAccess` refuses every
-// Project that names a credential with `repository_credential_executor_unavailable`, exactly as it did
-// before this boundary existed. Enabling it is the deployment declaring that it has established the
-// whole boundary, which is the shape D17 gives the missing-configuration table.
-type CloneDispatchConfig struct {
+// It covers two capabilities, and the configuration section is shared by both because they are one
+// deployment fact rather than two: a single executor process, reached at one endpoint, behind one
+// dispatcher identity, verifying one signing key. Splitting this into two sections would let a
+// deployment point clone dispatch and mirror dispatch at different hosts, and then the statement "the
+// mirror Cloud publishes is prepared by the component Cloud authorized" would stop being true without
+// anything refusing.
+//
+// What is separate is which capabilities are *switched on*: `enabled` for credentialed clones and
+// `mirror_enabled` for mirror preparation. Either may stand alone. The approved fail-closed state is
+// both off, which is the default: a deployment that configures no executor admits no credentialed
+// clone at all (`requireRepositoryAccess` refuses every Project that names a credential with
+// `repository_credential_executor_unavailable`) and prepares no mirror, exactly as before this
+// boundary existed. Enabling a capability is the deployment declaring it has established that
+// capability's whole boundary, which is the shape D17 gives the missing-configuration table.
+//
+// The mapstructure key remains `clone_dispatch`, and the environment prefix remains
+// `CLOUD_CLONE_DISPATCH_*`. The deployment files and the compose environment already spell it that
+// way, and widening a section is not a reason to invalidate them; the Go type is renamed because the
+// name is what a reader of this package sees, and `CloneDispatchConfig` holding the mirror capability
+// would be a name that lies about its contents.
+type ExecutorDispatchConfig struct {
+	// Enabled admits credentialed clones.
 	Enabled bool `mapstructure:"enabled"`
 	// Endpoint is the executor's HTTPS base URL.
 	Endpoint string `mapstructure:"endpoint"`
@@ -324,6 +342,31 @@ type CloneDispatchConfig struct {
 	// ceiling and must not exceed one clone's timeout, because an authorization that expires mid-clone
 	// fails a clone that was otherwise permitted.
 	AuthorizationLifetime time.Duration `mapstructure:"authorization_lifetime"`
+	// MirrorEnabled admits mirror preparation. It is separate from `Enabled` because the two
+	// capabilities have different consequences: mirror preparation installs a worker that claims
+	// Operations and can settle them with a failure, while credentialed clone dispatch is reachable only
+	// from an Operation that already reached the clone step. A deployment can therefore run the mirror
+	// path with the clone path still refused, which is what an incremental rollout of this boundary
+	// needs — and, before the clone path's own acceptance evidence exists, what keeps
+	// `repository_credential_executor_unavailable` the answer for every credentialed clone.
+	MirrorEnabled bool `mapstructure:"mirror_enabled"`
+	// ExecutorIdentity is the SPIFFE identity of the credential-executing component as the Credential
+	// Service sees it, meaning the URI in the certificate that component presents when it redeems.
+	//
+	// Cloud states it here because the mirror authorization has to name the party permitted to spend
+	// it, and the only value the Store will accept is the one it resolves from the verified client
+	// certificate. The two spellings have to agree; `validExecutorIdentity` checks the shape, and a
+	// well-formed value that names the wrong workload fails closed at redemption.
+	ExecutorIdentity string `mapstructure:"executor_identity"`
+	// MirrorAuthorizationLifetime is how long one mirror authorization lives.
+	//
+	// It is bounded by `core.MirrorPreparationLease`, which is the ceiling this differs from the clone
+	// path by and the reason the lease is exported: an authorization outliving its attempt's lease
+	// would let the executor fetch with material the worker has already reclaimed, and the generation
+	// fence would then refuse the result it publishes. Keep the executor's `mirror_timeout` at or below
+	// this value too, so a fetch is not cut off by the authorization midway — that is the executor's own
+	// file, in a different process, so it cannot be checked from here.
+	MirrorAuthorizationLifetime time.Duration `mapstructure:"mirror_authorization_lifetime"`
 	// Timeout bounds one dispatch. Zero selects the client's default.
 	Timeout time.Duration `mapstructure:"timeout"`
 }
@@ -333,30 +376,65 @@ type CloneDispatchConfig struct {
 // operating value.
 const DefaultAuthorizationLifetime = 10 * time.Minute
 
-// Open builds Cloud's dispatch client and signing key. A disabled section yields neither and no error
-// — the capability is simply absent. An enabled but incomplete or unusable section is an error,
-// because a deployment must refuse to start a capability it has declared but cannot establish.
-func (c *CloneDispatchConfig) Open() (*cloneexec.Client, ed25519.PrivateKey, time.Duration, error) {
-	if !c.Enabled {
-		return nil, nil, 0, nil
+// DefaultMirrorAuthorizationLifetime is the mirror lifetime used when the deployment configures none.
+// It leaves a minute of margin under `core.MirrorPreparationLease`, so the lease — not a clock
+// difference between this process and the executor's — is what ends an attempt that has stopped.
+const DefaultMirrorAuthorizationLifetime = 4 * time.Minute
+
+// ExecutorDispatch is what a configured section yields: one transport, one signing key, and the
+// capabilities the deployment switched on.
+//
+// The client and the key are shared rather than copied per capability on purpose, so a caller cannot
+// hold a clone dispatcher and a mirror dispatcher that authorize differently. The capability fields
+// are nil when the deployment did not enable them, and nil is the whole meaning: it is what a caller
+// checks instead of a boolean, so "not enabled" cannot be confused with "enabled but misconfigured" —
+// the latter never returns.
+type ExecutorDispatch struct {
+	// Client is the mutual-TLS transport to the executor.
+	Client *cloneexec.Client
+	// SigningKey is the Ed25519 key every authorization from this deployment is signed with.
+	SigningKey ed25519.PrivateKey
+	// Clone is non-nil exactly when `enabled` is set.
+	Clone *CloneCapability
+	// Mirror is non-nil exactly when `mirror_enabled` is set.
+	Mirror *MirrorCapability
+}
+
+// CloneCapability is the credentialed-clone half.
+type CloneCapability struct {
+	// Lifetime is the authorization lifetime, resolved to its default.
+	Lifetime time.Duration
+}
+
+// MirrorCapability is the mirror-preparation half.
+type MirrorCapability struct {
+	// ExecutorIdentity is the workload permitted to redeem a mirror authorization.
+	ExecutorIdentity string
+	// Lifetime is the authorization lifetime, resolved to its default.
+	Lifetime time.Duration
+}
+
+// Open builds Cloud's dispatch transport, signing key, and enabled capabilities.
+//
+// A section with both capabilities off yields an `ExecutorDispatch` with no capabilities and no
+// error, and builds nothing: an unconfigured deployment must not load a signing key or a certificate
+// it has no use for, because doing so would make an absent capability able to fail startup. An
+// enabled capability whose shared half is incomplete or unusable is an error, because a deployment
+// must refuse to start a capability it has declared but cannot establish.
+func (c *ExecutorDispatchConfig) Open() (*ExecutorDispatch, error) {
+	if !c.Enabled && !c.MirrorEnabled {
+		return &ExecutorDispatch{}, nil
 	}
 	if strings.TrimSpace(c.SigningKeyFile) == "" {
-		return nil, nil, 0, errors.New("clone dispatch: an authorization signing key is required")
+		return nil, errors.New("executor dispatch: an authorization signing key is required")
 	}
 	key, err := cloneauth.LoadSigningKey(c.SigningKeyFile)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("clone dispatch: %w", err)
-	}
-	lifetime := c.AuthorizationLifetime
-	if lifetime <= 0 {
-		lifetime = DefaultAuthorizationLifetime
-	}
-	if lifetime > cloneauth.MaxLifetime {
-		return nil, nil, 0, fmt.Errorf("clone dispatch: authorization lifetime exceeds %s", cloneauth.MaxLifetime)
+		return nil, fmt.Errorf("executor dispatch: %w", err)
 	}
 	cfg, _, err := loadMutualTLS(c.CertificateFile, c.PrivateKeyFile, c.CAFile)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("clone dispatch: %w", err)
+		return nil, fmt.Errorf("executor dispatch: %w", err)
 	}
 	client, err := cloneexec.NewClient(cloneexec.ClientConfig{
 		Endpoint: c.Endpoint,
@@ -364,7 +442,60 @@ func (c *CloneDispatchConfig) Open() (*cloneexec.Client, ed25519.PrivateKey, tim
 		Timeout:  c.Timeout,
 	})
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("clone dispatch: %w", err)
+		return nil, fmt.Errorf("executor dispatch: %w", err)
 	}
-	return client, key, lifetime, nil
+	dispatch := &ExecutorDispatch{Client: client, SigningKey: key}
+	if c.Enabled {
+		lifetime := c.AuthorizationLifetime
+		if lifetime <= 0 {
+			lifetime = DefaultAuthorizationLifetime
+		}
+		if lifetime > cloneauth.MaxLifetime {
+			return nil, fmt.Errorf("clone dispatch: authorization lifetime exceeds %s", cloneauth.MaxLifetime)
+		}
+		dispatch.Clone = &CloneCapability{Lifetime: lifetime}
+	}
+	if c.MirrorEnabled {
+		if err := validExecutorIdentity(c.ExecutorIdentity); err != nil {
+			return nil, fmt.Errorf("mirror dispatch: executor_identity %w", err)
+		}
+		lifetime := c.MirrorAuthorizationLifetime
+		if lifetime <= 0 {
+			lifetime = DefaultMirrorAuthorizationLifetime
+		}
+		// The lease, not `cloneauth.MaxLifetime`, is what bounds this: the decision's ceiling is looser
+		// than the attempt it authorizes, so the tighter of the two is the one worth checking, and the
+		// looser one is enforced by `Issue` regardless.
+		if lifetime > core.MirrorPreparationLease {
+			return nil, fmt.Errorf("mirror dispatch: authorization lifetime exceeds the preparation lease of %s", core.MirrorPreparationLease)
+		}
+		dispatch.Mirror = &MirrorCapability{ExecutorIdentity: c.ExecutorIdentity, Lifetime: lifetime}
+	}
+	return dispatch, nil
+}
+
+// validExecutorIdentity checks that an executor identity names exactly one SPIFFE workload.
+//
+// The shape is the one the control listener and the executor already enforce on their own peer
+// identities — `<trust domain>/<kind>/<name>` and nothing else — restated here because the value is
+// this deployment's to write and a typo in it is otherwise only discovered at the first redemption.
+// It is deliberately a shape check and not a lookup: nothing here can know which certificates the
+// deployment's credential service was configured to accept, so the authority on whether this identity
+// exists is the refusal the Store issues when it does not.
+func validExecutorIdentity(identity string) error {
+	uri, err := url.Parse(strings.TrimSpace(identity))
+	if err != nil {
+		return errors.New("is not a valid URI")
+	}
+	if uri.Scheme != "spiffe" || uri.Host == "" {
+		return errors.New("is not a spiffe:// URI with a trust domain")
+	}
+	if uri.RawQuery != "" || uri.Fragment != "" || uri.User != nil {
+		return errors.New("must not carry a query, fragment, or user info")
+	}
+	segments := strings.Split(strings.TrimPrefix(uri.Path, "/"), "/")
+	if len(segments) != 2 || segments[0] == "" || segments[1] == "" {
+		return errors.New("must name exactly one workload as /<kind>/<name>")
+	}
+	return nil
 }

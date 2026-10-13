@@ -91,23 +91,36 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
-	// The credentialed-clone boundary is optional in the same way and for the same reason. Unconfigured
-	// — the default — every Project that names a credential stays refused with
-	// `repository_credential_executor_unavailable` on every path. Configured, Cloud signs one
-	// single-use authorization per admitted clone and dispatches it to the executor, and the token
-	// never passes through Cloud at all. An enabled but unusable section is a startup error rather
-	// than a runtime downgrade.
-	cloneClient, signingKey, authorizationLifetime, e := cfg.CloneDispatch.Open()
+	// The credentialed-executor boundary is optional in the same way and for the same reason. Its two
+	// capabilities are switched on independently and each installs its own caller; the transport and the
+	// signing key are shared, because one executor serves both routes and one key authorizes both.
+	//
+	// Unconfigured — the default — every Project that names a credential stays refused with
+	// `repository_credential_executor_unavailable` on every path, and no mirror is prepared. Configured,
+	// Cloud signs one single-use authorization per admitted operation and dispatches it to the executor,
+	// and the token never passes through Cloud at all. An enabled but unusable section is a startup
+	// error rather than a runtime downgrade.
+	dispatch, e := cfg.ExecutorDispatch.Open()
 	if e != nil {
 		return e
 	}
-	if cloneClient != nil {
+	if dispatch.Clone != nil {
 		store.SetCredentialedCloner(&core.CloneDispatcher{
-			Client:     cloneClient,
-			SigningKey: signingKey,
-			Lifetime:   authorizationLifetime,
+			Client:     dispatch.Client,
+			SigningKey: dispatch.SigningKey,
+			Lifetime:   dispatch.Clone.Lifetime,
 		})
 	}
+	if dispatch.Mirror != nil {
+		store.SetMirrorPreparer(&core.MirrorDispatcher{
+			Client:           dispatch.Client,
+			SigningKey:       dispatch.SigningKey,
+			ExecutorIdentity: dispatch.Mirror.ExecutorIdentity,
+			Lifetime:         dispatch.Mirror.Lifetime,
+		})
+	}
+	// The mirror worker's loop is started below with the other dispatch loops, gated on the same
+	// `dispatch.Mirror` the install above uses.
 	configureCollaboration(store, cfg.Collaboration.DevelopmentFixtures, log)
 	// The B side of the Agent Run seam: Cloud's IssueRun/Thread lifecycle is driven by these five
 	// callbacks, each of which runs inside the control-plane transaction that just persisted the
@@ -174,6 +187,24 @@ func run() (runErr error) {
 		go func() {
 			defer syncGroup.Done()
 			pluginmarket.RunSyncLoop(ctx, store.StartQueuedAgentSessionsOnce, agentSessionStartInterval, pluginmarket.ContextSleep, log)
+		}()
+	}
+	// Mirror preparation: the loop that makes the preparer installed above reachable at all. Without it
+	// the gate on the `node` -> `clone` transition refuses with `mirror_not_ready` forever, because no
+	// preparation is ever claimed; an unconfigured deployment therefore has no loop, no claim, and no
+	// half-prepared Operation.
+	//
+	// A pass dispatches serially — claim, dispatch, settle, next — which is deliberate: the claim is
+	// what starts that attempt's lease, so claiming each row only immediately before dispatching it is
+	// what keeps a lease from running while its attempt waits behind other work. The cost is that one
+	// batch takes as long as its fetches do, so a backlog drains over passes rather than within one, and
+	// the interval decides only how long an idle queue waits before it is looked at again.
+	if dispatch.Mirror != nil {
+		const mirrorPreparationInterval = 10 * time.Second
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, store.PrepareMirrorsOnce, mirrorPreparationInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
 	// Thread-ending loops: B-owned recovery for the two ending triggers reachable without a new

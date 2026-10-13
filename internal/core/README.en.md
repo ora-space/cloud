@@ -41,6 +41,15 @@
 - The domain exclusively raises `*Fault` values containing a machine-readable `Code`, dynamic `Params`, and an HTTP `Status`.
 - `ErrorCode(err)` converts domain and internal database errors into client-safe `Fault` objects, mapping unexpected errors to `500 internal_error` without leaking database schema or credential information.
 
+### Credential-executor dispatch and mirror preparation
+
+Cloud dispatches two things to the credential executor (C). They share one deployment section and have two independent switches, and neither is wired by default:
+
+- **`CloneDispatcher`** (`credentialed_clone.go`): signs one single-use authorization per admitted credentialed clone and dispatches it. Only with it installed can `requireRepositoryAccess` ever admit a credential-bearing Project.
+- **`MirrorDispatcher`** (`mirror_dispatch.go`): signs a `mirror_prepare` authorization per claimed preparation attempt and dispatches it. The authorization binds the Operation, the attempt generation, the executor's SPIFFE identity, the repository, the ref and the capability set, and carries **no** execution id and no Node runtime triple; settling the attempt writes the returned commit and mirror generation as the `ready` evidence.
+
+Mirror preparation is driven by `PrepareMirrorsOnce`, and `cmd/server` starts that loop only when a `MirrorPreparer` is installed (off by default). Each attempt is exactly three steps and **no transaction spans the dispatch**: a short claim transaction (`FOR UPDATE` plus the lease), issuance and dispatch outside any transaction, then a short settlement transaction. The lease is 5 minutes, one Operation gets at most 3 attempts, and a failure backs off 30 seconds; `mirror_preparations.generation` increases monotonically and is the late-result fence — an answer whose generation has been superseded is refused rather than written. When attempts run out or the credential is terminally refused, the Operation is settled under the `controller_epoch` fence. The authorization lifetime is bounded by the attempt lease (`internal/config` enforces it at load), so no dispatch can hand out authority that outlives the attempt it serves and whose result the fence would discard anyway. Dispatch failures are classified in exactly two halves: the executor's own stable reason code, and "the executor was unreachable".
+
 ## Boundaries and invariants
 
 - **No long-lived transactions**: Transactions must never encompass network calls, Git operations, Substrate calls, or child process execution.

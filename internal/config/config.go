@@ -15,18 +15,18 @@ import (
 
 // Config holds all configuration of the application.
 type Config struct {
-	Server        ServerConfig            `mapstructure:"server"`
-	Logger        logger.Config           `mapstructure:"logger"`
-	Database      DatabaseConfig          `mapstructure:"database"`
-	Auth          AuthConfig              `mapstructure:"auth"`
-	Collaboration CollaborationConfig     `mapstructure:"collaboration"`
-	Directory     DirectoryConfig         `mapstructure:"directory"`
-	Control       ControlConfig           `mapstructure:"control"`
-	Plugins       PluginConfig            `mapstructure:"plugins"`
-	IssueRuns     IssueRunsConfig         `mapstructure:"issue_runs"`
-	ObjectStore   ObjectStoreConfig       `mapstructure:"object_store"`
-	Credentials   CredentialIngressConfig `mapstructure:"credentials"`
-	CloneDispatch CloneDispatchConfig     `mapstructure:"clone_dispatch"`
+	Server           ServerConfig            `mapstructure:"server"`
+	Logger           logger.Config           `mapstructure:"logger"`
+	Database         DatabaseConfig          `mapstructure:"database"`
+	Auth             AuthConfig              `mapstructure:"auth"`
+	Collaboration    CollaborationConfig     `mapstructure:"collaboration"`
+	Directory        DirectoryConfig         `mapstructure:"directory"`
+	Control          ControlConfig           `mapstructure:"control"`
+	Plugins          PluginConfig            `mapstructure:"plugins"`
+	IssueRuns        IssueRunsConfig         `mapstructure:"issue_runs"`
+	ObjectStore      ObjectStoreConfig       `mapstructure:"object_store"`
+	Credentials      CredentialIngressConfig `mapstructure:"credentials"`
+	ExecutorDispatch ExecutorDispatchConfig  `mapstructure:"clone_dispatch"`
 }
 
 // IssueRunsConfig holds the Thread lifecycle policy that belongs to Cloud's own dispatch loop

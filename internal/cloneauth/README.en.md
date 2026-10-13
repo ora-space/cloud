@@ -160,13 +160,24 @@ PKCS#8 private key and PKIX public key that `openssl genpkey -algorithm ED25519`
   refuse an authorization it does not recognise **locally**, before spending anything, and compares
   `binding.Operation != OperationClone` in `matchBinding` — the point where the clone route refuses a
   mirror authorization, before the Store is asked anything.
-- The issuing half's production call site is `CloneDispatcher.Execute` in `internal/core`, wired by
-  `cmd/server` from the `CloneDispatch` configuration section. **It is not wired by default**:
-  `CLOUD_CLONE_DISPATCH_ENABLED` is `false`, so `requireRepositoryAccess` still refuses before dispatch and
-  nothing is ever signed — which is also why the signing key file is not a required input, and Cloud starts
-  and stays fail-closed without it. **Configured means usable**: `CloneDispatch.Open()` fails startup when
-  the section is enabled but unusable (no endpoint, no signing key, no certificate) rather than degrading
-  at runtime.
+- The issuing half has two production call sites, both wired by `cmd/server` from one configuration
+  section (`clone_dispatch`, Go type `ExecutorDispatchConfig`), because the two share one executor
+  endpoint, one dispatcher certificate and one signing key: clone goes through `CloneDispatcher.Execute`
+  in `internal/core`, mirror through `MirrorDispatcher.Prepare`.
+- **Each capability has its own switch, and neither is on by default**: with
+  `CLOUD_CLONE_DISPATCH_ENABLED` `false`, `requireRepositoryAccess` still refuses before dispatch and
+  nothing is ever signed — which is also why the signing key file is not a required input, and Cloud
+  starts and stays fail-closed without it. `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` wires mirror preparation
+  alone and does not change the clone path, so the mirror chain can be brought up while every
+  credential-bearing clone is still refused. **Configured means usable**: `ExecutorDispatch.Open()` fails
+  startup when an enabled capability is unusable (no endpoint, no signing key, no certificate, no executor
+  identity) rather than degrading at runtime.
+- The mirror purpose adds one deployment fact: `CLOUD_CLONE_DISPATCH_EXECUTOR_IDENTITY` must match
+  `CREDENTIAL_STORE_BROKER_RESOLVER_IDENTITY` exactly, because the Store compares it not against what the
+  payload claims but against the identity it resolves from the **verified client certificate**. A wrong
+  spelling does not pass quietly: the redemption is refused and no credential is ever delivered. The
+  mirror authorization is additionally bounded by `core.MirrorPreparationLease`, because an authorization
+  has no honest reason to outlive the attempt lease it serves.
 
 ## Tests
 

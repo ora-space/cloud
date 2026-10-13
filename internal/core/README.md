@@ -42,6 +42,15 @@
 - 领域层只产生 `*Fault` 值，其中包含机器可读的 `Code`、动态 `Params` 和 HTTP `Status`。
 - `ErrorCode(err)` 将领域错误和内部数据库错误转换为对客户端安全的 `Fault` 对象，并将意外错误映射为 `500 internal_error`，而不泄露数据库 Schema 或凭据信息。
 
+### 凭据执行器派发与镜像准备
+
+Cloud 向凭据执行器（C）派发两件事，它们共用一段部署配置、两个互相独立的开关，默认都不装配：
+
+- **`CloneDispatcher`**（`credentialed_clone.go`）：为一次已准入的 credentialed clone 签发单次授权并派发。装配后 `requireRepositoryAccess` 才可能放行带凭据的项目。
+- **`MirrorDispatcher`**（`mirror_dispatch.go`）：为一次已领取的镜像准备尝试签发 `mirror_prepare` 授权并派发。授权绑定 Operation、尝试代次、执行器 SPIFFE 身份、仓库、ref 与能力集，**不含** execution 与 Node 运行时三元组；`PrepareMirrorsOnce` 的结算把返回的 commit 与镜像代次写成 `ready` 证据。
+
+镜像准备由 `PrepareMirrorsOnce` 驱动，只有装配了 `MirrorPreparer` 时 `cmd/server` 才启动该循环（默认关闭）。每次尝试严格三步，**任何事务都不跨越派发**：短事务领取（`FOR UPDATE` + 租约）→ 事务外签发与派发 → 短事务结算。租约 5 分钟、同一 Operation 至多 3 次尝试、失败退避 30 秒；`mirror_preparations.generation` 单调递增，是迟到结果的栅栏——代次已被取代的应答被拒绝而不是写入；尝试耗尽或凭据被终局拒绝时，按 `controller_epoch` 栅栏结算 Operation。授权有效期上界即尝试租约（`internal/config` 在校验配置时强制），避免出现"授权比它服务的租约活得更久"这种结果必被栅栏丢弃的派发。派发方的错误分类只在两处区分：执行器自己给出的稳定原因码，与"执行器不可达"。
+
 ## 边界与不变量
 
 - **严禁长事务**：数据库事务绝对禁止跨越外部网络调用、Git 操作、Substrate 调用或子进程执行。
