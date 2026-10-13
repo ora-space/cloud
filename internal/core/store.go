@@ -169,6 +169,14 @@ type Store struct {
 	// mirror is published: the upstream is not a substitute for the internal channel, because the Node
 	// holds no credential for it and the decision makes the mirror the single content channel.
 	mirrorEndpoint *MirrorEndpoint
+
+	// pushExecutor is the push executor boundary, installed once at startup by SetPushExecutor. While
+	// it is nil — the default, and the only state this change can produce in a deployment — no push is
+	// ever dispatched and every approval is settled `failed` with `push_executor_unavailable`, which is
+	// the approved fail-closed condition for a deployment whose write path does not exist yet. It is a
+	// separate field from credentialedCloner because the two authorize different work in different
+	// directions, and one may be installed without the other.
+	pushExecutor PushExecutor
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no

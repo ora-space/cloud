@@ -99,6 +99,24 @@ type CloneExecutorServiceConfig struct {
 	MirrorGrace time.Duration `mapstructure:"mirror_grace"`
 	// MirrorTimeout bounds one mirror preparation. Zero selects the executor's default.
 	MirrorTimeout time.Duration `mapstructure:"mirror_timeout"`
+	// PushRoot is the directory the push executor materializes an authorized upstream under. It is
+	// optional, and empty is the approved default: a deployment that performs no controlled push has no
+	// push endpoint at all, and the clone and mirror paths are unaffected either way.
+	//
+	// It is a directory of its own for a reason the other roots do not share. What lands here is a
+	// plaintext copy of a private upstream, fetched with a credential the Store delivered, and the only
+	// thing that removes it is the sweep — which removes every entry beneath the root it is given. A push
+	// root nested inside the materialization root would therefore have its contents deleted on the first
+	// restart, and the reverse nesting would put staged tokens inside the directory a private upstream is
+	// written to. See PushExecutor for the containment checks.
+	PushRoot string `mapstructure:"push_root"`
+	// PushTimeout bounds one push. Zero selects the executor's default.
+	//
+	// It is bounded by the authorization's own lifetime rather than the other way round, which is why the
+	// deployment should keep this at or below `push_authorization_lifetime` on Cloud's side: an
+	// authorization that expires mid-push cuts off a write that was otherwise permitted, and the two
+	// values live in different configuration files, so neither process can check the other's.
+	PushTimeout time.Duration `mapstructure:"push_timeout"`
 	// Timeout bounds one clone. Zero selects the executor's default.
 	Timeout time.Duration `mapstructure:"timeout"`
 	// Logger is the executor's own log destination.
@@ -237,6 +255,58 @@ func (c *CloneExecutorServiceConfig) MirrorExecutor() (*cloneexec.MirrorExecutor
 	return executor, nil
 }
 
+// PushExecutor builds the controlled-push executor over a scratch root of its own.
+//
+// An empty `push_root` yields `(nil, nil)`: the capability is absent, and C's push route answers
+// `credential_executor_unavailable` rather than the deployment performing writes it was never given a
+// root for. That is the approved default and the same shape `MirrorExecutor` has — an absent capability
+// is not an error, a half-declared one is.
+//
+// The containment checks matter more here than they do for the mirror root. A push root holds a
+// plaintext copy of a private upstream, and the push executor's own sweep removes every entry beneath
+// it: a root nested inside the mirror store would delete published content on the first restart, and one
+// nested inside the checkout root would have a Workspace's clone deleted out from under it. The
+// materialization root is checked for the reason the mirror root is — staged tokens must not live inside
+// a directory a repository is written to, and vice versa.
+func (c *CloneExecutorServiceConfig) PushExecutor() (*cloneexec.PushExecutor, error) {
+	root := strings.TrimSpace(c.PushRoot)
+	if root == "" {
+		return nil, nil
+	}
+	for _, other := range []struct{ name, path string }{
+		{"credential materialization root", c.MaterialRoot},
+		{"checkout root", c.CheckoutRoot},
+		{"mirror root", c.MirrorRoot},
+	} {
+		if err := separateRoots(root, other.path); err != nil {
+			return nil, fmt.Errorf("clone executor push root: %w; it must be a directory of its own, not one containing or contained by the %s", err, other.name)
+		}
+	}
+	keys, err := cloneauth.LoadVerificationKeys(c.AuthorizationPublicKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("clone executor push: %w", err)
+	}
+	storeClient, err := c.StoreClient()
+	if err != nil {
+		return nil, err
+	}
+	executor, err := cloneexec.NewPushExecutor(cloneexec.PushConfig{
+		MaterialRoot:     c.MaterialRoot,
+		ScratchRoot:      root,
+		HomeDirectory:    c.HomeDirectory,
+		HelperPath:       c.HelperPath,
+		GitPath:          c.GitPath,
+		SSLCAInfo:        c.SSLCAInfo,
+		VerificationKeys: keys,
+		Store:            storeClient,
+		Timeout:          c.PushTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clone executor push: %w", err)
+	}
+	return executor, nil
+}
+
 // separateRoots refuses two configured directories that contain one another.
 //
 // It is a containment check and not an equality check because of how each directory is swept:
@@ -303,20 +373,21 @@ func (c *CloneExecutorServiceConfig) ServerTLS() (*tls.Config, error) {
 // ExecutorDispatchConfig is Cloud's half of the credentialed-executor boundary: the executor it
 // dispatches jobs to, the identity it authenticates as, and the key it signs authorizations with.
 //
-// It covers two capabilities, and the configuration section is shared by both because they are one
-// deployment fact rather than two: a single executor process, reached at one endpoint, behind one
-// dispatcher identity, verifying one signing key. Splitting this into two sections would let a
-// deployment point clone dispatch and mirror dispatch at different hosts, and then the statement "the
-// mirror Cloud publishes is prepared by the component Cloud authorized" would stop being true without
-// anything refusing.
+// It covers three capabilities, and the configuration section is shared by all of them because they are
+// one deployment fact rather than three: a single executor process, reached at one endpoint, behind one
+// dispatcher identity, verifying one signing key. Splitting this into separate sections would let a
+// deployment point clone dispatch, mirror dispatch and push dispatch at different hosts, and then the
+// statement "the mirror Cloud published was prepared by the component Cloud authorized" would stop being
+// true without anything refusing.
 //
-// What is separate is which capabilities are *switched on*: `enabled` for credentialed clones and
-// `mirror_enabled` for mirror preparation. Either may stand alone. The approved fail-closed state is
-// both off, which is the default: a deployment that configures no executor admits no credentialed
-// clone at all (`requireRepositoryAccess` refuses every Project that names a credential with
-// `repository_credential_executor_unavailable`) and prepares no mirror, exactly as before this
-// boundary existed. Enabling a capability is the deployment declaring it has established that
-// capability's whole boundary, which is the shape D17 gives the missing-configuration table.
+// What is separate is which capabilities are *switched on*: `enabled` for credentialed clones,
+// `mirror_enabled` for mirror preparation, and `push_enabled` for controlled pushes. Any may stand
+// alone. The approved fail-closed state is all three off, which is the default: a deployment that
+// configures no executor admits no credentialed clone at all (`requireRepositoryAccess` refuses every
+// Project that names a credential with `repository_credential_executor_unavailable`), prepares no
+// mirror, and refuses every push with `push_executor_unavailable`. Enabling a capability is the
+// deployment declaring it has established that capability's whole boundary, which is the shape D17 gives
+// the missing-configuration table.
 //
 // The mapstructure key remains `clone_dispatch`, and the environment prefix remains
 // `CLOUD_CLONE_DISPATCH_*`. The deployment files and the compose environment already spell it that
@@ -367,6 +438,25 @@ type ExecutorDispatchConfig struct {
 	// this value too, so a fetch is not cut off by the authorization midway — that is the executor's own
 	// file, in a different process, so it cannot be checked from here.
 	MirrorAuthorizationLifetime time.Duration `mapstructure:"mirror_authorization_lifetime"`
+	// PushEnabled admits controlled pushes. It is separate from `Enabled` and `MirrorEnabled` because
+	// the three capabilities have different consequences, and this one's is the largest: a push is the
+	// only operation in this component that changes something outside the platform, in a repository the
+	// platform does not own. A deployment can therefore run clones and preparations while refusing every
+	// push, which is the approved state and the default.
+	//
+	// Turning it on does not by itself make a push possible. The Project has to bind a reference that
+	// permits one, the approval path has to admit it, and C's own `push_root` has to be configured; this
+	// switch only decides whether Cloud signs and dispatches an authorization at all.
+	PushEnabled bool `mapstructure:"push_enabled"`
+	// PushAuthorizationLifetime is how long one push authorization lives.
+	//
+	// It is the bound on the window `20261012-push-execution-authority` D6 describes as irreducible: the
+	// interval between Cloud's pre-dispatch re-check and the Credential Service's redemption, during
+	// which a revocation landing in between is not visible to both parties at once. The ceiling is
+	// therefore `core.PushDispatchLifetime`, which is Cloud's own documented bound on that window, and a
+	// deployment may only shorten it. A configuration that could widen it would be a deployment choosing
+	// a larger revocation window without the decision that set the bound being revisited.
+	PushAuthorizationLifetime time.Duration `mapstructure:"push_authorization_lifetime"`
 	// Timeout bounds one dispatch. Zero selects the client's default.
 	Timeout time.Duration `mapstructure:"timeout"`
 }
@@ -398,6 +488,8 @@ type ExecutorDispatch struct {
 	Clone *CloneCapability
 	// Mirror is non-nil exactly when `mirror_enabled` is set.
 	Mirror *MirrorCapability
+	// Push is non-nil exactly when `push_enabled` is set.
+	Push *PushCapability
 }
 
 // CloneCapability is the credentialed-clone half.
@@ -414,15 +506,28 @@ type MirrorCapability struct {
 	Lifetime time.Duration
 }
 
+// PushCapability is the controlled-push half.
+//
+// It carries the executor identity for the mirror's reason — a push authorization names the party
+// permitted to spend it, and the Store compares that against the identity it resolves from the verified
+// client certificate — and its lifetime is capped rather than merely defaulted, because the lifetime is
+// the width of the revocation window D6 records as irreducible.
+type PushCapability struct {
+	// ExecutorIdentity is the workload permitted to redeem a push authorization.
+	ExecutorIdentity string
+	// Lifetime is the authorization lifetime, resolved to its default and never above the bound.
+	Lifetime time.Duration
+}
+
 // Open builds Cloud's dispatch transport, signing key, and enabled capabilities.
 //
-// A section with both capabilities off yields an `ExecutorDispatch` with no capabilities and no
+// A section with every capability off yields an `ExecutorDispatch` with no capabilities and no
 // error, and builds nothing: an unconfigured deployment must not load a signing key or a certificate
 // it has no use for, because doing so would make an absent capability able to fail startup. An
 // enabled capability whose shared half is incomplete or unusable is an error, because a deployment
 // must refuse to start a capability it has declared but cannot establish.
 func (c *ExecutorDispatchConfig) Open() (*ExecutorDispatch, error) {
-	if !c.Enabled && !c.MirrorEnabled {
+	if !c.Enabled && !c.MirrorEnabled && !c.PushEnabled {
 		return &ExecutorDispatch{}, nil
 	}
 	if strings.TrimSpace(c.SigningKeyFile) == "" {
@@ -470,6 +575,22 @@ func (c *ExecutorDispatchConfig) Open() (*ExecutorDispatch, error) {
 			return nil, fmt.Errorf("mirror dispatch: authorization lifetime exceeds the preparation lease of %s", core.MirrorPreparationLease)
 		}
 		dispatch.Mirror = &MirrorCapability{ExecutorIdentity: c.ExecutorIdentity, Lifetime: lifetime}
+	}
+	if c.PushEnabled {
+		if err := validExecutorIdentity(c.ExecutorIdentity); err != nil {
+			return nil, fmt.Errorf("push dispatch: executor_identity %w", err)
+		}
+		lifetime := c.PushAuthorizationLifetime
+		if lifetime <= 0 {
+			lifetime = core.PushDispatchLifetime
+		}
+		// The bound is Cloud's own constant rather than `cloneauth.MaxLifetime`, and the direction is
+		// deliberate: the lifetime is the width of the revocation window D6 records as irreducible, so a
+		// deployment may narrow it and may not widen it. `Issue` enforces the issuer's ceiling either way.
+		if lifetime > core.PushDispatchLifetime {
+			return nil, fmt.Errorf("push dispatch: authorization lifetime exceeds the %s bound on the revocation window", core.PushDispatchLifetime)
+		}
+		dispatch.Push = &PushCapability{ExecutorIdentity: c.ExecutorIdentity, Lifetime: lifetime}
 	}
 	return dispatch, nil
 }

@@ -29,6 +29,7 @@ const maxJobBody = 16 << 10
 type Server struct {
 	executor *Executor
 	mirror   *MirrorExecutor
+	push     *PushExecutor
 	caller   string
 	log      *zap.Logger
 }
@@ -50,6 +51,12 @@ type ServerConfig struct {
 	// `credential_executor_unavailable` rather than absent, so a dispatcher that reaches it learns the
 	// deployment did not establish the capability instead of guessing at a routing mistake.
 	Mirror *MirrorExecutor
+	// Push is the push executor, or nil when the deployment declared no push capability. It is optional
+	// for the mirror's reason and one more: writing to a user's upstream is the only capability in this
+	// component that changes something outside the platform, and a deployment has to be able to run C
+	// for clones and preparations while refusing pushes outright. A nil value leaves the push route
+	// answering `credential_executor_unavailable` rather than absent, for the same reason.
+	Push *PushExecutor
 	// Log receives one line per job. It never receives a credential or an authorization.
 	Log *zap.Logger
 }
@@ -69,19 +76,21 @@ func NewServer(executor *Executor, cfg ServerConfig) (*Server, error) {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Server{executor: executor, mirror: cfg.Mirror, caller: cfg.Caller, log: log}, nil
+	return &Server{executor: executor, mirror: cfg.Mirror, push: cfg.Push, caller: cfg.Caller, log: log}, nil
 }
 
 // Handler returns the executor's HTTP surface.
 //
-// The two capabilities are two routes rather than one route with a discriminator, because they carry
-// different job shapes and different identities: a clone job names an execution and a Node, a mirror job
-// names an Operation and an attempt. A single route would have to decode both and decide which one it
-// was looking at, and that decision would be C's rather than the signature's (the 2026-10-13 ruling).
+// The three capabilities are three routes rather than one route with a discriminator, because they
+// carry different job shapes and different identities: a clone job names an execution and a Node, a
+// mirror job names an Operation and an attempt, a push job names an approval and the write it
+// authorizes. A single route would have to decode all three and decide which one it was looking at,
+// and that decision would be C's rather than the signature's (the 2026-10-13 ruling).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/clone-executions", s.dispatch)
 	mux.HandleFunc("POST /v1/mirror-preparations", s.prepare)
+	mux.HandleFunc("POST /v1/push-executions", s.pushExecution)
 	return mux
 }
 
@@ -163,12 +172,63 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, result)
 }
 
+// pushExecution performs one controlled push for the one caller allowed to ask for it.
+//
+// It is the push route's half of `dispatch`, and it keeps the rule the mirror route established: an
+// unconfigured deployment answers `credential_executor_unavailable` rather than 404. Writing to a
+// person's upstream is a capability a deployment either established or did not, and a dispatcher has to
+// be able to tell "this deployment cannot push" from "you sent the request to the wrong path".
+//
+// Its one deliberate difference from the other two routes is that a job which *ran* always answers 200,
+// including the attempts that failed and the attempts whose outcome is unknown: the reply carries the
+// state, and the state is the answer. An error means the executor never reached the write — a refusal it
+// decided, reported with its stable code, or a failure of the credential path, reported as the executor
+// being unavailable. That split is what lets the dispatcher settle a request as failed from a coded
+// refusal and as uncertain from a lost or unreadable reply, rather than reading every non-200 as an
+// unknown outcome.
+//
+// The authorization is cleared before any log line or error path can see it, exactly as on the other two
+// routes.
+func (s *Server) pushExecution(w http.ResponseWriter, r *http.Request) {
+	identity, ok := s.callerIdentity(w, r)
+	if !ok {
+		return
+	}
+	if s.push == nil {
+		s.refuse(w, identity, http.StatusInternalServerError, ReasonCodeUnavailable,
+			errors.New("this deployment declared no push execution capability"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxJobBody)
+	var job PushJob
+	if !decode(w, r, &job) {
+		return
+	}
+	result, err := s.push.Push(r.Context(), job)
+	job.Authorization = ""
+	if err != nil {
+		s.failure(w, identity, job.OperationID, err)
+		return
+	}
+	s.log.Info("push executor completed a job",
+		zap.String("serviceIdentity", identity),
+		zap.String("operationId", job.OperationID),
+		zap.String("repository", job.Repository),
+		zap.String("ref", job.Ref),
+		zap.String("state", string(result.State)),
+		zap.Int64("credentialVersion", result.CredentialVersion),
+	)
+	// The result is written as the type the caller will decode it into, so the wire shape and the
+	// structure cannot drift into two spellings of one answer.
+	respond(w, http.StatusOK, result)
+}
+
 // callerIdentity resolves and checks the dispatching service identity, answering the request itself
 // when the peer is not the one dispatcher this deployment accepts.
 //
-// It is shared by both routes so the two cannot drift into two identity stories: there is one
-// dispatcher, and whether it is asking for a clone or a mirror preparation is a question about the
-// body, not about who it is.
+// It is shared by all three routes so they cannot drift into three identity stories: there is one
+// dispatcher, and whether it is asking for a clone, a mirror preparation, or a push is a question about
+// the body, not about who it is.
 func (s *Server) callerIdentity(w http.ResponseWriter, r *http.Request) (string, bool) {
 	identity, err := presentedIdentity(r.TLS)
 	if err != nil {
@@ -208,6 +268,14 @@ func (s *Server) failure(w http.ResponseWriter, identity, subject string, err er
 		status = http.StatusForbidden
 	case ReasonCodeUnavailable, ReasonCodeCleanupFailed:
 		status = http.StatusInternalServerError
+	case ReasonCodePushFetchFailed, ReasonCodePushNotApplicable:
+		// Both are outcomes of a job that was well formed: the executor could not read the repository it
+		// was told to write to, or the authorized write is not one that repository's content supports.
+		// Neither is a protocol error by the caller, so both take the conflict status every refusal with
+		// no more specific meaning takes, and the dispatcher settles the request as a confirmed failure
+		// carrying this code. Naming them here rather than letting them fall through keeps that decision
+		// deliberate: a later push code must be given a status on purpose.
+		status = http.StatusConflict
 	}
 	s.log.Error("credential executor refused a job",
 		zap.String("serviceIdentity", identity),

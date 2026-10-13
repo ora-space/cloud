@@ -119,6 +119,20 @@ func run() (runErr error) {
 			Lifetime:         dispatch.Mirror.Lifetime,
 		})
 	}
+	// The push capability is installed the same way and is the one that must not be installed by accident.
+	// Until this runs, every push request is refused with `push_executor_unavailable`: the approval path
+	// records no approval it cannot dispatch, and `dispatchPush` settles the deployment-level refusal
+	// rather than leaving a row looking dispatched. Enabling it is the deployment declaring it has
+	// established the whole write boundary — a push-capable reference, an executor with a push root, and a
+	// Store that verifies the authorization — because each of those refuses independently.
+	if dispatch.Push != nil {
+		store.SetPushExecutor(&core.PushDispatcher{
+			Client:           dispatch.Client,
+			SigningKey:       dispatch.SigningKey,
+			ExecutorIdentity: dispatch.Push.ExecutorIdentity,
+			Lifetime:         dispatch.Push.Lifetime,
+		})
+	}
 	// The mirror worker's loop is started below with the other dispatch loops, gated on the same
 	// `dispatch.Mirror` the install above uses.
 	//

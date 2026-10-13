@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/wanglongan587/cloud/internal/cloneauth"
 )
 
 // A user's personal HTTPS Git credential (identity-access
@@ -17,9 +19,20 @@ import (
 // `credential_refs` is the only business record (credentials D1). A product credential is a row
 // attributed by `tenant_id` + `owner_user_id` with `purpose='git'`, `attribution='personal'` written
 // explicitly rather than inherited from the column's `unknown` default (D2), exactly one
-// `repository_scope`, and the single capability `clone`. The row never holds the token. What it holds
-// is an opaque reference the independent Credential Service generated, beside the metadata Cloud is
-// authoritative for: attribution, availability, scope, capabilities and a version.
+// `repository_scope`, and the capability set the create validated. The row never holds the token. What
+// it holds is an opaque reference the independent Credential Service generated, beside the metadata
+// Cloud is authoritative for: attribution, availability, scope, capabilities and a version.
+//
+// The capability set is the one field here that exists for a write. It is optional on the create — a
+// request that names none gets `clone`, which is what every credential carried before the push
+// decision existed — and a request that names `push` gets a reference the push admission will accept,
+// because nothing else can produce one: the vocabulary's members are refused everywhere they are not
+// served, and the product had no path that wrote a second member until this one. Declaring it grants
+// no write by itself. A push still needs its own single-use approval, signed by Cloud and bound to this
+// credential's id and version, redeemed by the one executor the deployment fixes, and the reference is
+// still compared against the upstream's normalized identity at admission. Nothing here upgrades an
+// existing credential: only a create writes this column, rotation rewrites material alone, and a
+// reference that says `["clone"]` keeps saying it.
 //
 // Three orderings from the approved decisions are implemented here, and they are the reason create
 // and rotate are split into a short transaction, an out-of-transaction handoff, and a second short
@@ -101,6 +114,45 @@ func validGitCredentialName(name string) bool {
 func validGitCredentialToken(token string) bool {
 	return token != "" && len(token) <= GitCredentialTokenMax &&
 		token == strings.TrimSpace(token) && !strings.ContainsRune(token, 0)
+}
+
+// gitCredentialCapabilities reads the capability set a create asks the new reference to carry.
+//
+// It is the one place a request may influence a reference's capabilities, and it is a create: the row
+// does not exist yet, so the only thing the caller can name is what its own new credential will permit.
+// Every later operation reads the set from the row and cannot add to it — `requireRepositoryAccess`
+// fixes `clone` for the work it admits and `pushAuthorizedCredential` requires the reference to already
+// declare `push` — which is the vocabulary decision's D3.1: 请求方自述不增加能力.
+//
+// The field is optional, and its absence means the capability every credential had before `push`
+// existed. That default is what keeps the create path's published behavior unchanged for a client that
+// has never heard of the field, and it is why a push-capable reference has to be asked for explicitly.
+//
+// A stated set is held to the vocabulary's own rule rather than repaired: unknown members, repeats, the
+// empty set and a non-canonical order are all refused. The stored value is compared as a set at every
+// enforcement point, so accepting a second spelling of one set would make "what the row declares" and
+// "what the caller was told it declared" two values that a later reader could not reconcile. The
+// `'[]'` a deployment-managed or pre-column reference carries keeps its own meaning — it permits
+// nothing — and nothing here migrates one: only a create writes this field.
+func gitCredentialCapabilities(body Object) ([]string, bool) {
+	raw, present := body["capabilities"]
+	if !present || raw == nil {
+		return []string{string(cloneauth.CapabilityClone)}, true
+	}
+	members, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	requested := make([]string, 0, len(members))
+	for _, member := range members {
+		capability, ok := member.(string)
+		if !ok {
+			return nil, false
+		}
+		requested = append(requested, capability)
+	}
+	canonical, err := cloneauth.CanonicalCapabilities(requested)
+	return canonical, err == nil
 }
 
 // normalizeRepositoryScope reduces one HTTPS repository URL to the single spelling a credential scope
@@ -279,6 +331,10 @@ type gitCredentialPrepare struct {
 	id string
 	// name and scope are the validated, normalized fields the insert will write.
 	name, scope string
+	// capabilities is the canonical capability set the insert will write. It is fixed here, before the
+	// handoff, so the stored set is the one this request was validated for rather than whatever a later
+	// read of the request would produce.
+	capabilities []string
 	// hash is the idempotency hash of this request. It covers the body with the token already removed
 	// and is therefore never a digest of anything secret.
 	hash string
@@ -308,6 +364,10 @@ func (s *Store) prepareGitCredential(ctx context.Context, r *PublicRequest) (git
 	if !ok {
 		return gitCredentialPrepare{}, &Fault{Code: "invalid_repository_scope", Status: 400, Params: Object{}}
 	}
+	capabilities, ok := gitCredentialCapabilities(r.Body)
+	if !ok {
+		return gitCredentialPrepare{}, &Fault{Code: "invalid_credential_capabilities", Status: 400, Params: Object{}}
+	}
 	var prepared gitCredentialPrepare
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		uid := identityWithAlias(t, r.Identity).S("id")
@@ -318,7 +378,7 @@ func (s *Store) prepareGitCredential(ctx context.Context, r *PublicRequest) (git
 			prepared = gitCredentialPrepare{userID: uid, hash: hash, response: old.O("response"), status: int(old.N("status"))}
 			return prepared.response
 		}
-		prepared = gitCredentialPrepare{userID: uid, id: gitCredentialID(r.TenantID, uid, r.Key), name: name, scope: normalized, hash: hash}
+		prepared = gitCredentialPrepare{userID: uid, id: gitCredentialID(r.TenantID, uid, r.Key), name: name, scope: normalized, capabilities: capabilities, hash: hash}
 		return Object{}
 	})
 	if err != nil {
@@ -367,8 +427,12 @@ func (s *Store) createGitCredential(ctx context.Context, r *PublicRequest, token
 		// `attribution` is written explicitly rather than left to the `unknown` default: D2 makes that
 		// default the marker of a deployment-managed reference, and a product credential that inherited
 		// it would be indistinguishable from one the freeze triggers treat as unattributed.
-		t.exec("INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,name,attribution,attribution_basis,repository_scope,capabilities) VALUES($1,$2,$3,'git',$4,$5,'personal','user_stated',$6,'[\"clone\"]'::jsonb)",
-			prepared.id, r.TenantID, uid, secretRef, prepared.name, prepared.scope)
+		// `capabilities` is written from the validated request rather than read back from it here, and it
+		// is written as a marshaled JSON array because the column is `jsonb`. The default in
+		// `gitCredentialCapabilities` is what keeps an older client's create byte-identical in meaning:
+		// the set it does not mention is the one it always got.
+		t.exec("INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,name,attribution,attribution_basis,repository_scope,capabilities) VALUES($1,$2,$3,'git',$4,$5,'personal','user_stated',$6,$7::jsonb)",
+			prepared.id, r.TenantID, uid, secretRef, prepared.name, prepared.scope, jsonText(prepared.capabilities))
 		out = t.one("SELECT "+gitCredentialColumns+" FROM credential_refs WHERE id=$1", prepared.id)
 		t.exec("INSERT INTO idempotency_records(tenant_id,user_id,key,request_hash,response,status) VALUES($1,$2,$3,$4,$5,201)", r.TenantID, uid, r.Key, prepared.hash, jsonText(out))
 		return out

@@ -70,6 +70,18 @@ type ResolveRequest struct {
 	ControlEpoch      int64  `json:"controlEpoch"`
 }
 
+// declaresNoRuntime reports whether the request states no runtime at all.
+//
+// It is what lets a `push` redemption arrive on this route: the push path declares no Node, no
+// generation and no epoch — C runs on none of them — so a push presented here must carry the
+// authorization and nothing else. Stating a runtime is refused rather than ignored, because a value
+// nothing reads is how a request comes to look fenced by a field that no check consults, and the push
+// binding forbids those fields outright (see `cloneauth.Binding.validatePush`).
+func (r *ResolveRequest) declaresNoRuntime() bool {
+	return r.NodeID == "" && r.NodeInstanceID == "" && r.NodeIncarnationID == "" &&
+		r.RuntimeGeneration == 0 && r.ControlEpoch == 0
+}
+
 // MirrorResolveRequest is what the credential-executing identity presents to redeem a
 // `mirror_prepare` authorization.
 //
@@ -121,20 +133,23 @@ type consumptionRecord struct {
 	// CredentialVersion is recorded so the audit trail names the material, not just the reference.
 	CredentialVersion int64 `json:"credentialVersion"`
 	// Operation is the purpose the authorization was minted for. It is recorded rather than inferred
-	// from which fields are populated, because the two purposes leave different traces and an operator
-	// reading the record should not have to work out which one it is holding.
+	// from which fields are populated, because the three purposes leave different traces and an operator
+	// reading the record should not have to work out which one it is holding. It is also the one field
+	// that tells a reader whether the secret this record accounts for was spent on a read or on a write.
 	Operation  string    `json:"operation"`
 	ConsumedAt time.Time `json:"consumedAt"`
 	// NodeID, NodeInstanceID, NodeIncarnationID, RuntimeGeneration and ControlEpoch are the runtime a
-	// clone declared. They are empty for a mirror preparation, which runs on no Node.
+	// clone declared. They are empty for the two operations that run on no Node — a mirror preparation
+	// and a push.
 	NodeID            string `json:"nodeId,omitempty"`
 	NodeInstanceID    string `json:"nodeInstanceId,omitempty"`
 	NodeIncarnationID string `json:"nodeIncarnationId,omitempty"`
 	RuntimeGeneration int64  `json:"runtimeGeneration,omitempty"`
 	ControlEpoch      int64  `json:"controlEpoch,omitempty"`
-	// ExecutorIdentity is the identity the transport proved from the client certificate for a mirror
-	// preparation. It is empty for a clone, whose binding carries a Node runtime instead: recording
-	// which of the two identified the caller is the point, because they are established differently.
+	// ExecutorIdentity is the identity the transport proved from the client certificate, for the two
+	// operations whose binding names the party permitted to spend them: a mirror preparation and a push.
+	// It is empty for a clone, whose binding carries a Node runtime instead: recording which of the two
+	// identified the caller is the point, because they are established differently.
 	ExecutorIdentity string `json:"executorIdentity,omitempty"`
 	// ExpiresAt is the authorization's own expiry. It is retained so an operator can tell a spent
 	// authorization from a live one without the token, and so a future sweep can drop records that
@@ -171,30 +186,42 @@ func (s *Store) Resolver() (*Resolver, bool) {
 	return &Resolver{store: s, keys: s.authorizationKeys}, true
 }
 
-// Resolve delivers the token one clone authorization names, consuming that authorization on the way.
+// Resolve delivers the token one authorization names, consuming that authorization on the way.
+//
+// It serves both operations that are redeemed on this route — a clone's and a push's — and it is one
+// method with one route for the reason the push decision's D5 gives: the purpose is in the signed
+// payload, so the signature decides which checks apply, and a second URL would be a second surface to
+// authenticate for no distinction the first one cannot make. The signature is verified first, which is
+// what makes branching on the operation safe: the operation comes from Cloud's signature, never from the
+// request.
 //
 // The order of operations is the whole point of this method, and D3 and D10 fix it:
 //
 //  1. Authenticate the authorization against the Store's own verification key, and check it against
 //     the Store's own clock. The Store does not take the caller's word that either already happened.
 //  2. Check every binding the Store can check without spending anything: the purpose it was minted
-//     for, the credential it names, the version, the runtime presenting it. A failure here leaves the
-//     authorization unspent, which is what D5 means by "a failure that did not obtain the secret is
-//     always a new authorization" — here it need not even be new.
+//     for, the credential it names, the version, the runtime or the identity presenting it. A failure
+//     here leaves the authorization unspent, which is what D5 means by "a failure that did not obtain
+//     the secret is always a new authorization" — here it need not even be new.
 //  3. Spend the authorization by creating its consumption record, atomically and durably.
 //  4. Only then open the secret.
 //
 // Reversing 3 and 4 would create the one state the decisions forbid: a secret that left the Store
 // while the record that proves it was spent is missing, which is exactly a replayable authorization.
 //
-// The purpose check is first because it is the one refusal that is about the caller rather than about
-// the request's contents. A `mirror_prepare` authorization presented here would otherwise be spent on
-// a clone: its binding carries no Node runtime at all, so a caller presenting empty runtime values
-// would match it field for field, and the single use a preparation is given would be consumed on
-// work it was never issued for.
+// The purpose check is what keeps one operation's authorization from being spent on another. A
+// `mirror_prepare` authorization presented here is refused outright; a `clone` authorization is spent on
+// a clone only, and a `push` authorization only on a push. Without it the operations would be labels:
+// a clone's binding carries no commit pair, so a push presented with empty commits would match it field
+// for field, and a single use issued for reading would be consumed on a write.
+//
+// `presented` is the service identity the transport proved from the verified client certificate. It is a
+// parameter rather than a request field because it must not be something the caller can state: the push
+// branch compares it against the binding's `executorIdentity`, which is how the deployment names the one
+// component permitted to perform a write.
 //
 //nolint:gocritic // Value parameter on purpose: the runtime declaration checked against the binding has to be the same snapshot that is written into the consumption record.
-func (r *Resolver) Resolve(ctx context.Context, credentialID string, request ResolveRequest) (ResolvedCredential, error) {
+func (r *Resolver) Resolve(ctx context.Context, credentialID, presented string, request ResolveRequest) (ResolvedCredential, error) {
 	store := r.store
 	if !validCredentialID(credentialID) {
 		return ResolvedCredential{}, fmt.Errorf("%w: credential id is not a canonical identifier", ErrInvalidRequest)
@@ -207,28 +234,59 @@ func (r *Resolver) Resolve(ctx context.Context, credentialID string, request Res
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
-	if binding.Operation != cloneauth.OperationClone {
+	switch binding.Operation {
+	case cloneauth.OperationClone:
+		// Every binding this request can contradict. The credential id is checked against the path rather
+		// than the body, so an authorization for one credential can never be spent on another even if the
+		// caller rewrites its own request.
+		if binding.CredentialID != credentialID ||
+			binding.NodeID != request.NodeID ||
+			binding.NodeInstanceID != request.NodeInstanceID ||
+			binding.NodeIncarnationID != request.NodeIncarnationID ||
+			binding.RuntimeGeneration != request.RuntimeGeneration ||
+			binding.ControlEpoch != request.ControlEpoch {
+			return ResolvedCredential{}, ErrAuthorizationBinding
+		}
+		return r.deliver(credentialID, binding, now, &consumptionRecord{
+			Operation:         cloneauth.OperationClone,
+			NodeID:            request.NodeID,
+			NodeInstanceID:    request.NodeInstanceID,
+			NodeIncarnationID: request.NodeIncarnationID,
+			RuntimeGeneration: request.RuntimeGeneration,
+			ControlEpoch:      request.ControlEpoch,
+		})
+	case cloneauth.OperationPush:
+		// The write is the one operation the Store redeems whose subject is on no Node, so what
+		// identifies the caller is the proven service identity rather than a runtime it declares. Both
+		// halves of the separation are enforced here: the request must declare no runtime (a push binding
+		// carries none, and `validatePush` refuses a payload that names one), and the identity must be the
+		// one the authorization named.
+		if !request.declaresNoRuntime() {
+			return ResolvedCredential{}, fmt.Errorf("%w: a push authorization binds no runtime", ErrAuthorizationBinding)
+		}
+		// An empty `presented` is refused rather than compared, for the reason the mirror path refuses it:
+		// a transport that could not establish an identity must not be able to match a binding whose
+		// identity happens to be unset.
+		if strings.TrimSpace(presented) == "" {
+			return ResolvedCredential{}, fmt.Errorf("%w: the caller's service identity was not established", ErrAuthorizationBinding)
+		}
+		if binding.CredentialID != credentialID || binding.ExecutorIdentity != presented {
+			return ResolvedCredential{}, ErrAuthorizationBinding
+		}
+		// What this does *not* check is stated where it belongs, in the push half of the execution
+		// authority's D6: the Store decides that this token was signed by Cloud for a push, is unspent,
+		// unexpired, names a version it can still read and has not revoked, and is being presented by the
+		// identity Cloud named. Whether the Cloud-side approval is still in force — the request still
+		// `dispatching`, the Project still bound to this credential, the credential still permitting a
+		// push — is Cloud's fact and is re-checked there immediately before the write is dispatched. The
+		// window between that re-check and this redemption is irreducible and is recorded as such.
+		return r.deliver(credentialID, binding, now, &consumptionRecord{
+			Operation:        cloneauth.OperationPush,
+			ExecutorIdentity: presented,
+		})
+	default:
 		return ResolvedCredential{}, ErrAuthorizationPurpose
 	}
-	// Every binding this request can contradict. The credential id is checked against the path rather
-	// than the body, so an authorization for one credential can never be spent on another even if the
-	// caller rewrites its own request.
-	if binding.CredentialID != credentialID ||
-		binding.NodeID != request.NodeID ||
-		binding.NodeInstanceID != request.NodeInstanceID ||
-		binding.NodeIncarnationID != request.NodeIncarnationID ||
-		binding.RuntimeGeneration != request.RuntimeGeneration ||
-		binding.ControlEpoch != request.ControlEpoch {
-		return ResolvedCredential{}, ErrAuthorizationBinding
-	}
-	return r.deliver(credentialID, binding, now, &consumptionRecord{
-		Operation:         cloneauth.OperationClone,
-		NodeID:            request.NodeID,
-		NodeInstanceID:    request.NodeInstanceID,
-		NodeIncarnationID: request.NodeIncarnationID,
-		RuntimeGeneration: request.RuntimeGeneration,
-		ControlEpoch:      request.ControlEpoch,
-	})
 }
 
 // ResolveMirror delivers the token one `mirror_prepare` authorization names, consuming that

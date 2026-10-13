@@ -23,10 +23,14 @@ type PublicRequest struct {
 	// aggregate stores or hashes (see WriteGitCredential). This field therefore only ever carries an
 	// identifier, on the read that lists one owner's credentials.
 	CredentialID string
-	Limit        int
-	Body         Object
-	Identity     *Claims
-	Person       *DirectoryPerson
+	// PushID is the `:pushId` path parameter of the Workspace push routes. Like CloneID it is an
+	// identifier the caller chose from a previous response, never an authority: the push routes
+	// re-derive the caller's permission from the Workspace's Project on every request.
+	PushID   string
+	Limit    int
+	Body     Object
+	Identity *Claims
+	Person   *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
@@ -37,6 +41,7 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 	var dispatches []dispatchTarget
 	var events []SpaceEvent
 	var accepted []string
+	var pushes []string
 	result, e := s.transact(ctx, func(t *transaction) Object {
 		u := identityWithAlias(t, r.Identity)
 		uid := u.S("id")
@@ -147,6 +152,17 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			status = 202
 		case r.WorkspaceID != "" && strings.Contains(r.Path, "/control/"):
 			out = runtimeControlPublic(t, r, uid)
+		case r.WorkspaceID != "" && strings.HasSuffix(r.Path, "/pushes"):
+			// A push approval is accepted work outside the operation model, like a clone request: it
+			// creates no operation and the Controller never sees it. The dispatch it may carry out is
+			// Cloud's own and runs after this transaction commits, so the approval is durable before
+			// anything is sent anywhere (D8).
+			var pending string
+			out, pending = pushRequestPublic(t, r, uid)
+			status = 202
+			if pending != "" {
+				pushes = append(pushes, pending)
+			}
 		case r.WorkspaceID != "":
 			out = workspaceAction(t, r, uid, hash, isAdmin)
 			status = 202
@@ -349,6 +365,14 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		for _, id := range accepted {
 			s.signalWork(id)
 		}
+		for _, id := range pushes {
+			// The approval committed, so the write it authorizes may now be attempted. This runs here
+			// rather than inside the transaction because a push is external work and the execution
+			// contract forbids holding the control plane's lock across it. Every outcome — including
+			// the deployment's "there is no executor" — is written back by dispatchPush; the response
+			// the caller already has is the approval itself, not the write's result.
+			s.dispatchPush(ctx, id)
+		}
 	}
 	return result, status, e
 }
@@ -492,6 +516,10 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 		return ownedOperation(t, r, uid)
 	case r.WorkspaceID != "" && strings.HasSuffix(r.Path, "/control"):
 		return runtimeControlPublic(t, r, uid)
+	case r.WorkspaceID != "" && strings.Contains(r.Path, "/pushes"):
+		// Placed before the generic Workspace arm, which would answer with the Workspace document:
+		// the push sub-resource is a different document and its own read.
+		return pushRead(t, r, uid)
 	case r.WorkspaceID != "":
 		return workspace(t, r.TenantID, uid, r.WorkspaceID, false)
 	case r.ProjectID != "":

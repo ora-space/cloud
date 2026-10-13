@@ -1128,6 +1128,41 @@ export interface Project {
   version: number;
 }
 
+export type PushRequestState = typeof PushRequestState[keyof typeof PushRequestState];
+
+
+export const PushRequestState = {
+  dispatching: 'dispatching',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  uncertain: 'uncertain',
+} as const;
+
+export interface PushRequest {
+  actorUserId: string;
+  authorizationId: string;
+  createdAt: string;
+  credentialRefId: string;
+  credentialRefVersion: number;
+  id: string;
+  newCommit: string;
+  /** @nullable */
+  observedCommit?: string | null;
+  oldCommit: string;
+  projectId: string;
+  ref: string;
+  repository: string;
+  requestId: string;
+  /** @nullable */
+  resultCode?: string | null;
+  /** @nullable */
+  settledAt?: string | null;
+  state: PushRequestState;
+  tenantId: string;
+  updatedAt: string;
+  workspaceId: string;
+}
+
 export type RuntimeControlState = typeof RuntimeControlState[keyof typeof RuntimeControlState];
 
 
@@ -1736,7 +1771,21 @@ export type GetApiV1TenantsTidGitCredentials200 = {
   nextCursor: string;
 };
 
+export type PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem = typeof PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem[keyof typeof PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem = {
+  clone: 'clone',
+  push: 'push',
+} as const;
+
 export type PostApiV1TenantsTidGitCredentialsBody = {
+  /**
+     * The repository operations this new credential permits. Omitted means ["clone"], which is what every credential created before the push capability existed carries; a credential with a push capability can therefore only be created deliberately. The members are stored and compared as a set in the vocabulary's canonical order — clone before push — and an unknown member, a repeat, an empty array or the members out of that order is refused with 400 invalid_credential_capabilities rather than repaired. A capability is the reference's own authority: adding one here does not authorize any operation by itself, and no later request can add to what a reference already declares.
+     * @minItems 1
+     * @maxItems 2
+     */
+  capabilities?: PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem[];
   /**
      * The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope.
      * @minLength 1
@@ -2814,6 +2863,44 @@ export type PostApiV1TenantsTidWorkspacesWidForceStopBody = {
 export type PostApiV1TenantsTidWorkspacesWidForceStop202 = {
   forceStop: RuntimeForceStop;
   resource: AdminResource;
+};
+
+export type GetApiV1TenantsTidWorkspacesWidPushesParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidWorkspacesWidPushes200 = {
+  items: PushRequest[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidWorkspacesWidPushesBody = {
+  /**
+     * A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.
+     * @pattern ^[0-9a-f]{40}$
+     */
+  newCommit: string;
+  /**
+     * A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.
+     * @pattern ^[0-9a-f]{40}$
+     */
+  oldCommit: string;
+  /**
+     * The one fully qualified branch ref this approval may update, e.g. refs/heads/main. A short branch name, a tag, a wildcard, a force prefix and a multi-ref list are all refused with 400 invalid_push_ref.
+     * @minLength 1
+     * @maxLength 200
+     * @pattern ^refs/heads/[^\s~^:?*\[\\]+$
+     */
+  ref: string;
+  requestId: string;
 };
 
 export type PostApiV1TenantsTidWorkspacesWidRestartBody = {

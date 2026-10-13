@@ -59,7 +59,7 @@ func TestARestoreDoesNotReviveAConsumedAuthorizationOrARevokedCredential(t *test
 	spentAuthorization := authorize(spentOn, 71)
 
 	// The two decisions, taken before the export so the export is what has to carry them.
-	if _, err := fixture.resolver.Resolve(context.Background(), spentOn, fixture.request(spentAuthorization)); err != nil {
+	if _, err := fixture.resolver.Resolve(context.Background(), spentOn, testResolverIdentity, fixture.request(spentAuthorization)); err != nil {
 		t.Fatalf("Resolve before the restore: %v", err)
 	}
 	if err := fixture.store.Revoke(context.Background(), revokedBefore); err != nil {
@@ -90,19 +90,19 @@ func TestARestoreDoesNotReviveAConsumedAuthorizationOrARevokedCredential(t *test
 	// The replay. This is the outcome the obligation names as forbidden: a backup that left the
 	// consumption records out of the export would let one authorization be spent twice, and the token
 	// it names would leave the Store a second time.
-	if _, err := resolver.Resolve(context.Background(), spentOn, fixture.request(spentAuthorization)); !errors.Is(err, ErrAuthorizationConsumed) {
+	if _, err := resolver.Resolve(context.Background(), spentOn, testResolverIdentity, fixture.request(spentAuthorization)); !errors.Is(err, ErrAuthorizationConsumed) {
 		t.Fatalf("replaying a spent authorization after a restore: got %v, want %v", err, ErrAuthorizationConsumed)
 	}
 	// The revocation. A fresh authorization is presented, so nothing about the replay above can be the
 	// reason for this refusal, and the credential is not spent — only withdrawn.
 	fresh := authorize(revokedBefore, 72)
-	if _, err := resolver.Resolve(context.Background(), revokedBefore, fixture.request(fresh)); !errors.Is(err, ErrRevoked) {
+	if _, err := resolver.Resolve(context.Background(), revokedBefore, testResolverIdentity, fixture.request(fresh)); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("resolving a revoked credential after a restore: got %v, want %v", err, ErrRevoked)
 	}
 	// The control: a credential that was neither spent nor revoked still delivers, and its own
 	// authorization is spent by this call rather than having been spent before.
 	live := authorize(untouched, 73)
-	token, err := resolver.Resolve(context.Background(), untouched, fixture.request(live))
+	token, err := resolver.Resolve(context.Background(), untouched, testResolverIdentity, fixture.request(live))
 	if err != nil {
 		t.Fatalf("a credential the backup recorded as usable must still resolve: %v", err)
 	}

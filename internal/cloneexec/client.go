@@ -137,6 +137,79 @@ func (c *Client) Dispatch(ctx context.Context, job Job) (Result, error) {
 	return result, nil
 }
 
+// Push asks the executor to perform one controlled push and returns what it established.
+//
+// It is a third method rather than a mode on either of the others, for the reason PrepareMirror is a
+// second one: the three jobs are different subjects on different routes, and a client that took all
+// three would be a client whose caller decides which identity fields matter.
+//
+// The distinction this method has to preserve, and the reason it is written out rather than folded into
+// the two above, is that *the result is not the same kind of thing as a clone's*. A clone either
+// produced a checkout or did not. A push can have happened without the caller learning that it did, so:
+//
+//   - a non-200 carrying a code is the executor saying this job never reached the write. Cloud settles
+//     that as a confirmed failure with that code, which is faithful only because the executor's own
+//     contract is that a job which reached the write answers 200 with a state.
+//   - a transport failure, a timeout, a killed connection, or a 200 whose body cannot be read is *not*
+//     an outcome. It is returned as a plain error with no refusal attached, and the caller must settle
+//     the request as uncertain. Returning a refusal here would record a possible write as a failure.
+//   - a 200 whose state is not one of the five is treated the same way. An unrecognized state is not a
+//     state, and reading it as "not applied" would be inferring an outcome the executor did not state.
+//
+// There is no retry, and for a push the reason is stronger than for the other two: the write may have
+// landed, so a second attempt under a new authorization would be a second write to the same ref, which
+// is exactly what the compare-and-swap exists to prevent.
+//
+//nolint:gocritic // By value on purpose: the job carries the bearer authorization, and the copy this method encodes is the copy it sends.
+func (c *Client) Push(ctx context.Context, job PushJob) (PushResult, error) {
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("encode push job: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/push-executions", bytes.NewReader(encoded))
+	if err != nil {
+		return PushResult{}, fmt.Errorf("build push dispatch request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("clone executor is unreachable: %w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxJobBody))
+	if err != nil {
+		return PushResult{}, fmt.Errorf("read push dispatch response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Code == "" {
+			refusal.Code = ReasonCodeUnavailable
+		}
+		return PushResult{}, &DispatcherRefusal{Code: refusal.Code, Status: response.StatusCode}
+	}
+	var result PushResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		// The executor answered, so this request *ran*, and the answer is unreadable. Whatever the write
+		// did, this client cannot say, and it must not say "nothing happened".
+		return PushResult{}, errors.New("clone executor returned an unreadable push result")
+	}
+	if !result.State.known() {
+		return PushResult{}, errors.New("clone executor returned a push state this Cloud does not know")
+	}
+	// The observed commit travels with the result for the audit, so its shape is checked here rather
+	// than trusted: it is written to a row a person will read, and a value that is not an object name is
+	// not evidence of anything. An absent one is permitted — it means the executor made no observation.
+	if observed := strings.TrimSpace(result.RemoteCommit); observed != "" {
+		if len(observed) != 40 || strings.Trim(observed, "0123456789abcdef") != "" {
+			return PushResult{}, errors.New("clone executor returned an unreadable push observation")
+		}
+		result.RemoteCommit = observed
+	}
+	return result, nil
+}
+
 // PrepareMirror asks the executor to prepare one internal mirror and returns what it published.
 //
 // It is a second method rather than a mode on Dispatch because the two jobs are different subjects on

@@ -150,6 +150,8 @@ func TestCloneExecutorBindsOnlyItsOwnEnvironment(t *testing.T) {
 		"CLONE_EXECUTOR_MIRROR_VOLUME_BYTES":           "68719476736",
 		"CLONE_EXECUTOR_MIRROR_GRACE":                  "24h",
 		"CLONE_EXECUTOR_MIRROR_TIMEOUT":                "10m",
+		"CLONE_EXECUTOR_PUSH_ROOT":                     "/var/lib/clone-executor/pushes",
+		"CLONE_EXECUTOR_PUSH_TIMEOUT":                  "5m",
 	} {
 		t.Setenv(name, value)
 	}
@@ -199,6 +201,14 @@ func TestCloneExecutorBindsOnlyItsOwnEnvironment(t *testing.T) {
 	if cfg.MirrorTimeout != 10*time.Minute {
 		t.Fatalf("mirror timeout = %v, want 10m", cfg.MirrorTimeout)
 	}
+	// The push section, which is the one whose absence is the approved default and whose misspelling would
+	// therefore surface as a deployment that silently performs no controlled push at all.
+	if cfg.PushRoot != "/var/lib/clone-executor/pushes" {
+		t.Fatalf("push root = %q, want the mounted push volume", cfg.PushRoot)
+	}
+	if cfg.PushTimeout != 5*time.Minute {
+		t.Fatalf("push timeout = %v, want 5m", cfg.PushTimeout)
+	}
 	if _, err := os.Stat(cfg.AuthorizationPublicKeyFile); err != nil {
 		t.Fatalf("the verification key the environment named is not the file that was written: %v", err)
 	}
@@ -234,6 +244,149 @@ func startMirrorExecutor(t *testing.T, cfg CloneExecutorServiceConfig) error {
 	}
 	_, err = executor.Sweep()
 	return err
+}
+
+// pushDeployment completes a clone-executor deployment with a declared push section.
+func pushDeployment(t *testing.T, dir string) CloneExecutorServiceConfig {
+	t.Helper()
+	cfg := cloneExecutorDeployment(t, dir)
+	cfg.PushRoot = filepath.Join(dir, "pushes")
+	cfg.PushTimeout = 5 * time.Minute
+	return cfg
+}
+
+// startPushExecutor mirrors the sequence `cmd/clone-executor` runs for the push capability, including the
+// startup sweep, so a case asserts the deployment is refused at startup rather than that one accessor
+// happens to fail.
+func startPushExecutor(t *testing.T, cfg CloneExecutorServiceConfig) error {
+	t.Helper()
+	executor, err := cfg.PushExecutor()
+	if err != nil {
+		return err
+	}
+	if executor == nil {
+		return nil
+	}
+	_, err = executor.Sweep()
+	return err
+}
+
+// TestCloneExecutorPushIsAbsentUnlessTheDeploymentDeclaresIt pins the approved default for the one
+// capability that changes something outside the platform.
+//
+// A deployment with no push root performs no controlled push at all, and that is not an error: a
+// deployment has to be able to run C for clones and preparations while refusing every write, which is
+// what an incremental rollout of the write boundary needs. What the route answers in that state is the
+// executor's business, and `internal/cloneexec` proves it answers `credential_executor_unavailable`.
+func TestCloneExecutorPushIsAbsentUnlessTheDeploymentDeclaresIt(t *testing.T) {
+	dir := t.TempDir()
+	cfg := cloneExecutorDeployment(t, dir)
+	executor, err := cfg.PushExecutor()
+	if err != nil {
+		t.Fatalf("a deployment that declared no push was refused: %v", err)
+	}
+	if executor != nil {
+		t.Fatal("a deployment that declared no push produced a push executor")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pushes")); !os.IsNotExist(err) {
+		t.Fatalf("an undeclared push root was created anyway: %v", err)
+	}
+}
+
+// TestCloneExecutorPushRefusesAnIncompleteSection is the D17 rule applied to the third capability: a
+// deployment that declares a push establishes the whole of it or does not start. Every case removes
+// something a push cannot work without, and a deployment that started anyway would accept an approval and
+// then fail it, which reads as a flaky write rather than as a misconfigured deployment.
+func TestCloneExecutorPushRefusesAnIncompleteSection(t *testing.T) {
+	if err := startPushExecutor(t, pushDeployment(t, t.TempDir())); err != nil {
+		t.Fatalf("a complete push deployment did not start: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*CloneExecutorServiceConfig)
+		reason string
+	}{
+		{"no verification key", func(c *CloneExecutorServiceConfig) { c.AuthorizationPublicKeyFile = "" }, "no push authorization could be verified, so every write would be unverifiable"},
+		{"no credential service endpoint", func(c *CloneExecutorServiceConfig) { c.StoreEndpoint = "" }, "the executor could not redeem a push authorization"},
+		{"no credential service authority", func(c *CloneExecutorServiceConfig) { c.StoreCAFile = "" }, "the Service's certificate could not be verified"},
+		{"no materialization root", func(c *CloneExecutorServiceConfig) { c.MaterialRoot = "" }, "there would be nowhere to stage the token the fetch authenticates with"},
+		{"no credential helper", func(c *CloneExecutorServiceConfig) { c.HelperPath = "" }, "Git would find no credential at all, or an inherited one"},
+		{"no git program", func(c *CloneExecutorServiceConfig) { c.GitPath = "" }, "the executor would write with whatever `git` resolves to"},
+		{"no home directory", func(c *CloneExecutorServiceConfig) { c.HomeDirectory = "" }, "Git would fall back to a real home directory"},
+		{"a relative push root", func(c *CloneExecutorServiceConfig) { c.PushRoot = "pushes" }, "the scratch repository's location would depend on the working directory"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := pushDeployment(t, t.TempDir())
+			test.mutate(&cfg)
+			if err := startPushExecutor(t, cfg); err == nil {
+				t.Fatalf("an incomplete push deployment started: %s", test.reason)
+			}
+		})
+	}
+}
+
+// TestCloneExecutorPushRefusesARootItWouldSweepAway is the containment rule, and for a push it guards
+// more than its siblings do.
+//
+// The push executor's own sweep removes every entry beneath its root, and what lands there is a
+// plaintext copy of a private upstream fetched with a delivered credential. Nesting it inside the mirror
+// store would delete published content on the first restart — mirrors the internal Git Server is
+// serving — and nesting it inside the checkout root would have a Workspace's clone deleted out from
+// under it. The reverse nestings put a private repository's copy inside the directory staged tokens live
+// in, or inside the volume served to workloads.
+func TestCloneExecutorPushRefusesARootItWouldSweepAway(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*CloneExecutorServiceConfig)
+	}{
+		{"the push root is inside the materialization root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Join(c.MaterialRoot, "pushes")
+		}},
+		{"the push root contains the materialization root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Dir(c.MaterialRoot)
+		}},
+		{"the push root is the materialization root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = c.MaterialRoot
+		}},
+		{"the push root is inside the checkout root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Join(c.CheckoutRoot, "pushes")
+		}},
+		{"the push root contains the checkout root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Dir(c.CheckoutRoot)
+		}},
+		{"the push root is the checkout root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = c.CheckoutRoot
+		}},
+		{"the push root is inside the mirror root", func(c *CloneExecutorServiceConfig) {
+			c.MirrorRoot = filepath.Join(filepath.Dir(c.MaterialRoot), "mirrors")
+			c.PushRoot = filepath.Join(c.MirrorRoot, "pushes")
+		}},
+		{"the push root contains the mirror root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Join(filepath.Dir(c.MaterialRoot), "pushes")
+			c.MirrorRoot = filepath.Join(c.PushRoot, "mirrors")
+		}},
+		{"the push root is the mirror root", func(c *CloneExecutorServiceConfig) {
+			c.PushRoot = filepath.Join(filepath.Dir(c.MaterialRoot), "mirrors")
+			c.MirrorRoot = c.PushRoot
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := pushDeployment(t, t.TempDir())
+			test.mutate(&cfg)
+			if err := startPushExecutor(t, cfg); err == nil {
+				t.Fatal("a deployment whose roots contain one another started")
+			}
+		})
+	}
+	// The control: sibling directories under the same parent are a legitimate deployment, so the rule
+	// above is containment and not merely "shares an ancestor".
+	cfg := pushDeployment(t, t.TempDir())
+	cfg.MirrorRoot = filepath.Join(filepath.Dir(cfg.MaterialRoot), "mirrors")
+	if err := startPushExecutor(t, cfg); err != nil {
+		t.Fatalf("a deployment with sibling roots was refused: %v", err)
+	}
 }
 
 // TestCloneExecutorMirrorIsAbsentUnlessTheDeploymentDeclaresIt pins the approved default.
@@ -372,20 +525,20 @@ func dispatchDeployment(t *testing.T, dir string) ExecutorDispatchConfig {
 }
 
 // TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled pins the whole point of splitting
-// the two switches: a deployment that enables neither installs nothing and builds nothing, one that
-// enables either gets that capability alone, and the transport and key are shared rather than built
-// twice.
+// the switches: a deployment that enables none installs nothing and builds nothing, one that enables
+// any gets that capability alone, and the transport and key are shared rather than built three times.
 func TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled(t *testing.T) {
 	cases := []struct {
 		name       string
 		mutate     func(*ExecutorDispatchConfig)
 		wantClone  bool
 		wantMirror bool
+		wantPush   bool
 	}{
 		{
 			// The approved fail-closed default: no capability, and no key or certificate is even read,
 			// so an absent capability cannot fail startup.
-			name: "neither capability",
+			name: "no capability",
 		},
 		{
 			name:      "clone only",
@@ -404,7 +557,18 @@ func TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled(t *testin
 			wantMirror: true,
 		},
 		{
-			name: "both capabilities",
+			// The case the whole write boundary is rolled out on: push alone. Every credentialed clone
+			// stays refused while a push is dispatched, which is the only way to enable the write side
+			// without also enabling a read path that has no acceptance evidence yet.
+			name: "push only",
+			mutate: func(c *ExecutorDispatchConfig) {
+				c.PushEnabled = true
+				c.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
+			},
+			wantPush: true,
+		},
+		{
+			name: "clone and mirror",
 			mutate: func(c *ExecutorDispatchConfig) {
 				c.Enabled = true
 				c.MirrorEnabled = true
@@ -412,6 +576,18 @@ func TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled(t *testin
 			},
 			wantClone:  true,
 			wantMirror: true,
+		},
+		{
+			name: "every capability",
+			mutate: func(c *ExecutorDispatchConfig) {
+				c.Enabled = true
+				c.MirrorEnabled = true
+				c.PushEnabled = true
+				c.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
+			},
+			wantClone:  true,
+			wantMirror: true,
+			wantPush:   true,
 		},
 	}
 
@@ -434,7 +610,10 @@ func TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled(t *testin
 			if (dispatch.Mirror != nil) != c.wantMirror {
 				t.Fatalf("the mirror capability is %v, want %v", dispatch.Mirror != nil, c.wantMirror)
 			}
-			if !c.wantClone && !c.wantMirror {
+			if (dispatch.Push != nil) != c.wantPush {
+				t.Fatalf("the push capability is %v, want %v", dispatch.Push != nil, c.wantPush)
+			}
+			if !c.wantClone && !c.wantMirror && !c.wantPush {
 				// Nothing was enabled, so nothing may have been built: a signing key loaded "just in
 				// case" is a capability present without a switch.
 				if dispatch.Client != nil || dispatch.SigningKey != nil {
@@ -454,6 +633,17 @@ func TestExecutorDispatchBuildsOnlyTheCapabilitiesTheDeploymentEnabled(t *testin
 				}
 				if dispatch.Mirror.ExecutorIdentity == "" {
 					t.Fatal("the mirror capability did not carry the executor identity")
+				}
+			}
+			if c.wantPush {
+				// A push's authorization is the one whose lifetime is also the width of the window in
+				// which an approval can still be redeemed after the writer has stopped waiting for it,
+				// so the default is the bound rather than a number this section may choose freely.
+				if dispatch.Push.Lifetime != core.PushDispatchLifetime {
+					t.Fatalf("the push authorization lifetime is %s, want the bound %s", dispatch.Push.Lifetime, core.PushDispatchLifetime)
+				}
+				if dispatch.Push.ExecutorIdentity == "" {
+					t.Fatal("the push capability did not carry the executor identity")
 				}
 			}
 		})
@@ -545,6 +735,45 @@ func TestExecutorDispatchRefusesAHalfDeclaredCapability(t *testing.T) {
 				c.Endpoint = ""
 			},
 		},
+		{"only the push capability is enabled, with no signing key", func(c *ExecutorDispatchConfig) {
+			c.PushEnabled = true
+			c.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
+			c.SigningKeyFile = ""
+		}},
+		{"the push capability is enabled with no executor identity", func(c *ExecutorDispatchConfig) {
+			c.PushEnabled = true
+		}},
+		{"the push capability is enabled with a blank executor identity", func(c *ExecutorDispatchConfig) {
+			c.PushEnabled = true
+			c.ExecutorIdentity = "   "
+		}},
+		{
+			// The same shape the mirror cases pin, repeated for push because it is the capability whose
+			// identity is checked by the Store rather than by the executor: a non-SPIFFE value here would
+			// be signed into every approval as the executor the Store must see.
+			name: "the push executor identity is not SPIFFE", mutate: func(c *ExecutorDispatchConfig) {
+				c.PushEnabled = true
+				c.ExecutorIdentity = "https://ora.local/credential-store/broker-resolver"
+			},
+		},
+		{
+			// The bound that is specific to the push capability, and the only one whose value is also a
+			// security window: the authorization stays redeemable from the moment it is signed, so a
+			// lifetime longer than the bound widens the interval in which a late executor can still write
+			// after Cloud stopped waiting for the result.
+			name: "the push authorization lifetime exceeds the revocation window bound", mutate: func(c *ExecutorDispatchConfig) {
+				c.PushEnabled = true
+				c.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
+				c.PushAuthorizationLifetime = core.PushDispatchLifetime + time.Second
+			},
+		},
+		{
+			name: "the push capability is enabled with no endpoint", mutate: func(c *ExecutorDispatchConfig) {
+				c.PushEnabled = true
+				c.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
+				c.Endpoint = ""
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -557,12 +786,14 @@ func TestExecutorDispatchRefusesAHalfDeclaredCapability(t *testing.T) {
 		})
 	}
 	// The control: the same shapes are accepted when the shared half is present, so the refusals above
-	// are about what is missing and not about the section being impossible to configure.
+	// are about what is missing and not about the section being impossible to configure. The push
+	// lifetime is set to exactly the bound, which is the value the ceiling must admit.
 	cfg := dispatchDeployment(t, t.TempDir())
-	cfg.Enabled, cfg.MirrorEnabled = true, true
+	cfg.Enabled, cfg.MirrorEnabled, cfg.PushEnabled = true, true, true
 	cfg.ExecutorIdentity = "spiffe://ora.local/credential-store/broker-resolver"
 	cfg.AuthorizationLifetime = cloneauth.MaxLifetime
 	cfg.MirrorAuthorizationLifetime = core.MirrorPreparationLease
+	cfg.PushAuthorizationLifetime = core.PushDispatchLifetime
 	if _, err := cfg.Open(); err != nil {
 		t.Fatalf("a complete deployment was refused: %v", err)
 	}

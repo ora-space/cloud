@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,49 @@ func TestValidGitCredentialTokenRefusesRatherThanRepairs(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := validGitCredentialToken(c.value); got != c.ok {
 				t.Fatalf("validGitCredentialToken(%d bytes) = %v; want %v", len(c.value), got, c.ok)
+			}
+		})
+	}
+}
+
+// TestGitCredentialCapabilitiesAreAskedForExplicitlyAndNeverRepaired pins the one provisioning path a
+// reference with a second capability can come from, and the two properties that make it safe to have.
+//
+// The first is the default: a body that does not mention the field gets `clone`, which is what every
+// credential carried before `push` existed, so no client's request changes meaning because the field
+// appeared. The second is that a stated set is refused rather than normalized — the vocabulary's rule
+// (known members, no repeats, canonical order) decides, and a set that is a valid set but not its
+// canonical spelling is not accepted, so what the caller is told it asked for and what the row will
+// declare are one value.
+func TestGitCredentialCapabilitiesAreAskedForExplicitlyAndNeverRepaired(t *testing.T) {
+	cases := []struct {
+		name string
+		body Object
+		want []string
+		ok   bool
+	}{
+		{"an absent field is the clone-only default", Object{}, []string{"clone"}, true},
+		{"an explicit null is the default, not an empty set", Object{"capabilities": nil}, []string{"clone"}, true},
+		{"clone alone is accepted", Object{"capabilities": []any{"clone"}}, []string{"clone"}, true},
+		{"push alone is accepted", Object{"capabilities": []any{"push"}}, []string{"push"}, true},
+		{"both in canonical order are accepted", Object{"capabilities": []any{"clone", "push"}}, []string{"clone", "push"}, true},
+		{"the empty set is refused", Object{"capabilities": []any{}}, nil, false},
+		{"an unknown member is refused", Object{"capabilities": []any{"write"}}, nil, false},
+		{"a member from another vocabulary is refused", Object{"capabilities": []any{"mirror_prepare"}}, nil, false},
+		{"a repeated member is refused", Object{"capabilities": []any{"clone", "clone"}}, nil, false},
+		{"a non-canonical order is refused rather than sorted", Object{"capabilities": []any{"push", "clone"}}, nil, false},
+		{"a member that is not a string is refused", Object{"capabilities": []any{"clone", 1}}, nil, false},
+		{"a bare string is not a set", Object{"capabilities": "clone"}, nil, false},
+		{"an object is not a set", Object{"capabilities": Object{"clone": true}}, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := gitCredentialCapabilities(c.body)
+			if ok != c.ok {
+				t.Fatalf("gitCredentialCapabilities(%v) accepted = %v; want %v", c.body, ok, c.ok)
+			}
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("gitCredentialCapabilities(%v) = %v; want %v", c.body, got, c.want)
 			}
 		})
 	}

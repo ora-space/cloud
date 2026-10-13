@@ -68,6 +68,15 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	// The push capability is optional in the same way and for a stronger reason: a controlled push is the
+	// only thing this component does that changes something outside the platform, in a repository the
+	// platform does not own. An empty push root yields no executor and the route then answers
+	// `credential_executor_unavailable`; a declared but unbuildable push section — a scratch root that
+	// contains or is contained by another capability's root — refuses here, in the same startup gate.
+	pushExecutor, e := cfg.PushExecutor()
+	if e != nil {
+		return e
+	}
 	serverTLS, e := cfg.ServerTLS()
 	if e != nil {
 		return e
@@ -76,6 +85,7 @@ func run() (runErr error) {
 		TLS:    serverTLS,
 		Caller: cfg.DispatcherIdentity,
 		Mirror: mirrorExecutor,
+		Push:   pushExecutor,
 		Log:    log,
 	})
 	if e != nil {
@@ -94,6 +104,15 @@ func run() (runErr error) {
 		// touches nothing published and does not reconcile the store, which is why it is safe at every
 		// start while the store's own lifetime is left to the deployment.
 		if fetched, e = mirrorExecutor.Sweep(); e != nil {
+			return e
+		}
+	}
+	pushed := 0
+	if pushExecutor != nil {
+		// A push's scratch repository has no life of its own, so anything under the push root at startup
+		// is debris from a process that died — and debris that holds a plaintext copy of a private
+		// upstream. Removing it is the whole repair, and it is why this runs before the listener is bound.
+		if pushed, e = pushExecutor.Sweep(); e != nil {
 			return e
 		}
 	}
@@ -116,6 +135,13 @@ func run() (runErr error) {
 		}
 		jobTimeout = max(jobTimeout, mirrorTimeout)
 	}
+	if pushExecutor != nil {
+		pushTimeout := cloneexec.DefaultPushTimeout
+		if cfg.PushTimeout > 0 {
+			pushTimeout = cfg.PushTimeout
+		}
+		jobTimeout = max(jobTimeout, pushTimeout)
+	}
 	httpServer := &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -137,8 +163,11 @@ func run() (runErr error) {
 			zap.String("checkoutRoot", cfg.CheckoutRoot),
 			zap.String("mirrorRoot", cfg.MirrorRoot),
 			zap.Bool("mirrorCapability", mirrorExecutor != nil),
+			zap.String("pushRoot", cfg.PushRoot),
+			zap.Bool("pushCapability", pushExecutor != nil),
 			zap.Int("sweptEntries", removed),
 			zap.Int("sweptFetches", fetched),
+			zap.Int("sweptPushes", pushed),
 		)
 		// The mutual-TLS configuration wraps the listener directly rather than going through ServeTLS,
 		// whose empty-file-name form silently depends on the certificate already being in the config.

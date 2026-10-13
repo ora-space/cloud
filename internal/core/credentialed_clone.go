@@ -79,9 +79,14 @@ type CredentialedCloner interface {
 	Execute(ctx context.Context, clone CredentialedClone) (CredentialedCloneOutcome, error)
 }
 
-// credentialedCloneRefusal is the shape a cloner's error takes when it is a refusal with a stable
-// reason code rather than an infrastructure failure.
-type credentialedCloneRefusal interface {
+// codedRefusal is the shape an executor's error takes when it is a refusal with a stable reason code
+// rather than an infrastructure failure.
+//
+// The two are not interchangeable at the caller: a refusal is an outcome of the work — the executor
+// reached the answer and the answer was no — while an unreachable executor leaves the outcome unknown.
+// Both the credentialed clone and the push read their executors' errors through this interface so that
+// each of them settles with the refusal's own code rather than with its own generic one.
+type codedRefusal interface {
 	ReasonCode() string
 }
 
@@ -338,7 +343,7 @@ func (s *Store) registerCredentialedClone(ctx context.Context, r *ControlRequest
 // credentialedCloneReasonCode names a clone failure in a form the Controller can act on, falling back
 // to the executor's generic code so a transport failure is never reported as a refusal.
 func credentialedCloneReasonCode(err error) string {
-	var refusal credentialedCloneRefusal
+	var refusal codedRefusal
 	if errors.As(err, &refusal) {
 		return refusal.ReasonCode()
 	}

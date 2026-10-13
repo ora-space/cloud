@@ -168,6 +168,25 @@ type MirrorRedemptionClient interface {
 	ResolveMirror(ctx context.Context, credentialID, authorization string) (Credential, error)
 }
 
+// PushRedemptionClient is the redemption boundary for the push purpose.
+//
+// It is a third interface rather than a third method on either of the others for the reason
+// MirrorRedemptionClient is a second one: the claims differ, and the Store checks a different set for
+// each. A push states neither a runtime nor a purpose — the purpose is in the signed authorization and
+// the presenter's identity is on the client certificate — so its request is the authorization alone.
+//
+// It reaches the *same* route a clone's redemption does. The push decision (D5) settled that: the
+// authorization's operation is what tells the two apart at the Store, so a second URL would be a second
+// surface to authenticate for no capability the first one lacks. The separation this interface provides
+// is on the executor's side, where it belongs — the push path cannot state a runtime it is not going to
+// have checked, and a client holding only this method cannot present a push authorization to the clone
+// route or the reverse.
+type PushRedemptionClient interface {
+	// ResolvePush redeems one `push` authorization for the credential it names. The caller is identified
+	// by the certificate this client presents, never by anything in the call.
+	ResolvePush(ctx context.Context, credentialID, authorization string) (Credential, error)
+}
+
 // Resolve redeems one authorization for the token it names.
 //
 // The request carries the authorization and the executor's own declaration of which runtime it is.
@@ -175,52 +194,14 @@ type MirrorRedemptionClient interface {
 // rather than an identity claim: what proves the caller is the credential-executing identity is the
 // mutual-TLS certificate, and what proves the authorization is genuine is Cloud's signature.
 func (c *StoreClient) Resolve(ctx context.Context, credentialID, authorization string, runtime Runtime) (Credential, error) {
-	body := map[string]any{
+	return c.redeem(ctx, credentialID, "/resolve", "redemption", map[string]any{
 		"authorization":     authorization,
 		"nodeId":            runtime.NodeID,
 		"nodeInstanceId":    runtime.NodeInstanceID,
 		"nodeIncarnationId": runtime.NodeIncarnationID,
 		"runtimeGeneration": runtime.RuntimeGeneration,
 		"controlEpoch":      runtime.ControlEpoch,
-	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return Credential{}, fmt.Errorf("encode redemption request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.endpoint+"/v1/credentials/"+url.PathEscape(credentialID)+"/resolve", bytes.NewReader(encoded))
-	if err != nil {
-		return Credential{}, fmt.Errorf("build redemption request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
-		// The URL is in the error and a URL never carries a token, because tokens only ever travel in
-		// a response body. The authorization is in the request body and is not repeated here.
-		return Credential{}, fmt.Errorf("credential service is unreachable: %w", err)
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxStoreResponse))
-	if err != nil {
-		return Credential{}, fmt.Errorf("read redemption response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		var refusal struct {
-			Code string `json:"code"`
-		}
-		if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Code == "" {
-			refusal.Code = ReasonCodeStoreUnavailable
-		}
-		return Credential{}, &StoreRefusal{Code: refusal.Code, Status: response.StatusCode}
-	}
-	var resolved Credential
-	if err := json.Unmarshal(raw, &resolved); err != nil {
-		return Credential{}, errors.New("credential service returned an unreadable response")
-	}
-	if strings.TrimSpace(resolved.Token) == "" {
-		return Credential{}, errors.New("credential service returned no credential")
-	}
-	return resolved, nil
+	})
 }
 
 // ResolveMirror redeems one `mirror_prepare` authorization for the token it names.
@@ -234,14 +215,44 @@ func (c *StoreClient) Resolve(ctx context.Context, credentialID, authorization s
 // It is the same endpoint vocabulary — the same refusal codes, the same single-use semantics, the
 // authorization spent exactly once by the Store — reached on the Store's mirror route.
 func (c *StoreClient) ResolveMirror(ctx context.Context, credentialID, authorization string) (Credential, error) {
-	encoded, err := json.Marshal(map[string]any{"authorization": authorization})
+	return c.redeem(ctx, credentialID, "/resolve-mirror", "mirror redemption",
+		map[string]any{"authorization": authorization})
+}
+
+// ResolvePush redeems one `push` authorization for the token it names.
+//
+// The request is the authorization and nothing else, and it is sent to the same route a clone's
+// redemption uses, because the authorization is what says which purpose it is for: the Store verifies
+// the signature, reads the operation out of the signed payload, and refuses anything that is not a push
+// on this path. The executor does not declare a purpose here for the same reason it does not declare
+// its own identity — a value the other side has to compare against a signed one can only ever be
+// redundant or wrong, and a wrong one would be a refusal this executor caused.
+//
+// No runtime is stated either. A push runs on no Node and holds no generation to fence; the executor
+// identity on the client certificate is what the Store compares against the authorization's binding.
+func (c *StoreClient) ResolvePush(ctx context.Context, credentialID, authorization string) (Credential, error) {
+	return c.redeem(ctx, credentialID, "/resolve", "push redemption",
+		map[string]any{"authorization": authorization})
+}
+
+// redeem performs one redemption request and reads the Store's answer.
+//
+// The three purposes reach the Store with different request bodies and, for the mirror purpose, on a
+// different route, but the answer vocabulary is one vocabulary, and reading it is where a mistake is
+// expensive: a non-200 whose body cannot be read, or whose code is blank, has to become the Store's own
+// unreachable code rather than an empty refusal. An empty code would travel up as an unrecognized
+// failure, and the caller would then have to decide what an unrecognized refusal means — which is
+// exactly the decision that lets an infrastructure failure be recorded as a decision about a
+// credential. One copy of that rule, applied to all three purposes.
+func (c *StoreClient) redeem(ctx context.Context, credentialID, path, what string, body map[string]any) (Credential, error) {
+	encoded, err := json.Marshal(body)
 	if err != nil {
-		return Credential{}, fmt.Errorf("encode mirror redemption request: %w", err)
+		return Credential{}, fmt.Errorf("encode %s request: %w", what, err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.endpoint+"/v1/credentials/"+url.PathEscape(credentialID)+"/resolve-mirror", bytes.NewReader(encoded))
+		c.endpoint+"/v1/credentials/"+url.PathEscape(credentialID)+path, bytes.NewReader(encoded))
 	if err != nil {
-		return Credential{}, fmt.Errorf("build mirror redemption request: %w", err)
+		return Credential{}, fmt.Errorf("build %s request: %w", what, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
@@ -253,7 +264,7 @@ func (c *StoreClient) ResolveMirror(ctx context.Context, credentialID, authoriza
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxStoreResponse))
 	if err != nil {
-		return Credential{}, fmt.Errorf("read mirror redemption response: %w", err)
+		return Credential{}, fmt.Errorf("read %s response: %w", what, err)
 	}
 	if response.StatusCode != http.StatusOK {
 		var refusal struct {

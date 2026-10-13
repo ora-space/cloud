@@ -178,7 +178,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID, _ 
 	respond(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
-// resolve delivers the token one single-use authorization names.
+// resolve delivers the token one single-use authorization names, for either operation redeemed here.
 //
 // Two factors must both hold, and neither is taken from the caller's assertion: the `broker-resolver`
 // service identity is enforced by the route above, and the authorization is verified against Cloud's
@@ -186,11 +186,20 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request, credentialID, _ 
 // expiry against the Store's own clock, and whether it has already been spent, and it records the
 // consumption before the secret leaves the process (D10).
 //
+// One route serves both a clone's redemption and a push's, which is the push decision's D5: the purpose
+// is inside the signed payload, so the signature is what decides which set of checks applies, and a
+// second URL would be a second surface to authenticate without adding a distinction the first one cannot
+// make. The handler therefore does not branch on the purpose — it could only do so by reading an
+// unverified payload — and hands the resolver the identity the route proved. The `identity` is what the
+// push branch compares against the authorization's `executorIdentity`; a clone's branch ignores it,
+// because a clone's caller is identified by the runtime it declares and by the certificate both Nodes
+// share.
+//
 // When the deployment configured no verification key there is no resolver at all. The refusal is then
 // issued before the body is read, because a Store that cannot decide whether an authorization is
 // genuine must not act on one, and parsing input it can never accept would only invite a caller to
 // keep trying.
-func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID, _ string) {
+func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID, identity string) {
 	if s.resolver == nil {
 		s.audit(r, "resolve", credentialID, "authorization_verification_unavailable")
 		respond(w, http.StatusConflict, map[string]string{
@@ -203,7 +212,7 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request, credentialID, _
 	if !decode(w, r, &body) {
 		return
 	}
-	resolved, err := s.resolver.Resolve(r.Context(), credentialID, body)
+	resolved, err := s.resolver.Resolve(r.Context(), credentialID, identity, body)
 	// The authorization is a bearer secret; it must not survive into the audit line or the failure log.
 	body.Authorization = ""
 	if err != nil {

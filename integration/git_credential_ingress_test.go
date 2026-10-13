@@ -217,7 +217,11 @@ func TestGitCredentialIngressAcceptsTheTokenInNoOtherPosition(t *testing.T) {
 	}
 	// Server-owned identity and scope are not fields a caller may supply, so they are rejected as
 	// unknown rather than read: condition 1 derives ownership from claims and current state alone.
-	for _, field := range []string{"tenantId", "ownerUserId", "userId", "id", "availability", "capabilities", "secretRef"} {
+	// `capabilities` was one of these until the push capability gave the product a provisioning path,
+	// and it is now a create-only field rather than a server-owned one — what bounds it is asserted
+	// where a credential exists to be widened (`TestAPushCapableCredentialIsCreatedDeliberatelyAnd…`),
+	// because the claim that matters there is that no later request may state it.
+	for _, field := range []string{"tenantId", "ownerUserId", "userId", "id", "availability", "secretRef"} {
 		body := core.Object{"name": "work", "repositoryScope": credentialScope, "token": credentialToken, field: uuid.NewString()}
 		params := f.failAs(f.user, "POST", f.path("/git-credentials"), body, uuid.NewString(), 400, "unknown_field")
 		if params.S("field") != field {

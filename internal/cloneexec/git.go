@@ -188,6 +188,63 @@ func repositoryScope(repository string) (host, path string, err error) {
 	return host, path, nil
 }
 
+// gitConstraintArguments is the closed Git configuration every path in this package that speaks to a
+// repository runs with, as the leading `-c` options of its command line.
+//
+// It is one function rather than three copies because the three paths — the credentialed clone, the
+// mirror preparation and the controlled push — differ in what they ask Git to do and not in how Git
+// is invoked. A copy per path would mean a deployment could narrow one of them and leave the other
+// two as they were, which is exactly the asymmetry that would go unnoticed: nothing in a clone's
+// behavior would change if the push path's copy lost `http.followRedirects=false`.
+//
+// The helper value is the composed `path root identity` triple for the two fetch-and-write paths and
+// the same shape for a clone, so it is deliberately not put through `validateExecutablePath`: that
+// rule describes one path, and the components were each validated by `helperArgument` before they
+// were joined. What is checked here is that the value is not blank, because `credential.helper=` with
+// nothing after it is the directive that *clears* the helper — a deployment that produced one would
+// be talking to a repository with no credential at all, and it would look like an upstream that
+// refused anonymous access rather than like a misconfiguration.
+func gitConstraintArguments(helper, sslCAInfo string) ([]string, error) {
+	if strings.TrimSpace(helper) == "" {
+		return nil, errors.New("the credential helper is not configured")
+	}
+	if sslCAInfo != "" {
+		if err := validateExecutablePath(sslCAInfo); err != nil {
+			return nil, fmt.Errorf("git certificate authority file: %w", err)
+		}
+	}
+	arguments := []string{
+		"-c", "protocol.allow=never",
+		"-c", "protocol.https.allow=always",
+		"-c", "protocol.ssh.allow=never",
+		"-c", "protocol.file.allow=never",
+		"-c", "protocol.ext.allow=never",
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.askPass=",
+		"-c", "core.symlinks=false",
+		"-c", "credential.helper=",
+		"-c", "credential.helper=" + helper,
+		"-c", "credential.useHttpPath=true",
+		"-c", "http.followRedirects=false",
+		"-c", "http.proxy=",
+		"-c", "http.sslVerify=true",
+		"-c", "submodule.recurse=false",
+		"-c", "fetch.recurseSubmodules=false",
+		"-c", "filter.lfs.smudge=",
+		"-c", "filter.lfs.process=",
+		"-c", "filter.lfs.required=false",
+	}
+	// A deployment that terminates its Git service with its own certificate authority names it here,
+	// as a deployment-fixed path. It is stated as a command-line option rather than through
+	// `GIT_SSL_CAINFO` so that the trust anchor is part of the same audited command line as
+	// `http.sslVerify=true`, and so a repository can never influence it. An unset value means the
+	// system bundle, which is what a deployment reaching a public host wants.
+	if sslCAInfo != "" {
+		arguments = append(arguments, "-c", "http.sslCAInfo="+sslCAInfo)
+	}
+	return arguments, nil
+}
+
 // cloneArguments is the complete Git configuration and command for one credentialed clone.
 //
 // Every constraint is a `-c` on this command line rather than a configuration file, which is what
@@ -230,39 +287,9 @@ func cloneArguments(job *Job, helperPath, materialRoot, target, sslCAInfo string
 	if err := validateExecutablePath(target); err != nil {
 		return nil, fmt.Errorf("clone target: %w", err)
 	}
-	if sslCAInfo != "" {
-		if err := validateExecutablePath(sslCAInfo); err != nil {
-			return nil, fmt.Errorf("git certificate authority file: %w", err)
-		}
-	}
-	arguments := []string{
-		"-c", "protocol.allow=never",
-		"-c", "protocol.https.allow=always",
-		"-c", "protocol.ssh.allow=never",
-		"-c", "protocol.file.allow=never",
-		"-c", "protocol.ext.allow=never",
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.askPass=",
-		"-c", "core.symlinks=false",
-		"-c", "credential.helper=",
-		"-c", "credential.helper=" + helper,
-		"-c", "credential.useHttpPath=true",
-		"-c", "http.followRedirects=false",
-		"-c", "http.proxy=",
-		"-c", "http.sslVerify=true",
-		"-c", "submodule.recurse=false",
-		"-c", "fetch.recurseSubmodules=false",
-		"-c", "filter.lfs.smudge=",
-		"-c", "filter.lfs.process=",
-		"-c", "filter.lfs.required=false",
-	}
-	// A deployment that terminates its Git service with its own certificate authority names it here,
-	// as a deployment-fixed path. It is stated as a command-line option rather than through
-	// `GIT_SSL_CAINFO` so that the trust anchor is part of the same audited command line as
-	// `http.sslVerify=true`, and so a repository can never influence it. An unset value means the
-	// system bundle, which is what a deployment cloning from a public host wants.
-	if sslCAInfo != "" {
-		arguments = append(arguments, "-c", "http.sslCAInfo="+sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	if err != nil {
+		return nil, err
 	}
 	arguments = append(arguments,
 		"clone",
@@ -304,6 +331,12 @@ func validateBranch(branch string) error {
 // runGit runs one constrained Git command and returns both of its output streams alongside the exit
 // error.
 //
+// Both streams are returned whether the command succeeded or not. The push path is why: `git push`
+// reports what it did to the remote on *standard output* and still exits non-zero when the remote
+// refused the update, so a helper that discarded standard output on failure would throw away the only
+// evidence that a refused write was refused rather than lost. Callers that only want a fact printed
+// by a successful command check the error first, as they always did.
+//
 // Git's stderr is captured rather than streamed: it is the only useful thing a failed command
 // produces, and it is also the one place a credential could reach a log, because a remote can put
 // arbitrary text in a response and Git may quote it. The caller therefore redacts it against the
@@ -325,10 +358,8 @@ func runGit(ctx context.Context, gitPath, home string, arguments []string, worki
 	var output, errorOutput strings.Builder
 	command.Stdout = &output
 	command.Stderr = &errorOutput
-	if err := command.Run(); err != nil {
-		return "", errorOutput.String(), err
-	}
-	return output.String(), errorOutput.String(), nil
+	err = command.Run()
+	return output.String(), errorOutput.String(), err
 }
 
 // redactFailure turns Git's own error output into a failure the executor may log.

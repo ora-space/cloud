@@ -131,6 +131,21 @@ func TestPushRefusesTheOtherOperationsFields(t *testing.T) {
 			apply: func(b *Binding) { b.NewCommit = strings.ToUpper(testNewCommit) },
 		},
 		{
+			// The delete spelling. The execution authority refuses deleting a ref outright, and the null
+			// object id is the one spelling of "no commit" Git's own protocol would accept for it, so the
+			// refusal has to be here rather than only in a rule a formatter could skip.
+			name:  "a push whose published commit is the null object id",
+			base:  pushBinding,
+			apply: func(b *Binding) { b.NewCommit = strings.Repeat("0", 40) },
+		},
+		{
+			// The creation spelling: `old` as the null oid is how a ref update says the ref does not
+			// exist yet, which is the other half of what the authority refuses.
+			name:  "a push whose observed commit is the null object id",
+			base:  pushBinding,
+			apply: func(b *Binding) { b.OldCommit = strings.Repeat("0", 40) },
+		},
+		{
 			name:  "a push that names an execution",
 			base:  pushBinding,
 			apply: func(b *Binding) { b.ExecutionID = "execution-1" },

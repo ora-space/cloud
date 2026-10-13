@@ -298,10 +298,19 @@ type privateRepository struct {
 	URL string
 	// Commit is the revision the repository's default branch points at.
 	Commit string
+	// Bare is the path of the bare repository the HTTP server exports. A test that needs to arrange the
+	// remote's own state — a ref moved by a third party, a server-side hook that refuses an update —
+	// reaches it here rather than over the protocol, because both of those are things only the remote's
+	// operator can do.
+	Bare string
 	// Token is the password the server accepts. It is the value a user would have stored, and it is
 	// generated per test run so a test that accidentally printed it would print a value that means
 	// nothing outside that run.
 	Token string
+	// requests counts the authenticated smart-HTTP traffic this server served, by service. Part of what
+	// a push must prove is what it did *not* do — one write, and a read-only reconciliation rather than a
+	// second write — and the wire is the only place that is observable from outside the executor.
+	requests *repositoryRequests
 	// authorities is what a client verifies the repository's certificate against.
 	authorities *x509.CertPool
 }
@@ -344,6 +353,7 @@ func newPrivateRepository(t *testing.T, pki *testPKI) *privateRepository {
 		Path: filepath.Join(execPath, "git-http-backend"),
 		Env:  []string{"GIT_PROJECT_ROOT=" + projectRoot, "GIT_HTTP_EXPORT_ALL=1"},
 	}
+	requests := &repositoryRequests{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented, password, ok := r.BasicAuth()
 		// The password is the credential, and the comparison is constant-time. The username is the
@@ -357,6 +367,9 @@ func newPrivateRepository(t *testing.T, pki *testPKI) *privateRepository {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
+		// Only authenticated traffic is counted, so a test's arithmetic is about what a credential was
+		// used for rather than about how many times something was refused at the door.
+		requests.count(r)
 		backend.ServeHTTP(w, r)
 	})
 	server := pki.startServer(t, handler, "", nil)
@@ -364,7 +377,9 @@ func newPrivateRepository(t *testing.T, pki *testPKI) *privateRepository {
 		server:      server,
 		URL:         server.URL + "/" + acceptanceRepoName,
 		Commit:      commit,
+		Bare:        bare,
 		Token:       token,
+		requests:    requests,
 		authorities: pki.pool,
 	}
 }

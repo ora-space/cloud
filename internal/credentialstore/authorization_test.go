@@ -214,7 +214,7 @@ func TestResolveDeliversTheBoundToken(t *testing.T) {
 	storeCredential(t, fixture.store, id, "ghp_bound_token")
 	authorization := fixture.issue(t, fixture.binding(id, 1))
 
-	resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -248,10 +248,10 @@ func TestResolveConsumesTheAuthorizationOnce(t *testing.T) {
 	storeCredential(t, fixture.store, id, "ghp_once")
 	authorization := fixture.issue(t, fixture.binding(id, 1))
 
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); err != nil {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); err != nil {
 		t.Fatalf("first Resolve: %v", err)
 	}
-	_, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	_, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if !errors.Is(err, ErrAuthorizationConsumed) {
 		t.Fatalf("second Resolve error = %v, want %v", err, ErrAuthorizationConsumed)
 	}
@@ -265,7 +265,7 @@ func TestResolveSurvivesARestart(t *testing.T) {
 	id := testCredentialID(3)
 	storeCredential(t, fixture.store, id, "ghp_restart")
 	authorization := fixture.issue(t, fixture.binding(id, 1))
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); err != nil {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); err != nil {
 		t.Fatalf("first Resolve: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestResolveSurvivesARestart(t *testing.T) {
 	if !ok {
 		t.Fatal("the reopened Store lost its resolve capability")
 	}
-	if _, err := resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
+	if _, err := resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
 		t.Fatalf("Resolve after restart error = %v, want %v", err, ErrAuthorizationConsumed)
 	}
 }
@@ -303,7 +303,7 @@ func TestResolveRejectsAForgedAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue with the impostor key: %v", err)
 	}
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(forged)); !errors.Is(err, ErrAuthorizationInvalid) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(forged)); !errors.Is(err, ErrAuthorizationInvalid) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationInvalid)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -332,7 +332,7 @@ func TestResolveRejectsATamperedAuthorization(t *testing.T) {
 		t.Fatalf("test did not change the payload: %s", payload)
 	}
 	tampered := base64.RawURLEncoding.EncodeToString([]byte(edited)) + "." + encodedSignature
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(tampered)); !errors.Is(err, ErrAuthorizationInvalid) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(tampered)); !errors.Is(err, ErrAuthorizationInvalid) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationInvalid)
 	}
 }
@@ -346,7 +346,7 @@ func TestResolveRejectsAnExpiredAuthorization(t *testing.T) {
 	authorization := fixture.issue(t, fixture.binding(id, 1))
 
 	fixture.clock.Advance(2 * time.Minute)
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationExpired) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationExpired) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationExpired)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -379,7 +379,7 @@ func TestResolveRejectsBindingMismatches(t *testing.T) {
 			test.mutate(&binding, &request)
 			request.Authorization = fixture.issue(t, binding)
 
-			if _, err := fixture.resolver.Resolve(context.Background(), id, request); !errors.Is(err, ErrAuthorizationBinding) {
+			if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, request); !errors.Is(err, ErrAuthorizationBinding) {
 				t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationBinding)
 			}
 			if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -399,7 +399,7 @@ func TestResolveRejectsAnUnavailableVersion(t *testing.T) {
 		id := testCredentialID(8)
 		storeCredential(t, fixture.store, id, "ghp_version")
 		authorization := fixture.issue(t, fixture.binding(id, 9))
-		if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrVersionUnavailable) {
+		if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrVersionUnavailable) {
 			t.Fatalf("Resolve error = %v, want %v", err, ErrVersionUnavailable)
 		}
 	})
@@ -415,7 +415,7 @@ func TestResolveRejectsAnUnavailableVersion(t *testing.T) {
 		}
 		authorization := fixture.issue(t, fixture.binding(id, 1))
 		fixture.clock.Advance(31 * time.Second)
-		if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrVersionUnavailable) {
+		if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrVersionUnavailable) {
 			t.Fatalf("Resolve error = %v, want %v", err, ErrVersionUnavailable)
 		}
 	})
@@ -431,7 +431,7 @@ func TestResolveServesARetainedVersion(t *testing.T) {
 		t.Fatalf("Rotate: %v", err)
 	}
 	authorization := fixture.issue(t, fixture.binding(id, 1))
-	resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestResolveRejectsARevokedCredential(t *testing.T) {
 	if err := fixture.store.Revoke(context.Background(), id); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrRevoked) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrRevoked)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -467,11 +467,11 @@ func TestResolveRejectsUnknownAndMalformedCredentialIds(t *testing.T) {
 	fixture := newResolveFixture(t)
 	absent := testCredentialID(12)
 	authorization := fixture.issue(t, fixture.binding(absent, 1))
-	if _, err := fixture.resolver.Resolve(context.Background(), absent, fixture.request(authorization)); !errors.Is(err, ErrNotFound) {
+	if _, err := fixture.resolver.Resolve(context.Background(), absent, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve(absent) error = %v, want %v", err, ErrNotFound)
 	}
 	malformed := fixture.issue(t, fixture.binding("not-a-uuid", 1))
-	if _, err := fixture.resolver.Resolve(context.Background(), "not-a-uuid", fixture.request(malformed)); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := fixture.resolver.Resolve(context.Background(), "not-a-uuid", testResolverIdentity, fixture.request(malformed)); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("Resolve(malformed) error = %v, want %v", err, ErrInvalidRequest)
 	}
 }
@@ -485,7 +485,7 @@ func TestResolveHonoursCancellation(t *testing.T) {
 	authorization := fixture.issue(t, fixture.binding(id, 1))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := fixture.resolver.Resolve(ctx, id, fixture.request(authorization)); !errors.Is(err, context.Canceled) {
+	if _, err := fixture.resolver.Resolve(ctx, id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Resolve error = %v, want %v", err, context.Canceled)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -504,10 +504,10 @@ func TestResolveLeavesTheAuthorizationUnspentWhenChecksFail(t *testing.T) {
 
 	wrong := fixture.request(authorization)
 	wrong.ControlEpoch = testControlEpoch + 1
-	if _, err := fixture.resolver.Resolve(context.Background(), id, wrong); !errors.Is(err, ErrAuthorizationBinding) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, wrong); !errors.Is(err, ErrAuthorizationBinding) {
 		t.Fatalf("Resolve(mismatched) error = %v, want %v", err, ErrAuthorizationBinding)
 	}
-	resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if err != nil {
 		t.Fatalf("Resolve after a refused attempt: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestResolveConsumesAtMostOnceUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			_, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+			_, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 			results <- err
 		}()
 	}
@@ -596,7 +596,7 @@ func TestResolveAcceptsAnAuthorizationFromAnyTrustedKey(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			binding := fixture.binding(id, 1)
 			binding.AuthorizationID = testAuthorizationID(30 + index)
-			resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(fixture.issueWith(t, index, binding)))
+			resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(fixture.issueWith(t, index, binding)))
 			if err != nil {
 				t.Fatalf("Resolve with the %s: %v", name, err)
 			}
@@ -640,7 +640,7 @@ func TestResolveRefusesAnAuthorizationFromAnUntrustedKey(t *testing.T) {
 	afterRotation := reopenResolveFixture(t, fixture, writePublicKeyFile(t, filepath.Join(t.TempDir(), "cloneauth.pem"), incoming))
 
 	authorization := fixture.issueWith(t, 0, fixture.binding(id, 1))
-	if _, err := afterRotation.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationInvalid) {
+	if _, err := afterRotation.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationInvalid) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationInvalid)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {
@@ -650,7 +650,7 @@ func TestResolveRefusesAnAuthorizationFromAnUntrustedKey(t *testing.T) {
 	// rather than about the reopened Store refusing everything.
 	surviving := fixture.binding(id, 1)
 	surviving.AuthorizationID = testAuthorizationID(31)
-	if _, err := afterRotation.resolver.Resolve(context.Background(), id, fixture.request(fixture.issueWith(t, 1, surviving))); err != nil {
+	if _, err := afterRotation.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(fixture.issueWith(t, 1, surviving))); err != nil {
 		t.Fatalf("Resolve with the surviving key: %v", err)
 	}
 }
@@ -672,7 +672,7 @@ func TestResolveTreatsAnUnparseableConsumptionRecordAsSpent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"authorizationId":`), 0o600); err != nil {
 		t.Fatalf("write a torn consumption record: %v", err)
 	}
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationConsumed)
 	}
 }
@@ -694,7 +694,7 @@ func TestResolveRefusesWhenTheConsumptionRecordCannotBeWritten(t *testing.T) {
 	if err := os.WriteFile(directory, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("replace the consumption record directory: %v", err)
 	}
-	resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if err == nil {
 		t.Fatal("Resolve delivered a secret it could not record as spent")
 	}
@@ -720,7 +720,7 @@ func TestResolveRecordsConsumedNotDeliveredWhenTheSecretCannotBeOpened(t *testin
 		t.Fatalf("corrupt the stored material: %v", err)
 	}
 
-	resolved, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+	resolved, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 	if err == nil {
 		t.Fatal("Resolve reported success although the sealed token could not be opened")
 	}
@@ -737,7 +737,7 @@ func TestResolveRecordsConsumedNotDeliveredWhenTheSecretCannotBeOpened(t *testin
 	if record.Result != consumptionConsumed {
 		t.Fatalf("consumption result = %q, want %q", record.Result, consumptionConsumed)
 	}
-	if _, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization)); !errors.Is(err, ErrAuthorizationConsumed) {
 		t.Fatalf("second Resolve error = %v, want %v", err, ErrAuthorizationConsumed)
 	}
 }
@@ -753,7 +753,7 @@ func TestResolveRefusesAnIncompleteRuntimeDeclaration(t *testing.T) {
 	authorization := fixture.issue(t, fixture.binding(id, 1))
 
 	bare := ResolveRequest{Authorization: authorization}
-	if _, err := fixture.resolver.Resolve(context.Background(), id, bare); !errors.Is(err, ErrAuthorizationBinding) {
+	if _, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, bare); !errors.Is(err, ErrAuthorizationBinding) {
 		t.Fatalf("Resolve error = %v, want %v", err, ErrAuthorizationBinding)
 	}
 	if _, found := readConsumption(t, fixture, testAuthorizationID(1)); found {

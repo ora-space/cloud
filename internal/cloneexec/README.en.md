@@ -21,11 +21,14 @@ deployment — recorded honestly as such in
 `specs/test-cases/node/repository/git-credential-execution-isolation.md` — and is not something this
 package can prove about itself.
 
-C carries **two capabilities on two routes** today: `POST /v1/clone-executions` turns an
-authorization into one `git clone`, and `POST /v1/mirror-preparations` turns one into one internal
-mirror. They **share** the deployment, the verification, the redemption and the way Git is invoked,
-and they **share nothing else** — not a route, not a request type, not a result type, not a consumer.
-There is deliberately no `kind` switch on one job; see "Two routes, not a switch" below.
+C carries **three capabilities on three routes** today: `POST /v1/clone-executions` turns an
+authorization into one `git clone`, `POST /v1/mirror-preparations` turns one into one internal mirror,
+and `POST /v1/push-executions` turns one into **one write to one ref**. They **share** the deployment,
+the verification, the redemption and the way Git is invoked, and they **share nothing else** — not a
+route, not a request type, not a result type, not a consumer. There is deliberately no `kind` switch on
+one job; see "Three routes, not a switch" below. The three are not equally costly: the first two read
+and the third **writes**, which is why its ordering, its timeout and its failure vocabulary are all
+narrower (see "The order of a push").
 
 ## The order is the contract
 
@@ -49,38 +52,44 @@ decided to deliver, destroyed before the result is returned. A crash is the one 
 cannot cover, which is what the startup sweep is for (`Sweep`, `executor.go:304`) — it runs before the
 listener opens.
 
-## Two routes, not a switch
+## Three routes, not a switch
 
-The two capabilities have a route, a request type and a result type each, and they are two exported
+The three capabilities have a route, a request type and a result type each, and they are three exported
 methods rather than a switch on one:
 
-| | Clone | Mirror preparation |
-| --- | --- | --- |
-| Route | `POST /v1/clone-executions` | `POST /v1/mirror-preparations` |
-| Request / result | `Job` / `Result` | `MirrorJob` / `MirrorResult` |
-| Authorization operation | `clone` | `mirror_prepare` |
-| Subject | one execution's checkout on one Node | one attempt of one Project Operation |
-| Identity fields | `executionId`, `nodeId`/`nodeInstanceId`/`nodeIncarnationId` | `operationId`/`preparationGeneration`/`executorIdentity` |
-| Cloud-side method | `Client.Dispatch` | `Client.PrepareMirror` |
+| | Clone | Mirror preparation | Push |
+| --- | --- | --- | --- |
+| Route | `POST /v1/clone-executions` | `POST /v1/mirror-preparations` | `POST /v1/push-executions` |
+| Request / result | `Job` / `Result` | `MirrorJob` / `MirrorResult` | `PushJob` / `PushResult` |
+| Authorization operation | `clone` | `mirror_prepare` | `push` |
+| Subject | one execution's checkout on one Node | one attempt of one Project Operation | one approved write (which ref of which upstream, from which commit to which) |
+| Identity fields | `executionId`, `nodeId`/`nodeInstanceId`/`nodeIncarnationId` | `operationId`/`preparationGeneration`/`executorIdentity` | `operationId`/`executorIdentity`, plus the ref and the two commits |
+| Cloud-side method | `Client.Dispatch` | `Client.PrepareMirror` | `Client.Push` |
 
-The subject is what forces it: a clone binds "this execution on that Node" and a mirror preparation
-binds "this attempt of that Project Operation", and the two sets of identity fields are **disjoint** —
-`Binding.validate` requires the three node ids of a clone and **forbids** operation/generation/
-executorIdentity, and requires those three of a preparation and **forbids** the node ids. Folding both
-into one `kind`-tagged job would leave a decoder deciding which identity fields are meaningful, and the
-operation boundary would become a branch inside C instead of a signature Cloud cannot forge (the
-2026-10-13 ruling).
+The subject is what forces it: a clone binds "this execution on that Node", a mirror preparation binds
+"this attempt of that Project Operation", and a push binds "this one approved write", and the three sets
+of identity fields are **disjoint** — `Binding.validate` requires the three node ids of a clone and
+**forbids** operation/generation/executorIdentity, requires an operation of a preparation or a push and
+**forbids** the node ids, and additionally requires a ref and a commit pair of a push and a ref and a
+generation of a preparation. Folding all three into one `kind`-tagged job would leave a decoder deciding
+which identity fields are meaningful, and the operation boundary would become a branch inside C instead
+of a signature Cloud cannot forge (the 2026-10-13 ruling).
 
-**Purpose confusion has to be refused in both directions**, and the rule is a comparison of the
+**Purpose confusion has to be refused in all three directions**, and the rule is a comparison of the
 **operation inside the signature**, not of the route the request arrived on:
 
 - a `clone` authorization at the mirror route → 400 `binding_mismatch` (the first check in
   `matchMirrorBinding`), and it happens **before the Store is asked for anything**;
 - a `mirror_prepare` authorization at the clone route → 400 `binding_mismatch` (the same check in
-  `matchBinding`).
+  `matchBinding`);
+- a `clone` or `mirror_prepare` authorization at the push route → 400 `binding_mismatch` (the first
+  check in `matchPushBinding`), likewise **before the Store is asked for anything**; and the reverse
+  holds too: a write authorization is refused on the other two routes, and the Store decides the purpose
+  a second time on its own side (`Resolve`, `ResolveMirror` and `ResolvePush` each compare the
+  operation first).
 
-In neither direction is "it was not consumed" taken on C's word: it is shown by redeeming the
-authorization afterwards through **the route that does own it** (see "Tests").
+In no direction is "it was not consumed" taken on C's word: it is shown by redeeming the authorization
+afterwards through **the route that does own it** (see "Tests").
 
 ## The order of a mirror preparation
 
@@ -111,6 +120,61 @@ instead of a checkout at the end:
 The preparation's timeout is the lesser of the deployment's value and the authorization's remaining
 lifetime, so an authorization about to expire cannot let a fetch run past it.
 
+## The order of a push
+
+`PushExecutor.Push` (`push.go:300`) is the same "the order is the contract" as the other two, with one
+**deliberate** difference in ordering: the write's two local determinations can only be made *after*
+redemption.
+
+1. **Verify locally, spending nothing.** Canonicalize the repository, check the operation, the project,
+   the workspace and the credential id, validate the ref and both commits with the issuer's own
+   `ValidateRef`/`ValidateCommit`, verify the signature, then `matchPushBinding` — whose first check is
+   the operation. A job that fails here has consumed nothing.
+2. **Redeem as `broker-resolver`.** `Store.ResolvePush` decides the purpose and the presenting identity
+   on its own side first — the presenter must be the one the authorization names as `executorIdentity`,
+   and the request must declare **no** runtime, because a push binding carries none — and only then
+   spends the authorization durably and exactly once.
+3. **Materialize** under the **authorization's** identifier (`pushMaterialIdentity`), for the mirror
+   path's reason: an authorization is spent exactly once, so two attempts of one approval cannot land
+   in one directory.
+4. **One constrained fetch** of the signed repository's `refs/heads/*` into a scratch bare repository
+   (`--no-tags`, and not writing `FETCH_HEAD`, so one fetch leaves nothing behind that could influence a
+   later command).
+5. **Two local determinations**: the signed new commit must **already exist** in the signed upstream, and
+   the signed old commit must be its **ancestor** (`verifyWriteIsExpressible`). Either failing is
+   `credential_executor_push_not_applicable`, and it happens **before any network write**. The cost is
+   that this sits after step 2, so a job naming a commit the upstream does not have **spends one
+   authorization** — the one place this path's order differs from the other two, for the reason `Push`'s
+   comment gives: moving the determination earlier would need a second content channel for the objects,
+   and a second channel is a second thing to authorize.
+6. **One compare-and-swap write**, below; the ref's value is then read back as evidence for the result,
+   never as a substitute for it.
+7. **Destroy.** Success, Git failure, timeout, cancellation and panic all pass through the `defer`, and a
+   failed destruction is reported as `credential_executor_cleanup_failed` even when the remote accepted
+   the write — a push whose credential may still be on disk is not a completed push.
+
+The push's timeout is the lesser of the deployment's value and the authorization's remaining lifetime,
+for the preparation's reason.
+
+### The write is one command
+
+`pushUpdateArguments` (`pushgit.go`) is the **only** line in this package that changes anything outside
+the executor, and every restriction the decision fixes is on it:
+
+- The refspec is `<local ref>:<signed ref>` — one source, one target, both fully qualified, with no
+  pattern, no multi-ref list, no `+` prefix and no empty source, so a deletion and a "push everything"
+  are **not expressible**. The local ref is created at the signed new commit on the line above, so the
+  value the remote receives and the value the signature covers are the same commit **by construction**
+  rather than by a reader comparing two spellings.
+- `--force-with-lease=<ref>:<old>` is the compare-and-swap, and the expected value is **written on the
+  command line** rather than taken from the local ref: a lease checked against this process's own copy
+  would be checked against a value this process just wrote, which is to say against nothing.
+- `--no-verify` and `-c push.followTags=false` are defence in depth: hooks are already off through
+  `core.hooksPath=/dev/null` and an explicit refspec cannot carry a tag, but a write is the one
+  operation where a second, unreviewed program or ref must not ride along.
+- `--porcelain` is what makes the outcome readable: the default output is prose meant for a person, and
+  parsing it means matching English.
+
 ## Files
 
 - `executor.go`: `Config`, `Executor`, `New`, `Sweep`, `Execute`, `Job`, `Result`, `Runtime`, `Failure`
@@ -127,13 +191,20 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
 - `mirrorcontent.go`: the half of a preparation that runs Git — `mirrorArguments` (the clone's
   constraints, pinned the same way, plus a `--bare` fetch), `validateMirrorRef`, `fetch`
   (init/fetch/rev-parse/for-each-ref/symbolic-ref), `gitFact`, `publish`.
+- `push.go`: the third capability — `PushJob`, `PushState` (five members), `PushResult`, the two
+  write-side reason codes, `PushConfig`, `PushExecutor`, `NewPushExecutor`, `Sweep`, `Push`,
+  `matchPushBinding`, `pushMaterialIdentity`, `materialize`, `verifyWriteIsExpressible`, `update`,
+  `reconcile`, `stage`.
+- `pushgit.go`: the half of a push that runs Git — `pushFetchArguments`, `pushUpdateArguments` (the one
+  write command), `pushFactArguments`, `validatePushTarget`, and the two readers: Git's `--porcelain`
+  report and `ls-remote`'s remote value.
 - `server.go`: the mutually authenticated HTTP listener (`Server`, `ServerConfig`, `NewServer`) with
-  two routes, which accepts only the deployment-fixed dispatching identity
-  (`presentedIdentity`/`callerIdentity`), with a 16 KiB request body ceiling (`maxJobBody`). Both
+  three routes, which accepts only the deployment-fixed dispatching identity
+  (`presentedIdentity`/`callerIdentity`), with a 16 KiB request body ceiling (`maxJobBody`). The three
   routes **share one dispatching identity**, which is what makes "the same presenter gets a different
   answer on each route" an observable form of "the rule is the operation, not the route".
 - `client.go`: the caller's side — `Client`, `ClientConfig`, `NewClient`, `Dispatch`, `PrepareMirror`,
-  `DispatcherRefusal`.
+  `Push`, `DispatcherRefusal`.
 - `storeclient.go`: the `RedemptionClient` interface and `StoreClient` — the `broker-resolver` mutual-TLS
   client, the ten Store reason codes, and `Credential`.
 - `executor_test.go`: 18 deployment mutations, argv and environment pinned position by position, the
@@ -145,6 +216,9 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   "Tests").
 - `mirror_acceptance_test.go`: the end-to-end mirror preparation against a real private repository, and
   the purpose-confusion matrix in both directions (see "Tests").
+- `push_acceptance_test.go`: the end-to-end push against a real private repository, including the
+  read-only reconciliation and "one approval writes once" (see "Tests").
+- `pushgit_test.go`: the offline pinning of the write command and the two readers (see "Tests").
 
 ## Interface
 
@@ -183,6 +257,26 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   is a method rather than a mode on `Dispatch` for the same reason the executor has two handlers: a
   clone names an execution and a Node, a preparation names an Operation and an attempt, and which one
   is being sent is a fact about the call site rather than about a field.
+- `PushConfig` / `NewPushExecutor`: the third capability's deployment descriptor and constructor. It
+  **reuses** the clone's Git and materialization inputs (the same `gitDeployment` boundary) and
+  **additionally** requires a scratch root, a verification key set and a `PushRedemptionClient`, and
+  refuses to start without any of them; the scratch root must be a directory **other than** the
+  materialization root, because a push writes an entire private upstream to disk and pointing that at
+  the directory holding staged tokens would make "sweep the abandoned repositories" and "sweep the
+  abandoned tokens" one operation.
+- `PushExecutor.Push(job)`: `(PushResult, error)`, in the order above. The returned `PushResult` states
+  what this attempt **established about the remote**: one of the five states, the remote value the
+  executor read back (when it read one), and the credential version the write actually used. An error is
+  returned in exactly two cases — a refusal the executor decided, or a failure of the credential path —
+  because both mean the write **never started**, and the result type exists to carry "it started and the
+  outcome is unestablished".
+- `PushExecutor.Sweep`: `(entries removed, error)`, removing what a previous run left under the scratch
+  root. The sweep matters more here than on the other paths: the scratch holds a plaintext copy of a
+  private upstream, not a checkout.
+- `Client.Push(job)`: the third method, POSTing to `/v1/push-executions` and sharing the `maxJobBody`
+  bound and the `DispatcherRefusal` mapping with the other two. It is called by Cloud's
+  `core.PushDispatcher` alone, and that dispatcher is installed only when the deployment declares the
+  push capability.
 - `Server`/`Client`: HTTPS with JSON. The carrier is plain HTTP under TLS for the same reason the
   Credential Service's is — the platform's service-identity model is "TLS with a pinned client CA and a
   SPIFFE URI in the client certificate", which `net/http` expresses completely — and this endpoint is
@@ -204,7 +298,9 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   checks against the staged scope), `http.followRedirects=false`, the proxy keys, `core.hooksPath`,
   `core.symlinks`, submodules and LFS; `gitEnvironment` is the clone process's **entire** environment
   (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` and the rest). The
-  token never enters argv: it travels only in the `credential` protocol between the helper and Git.
+  token never enters argv: it travels only in the `credential` protocol between the helper and Git. The
+  write command and the read-only reconciliation run with that same environment and that same helper,
+  so the write path has no second way of obtaining the secret either.
 - **Nothing the repository supplies gets run**: no hooks, no LFS filters, no submodules, no following
   symlinks — each of those is a program or a fetch the authorization does not cover.
 - **Failures do not echo the secret**: `redactFailure` removes the token from error strings, and
@@ -215,7 +311,8 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
 - **The purpose comes from the signature, not from the route**: each route compares the **operation in
   the authorization** before it asks the Store for anything. So sending a clone's job to the mirror
   route does not buy a mirror, and does not spend the Node's clone either — it buys a 400
-  `binding_mismatch`, and the authorization still redeems on the route that owns it.
+  `binding_mismatch`, and the authorization still redeems on the route that owns it. The same holds for
+  a write: a push job carrying a read authorization is refused, and spends nothing.
 - **Only the ref the authorization signed is fetched**: the ref travels inside the signed authorization
   and is validated by `cloneauth.ValidateRef`, and the published mirror is asserted with `for-each-ref`
   to expose **exactly** `refs/heads/ora-mirror`, so a reader gets the commit Cloud's rows name rather than the
@@ -225,6 +322,26 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   within one filesystem by construction. A deployment that nested the mirror root and the
   materialization root inside one another is refused at startup by `NewMirrorExecutor` (see the next
   section) — because the startup sweep removes **every** entry under the materialization root.
+- **A write updates one ref, and "writing wider" is not expressible**: the ref and both commits travel
+  inside the signature and are validated by the issuer's own `ValidateRef` (under `refs/heads/`, with
+  Git's own spelling rules refusing `*`, `?`, `..`, `@{`, `:` and `\`) and `ValidateCommit` (refusing an
+  abbreviation, an upper-case spelling and the all-zero object id — which is how a deletion and a
+  creation-from-nothing are spelled); `old == new` is refused; and the write command's refspec has one
+  source and one target. Force, deletion, wildcards, tags and multiple refs are therefore refused **at
+  admission**, not left to the remote to refuse.
+- **Before writing, the executor proves locally that the write is expressible**: the signed new commit
+  must exist in the signed upstream and the signed old commit must be its ancestor. Either failing is a
+  refusal that sends **no write at all**. Both depend on the objects step 4 fetched, which is why they
+  can only run after redemption — the one ordering concession on this path (step 5 above).
+- **The remote's value is evidence and never changes the conclusion**: after a write (or after a
+  refusal) the executor reads the ref's current value **read-only** and reports it unchanged. It does not
+  call `target_satisfied` a `confirmed` — "the ref already holds that commit" and "this write is what put
+  it there" are two different facts (the observable face of invariant 12) — and it is not a retry path:
+  reconciling grants no new write authority and runs no second write.
+- **Five states rather than a boolean**: `confirmed`/`target_satisfied`/`not_applied`/`target_conflict`/
+  `unknown` are mutually exclusive members, and `unknown` is one of them rather than the absence of an
+  answer — an attempt whose outcome could not be established has to be recordable as exactly that, and
+  never as an empty value a reader would take to mean "nothing happened".
 
 ## Deployment ownership and failure cleanup
 
@@ -249,6 +366,16 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   means having no such capability**: the route answers `credential_executor_unavailable` honestly and
   the clone path is unaffected — whether this machine serves an internal Git Server is a separable
   question.
+- The push scratch root is a **third** root: the materialization root holds secrets, the checkout root is
+  the handoff, and the scratch root holds a **plaintext copy of a private upstream**. So the deployment
+  layer (`PushExecutor` in `internal/config`) refuses at startup to configure it as a directory that
+  contains or is contained by the materialization, checkout or mirror root: `NewPushExecutor` requires
+  it to be **different** from the materialization root, and the containment checks run in the
+  configuration layer — a contained scratch root would either be deleted along with everything else by
+  the clone's startup sweep (`credentialmaterial.Sweep` removes every entry under the materialization
+  root) or would put a plaintext upstream inside the tree that holds secrets. **Declaring no push root
+  means having no such capability**: the route answers `credential_executor_unavailable` honestly and the
+  other two are unaffected.
 - Cleanup coverage: the in-job `defer` covers success, failure, timeout, cancellation and panic; outside
   the process, `Sweep` covers a crash. What still has **no direct evidence** is an end-to-end sweep after
   a real hard kill, and the "timeout" and `Interrupted` outcomes of the Node clone state machine — the
@@ -268,14 +395,24 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
 - Called by: `cmd/clone-executor` is its deployment entry point, and `cmd/git-credential-ora` is the
   helper it fixes (sharing only `credentialmaterial`, never the job logic). On the Cloud side,
   `CloneDispatcher` in `internal/core` calls `Dispatch` in `client.go`.
-- **No caller is enabled by default**: both `CLOUD_CLONE_DISPATCH_ENABLED` and
-  `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` default to `false`. With both off, Cloud neither signs nor
-  dispatches and the executor refuses every job. That is the fail-closed default, not a pending task.
+- **No caller is enabled by default**: `CLOUD_CLONE_DISPATCH_ENABLED`, `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED`
+  and `CLOUD_CLONE_DISPATCH_PUSH_ENABLED` all default to `false`. With all three off, Cloud neither signs
+  nor dispatches and the executor refuses every job. That is the fail-closed default, not a pending task.
   With `mirror_enabled` on, Cloud does sign and dispatch for every claimed mirror-preparation attempt
   (see `MirrorDispatcher` and `PrepareMirrorsOnce` in `internal/core`) — but **published mirror content
   still has no reader**: Cloud has not been told where a sandbox reads a mirror from
   (`git_server.sandbox_base_url` is empty), so no Workspace clones from a mirror, and
   `internal/mirrorpublish` still has no production caller outside this package.
+- `push_enabled` needs **three** things to hold at once, and each of the three refuses independently:
+  `CLOUD_CLONE_DISPATCH_PUSH_ENABLED` on Cloud (which installs `core.PushDispatcher`),
+  `CLONE_EXECUTOR_PUSH_ENABLED` on the executor (which installs `PushExecutor` and requires `push_root`),
+  and a verification key for Cloud's authorizations on the Credential Service
+  (`CREDENTIAL_STORE_AUTHORIZATION_PUBLIC_KEY_FILE`, together with an issued `broker-resolver` client
+  certificate). With any one missing, a push is refused in a **different** place with a different stable
+  code — `push_executor_unavailable` when Cloud installs no executor,
+  `authorization_verification_unavailable` when the Store holds no verification key. No deployment file
+  turns them on today: the push path is implemented and accepted, but **no production deployment enables
+  it**, which the reports and the verification obligations state as such.
 
 ## Tests
 
@@ -328,3 +465,39 @@ lifetime, so an authorization about to expire cannot let a fetch run past it.
   400, and that mirror authorization then still redeems through `ResolveMirror`); and a server built
   with `Mirror: nil` answers `credential_executor_unavailable` (500) rather than a routing mistake, and
   spends nothing.
+- `pushgit_test.go` is offline and deterministic: the write command is pinned position by position (the
+  single `<local ref>:<signed ref>` refspec, the `--force-with-lease=<ref>:<old>` expected value,
+  `--no-verify`, `push.followTags=false`, `--porcelain`), and it refuses an address that cannot be dialled
+  and a ref or commit that `ValidateRef` / `ValidateCommit` reject; the fetch and the two read-only
+  commands are asserted to **stay reads**; the reader of the `--porcelain` report reads **exactly one**
+  ref; and the `ls-remote` reader separates "there is no such ref" from "this read did not succeed" —
+  the first is "the ref is not there", the second is "unknown".
+- `push_acceptance_test.go` is the **real-chain** acceptance run for a push, reusing the same real
+  components **with Cloud's `core.PushDispatcher` at the head of the chain**: a real private HTTPS
+  repository, a real Credential Service with a real volume and a real key-encryption key, real mutual
+  TLS between all three parties, the real `git-credential-ora` built on the spot, and all three executors
+  on one server. The remote-side evidence is not taken from the executor's own account: the repository
+  carries a `pre-receive` hook that writes down Git's own `<old> <new> <ref>` line before deciding to
+  accept or reject, so "what was written" is what the **server** saw; and the repository's request count
+  separates "a second read after the refusal" from "a second write" (the write side has no ambiguity — one
+  receive-pack exchange is one attempt, so the count is pinned there rather than the read side's round
+  trips, which are a property of the Git protocol's negotiation). Its eleven cases: a controlled push moves
+  one ref of a real upstream from old to new, with the server seeing **exactly one** receive-pack and the
+  hook recording **one** line — the one update the authorization named; when a third party moves the ref
+  the compare-and-swap refuses and **does not overwrite**; a ref already at the target commit reports
+  `target_satisfied` rather than `confirmed` (**the write is not attributable**); an update the remote
+  explicitly rejects is not applied and is **not retried**; a signed new commit that is not in the upstream,
+  or an old that is not an ancestor of the new, is refused with **no write issued**; the **14** jobs that
+  would widen the write are each refused and **spend nothing** — a non-HTTPS address, a tag, a
+  `refs/heads/*` wildcard, a `+` force prefix, two refs, a `../..` traversal spelling, the all-zero oid
+  spellings of a delete and a create, a repository the authorization did not name (the victim is a real
+  repository **within that credential's reach**, so "it was not touched" is an assertion about a place a
+  write could have landed), a ref the authorization did not name, a commit pair the authorization did not
+  name, another credential, another credential version, and an authorization issued for a clone; **one
+  approval cannot write twice**; a redemption cannot be spent on another purpose; an upstream that cannot
+  be reached is killed and reaped inside the configured timeout, leaving no secret in the materialization
+  or scratch root, and the same executor then completes a real push immediately afterwards; the startup
+  sweep removes an abandoned scratch repository; and an incomplete push deployment is refused at startup.
+  **What this file cannot prove** is the OS-level separation of C from W — the whole chain runs under one
+  test process and one uid, and that boundary is a deployment property evidenced by the container-level
+  acceptance run (stated honestly in the same place as the clone acceptance run).

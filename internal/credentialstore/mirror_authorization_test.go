@@ -105,7 +105,7 @@ func TestTheTwoPurposesCannotBeSpentOnEachOther(t *testing.T) {
 
 		// The request is built by the clone fixture's own helper, so it declares the runtime a clone
 		// would — and it is refused before any of those values are compared.
-		_, err := fixture.resolver.Resolve(context.Background(), id, fixture.request(authorization))
+		_, err := fixture.resolver.Resolve(context.Background(), id, testResolverIdentity, fixture.request(authorization))
 		if !errors.Is(err, ErrAuthorizationPurpose) {
 			t.Fatalf("a mirror authorization on the clone path returned %v, want %v", err, ErrAuthorizationPurpose)
 		}

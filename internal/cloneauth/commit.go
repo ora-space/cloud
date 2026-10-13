@@ -27,15 +27,30 @@ const commitIDLength = 40
 // An empty value is refused here rather than being left to the presence rules, so every caller gets
 // one answer for "this is not a commit id" instead of an empty string that reads as absent in one
 // place and as a malformed id in another.
+//
+// The all-zero object id is refused as well. It is a well-formed spelling — 40 lowercase hexadecimal
+// characters — that names no commit at all: Git uses it as the null oid, and in a ref update it is
+// how "the ref does not exist" and "delete the ref" are written. A binding that carried it would sign
+// an authority whose subject is the absence of a subject, and the two requests the execution
+// authority refuses outright — creating a ref from nothing and deleting one — would be expressible
+// after all, as the value nobody looks at twice. Refusing it here is the structural spelling of that
+// refusal: there is no field, no flag and no spelling in which this package will sign "no commit".
 func ValidateCommit(commit string) error {
 	if len(commit) != commitIDLength {
 		return fmt.Errorf("%w: %q is not a %d-character commit id", ErrIncomplete, commit, commitIDLength)
 	}
+	null := true
 	for i := 0; i < len(commit); i++ {
 		c := commit[i]
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return fmt.Errorf("%w: %q is not a lowercase hexadecimal commit id", ErrIncomplete, commit)
 		}
+		if c != '0' {
+			null = false
+		}
+	}
+	if null {
+		return fmt.Errorf("%w: %q is the null object id, which names no commit", ErrIncomplete, commit)
 	}
 	return nil
 }

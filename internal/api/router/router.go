@@ -86,7 +86,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/tenants/:tid/members", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/members/:uid", "", []string{"role", "status", "version"}},
 		{"GET", GitCredentialPath, "", nil},
-		{"POST", GitCredentialPath, "", []string{"name", "repositoryScope", "token"}},
+		{"POST", GitCredentialPath, "", []string{"name", "repositoryScope", "token", "capabilities"}},
 		{"PUT", GitCredentialItemPath, "", []string{"token", "version"}},
 		{"DELETE", GitCredentialItemPath, "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/collaboration/targets", "", nil},
@@ -172,6 +172,9 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/start", "", []string{"version", "sessionId"}},
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/stop", "", []string{"version", "sessionId"}},
 		{"DELETE", "/api/v1/tenants/:tid/workspaces/:wid", "", []string{"version", "sessionId"}},
+		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/pushes", "", nil},
+		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/pushes", "", []string{"requestId", "ref", "oldCommit", "newCommit"}},
+		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/pushes/:pushId", "", nil},
 		{"GET", "/api/v1/tenants/:tid/clones", "", nil},
 		{"POST", "/api/v1/tenants/:tid/clones", "", []string{"requestId", "repository", "branch"}},
 		{"GET", "/api/v1/tenants/:tid/clones/:cloneId", "", nil},
@@ -411,7 +414,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), PushID: c.Param("pushId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 			}
@@ -525,7 +528,10 @@ func validField(name string, value any) bool {
 		}
 		_, e := n.Int64()
 		return e == nil
-	case "ids":
+	case "ids", "capabilities":
+		// A list of strings, and nothing else. For `capabilities` that is as far as the boundary goes:
+		// whether the members are a set this build can store is the vocabulary's question and the core
+		// answers it, so a client error here means the value was not a list of strings at all.
 		arr, ok := value.([]any)
 		if !ok {
 			return false

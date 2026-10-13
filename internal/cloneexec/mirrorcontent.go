@@ -52,34 +52,9 @@ func mirrorArguments(helper, address, ref, sslCAInfo string) ([]string, error) {
 	if err := validateMirrorRef(ref); err != nil {
 		return nil, err
 	}
-	if sslCAInfo != "" {
-		if err := validateExecutablePath(sslCAInfo); err != nil {
-			return nil, fmt.Errorf("git certificate authority file: %w", err)
-		}
-	}
-	arguments := []string{
-		"-c", "protocol.allow=never",
-		"-c", "protocol.https.allow=always",
-		"-c", "protocol.ssh.allow=never",
-		"-c", "protocol.file.allow=never",
-		"-c", "protocol.ext.allow=never",
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.askPass=",
-		"-c", "core.symlinks=false",
-		"-c", "credential.helper=",
-		"-c", "credential.helper=" + helper,
-		"-c", "credential.useHttpPath=true",
-		"-c", "http.followRedirects=false",
-		"-c", "http.proxy=",
-		"-c", "http.sslVerify=true",
-		"-c", "submodule.recurse=false",
-		"-c", "fetch.recurseSubmodules=false",
-		"-c", "filter.lfs.smudge=",
-		"-c", "filter.lfs.process=",
-		"-c", "filter.lfs.required=false",
-	}
-	if sslCAInfo != "" {
-		arguments = append(arguments, "-c", "http.sslCAInfo="+sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	if err != nil {
+		return nil, err
 	}
 	// The address is the deployment's spelling, which is what Git must dial; it is not canonicalized
 	// here, because a fetch target is an address and not an identity. The identity was bound and

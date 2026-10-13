@@ -489,3 +489,95 @@ func TestGitCredentialServiceRefusalsBecomeReasonCodes(t *testing.T) {
 		})
 	}
 }
+
+// TestAPushCapableCredentialIsCreatedDeliberatelyAndRestoresNoAuthority is the provisioning path the
+// push capability needed, and the four things that make it a boundary rather than a switch.
+//
+// Before this, `POST /git-credentials` wrote `["clone"]` unconditionally, so no reference in any
+// deployment could permit a push and every push approval was refused at the capability check. The
+// field is the smallest hole that closes: it exists on the create alone, and it is optional, so the
+// body every existing client sends still produces the reference it produced before.
+//
+// The other three assertions are what keep it from being a way to widen authority: the set is refused
+// rather than repaired when it is not the vocabulary's own spelling; a rotation rewrites material and
+// leaves the set exactly as it was (nothing upgrades a credential in place, and nothing downgrades one
+// either); and a reference that permits a push does not permit anything else — it is accepted by the
+// push admission and refused by the clone admission, which is the separation the capability set exists
+// to express.
+func TestAPushCapableCredentialIsCreatedDeliberatelyAndRestoresNoAuthority(t *testing.T) {
+	f := setup(t)
+	f.store.Secrets = &recordingSecrets{}
+
+	readOnly := f.call("POST", f.path("/git-credentials"), core.Object{"name": "read only", "repositoryScope": credentialScope, "token": credentialToken}, uuid.NewString(), 201)
+	if got := fmt.Sprint(readOnly["capabilities"]); got != "[clone]" {
+		t.Fatalf("a create that names no capabilities must still produce the clone-only reference: %s", got)
+	}
+	// The same set is refused when it is not the vocabulary's spelling, and the refusal happens before
+	// the handoff, so a rejected request stores no reference and no material.
+	f.failAs(f.user, "POST", f.path("/git-credentials"), core.Object{"name": "widened", "repositoryScope": credentialScope, "token": credentialToken, "capabilities": []any{"clone", "clone"}}, uuid.NewString(), 400, "invalid_credential_capabilities")
+	f.failAs(f.user, "POST", f.path("/git-credentials"), core.Object{"name": "widened", "repositoryScope": credentialScope, "token": credentialToken, "capabilities": []any{}}, uuid.NewString(), 400, "invalid_credential_capabilities")
+	f.failAs(f.user, "POST", f.path("/git-credentials"), core.Object{"name": "widened", "repositoryScope": credentialScope, "token": credentialToken, "capabilities": []any{"admin"}}, uuid.NewString(), 400, "invalid_credential_capabilities")
+	if f.scalar("SELECT count(*) FROM credential_refs WHERE name='widened'") != 0 {
+		t.Fatal("a refused capability set still created a reference")
+	}
+
+	writer := f.call("POST", f.path("/git-credentials"), core.Object{"name": "writer", "repositoryScope": credentialScope, "token": credentialToken, "capabilities": []any{"push"}}, uuid.NewString(), 201)
+	if got := fmt.Sprint(writer["capabilities"]); got != "[push]" {
+		t.Fatalf("a requested push capability must be stored as asked: %s", got)
+	}
+	var stored string
+	must(t, f.store.Pool.QueryRow("SELECT capabilities::text FROM credential_refs WHERE id=$1", writer.S("id")).Scan(&stored))
+	if stored != `["push"]` {
+		t.Fatalf("the row does not carry the set the request declared: %s", stored)
+	}
+
+	rotated := f.call("PUT", f.path("/git-credentials/"+writer.S("id")), core.Object{"token": credentialToken + "-rotated", "version": 1}, uuid.NewString(), 200)
+	if got := fmt.Sprint(rotated["capabilities"]); got != "[push]" {
+		t.Fatalf("rotation must not change what a credential permits: %s", got)
+	}
+	// The field is a create's alone. A rotate that carried it would be an attempt to widen a reference
+	// that already exists, so the boundary refuses the name outright instead of reading and ignoring it,
+	// and the row is asserted unchanged afterwards.
+	f.failAs(f.user, "PUT", f.path("/git-credentials/"+writer.S("id")), core.Object{"token": credentialToken + "-second", "version": 2, "capabilities": []any{"clone", "push"}}, uuid.NewString(), 400, "unknown_field")
+	var afterRotate string
+	must(t, f.store.Pool.QueryRow("SELECT capabilities::text FROM credential_refs WHERE id=$1", writer.S("id")).Scan(&afterRotate))
+	if afterRotate != `["push"]` {
+		t.Fatalf("a refused rotate changed what the credential permits: %s", afterRotate)
+	}
+	// The one thing a deployment must never be able to do by accident is widen an existing reference,
+	// so the clone-only credential created above is re-read here rather than assumed unchanged.
+	var readOnlyStored string
+	must(t, f.store.Pool.QueryRow("SELECT capabilities::text FROM credential_refs WHERE id=$1", readOnly.S("id")).Scan(&readOnlyStored))
+	if readOnlyStored != `["clone"]` {
+		t.Fatalf("a second credential's creation changed the first one's capabilities: %s", readOnlyStored)
+	}
+
+	// Two Projects over the same repository, one per credential, so the two admissions are asked the
+	// same question about two references that differ only in their capability set.
+	pushProject := f.call("POST", f.path("/projects"), core.Object{"name": "Writer", "repositoryUrl": credentialScope, "defaultBranch": "main", "credentialRefId": writer.S("id")}, "push-capable", 202)
+	readProject := f.call("POST", f.path("/projects"), core.Object{"name": "Reader", "repositoryUrl": credentialScope, "defaultBranch": "main", "credentialRefId": readOnly.S("id")}, "read-only", 202)
+	approval := core.Object{"requestId": "approve-one", "ref": "refs/heads/main", "oldCommit": strings.Repeat("a", 40), "newCommit": strings.Repeat("b", 40)}
+
+	// The clone-only reference is refused exactly as it was before this change: the write path does not
+	// accept a reference that may only read, and `clone` is not a substitute for `push`.
+	f.failAs(f.user, "POST", f.path("/workspaces/"+readProject.O("workspace").S("id")+"/pushes"), approval, uuid.NewString(), 409, "repository_credential_capability_unsupported")
+
+	// The push-capable reference passes the capability check and is stopped by the next thing that is
+	// true of this deployment: no executor is installed, so the approval is recorded and settled as
+	// failed rather than left looking dispatched, and no authorization is ever signed for it.
+	accepted := f.call("POST", f.path("/workspaces/"+pushProject.O("workspace").S("id")+"/pushes"), approval, uuid.NewString(), 202)
+	if accepted.S("state") != "failed" || accepted.S("resultCode") != "push_executor_unavailable" {
+		t.Fatalf("an approved push on an executor-less deployment must settle as failed: %v", accepted)
+	}
+	if accepted.S("credentialRefId") != writer.S("id") || accepted.N("credentialRefVersion") != 2 {
+		t.Fatalf("the approval did not bind the credential version it was approved against: %v", accepted)
+	}
+	if accepted.S("authorizationId") == "" {
+		t.Fatal("the approval record must name the authorization it would have used")
+	}
+	// A capability is not a write. The deployment performed none, and the reference is unchanged by
+	// having been approved against once.
+	if f.scalar("SELECT count(*) FROM clone_executions") != 0 {
+		t.Fatal("a push approval produced an execution")
+	}
+}
