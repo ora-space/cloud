@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,9 +248,10 @@ func TestTheDispatcherReportsEveryVerdictTheExecutorCanState(t *testing.T) {
 //
 // A coded refusal is a concluded answer about this attempt and is handed back with the executor's own
 // code, which is what lets the audit say *why* the write did not happen. Anything else — a dial failure,
-// a reset connection, an unreadable answer — is handed back as the executor being unavailable, and the
-// caller settles that as an uncertain outcome rather than a failure, because an executor that could not
-// be reached may still have written.
+// a reset connection, an unreadable answer — carries no code at all, because the caller settles by code:
+// an error with one is recorded as a concluded failure, and an executor that could not be reached may
+// still have written. These cases assert the *shape* the caller reads, which is why the two halves are
+// asserted as "coded" and "not coded" rather than as two codes that happen to differ.
 func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 	t.Run("a coded refusal keeps its code", func(t *testing.T) {
 		scene := newPushTestScene(t)
@@ -267,28 +269,37 @@ func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 	})
 
 	t.Run("an unreachable executor is not a refusal", func(t *testing.T) {
+		// The executor dying mid-flight is the case this shape exists for: it may have written before it
+		// died, so the approval has to settle uncertain. A code here — the unavailable one included —
+		// would be read by `dispatchPush` as a concluded failure and would record a possible write as a
+		// refusal.
 		scene := newPushTestScene(t)
-		scene.client.err = errors.New("dial tcp: connection refused")
+		scene.client.err = errors.New("clone executor is unreachable: dial tcp: connection refused")
 
 		_, err := scene.dispatcher.Execute(context.Background(), scene.execution)
-		code, coded := pushRefusalCode(err)
-		if !coded || code != cloneexec.ReasonCodeUnavailable {
-			t.Fatalf("an unreachable executor read back as (%q, %v), want the unavailable code", code, coded)
+		if code, coded := pushRefusalCode(err); coded {
+			t.Fatalf("an unreachable executor read back as the concluded refusal %q", code)
+		}
+		var fault *Fault
+		if errors.As(err, &fault) {
+			t.Fatalf("an unreachable executor reached the caller as a coded fault %q", fault.Code)
+		}
+		if !strings.Contains(err.Error(), "unreachable") {
+			t.Fatalf("the transport failure lost its own description: %v", err)
 		}
 	})
 
-	t.Run("a refusal with no code is an unavailable executor", func(t *testing.T) {
-		// A coded refusal whose code is empty is the one shape the caller cannot classify: an empty code
-		// is not a code, it would match no entry in any table of terminal refusals, and passing it through
-		// would settle the approval with nothing. It is therefore reported as the executor being
-		// unavailable, which is true of a component that cannot say why it refused.
+	t.Run("a refusal with no code is not a refusal either", func(t *testing.T) {
+		// A coded refusal whose code is empty is the one shape neither half can claim: an empty code is
+		// not a code, so it is not a concluded answer, and the caller cannot settle a write on it. It is
+		// therefore passed through uncoded, which is the conservative direction — "no component said
+		// anything" is the unknown outcome, not the concluded one.
 		scene := newPushTestScene(t)
 		scene.client.err = pushClientRefusal{}
 
 		_, err := scene.dispatcher.Execute(context.Background(), scene.execution)
-		code, coded := pushRefusalCode(err)
-		if !coded || code != cloneexec.ReasonCodeUnavailable {
-			t.Fatalf("a codeless refusal read back as (%q, %v), want the unavailable code", code, coded)
+		if code, coded := pushRefusalCode(err); coded {
+			t.Fatalf("a codeless refusal read back as the concluded refusal %q", code)
 		}
 	})
 }
@@ -319,6 +330,92 @@ func TestTheDispatcherRefusesToSignFromAnIncompleteDeployment(t *testing.T) {
 			}
 			if len(scene.client.jobs) != 0 {
 				t.Fatalf("an incomplete deployment reached the executor %d times", len(scene.client.jobs))
+			}
+		})
+	}
+}
+
+// TestAnInterruptedWriteIsNotSettledAsAConcludedFailure is the direction a write must never be settled
+// in, measured where the settlement is actually made rather than at the dispatcher's return.
+//
+// The cases are the shapes an interrupted dispatch produces: the executor killed after it accepted the
+// write, and a reply that arrived but could not be read back. Neither establishes anything about the
+// remote, so both must leave the approval `uncertain` under `push_result_unknown` — never `failed`,
+// which would record a possible write as a refusal, and never `succeeded`.
+//
+// It is deliberately driven through the real accepting route, the real `dispatchPush` and the real
+// settlement, with the **production** dispatcher installed, and with errors spelled the way the shipped
+// `*cloneexec.Client` spells them. A case that answered at the `PushExecutor` boundary instead would
+// hand `dispatchPush` a plain error directly — which is exactly the shape the dispatcher used to destroy
+// on the way — and would pass against the defect. That is the gap the container-level run found, and
+// this is its smallest reproduction.
+func TestAnInterruptedWriteIsNotSettledAsAConcludedFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "the executor died after it accepted the write", err: errors.New("clone executor is unreachable: EOF")},
+		{name: "the reply could not be read back", err: errors.New("clone executor returned an unreadable push result")},
+		{name: "the route answered with no reason code", err: errors.New("the push route answered 502 with no reason code")},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := dispatcherDB(t)
+			scene := seedPushScene(t, store, `["push"]`)
+			dispatch := newPushTestScene(t)
+			dispatch.client.err = testCase.err
+			store.SetPushExecutor(dispatch.dispatcher)
+
+			out, _, err := scene.pushRequest(store, "key-interrupted", "req-interrupted", pushRef, pushOldCommit, pushNewCommit)
+			if err != nil {
+				t.Fatalf("approve a push: %v", err)
+			}
+
+			want := pushUncertain + "/" + pushResultUnknown
+			if got := pushState(t, store, out.S("id")); got != want {
+				t.Fatalf("an interrupted write settled as %q, want %q", got, want)
+			}
+			// Uncertain is a settlement, not a row left behind: an approval Cloud never settled would read
+			// `dispatching`, which is a different fact from "the outcome could not be established".
+			if row := pushRow(t, store, out.S("id")); row["settledAt"] == nil {
+				t.Fatal("an uncertain settlement left the approval looking dispatched")
+			}
+			// Nothing was observed, so nothing is recorded as observed. A value here would be Cloud
+			// inventing evidence about a remote it never heard from.
+			if got := pushObserved(t, store, out.S("id")); got != "" {
+				t.Fatalf("an interrupted write recorded the observation %q", got)
+			}
+			// The dispatcher got all the way to the transport, so the attempt really was made and the
+			// authorization really was minted for it: a case that never reached the client would assert
+			// nothing about the classification.
+			if len(dispatch.client.jobs) != 1 {
+				t.Fatalf("the executor was asked %d times, want exactly 1", len(dispatch.client.jobs))
+			}
+			if dispatch.client.jobs[0].Authorization == "" {
+				t.Fatal("the attempt carried no signed authorization")
+			}
+
+			// An unknown outcome is never retried, and the rule is enforced by the settlement rather than
+			// by the caller's restraint: the authorization is single-use, so a second dispatch would
+			// either be refused at redemption having burned an audit trail, or — worse — would be a
+			// second write to the same ref.
+			store.dispatchPush(context.Background(), out.S("id"))
+			if len(dispatch.client.jobs) != 1 {
+				t.Fatalf("an uncertain approval was dispatched %d times, want exactly 1", len(dispatch.client.jobs))
+			}
+
+			// And a report that arrives after the settlement cannot revise it. This is the shape the
+			// interruption leaves behind: a write that did land, reported by a component that finally
+			// answers. The first record is the fact, and a later one may not turn it into a success.
+			store.settlePushObserved(context.Background(), out.S("id"), pushSucceeded, pushApplied, pushNewCommit)
+			if got := pushState(t, store, out.S("id")); got != want {
+				t.Fatalf("a late report rewrote an interrupted write to %q", got)
+			}
+			// The two unavailable outcomes are different facts and are not interchangeable: this
+			// deployment has an executor and reached it, so its approval must never be recorded as a
+			// deployment that has none.
+			if got := pushState(t, store, out.S("id")); got == pushFailed+"/"+pushExecutorUnavailable {
+				t.Fatal("a deployment with an executor was settled as a deployment without one")
 			}
 		})
 	}

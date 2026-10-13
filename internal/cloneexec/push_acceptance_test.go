@@ -33,9 +33,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -410,6 +412,15 @@ type pushDeployment struct {
 // that can bind a write: neither component could mint one.
 func newPushDeployment(t *testing.T, pushTimeout time.Duration) *pushDeployment {
 	t.Helper()
+	return newPushDeploymentWith(t, pushTimeout, nil)
+}
+
+// newPushDeploymentWith wires the same chain with the executor's listener decorated, which is how a case
+// reaches the one condition the chain cannot produce by itself: an executor that ran and whose answer
+// never arrived. A nil decorator is the undecorated chain, so every other case in this file keeps
+// meeting exactly the listener it met before.
+func newPushDeploymentWith(t *testing.T, pushTimeout time.Duration, decorate func(http.Handler) http.Handler) *pushDeployment {
+	t.Helper()
 	pki := newTestPKI(t)
 	signingPublic, signingKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -483,7 +494,11 @@ func newPushDeployment(t *testing.T, pushTimeout time.Duration) *pushDeployment 
 	if err != nil {
 		t.Fatalf("build the executor server: %v", err)
 	}
-	executorServer := pki.startServer(t, server.Handler(), executorServerIdentity, pki.pool)
+	handler := server.Handler()
+	if decorate != nil {
+		handler = decorate(handler)
+	}
+	executorServer := pki.startServer(t, handler, executorServerIdentity, pki.pool)
 	client, err := cloneexec.NewClient(cloneexec.ClientConfig{
 		Endpoint: executorServer.URL,
 		TLS:      pki.clientTLS(t, cloneDispatcherIdentity),
@@ -612,6 +627,117 @@ func TestAControlledPushMovesOneRefOfARealUpstream(t *testing.T) {
 	}
 	deployment.assertNothingWasLeftBehind(t)
 	deployment.assertNoSecretInLog(t)
+}
+
+// loseThePushAnswer runs the push route and then breaks the connection instead of answering.
+//
+// The handler runs to completion against a discarded writer, so everything the job does really happens —
+// the authorization is redeemed and spent, the upstream is read, the update is applied, the material is
+// destroyed — and only the reply is lost. That is the shape of an executor killed between accepting the
+// write and answering, and it is the ambiguity the settlement rule is about: nothing about the write can
+// be established from the caller's side, so the caller must not conclude anything.
+func loseThePushAnswer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/push-executions" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(httptest.NewRecorder(), r)
+		// `ErrAbortHandler` is the server's own signal for "close this connection without a response and
+		// without a stack trace". It is how the write below lands while the answer does not.
+		panic(http.ErrAbortHandler)
+	})
+}
+
+// answerWithoutACode stands in for whatever sits between Cloud and the executor and answers in its place.
+//
+// The job never runs, and the reply is still not evidence of that: a caller cannot tell this from a write
+// whose answer was lost, which is why it must not be read as the executor having refused anything.
+func answerWithoutACode(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/push-executions" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<html><body><h1>502 Bad Gateway</h1></body></html>"))
+	})
+}
+
+// TestAnInterruptedWriteIsNotAConcludedFailure is the real-boundary half of the interruption rule, and
+// it is the case a container-level run found first.
+//
+// The two shapes are the two ways a reply goes missing around a write: the executor ran and its answer
+// was lost, and something else answered in its place. What the test asserts is deliberately *not* a
+// verdict — this layer has no approval row and cannot reach one, so Cloud's settlement is measured in
+// `internal/core`. What it asserts is what the chain actually hands over: for the first shape that the
+// write really landed (proved from the upstream's side, and from the executor having got far enough to
+// destroy its material), and for both shapes that the error Cloud receives is **not** a refusal. An
+// error carrying a code is what a caller settles a concluded failure with, so a code here is the defect:
+// it would record a write that may have landed as one that did not.
+func TestAnInterruptedWriteIsNotAConcludedFailure(t *testing.T) {
+	cases := []struct {
+		name     string
+		decorate func(http.Handler) http.Handler
+		// wrote says whether the job reached the upstream, which is what makes the first shape the
+		// dangerous one: there is a real write behind an answer nobody received.
+		wrote bool
+	}{
+		{name: "the executor accepted the write and the answer was lost", decorate: loseThePushAnswer, wrote: true},
+		{name: "an intermediary answered in the executor's place", decorate: answerWithoutACode},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			deployment := newPushDeploymentWith(t, 0, testCase.decorate)
+			repository := deployment.repository
+			version := deployment.storeCredential(t, repository.Token)
+			repository.forgetHookUpdates(t)
+
+			_, err := deployment.dispatcher.Execute(context.Background(), deployment.write(version, repository.Old, repository.New).execution())
+			if err == nil {
+				t.Fatal("an interrupted dispatch reported an outcome")
+			}
+			// The two shapes a coded error can take, both of which would settle the approval as a
+			// concluded failure. Neither may appear here.
+			var fault *core.Fault
+			if errors.As(err, &fault) {
+				t.Fatalf("an unreadable answer was reported as Cloud's own refusal %q", fault.Code)
+			}
+			var refusal *cloneexec.DispatcherRefusal
+			if errors.As(err, &refusal) {
+				t.Fatalf("a reply no component vouched for was reported as the executor's refusal %q", refusal.Code)
+			}
+
+			updates := repository.hookUpdates(t)
+			if testCase.wrote {
+				// The write is real: the upstream was asked to apply exactly the authorized update, and the
+				// ref holds the authorized new commit. This is what makes the settlement direction matter
+				// rather than theoretical.
+				want := repository.Old + " " + repository.New + " " + pushRef
+				if len(updates) != 1 || updates[0] != want {
+					t.Fatalf("the upstream was asked to apply %v, want exactly one update %q", updates, want)
+				}
+				if got := repository.ref(t, pushRef); got != repository.New {
+					t.Fatalf("the upstream's %s = %q, want the authorized commit %q", pushRef, got, repository.New)
+				}
+				// And the executor got far enough to do everything a completed push does, including
+				// destroying the material: the answer is the only thing that went missing, so a caller
+				// reading the failure as "nothing happened" would be reading it wrong.
+				deployment.assertNothingWasLeftBehind(t)
+				deployment.assertNoSecretInLog(t)
+			} else {
+				// Nothing ran, so there is nothing at the upstream. Cloud still cannot conclude that from
+				// the reply it got, which is the whole point of the case.
+				if len(updates) != 0 {
+					t.Fatalf("a job that never ran reached the upstream: %v", updates)
+				}
+				if got := repository.ref(t, pushRef); got != repository.Old {
+					t.Fatalf("the upstream's %s = %q, want it untouched at %q", pushRef, got, repository.Old)
+				}
+			}
+		})
+	}
 }
 
 // TestThePushDoesNotOverwriteARefAnotherWriterMoved is the compare-and-swap's first refusal.

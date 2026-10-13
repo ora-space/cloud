@@ -81,12 +81,18 @@ const OperationMirrorPrepare = "mirror_prepare"
 //
 // The operation is not the capability's only reader, and that is the point: `Verify` refuses a
 // payload whose capability set is not exactly what its operation permits, so a token that claims to
-// be a push authorization while carrying a clone's set never becomes a verified binding. What is
-// still missing on this path is the work itself — no component issues or executes a push yet, and
-// every consumer that does not serve this operation refuses it by name
-// (`internal/credentialstore` answers `ErrAuthorizationPurpose`; `internal/cloneexec` has no push
-// job). The operation exists so those refusals are decisions about a defined purpose rather than
-// about a value nobody has heard of.
+// be a push authorization while carrying a clone's set never becomes a verified binding. The path
+// itself exists end to end: Cloud signs one authorization per approved write and dispatches it
+// (`internal/core`'s push dispatcher), the executor redeems it and performs the write
+// (`internal/cloneexec`'s push job and route), and the Credential Service serves the write purpose.
+//
+// None of that is on by default, and the deployment is where that is decided. A deployment that has
+// not installed the dispatcher admits an approval, mints no authorization for it and settles it as
+// having no executor; the executor answers `credential_executor_unavailable` where its push
+// capability was not configured; and a component that does not serve the purpose refuses it by name
+// (`internal/credentialstore` answers `ErrAuthorizationPurpose`). Those refusals are decisions about
+// a defined purpose rather than about a value nobody has heard of, which is what this operation
+// exists to make possible.
 const OperationPush = "push"
 
 // permittedCapabilities returns the one capability set an operation permits.

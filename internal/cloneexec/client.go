@@ -150,9 +150,10 @@ func (c *Client) Dispatch(ctx context.Context, job Job) (Result, error) {
 //   - a non-200 carrying a code is the executor saying this job never reached the write. Cloud settles
 //     that as a confirmed failure with that code, which is faithful only because the executor's own
 //     contract is that a job which reached the write answers 200 with a state.
-//   - a transport failure, a timeout, a killed connection, or a 200 whose body cannot be read is *not*
-//     an outcome. It is returned as a plain error with no refusal attached, and the caller must settle
-//     the request as uncertain. Returning a refusal here would record a possible write as a failure.
+//   - a transport failure, a timeout, a killed connection, a 200 whose body cannot be read, or a non-200
+//     carrying no code at all is *not* an outcome. Each is returned as a plain error with no refusal
+//     attached, and the caller must settle the request as uncertain. Returning a refusal here would
+//     record a possible write as a failure.
 //   - a 200 whose state is not one of the five is treated the same way. An unrecognized state is not a
 //     state, and reading it as "not applied" would be inferring an outcome the executor did not state.
 //
@@ -184,8 +185,16 @@ func (c *Client) Push(ctx context.Context, job PushJob) (PushResult, error) {
 		var refusal struct {
 			Code string `json:"code"`
 		}
+		// Only a code the executor itself wrote is the executor's refusal, and only that is returned as
+		// one. A non-200 whose body cannot be read as a code — a gateway's error page, a truncated reply,
+		// an empty body — is not evidence about the job at all: the request may have reached the executor
+		// and the write may have happened, and an intermediary's answer cannot rule that out. It is
+		// therefore returned as a plain error with no refusal attached, so the caller settles the request
+		// as uncertain. Substituting a code here would do the opposite of what this method exists for: it
+		// would let a reply no component vouched for settle a possible write as a concluded failure. The
+		// other two routes keep the substitution, because neither of them can have written anything.
 		if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Code == "" {
-			refusal.Code = ReasonCodeUnavailable
+			return PushResult{}, fmt.Errorf("the push route answered %d with no reason code", response.StatusCode)
 		}
 		return PushResult{}, &DispatcherRefusal{Code: refusal.Code, Status: response.StatusCode}
 	}

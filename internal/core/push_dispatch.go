@@ -82,17 +82,21 @@ type PushDispatcher struct {
 
 // Execute signs one authorization for an approved write and dispatches it.
 //
-// The error it returns is a `*Fault` carrying a reason code in every case, and which code is the whole
-// of what the caller settles on. A coded refusal from the executor — a bad job, a refused authorization,
-// a fetch that failed, a write that is not expressible — is a concluded answer about *this* attempt and
-// comes back with its own code. Anything else is an executor that could not be reached or could not be
-// understood, and comes back as the executor being unavailable.
+// The two answers it can return are the two the caller's settlement distinguishes, and they are kept
+// apart by whether the error carries a reason code. A coded refusal from the executor — a bad job, a
+// refused authorization, a fetch that failed, a write that is not expressible — is a concluded answer
+// about *this* attempt, and it comes back as a `*Fault` carrying the executor's own code.
 //
-// That second case is the one the caller must not mistake for the first. It is returned as an error
-// rather than as a verdict on purpose: a dispatcher that answered `PushUnknown` here would be asserting
-// an outcome, and the caller's rule is that an unreachable executor is settled uncertain — not failed,
-// because the write may have landed, and not successful, because nothing was established. The caller
-// reaches that conclusion from the error, so the error must not look like a result.
+// Anything else is an executor that could not be reached or could not be understood. It comes back as an
+// error with **no** code, which is what makes the caller settle the approval `uncertain` rather than
+// `failed`: the write may have landed, so recording a refusal would be Cloud asserting an outcome it was
+// not told. The distinction is carried by the code rather than by a verdict type for exactly this reason
+// — `dispatchPush` classifies by code, and an error that has one is a concluded failure to it.
+//
+// It is an error rather than the `PushUnknown` verdict on purpose, and the two are different facts even
+// though both settle uncertain: `PushUnknown` is a verdict Cloud reached about the *remote*, while this
+// is Cloud admitting it could not read its *own executor*. Keeping them apart is what lets the settlement
+// record which component could not answer.
 //
 //nolint:gocritic // By value on purpose: the execution is a snapshot the approval transaction decided, and signing a copy is what keeps that decision and the signed bytes the same one.
 func (d *PushDispatcher) Execute(ctx context.Context, push PushExecution) (PushOutcome, error) {
@@ -202,16 +206,25 @@ func pushVerdictOf(state cloneexec.PushState) (PushVerdict, bool) {
 
 // pushDispatchFault names a dispatch failure in the form the caller classifies.
 //
-// The two halves are the ones every dispatch boundary in this package distinguishes: a refusal the
-// executor decided arrives with its own stable code, while a transport failure has no code of its own
-// and is reported as the executor being unavailable. Reporting the second as the first would let an
-// outage settle an approval as a concluded refusal — and for a write that is the wrong direction, since
-// an executor that could not be reached may still have written.
+// The two halves are the ones every dispatch boundary in this package distinguishes, and preserving the
+// difference between them is the whole of what this function may do. A refusal the executor decided
+// arrives with its own stable code and is handed back as a coded fault; a transport failure, a lost
+// reply, or an answer that could not be read carries no code and is handed back **as it is**.
 //
-// A refusal that carries no code is classified as unavailable rather than passed through as an empty
-// code. The shipped client substitutes the unavailable code for an empty one before returning, so this
-// guards the interface rather than that client: an empty code is not a code, and a fault with no code is
-// the one shape the caller cannot classify.
+// The second half is deliberately given no code of its own, and the reason is the caller's rule rather
+// than a shortage of names. A code is what `dispatchPush` settles a *concluded* failure with, and an
+// executor that could not be reached may still have written: inventing a code here would record a
+// possible write as a refusal, which is the one direction a write must never be settled in. Left
+// uncoded, the error reaches `dispatchPush` as the unknown case it is and settles `uncertain` under
+// `push_result_unknown`. This is not a hypothetical path: it is what an interrupted dispatch — the
+// executor killed after it accepted the write — actually produces, and the container-level run measures
+// the settlement it must end in.
+//
+// A refusal that carries no code is treated the same way, and for the same reason rather than as a
+// fallback: an empty code is not evidence that the executor decided anything. The shipped client
+// substitutes a code for an empty one only when the executor itself answered with a body this build
+// could read, so a codeless error arriving here is one no component vouched for, and the conservative
+// reading of "no component said anything" is the unknown outcome, not the concluded one.
 func pushDispatchFault(err error) error {
 	var refusal interface{ ReasonCode() string }
 	if errors.As(err, &refusal) {
@@ -219,5 +232,5 @@ func pushDispatchFault(err error) error {
 			return &Fault{Status: 409, Code: code}
 		}
 	}
-	return &Fault{Status: 409, Code: cloneexec.ReasonCodeUnavailable}
+	return err
 }

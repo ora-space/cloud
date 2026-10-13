@@ -41,9 +41,13 @@ const CapabilityClone Capability = "clone"
 // `["clone"]`: no default, migration or deployment-managed reference gains this member, and every
 // enforcement point — admission (`internal/core`, which admits only work whose required capability
 // the reference permits), signing (`permittedCapabilities`, which permits `push` to `OperationPush`
-// alone), execution (`internal/cloneexec`, which has no write path) and redemption
-// (`internal/credentialstore`, which refuses a purpose it does not serve) — still refuses what it
-// does not serve.
+// alone), execution (`internal/cloneexec`, whose push job re-compares the set before it touches the
+// network) and redemption (`internal/credentialstore`, which serves the write purpose only to an
+// authorization minted for it) — still refuses what it does not serve.
+//
+// Nor does it enable anything in a deployment by itself. The dispatcher and the executor's push
+// route are installed from configuration, and where they are absent the work is refused rather than
+// falling back to something else.
 const CapabilityPush Capability = "push"
 
 // capabilities is the complete vocabulary in its canonical order.
@@ -56,10 +60,10 @@ var capabilities = []Capability{CapabilityClone, CapabilityPush}
 
 // KnownCapability reports whether a value names a capability this vocabulary defines.
 //
-// It answers membership in the vocabulary, not whether the work the capability describes can be
-// performed by any particular component: `push` is a defined capability that no executor performs
-// yet, and the components that do not perform it refuse it on their own terms rather than by this
-// function answering false.
+// It answers membership in the vocabulary, not whether a particular deployment can perform the work
+// the capability describes: every member is performed by the executor today, but whether a deployment
+// installed that component is a deployment fact, and a component that does not serve a capability
+// refuses it on its own terms rather than by this function answering false.
 func KnownCapability(value Capability) bool {
 	return slices.Contains(capabilities, value)
 }
