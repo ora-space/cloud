@@ -49,7 +49,24 @@ func workspaceCloneDispatch(t *transaction, r *ControlRequest, operation, execut
 	require(input.S("repositoryUrl") == admissible.repository && input.S("branch") == admissible.branch, 409, "dispatch_conflict")
 	require(currentNode(t, wid).S("nodeId") == node, 409, "dispatch_conflict")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE operation_id=$1 AND (result IS NULL OR result->>'outcome'='clone_ready')", operation) == nil, 409, "dispatch_conflict")
-	t.exec("INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,input,dispatched_epoch,node_operation_id) VALUES($1,$2,$3,$4,$5,$6,$1::text)", execution, operation, wid, node, jsonText(input), r.Body.N("epoch"))
+	// D8 of the credentials decision: the registration records which credential admitted this clone, and
+	// which version it was admitted under. It is written with the row rather than derived later, because
+	// after a rotation nothing else can answer "which version did this clone use" — the reference now
+	// names a different one, and the authorization that was spent is gone. The pair comes from the
+	// admission `requireRepositoryAccess` performed above, in this same transaction, so the recorded
+	// number is the version that guard actually compared rather than one read a second time.
+	//
+	// `execution_credential_binding` pairs the columns, so the only two shapes the row can take are both
+	// and neither: an anonymous clone's absence is written here as two nulls, from this one decision,
+	// instead of being left to a column default that could set half of it.
+	var credentialID, credentialVersion any
+	if c := t.admittedCredential; c != nil {
+		credentialID, credentialVersion = c.CredentialID, c.CredentialVersion
+	}
+	t.exec(`INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,input,dispatched_epoch,
+			node_operation_id,credential_ref_id,credential_ref_version)
+		VALUES($1,$2,$3,$4,$5,$6,$1::text,$7::uuid,$8::bigint)`,
+		execution, operation, wid, node, jsonText(input), r.Body.N("epoch"), credentialID, credentialVersion)
 	return t.one("SELECT * FROM clone_executions WHERE execution_id=$1", execution)
 }
 
