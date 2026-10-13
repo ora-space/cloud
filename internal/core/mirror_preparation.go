@@ -13,12 +13,16 @@ const mirrorNotReady = "mirror_not_ready"
 // The order inside this function is the point. An anonymous Project returns immediately, so the
 // existing public-clone path is untouched. A credentialed Project then goes through the same guard a
 // credentialed clone already goes through, *before* anything is said about the mirror: that guard is
-// the single place a credentialed clone can be admitted, and every refusal it makes is one the
-// deployment and the reference fix durably. Answering `mirror_not_ready` in front of it would name the
-// mirror as the obstacle when the cause is elsewhere, and — because `mirror_not_ready` is retryable
-// while those refusals settle an Operation — would turn an Operation that settles today into one that
-// retries forever. The mirror gate therefore sits behind the existing guard and only becomes reachable
-// once an executor is installed and the reference actually permits the work.
+// the single place a credentialed clone can be admitted, and it is where a refusal about the
+// deployment or the reference keeps its own code rather than being reported as a mirror problem. The
+// mirror gate therefore sits behind it and only becomes reachable once an executor is installed and
+// the reference actually permits the work.
+//
+// Which of that guard's refusals are durable and which are retryable is the guard's classification,
+// not this gate's: `terminalCredentialRefusals` is the single list, and it is deliberately shorter
+// than "everything the reference can go wrong with" — a frozen reference is retryable, because an
+// owner can reconnect it. This gate must not turn any of them into `mirror_not_ready`, which would
+// name the mirror as the obstacle when the cause is elsewhere.
 //
 // Past that guard, readiness is re-established rather than trusted. The preparation's own `ready` state
 // is not evidence that the bindings still hold: a Project can be rebound to another credential, a
