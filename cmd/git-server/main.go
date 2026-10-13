@@ -58,10 +58,18 @@ func run() error {
 		maxMirror  = flag.Int64("max-mirror-bytes", 4<<30, "largest single mirror; reaching it fails the mirror instead of publishing a partial one")
 		maxVolume  = flag.Int64("max-volume-bytes", 64<<30, "largest total the mirror volume may hold")
 		grace      = flag.Duration("mirror-grace", 24*time.Hour, "how long an unreferenced mirror is kept before it may be reclaimed")
+		reclaim    = flag.Bool("mirror-reclaim", false, "reclaim mirrors Cloud no longer references; off unless the deployment asks for it")
+		reclaimFor = flag.Duration("mirror-reclaim-interval", 5*time.Minute, "how often the reclaim pass runs when -mirror-reclaim is set")
 	)
 	flag.Parse()
 	if *mirrorRoot == "" {
 		return errors.New("-mirror-root is required")
+	}
+	// A zero or negative interval would turn the reclaim pass into a busy loop against PostgreSQL and
+	// the mirror volume. It is refused at startup rather than clamped, because a deployment that asked
+	// for a period it did not get should hear about it instead of running at one it never chose.
+	if *reclaim && *reclaimFor <= 0 {
+		return errors.New("-mirror-reclaim-interval must be positive")
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return serve(settings{
@@ -69,6 +77,7 @@ func run() error {
 		identityDir: *identityTo, serverName: *serverName, tlsCert: *tlsCert, tlsKey: *tlsKey,
 		gitPath: *gitPath, timeout: *timeout,
 		originTimeout: *originWait, maxMirrorBytes: *maxMirror, maxVolumeBytes: *maxVolume, grace: *grace,
+		mirrorReclaim: *reclaim, reclaimInterval: *reclaimFor,
 	}, log)
 }
 
@@ -91,20 +100,22 @@ func listenerTLS(certFile, keyFile string) (*tls.Config, error) {
 // settings is everything the process was told, gathered so the wiring below takes one argument
 // rather than eight.
 type settings struct {
-	configPath     string
-	addr           string
-	mirrorRoot     string
-	originURL      string
-	identityDir    string
-	serverName     string
-	tlsCert        string
-	tlsKey         string
-	gitPath        string
-	timeout        time.Duration
-	originTimeout  time.Duration
-	maxMirrorBytes int64
-	maxVolumeBytes int64
-	grace          time.Duration
+	configPath      string
+	addr            string
+	mirrorRoot      string
+	originURL       string
+	identityDir     string
+	serverName      string
+	tlsCert         string
+	tlsKey          string
+	gitPath         string
+	timeout         time.Duration
+	originTimeout   time.Duration
+	maxMirrorBytes  int64
+	maxVolumeBytes  int64
+	grace           time.Duration
+	mirrorReclaim   bool
+	reclaimInterval time.Duration
 }
 
 // the wiring below must be readable as one snapshot rather than as a live shared struct.
@@ -167,6 +178,32 @@ func serve(s settings, log *slog.Logger) error {
 	state, err := gitserver.MirrorState(store, mirrors)
 	if err != nil {
 		return err
+	}
+	// The reclaim loop is a goroutine of this process, so it is started here and ends with the context
+	// the shutdown below already cancels. It is off unless the deployment set -mirror-reclaim: with the
+	// flag unset this process behaves exactly as it did before the loop existed, serving reads and
+	// removing nothing.
+	if s.mirrorReclaim {
+		reclaim, cancelReclaim := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runMirrorReclaim(reclaim, pool, mirrors, s.reclaimInterval, log)
+		}()
+		// The loop is stopped and awaited before the deferred pool close below runs, because a pass in
+		// flight holds a connection and closing the pool under it would report a failure on the way out
+		// of a shutdown that was not one. The wait is bounded: canceling the context ends every
+		// database call the pass makes, so what could still outlast it is a volume walk, and a
+		// shutdown must not be held open by housekeeping.
+		defer func() {
+			cancelReclaim()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				log.Warn("the mirror reclaim pass did not stop in time; exiting anyway")
+			}
+		}()
+		log.Info("mirror reclaim enabled", "interval", s.reclaimInterval.String(), "grace", s.grace.String())
 	}
 	server, err := gitserver.New(gitserver.Config{
 		Mirrors: mirrors, Origins: origins, State: state,

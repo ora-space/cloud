@@ -89,6 +89,9 @@ type Store struct {
 	// volume cap is a deployment budget, not a correctness boundary: two processes racing it can
 	// overshoot by at most one mirror, and nothing is corrupted when they do.
 	volumeLock sync.Mutex
+	// ownerUID is the uid every file this store creates is given, read from the root when it is
+	// opened. It is -1 when the deployment's owner is unknown, which switches adoption off.
+	ownerUID int
 }
 
 // New validates the configuration and creates the directory skeleton. It does not touch the
@@ -112,13 +115,93 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
-	store := &Store{cfg: cfg}
+	store := &Store{cfg: cfg, ownerUID: -1}
+	// The volume's owner is read from the root, because the root is the thing the deployment created
+	// and fixed the ownership of. A root that is not there yet is a deployment that has not prepared
+	// the volume, and then there is no owner to adopt: the skeleton below is created by this process
+	// for this process, which is correct for a single-identity store and is exactly the state a
+	// deployment is in before its setup step runs.
+	if info, err := os.Stat(cfg.Root); err == nil {
+		if uid, ok := volumeOwner(info); ok {
+			store.ownerUID = uid
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read mirror store root %s: %w", cfg.Root, err)
+	}
 	for _, dir := range []string{store.stagingDir(), store.publishedDir(), store.recordsDir(), store.locksDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("create mirror store directory %s: %w", dir, err)
+		if err := store.ensureDir(dir); err != nil {
+			return nil, err
 		}
 	}
 	return store, nil
+}
+
+// ensureDir creates one of the store's directories if it is missing, giving it the volume's owner.
+//
+// A directory this process created and left to its own identity is one the other process cannot
+// enter, which is the failure the deployment's own preparation step exists to prevent by fixing the
+// ownership before either process starts. Doing it here as well means the reader starting first on
+// an unprepared volume is no longer the difference between a working store and one the writer cannot
+// open.
+func (s *Store) ensureDir(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read mirror store directory %s: %w", dir, err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create mirror store directory %s: %w", dir, err)
+	}
+	if err := s.adopt(dir); err != nil {
+		return fmt.Errorf("create mirror store directory %s: %w", dir, err)
+	}
+	return nil
+}
+
+// adopt gives a path this process just created the identity of the volume's owner.
+//
+// This store's root is one directory two identities use: the credential executor publishes into it
+// as its own uid, and the Git Server reads it, reclaims what nothing references and records both of
+// those as root. A file belongs to whoever created it, so without this a record or a lock file
+// written by the reclaimer is a root-owned 0600 file the executor cannot open — and the store is
+// then unusable for the process that publishes into it, with the symptom appearing in the executor's
+// log as a permission error about a file it never wrote. The volume has one owner because the
+// deployment fixed it once (see the `mirror` volume in compose/git-server-setup.sh); every file in
+// it therefore belongs to that owner, whichever of the two processes made it.
+//
+// Adopting is a no-op for the process that already is the owner and a real change only for one with
+// the privilege to make it. A process that can do neither fails here, at the write, rather than
+// leaving behind a file the other identity will only discover later.
+func (s *Store) adopt(path string) error {
+	if s.ownerUID < 0 {
+		return nil
+	}
+	if err := os.Chown(path, s.ownerUID, -1); err != nil {
+		return fmt.Errorf("%w: give %s the mirror volume's owner: %v", ErrUnavailable, path, err)
+	}
+	return nil
+}
+
+// keyLock opens the key's lock file, creating it first if it is not there.
+//
+// The file is created here rather than by the lock library's own open because its ownership has to
+// be fixed before it exists as a lock: a lock file this process made and left to its own identity is
+// not a held lock, it is a file the other identity cannot open at all, and every publication of that
+// key would fail from then on. Whether the file exists says nothing — a lock is held or not, and
+// that is what the callers ask about.
+func (s *Store) keyLock(digest string) (*flock.Flock, error) {
+	path := filepath.Join(s.locksDir(), digest+".lock")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("%w: open the key lock: %v", ErrUnavailable, err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("%w: open the key lock: %v", ErrUnavailable, err)
+	}
+	if err := s.adopt(path); err != nil {
+		return nil, err
+	}
+	return flock.New(path), nil
 }
 
 // Root is the configured root, for a deployment that wants to report where its content lives.
@@ -165,7 +248,10 @@ func (s *Store) Begin(ctx context.Context, key Key) (*Preparation, error) {
 		return nil, err
 	}
 	digest := key.Digest()
-	lock := flock.New(filepath.Join(s.locksDir(), digest+".lock"))
+	lock, err := s.keyLock(digest)
+	if err != nil {
+		return nil, err
+	}
 	locked, err := lock.TryLockContext(ctx, 50*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("%w: waiting for the key lock: %v", ErrUnavailable, err)
@@ -477,6 +563,11 @@ func (s *Store) writeRecord(record *Record) error {
 	}
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	// Adopted before the rename, so a record only ever becomes visible as the record of the volume's
+	// owner — never, even briefly, as a file the other process may not read.
+	if err := s.adopt(name); err != nil {
+		return err
 	}
 	if err := os.Chmod(name, 0o600); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)

@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/gofrs/flock"
 )
 
 // SweepReport is what one sweep did, so a deployment can log a reclaim instead of assuming it.
@@ -115,7 +113,10 @@ func (s *Store) Sweep(ctx context.Context, live []Key, now time.Time) (SweepRepo
 // publication is in flight, and the next sweep will see the key again — losing one grace period is
 // cheaper than deleting content out from under a publication.
 func (s *Store) destroyUnreferenced(key Key) (bool, error) {
-	lock := flock.New(filepath.Join(s.locksDir(), key.Digest()+".lock"))
+	lock, err := s.keyLock(key.Digest())
+	if err != nil {
+		return false, err
+	}
 	free, err := lock.TryLock()
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrUnavailable, err)
@@ -158,7 +159,10 @@ func (s *Store) reclaimStaging() (int, error) {
 			// path this package does not recognize is how a cleanup becomes a deletion.
 			continue
 		}
-		lock := flock.New(filepath.Join(s.locksDir(), digest+".lock"))
+		lock, err := s.keyLock(digest)
+		if err != nil {
+			return removed, err
+		}
 		free, err := lock.TryLock()
 		if err != nil {
 			return removed, fmt.Errorf("%w: %v", ErrUnavailable, err)

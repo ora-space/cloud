@@ -14,20 +14,73 @@ import (
 //
 // It is written out rather than composed from helpers because this projection *is* the
 // authorization: an edit that adds or drops a predicate should have to be made here, in front of the
-// reader, rather than being inherited from a join. Four facts have to hold together, and each one is
-// a way a key could otherwise be published without the binding D2 requires:
+// reader, rather than being inherited from a join.
 //
-//   - the Workspace is not deleted, so a mirror is not kept alive by a Workspace that is gone;
-//   - it carries a pinned commit, because a Workspace whose clone never completed names no immutable
-//     content and a mirror of "whatever it last had" is exactly what D6's key exists to prevent;
-//   - its Project is active and not deleted, so a Project being torn down does not authorize
-//     publication while its mirrors are on their way to being reclaimed;
-//   - `clone_executions` has a completed clone for that Workspace, which is the execution binding:
-//     without it, a row that only claims a commit would be enough to put content in the store.
+// # Why this is a union of two halves
 //
-// `requested_ref` is carried rather than derived. The writer fetches that branch and refuses to
-// publish unless its tip is the pinned commit, so the branch Cloud recorded is what makes the mirror
-// the commit Cloud bound, rather than a mirror of wherever the branch has since moved to.
+// A mirror is kept while something still names it (D6), and in this channel two different somethings
+// can: a read that could be authorized right now, and a clone that has been authorized but has not
+// consumed the mirror yet. Each half takes the three facts of the key from the same columns its own
+// consumer reads them from, so "live" here means "one of the two would derive this key":
+//
+//   - the read half reproduces `gitReadState.mirrorKey` — the Workspace's Project, that Project's
+//     canonical upstream, and the pinned baseline. It is why a mirror a live sandbox is entitled to
+//     read can never be reclaimed out from under it;
+//   - the clone half reproduces `Store.cloneInputFor` — the preparation's own repository (which must
+//     still agree with the Project's, since a Project may be rebound) and the commit the preparation
+//     published. Between publication and the `node` -> `clone` gate that pins the baseline, the first
+//     half names nothing: the mirror is ready and the Workspace it was prepared for has no baseline
+//     yet. Without this half a sweep in that window would reclaim the mirror of an Operation that is
+//     in flight, and the gate would then refuse a Workspace whose mirror had just been published.
+//
+// The clone half is limited to Operations that have not settled. Its preparation row is durable and
+// outlives the Operation, so without that limit every mirror a credentialed Project ever prepared
+// would stay referenced forever by the first row that named it and the sweep would never reclaim
+// anything. Once the Operation settles, the Workspace either carries the pinned baseline — which is
+// the read half's business, and it keeps the mirror for as long as that Workspace lives — or it does
+// not, and the mirror is genuinely unreferenced.
+//
+// # The latitude this takes, and which way it points
+//
+// `cloneInputFor` compares three more things before it accepts a preparation: the pinned ref against
+// the Workspace's requested ref, the preparation's runtime generation against the Workspace's, and
+// the preparation's credential against the Project's. None of them is here. Each is a comparison that
+// can only *narrow* the set of keys a consumer would derive — the key is the Project, the repository
+// and the commit, and none of the three changes any of those — so this list is a superset of the keys
+// the two consumers would name, never a subset.
+//
+// The direction is deliberate. A key that is missing from this list is a mirror the sweep is free to
+// destroy, so an under-approximation would remove content a live consumer is about to read, while an
+// over-approximation only keeps a mirror until its Operation settles. Reproduction here is therefore
+// exact about the key and generous about the binding, and a case where the two disagree resolves
+// towards keeping the content.
+//
+// # What this replaced, and why
+//
+// The two halves above replaced a single query whose fourth conjunct was
+// `EXISTS (SELECT 1 FROM clone_executions c WHERE c.workspace_id = w.id AND c.result->>'outcome' =
+// 'clone_ready')`. That conjunct reads "this Workspace has already cloned", and it is the *reverse*
+// of this channel's order: D7 publishes the mirror before the clone, and the clone cannot succeed
+// until the mirror exists. A reference set defined by a completed clone therefore named no mirror
+// until the clone that needed one had already run, so a reconciling pass over it could neither
+// publish nor keep the mirror the clone was waiting for. It was also narrower than the truth in a
+// second way: `clone_executions` is not where the reader's authorization comes from — the Git Server
+// derives the key from the Workspace's baseline and asks only the store — so a Workspace whose clone
+// had completed while its baseline named a different commit would have kept a mirror nothing read.
+//
+// # The channel predicate
+//
+// Both halves are limited to Projects that name a credential, because that is what makes a mirror
+// this deployment's content channel at all: `cloneInputFor` sends a Project with no credential to its
+// upstream and never to a mirror, so a key derived for one would be content no clone input and no
+// reader is entitled to, published at the cost of copying a public repository into the volume.
+//
+// `pinned_ref` and `requested_ref` are carried rather than derived. The writer fetches that branch
+// and refuses to publish unless its tip is the pinned commit, so the branch Cloud recorded is what
+// makes the mirror the commit Cloud bound, rather than a mirror of wherever the branch has since
+// moved to. The two halves store the branch in different spellings — the gate's is qualified, the
+// Workspace's is not — and the fetch takes the short name, so the clone half strips the one prefix
+// the schema guarantees is there (0034's `pinned_ref` CHECK).
 const liveReferences = `
 SELECT w.project_id, p.tenant_id, p.repository_url, w.base_commit_id, w.requested_ref
 FROM workspaces w
@@ -35,10 +88,21 @@ JOIN projects p ON p.id = w.project_id
 WHERE w.deleted_at IS NULL
   AND w.base_commit_id IS NOT NULL
   AND p.deleted_at IS NULL
-  AND p.lifecycle = 'active'
-  AND EXISTS (SELECT 1 FROM clone_executions c
-              WHERE c.workspace_id = w.id AND c.result->>'outcome' = 'clone_ready')
-ORDER BY w.project_id, w.base_commit_id`
+  AND p.lifecycle IN ('provisioning', 'active')
+  AND p.credential_ref_id IS NOT NULL
+UNION ALL
+SELECT m.project_id, m.tenant_id, m.repository_url, m.commit_id,
+       substring(m.pinned_ref FROM length('refs/heads/') + 1)
+FROM mirror_preparations m
+JOIN projects p ON p.id = m.project_id
+JOIN operations o ON o.id = m.operation_id
+WHERE m.state = 'ready'
+  AND o.state NOT IN ('succeeded', 'failed')
+  AND p.deleted_at IS NULL
+  AND p.lifecycle IN ('provisioning', 'active')
+  AND p.credential_ref_id IS NOT NULL
+  AND m.repository_url = p.repository_url
+ORDER BY 1, 4`
 
 // liveProjects is every Project that may still be compared against a stored mirror.
 //
@@ -124,7 +188,8 @@ func (r *References) Binding(ctx context.Context) (Binding, error) {
 
 // dedupe removes repeated keys. Two Workspaces of one Project resolve to the same key by D6's
 // design — that is what makes key reuse work — and a repeat would otherwise make the writer look at
-// the same mirror twice and report it twice.
+// the same mirror twice and report it twice. The union produces the same overlap for a third reason:
+// a Workspace whose baseline the gate has already pinned satisfies both halves at once.
 func dedupe(references []Reference) []Reference {
 	seen := make(map[string]struct{}, len(references))
 	unique := references[:0]

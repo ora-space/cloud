@@ -61,9 +61,11 @@ type Binding struct {
 	// Workspace, because a Project that changed its upstream must withdraw the mirrors of the
 	// upstream it left even when no Workspace pins one any more.
 	Projects []Project
-	// Live holds the referenced keys. A key reaches this list only through a Workspace row whose
-	// clone Cloud recorded as ready and which carries a pinned commit, joined to the Project that
-	// owns it.
+	// Live holds the referenced keys: the ones a read could be authorized for right now, and the ones
+	// a clone that has not settled is about to consume. Both are derived from the same two facts the
+	// consumers derive them from — the Workspace's pinned baseline for the first, the preparation's
+	// published commit for the second — so this list is the keys Cloud's rows name, not a second
+	// opinion about them.
 	Live []Reference
 }
 
@@ -181,16 +183,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Report, error) {
 	if err != nil {
 		return report, fmt.Errorf("read the stored mirrors: %w", err)
 	}
-	for i := range records {
-		if err := ctx.Err(); err != nil {
-			return report, err
-		}
-		keys, err := r.withdraw(binding, &records[i])
-		if err != nil {
-			return report, err
-		}
-		report.Revoked = append(report.Revoked, keys...)
+	revoked, err := r.withdrawAll(ctx, binding, records)
+	if err != nil {
+		return report, err
 	}
+	report.Revoked = revoked
 	for i := range binding.Live {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -220,6 +217,81 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Report, error) {
 	}
 	report.Sweep = sweep
 	return report, nil
+}
+
+// Maintain reconciles the store against Cloud's live set without publishing anything: it withdraws
+// the mirrors of Projects that moved to another upstream and sweeps what nothing references any more.
+//
+// It is a separate entry point from Reconcile rather than a mode of it because the step it omits is
+// one this deployment cannot take, not one it chose not to. Publishing a mirror in this channel means
+// fetching a private upstream as the credential-executing identity C, and C does that by redeeming a
+// single-use authorization Cloud signs for one Operation — bound to that Operation's tenant, Project,
+// Workspace, credential version, ref and runtime generation (see `mirror_preparations`). A
+// reconciliation pass is not an Operation: it has no tenant to bind, no credential version to pin and
+// no generation to fence a late result against, so there is no authorization such a fetch could be
+// made under. The alternative — fetching with the store's own access and no authorization at all —
+// would be an unauthorized path into the mirror volume, and for a private upstream it would fail and
+// leave a live key's record in the state readers refuse. Publication therefore stays with the
+// per-Operation worker, and this pass keeps the store honest about what is still wanted.
+//
+// The withdrawal and the sweep are the same code Reconcile runs; what differs is only that nothing
+// here writes content.
+func (r *Reconciler) Maintain(ctx context.Context) (Report, error) {
+	var report Report
+	if r.Mirrors == nil || r.Bindings == nil {
+		return report, errors.New("the maintainer needs a mirror store and a binder")
+	}
+	binding, err := r.Bindings.Binding(ctx)
+	if err != nil {
+		// As in Reconcile: a question that could not be answered must not read as "nothing is
+		// referenced", which would start every mirror's grace period and eventually remove the store.
+		return report, fmt.Errorf("read Cloud's mirror references: %w", err)
+	}
+	records, err := r.Mirrors.Records()
+	if err != nil {
+		return report, fmt.Errorf("read the stored mirrors: %w", err)
+	}
+	revoked, err := r.withdrawAll(ctx, binding, records)
+	if err != nil {
+		return report, err
+	}
+	report.Revoked = revoked
+	for i := range binding.Live {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		// Ready means "Cloud references this key and the store can serve it", which is the same answer
+		// Reconcile's Ready gives and the answer to "may a clone input name this mirror?". A referenced
+		// key the store does not have is reported by its absence, and publishing it is the worker's
+		// job, not this pass's.
+		if record, found, err := r.Mirrors.Lookup(binding.Live[i].Key); err != nil {
+			return report, fmt.Errorf("read the record for %s: %w", binding.Live[i].Key.String(), err)
+		} else if found && record.Readable() {
+			report.Ready = append(report.Ready, binding.Live[i].Key)
+		}
+	}
+	sweep, err := r.Mirrors.Sweep(ctx, binding.keys(), r.now())
+	if err != nil {
+		return report, fmt.Errorf("sweep the mirror store: %w", err)
+	}
+	report.Sweep = sweep
+	return report, nil
+}
+
+// withdrawAll applies withdraw to every stored record, stopping at the first error.
+func (r *Reconciler) withdrawAll(ctx context.Context, binding Binding, records []mirror.Record) ([]mirror.Key, error) {
+	var revoked []mirror.Key
+	for i := range records {
+		if err := ctx.Err(); err != nil {
+			return revoked, err
+		}
+		keys, err := r.withdraw(binding, &records[i])
+		if err != nil {
+			return revoked, err
+		}
+		revoked = append(revoked, keys...)
+	}
+	return revoked, nil
 }
 
 // withdraw applies D6's first revocation trigger to one stored record: the Project it belongs to now
