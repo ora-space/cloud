@@ -192,7 +192,7 @@ func TestReadGitMirrorRefusesEveryWayAWorkspaceStopsBeingReadable(t *testing.T) 
 			},
 		},
 		{
-			name: "the project is no longer active",
+			name: "the project is being deleted",
 			change: func(t *testing.T, scene gitReadScene) {
 				execTest(t, scene.store, `UPDATE projects SET lifecycle='deleting' WHERE id=$1`, scene.project)
 			},
@@ -251,6 +251,47 @@ func TestReadGitMirrorRefusesEveryWayAWorkspaceStopsBeingReadable(t *testing.T) 
 				t.Fatalf("a workspace that is no longer readable was authorized")
 			}
 		})
+	}
+}
+
+// TestReadGitMirrorServesTheWorkspaceWhoseProjectIsStillBeingBuilt is the deadlock regression test.
+//
+// A credentialed Project's first Workspace clones its own mirror *while the Project is still
+// `provisioning`*: `openWorkspace` — the write that makes the Project `active` — runs at the end of
+// the very operation whose clone step performs this read. A policy that admitted only `active`
+// therefore refused the read that would have made the Project active, so the channel could never
+// deliver a first Workspace at all. Measured on the isolated stack before this test existed: the Git
+// Server answered 403 with `container_not_live` for a Workspace whose live sandbox, generation,
+// pinned commit and published mirror all matched, and `projects.lifecycle='provisioning'` was the
+// only fact that differed from the passing case.
+//
+// This is not a relaxation, and the refusal matrix above is the other half of the same predicate:
+// the case named "the project is being deleted" still refuses, as does every other way a Workspace
+// stops being readable. What is asserted here is the composed decision — the reader's binding plus
+// the mirror store's own two fields — because a binding that merely fails to be refused for
+// liveness would not show that the read the first clone needs is actually authorized.
+func TestReadGitMirrorServesTheWorkspaceWhoseProjectIsStillBeingBuilt(t *testing.T) {
+	scene := seedGitReadScene(t)
+	execTest(t, scene.store, `UPDATE projects SET lifecycle='provisioning' WHERE id=$1`, scene.project)
+
+	snapshot := scene.read(t)
+	if !snapshot.Found {
+		t.Fatal("a provisioning Project's workspace produced no mirror key")
+	}
+	if !snapshot.ContainerLive {
+		t.Fatal("the live sandbox of a Project that is still provisioning was not reported as live")
+	}
+	if snapshot.Key != scene.key() {
+		t.Fatalf("key = %+v, want %+v", snapshot.Key, scene.key())
+	}
+	// The two fields the mirror store owns, supplied as the composed reader supplies them. With the
+	// binding above and a ready mirror, the policy must allow — which is the read the first clone of
+	// a credentialed Project makes.
+	snapshot.MirrorReady = true
+	snapshot.MirrorGeneration = 1
+	verdict := (gitread.Request{Origin: scene.origin(), MirrorDigest: scene.key().Digest(), Operation: gitread.OperationUploadPack}).Evaluate(snapshot)
+	if !verdict.Allow {
+		t.Fatalf("the first clone of a credentialed Project was refused with %q", verdict.Reason)
 	}
 }
 

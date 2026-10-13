@@ -32,7 +32,7 @@ import (
 // would be content no key names, and FETCH_HEAD would be a file a later Git command in this repository
 // could be influenced by. `--` separates the options from the repository, so a repository reference
 // that began with `-` cannot be read as another option.
-func mirrorArguments(helper, repository, ref, sslCAInfo string) ([]string, error) {
+func mirrorArguments(helper, address, ref, sslCAInfo string) ([]string, error) {
 	// The helper value is the composed `path root identity` triple, so it is deliberately not put
 	// through `validateExecutablePath`: that rule describes one path, and the three components were each
 	// validated by `helperArgument` before they were joined. What is checked here is that the value is
@@ -42,11 +42,11 @@ func mirrorArguments(helper, repository, ref, sslCAInfo string) ([]string, error
 	if strings.TrimSpace(helper) == "" {
 		return nil, errors.New("the credential helper is not configured")
 	}
-	parsed, err := url.Parse(repository)
+	parsed, err := url.Parse(address)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return nil, errors.New("the mirror target is not an https repository")
 	}
-	if strings.ContainsAny(repository, " \t\n\r") {
+	if strings.ContainsAny(address, " \t\n\r") {
 		return nil, errors.New("the mirror target must not contain whitespace")
 	}
 	if err := validateMirrorRef(ref); err != nil {
@@ -81,9 +81,12 @@ func mirrorArguments(helper, repository, ref, sslCAInfo string) ([]string, error
 	if sslCAInfo != "" {
 		arguments = append(arguments, "-c", "http.sslCAInfo="+sslCAInfo)
 	}
+	// The address is the deployment's spelling, which is what Git must dial; it is not canonicalized
+	// here, because a fetch target is an address and not an identity. The identity was bound and
+	// compared before this function was reached.
 	return append(arguments,
 		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--",
-		repository, "+"+ref+":"+mirrorpublish.MirrorRef,
+		address, "+"+ref+":"+mirrorpublish.MirrorRef,
 	), nil
 }
 
@@ -129,12 +132,18 @@ func validateMirrorRef(ref string) error {
 //
 // Nothing here retries and nothing here is reusable: the authorization was spent before this call, so a
 // failure is the outcome of this attempt, and a new attempt needs a new authorization.
-func (m *MirrorExecutor) fetch(ctx context.Context, job *MirrorJob, repository, identity, destination, token string) (mirror.PublishVerification, error) {
+//
+// `address` is the spelling the deployment gave for the repository, which is what Git dials; the
+// canonical identity the authorization binds is a different string and is deliberately not used here.
+// The credential's scope needs no adjustment for the difference: `credentialmaterial.NormalizeScope`
+// removes the same trailing `.git` from the request Git makes, so a scope staged from the canonical
+// spelling still matches the request for the deployed one.
+func (m *MirrorExecutor) fetch(ctx context.Context, job *MirrorJob, address, identity, destination, token string) (mirror.PublishVerification, error) {
 	helper, err := helperArgument(m.config.HelperPath, m.config.MaterialRoot, identity)
 	if err != nil {
 		return mirror.PublishVerification{}, err
 	}
-	arguments, err := mirrorArguments(helper, repository, job.Ref, m.config.SSLCAInfo)
+	arguments, err := mirrorArguments(helper, address, job.Ref, m.config.SSLCAInfo)
 	if err != nil {
 		return mirror.PublishVerification{}, err
 	}

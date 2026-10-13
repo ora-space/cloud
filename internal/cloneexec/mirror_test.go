@@ -536,6 +536,46 @@ func TestMirrorPreparePublishesWhatTheFetchProduced(t *testing.T) {
 		"credential.useHttpPath=true", "protocol.allow=never")
 }
 
+// TestMirrorPrepareDialsTheSpellingTheDeploymentSupplied covers the one difference between the address a
+// fetch dials and the identity the authorization binds.
+//
+// `CanonicalRepository` folds the decorations a forge adds to one repository — a trailing `.git`, a
+// trailing slash — into a single identity, which is what the credential's scope and the mirror's key
+// need. A Git service is not obliged to answer both spellings: `git http-backend` serves `/repo.git` and
+// 404s `/repo`, so a preparation that dialed the canonical identity would ask for a path that does not
+// exist while holding a correct authorization. Measured against the private acceptance upstream, where
+// it answered `remote: 404 page not found` and the operation failed with
+// `credential_executor_fetch_failed`.
+func TestMirrorPrepareDialsTheSpellingTheDeploymentSupplied(t *testing.T) {
+	fixture := newMirrorFixture(t, nil)
+	deployed := testRepository + ".git"
+	job := fixture.issue(t, nil, func(j *MirrorJob) { j.Repository = deployed })
+
+	result, err := fixture.executor.Prepare(context.Background(), job)
+	if err != nil {
+		t.Fatalf("the preparation was refused: %v", err)
+	}
+	// The identity stays canonical, so the mirror the preparation produced is the one the canonical
+	// spelling names — which is the key the Git Server derives from the Workspace's baseline.
+	if result.Repository != testRepository {
+		t.Fatalf("result repository = %q, want the canonical %q", result.Repository, testRepository)
+	}
+	if _, err := fixture.mirrors.Open(fixture.mirrorKey()); err != nil {
+		t.Fatalf("the mirror is not published under the canonical key: %v", err)
+	}
+	// The address is the deployment's spelling, and the canonical one was not dialed.
+	assertCaptured(t, fixture.capture, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--",
+		deployed, "+"+testRef+":"+mirrorpublish.MirrorRef)
+	recorded, err := os.ReadFile(fixture.capture)
+	if err != nil {
+		t.Fatalf("read the recorded Git invocations: %v", err)
+	}
+	if strings.Contains(string(recorded), "\n"+testRepository+"\n") {
+		t.Fatalf("the fetch dialed the canonical identity instead of the deployment's spelling:\n%s",
+			recorded)
+	}
+}
+
 // TestMirrorPrepareIsIdempotentForAnAlreadyPublishedCommit covers the retry Cloud will actually make.
 //
 // A preparation whose response was lost is retried with a new authorization and the same pinned ref.

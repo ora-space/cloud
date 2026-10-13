@@ -99,6 +99,15 @@ func (d *MirrorDispatcher) Prepare(ctx context.Context, p MirrorPreparation) (Mi
 	// derives it: the claim read the Project's stored URL, and the value the authorization binds has to be
 	// the value the executor re-derives from the job it is handed. A URL with no canonical form is not a
 	// repository this deployment can prepare.
+	//
+	// The job below is dispatched with the claim's own spelling, not with this canonical identity, and the
+	// two are deliberately different values: this one is an identity — what the credential's scope and the
+	// mirror's key are built from — while the job carries an address, which is what Git dials. A Git
+	// service need not answer both spellings of one repository (`git http-backend` serves `/repo.git` and
+	// 404s `/repo`), so dispatching the canonical form would ask a correct upstream for a path it does not
+	// serve. Measured against the private acceptance upstream: `remote: 404 page not found`. The executor
+	// re-derives the identity from whatever the job carries, which is what keeps one repository one
+	// identity while its address is whatever the deployment wrote.
 	repository, err := cloneauth.CanonicalRepository(p.Repository)
 	if err != nil {
 		return MirrorPreparationOutcome{}, err
@@ -139,7 +148,7 @@ func (d *MirrorDispatcher) Prepare(ctx context.Context, p MirrorPreparation) (Mi
 		OperationID:           p.OperationID,
 		PreparationGeneration: p.Generation,
 		ProjectID:             p.ProjectID,
-		Repository:            repository,
+		Repository:            strings.TrimSpace(p.Repository),
 		Ref:                   p.Ref,
 		CredentialID:          p.CredentialID,
 		CredentialVersion:     p.CredentialVersion,

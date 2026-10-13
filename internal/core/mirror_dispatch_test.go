@@ -149,8 +149,27 @@ func TestMirrorDispatchSignsTheClaimedAttemptAndNothingElse(t *testing.T) {
 	// The job and the signature must agree on the values the executor re-derives from the job, because
 	// the executor compares the two: a job whose repository differed from the signed one would be
 	// refused as a mismatch, and a test that only checked the signature would not notice.
+	//
+	// The repository is the one field they agree on *as an identity rather than as a string*. The job
+	// carries the claim's spelling — the address the executor dials — and the signature carries the
+	// canonical form the executor re-derives from it, so what must hold is both that the job was handed
+	// the deployment's own spelling and that its canonical form is what was signed. Asserting the two
+	// strings were equal would be asserting the executor dials the canonical form, which is the bug this
+	// pair exists to keep out: an upstream that serves `/repo.git` and not `/repo` would 404.
+	if client.job.Repository != claim.Repository {
+		t.Fatalf("the dispatched job names %q, want the claim's spelling %q",
+			client.job.Repository, claim.Repository)
+	}
+	dispatchedIdentity, err := cloneauth.CanonicalRepository(client.job.Repository)
+	if err != nil {
+		t.Fatalf("the dispatched repository has no canonical form: %v", err)
+	}
+	if dispatchedIdentity != binding.Repository {
+		t.Fatalf("the dispatched job's canonical identity is %q, but the authorization binds %q",
+			dispatchedIdentity, binding.Repository)
+	}
 	if client.job.OperationID != binding.OperationID || client.job.PreparationGeneration != binding.PreparationGeneration ||
-		client.job.ProjectID != binding.ProjectID || client.job.Repository != binding.Repository ||
+		client.job.ProjectID != binding.ProjectID ||
 		client.job.Ref != binding.Ref || client.job.CredentialID != binding.CredentialID ||
 		client.job.CredentialVersion != binding.CredentialVersion || client.job.RuntimeGeneration != binding.RuntimeGeneration ||
 		client.job.ControlEpoch != binding.ControlEpoch {

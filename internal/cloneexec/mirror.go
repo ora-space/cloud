@@ -349,7 +349,16 @@ func (m *MirrorExecutor) Prepare(ctx context.Context, job MirrorJob) (result Mir
 				zap.String("operationId", job.OperationID), zap.Error(removeErr))
 		}
 	}()
-	verification, err := m.fetch(prepareContext, &job, repository, identity, fetchDirectory, token)
+	// The address the fetch dials is the deployment's own spelling of the repository, not the canonical
+	// identity the authorization binds. The two differ exactly in the decorations `CanonicalRepository`
+	// removes — a trailing `.git`, a trailing slash — and a Git service is free to serve only one of
+	// them: `git http-backend` answers `/repo.git` and 404s `/repo`. Dialing the canonical form would
+	// therefore turn a correct binding into a fetch of a path that does not exist, which is what the
+	// private acceptance upstream reported: `remote: 404 page not found`. The canonical form stays the
+	// identity — the binding, the credential's scope and the mirror's key all use it — so the two
+	// spellings are one repository with one identity and one address, and only the address is dialed.
+	address := strings.TrimSpace(job.Repository)
+	verification, err := m.fetch(prepareContext, &job, address, identity, fetchDirectory, token)
 	if err != nil {
 		return MirrorResult{}, m.refuse(ReasonCodeFetchFailed, err)
 	}

@@ -60,7 +60,10 @@ type MirrorPreparation struct {
 	OwnerUserID string
 	ProjectID   string
 	WorkspaceID string
-	// Repository is the Project's real upstream identity, never the internal mirror address.
+	// Repository is the Project's real upstream as the deployment spelled it — the address the executor
+	// dials, never the internal mirror address. The authorization binds its canonical identity, which the
+	// executor re-derives from this value; the two differ by the decorations a forge adds to one
+	// repository, and keeping both is what lets an upstream that serves only `/repo.git` be fetched.
 	Repository string
 	// Ref is the fully qualified ref this preparation pins.
 	Ref string

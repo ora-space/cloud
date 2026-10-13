@@ -112,7 +112,7 @@ type gitReadState struct {
 // database enforces at most one unterminated sandbox per workspace, so "the id matches" and "it is
 // the live one" are the same statement — and an older generation has a different instance id.
 func (r *gitReadState) live(containerID string) bool {
-	if r.workspaceDeleted || r.projectDeleted || r.projectLifecycle != "active" {
+	if r.workspaceDeleted || r.projectDeleted || !r.projectServesContent() {
 		return false
 	}
 	if r.sandboxID == "" || r.sandboxState != "running" {
@@ -122,6 +122,32 @@ func (r *gitReadState) live(containerID string) bool {
 		return false
 	}
 	return r.sandboxID == containerID
+}
+
+// projectServesContent reports whether the Project is in a state where its own mirror may still be
+// read. A Project that is being deleted or has been deleted does not.
+//
+// `provisioning` does, and that is a requirement rather than a relaxation. The first Workspace of a
+// credentialed Project clones its mirror *while the Project is still provisioning*: the Project
+// becomes `active` in `openWorkspace`, which runs at the end of the operation whose clone step is
+// the read in question. A predicate that admitted only `active` therefore refused every such read
+// and left the channel unable to deliver its own first Workspace — measured end to end on the
+// isolated stack, where the Git Server refused with `container_not_live` while the workspace, its
+// sandbox, its pinned commit and its published mirror all matched, and the only fact that differed
+// from the refusal matrix's passing case was `projects.lifecycle = 'provisioning'`.
+//
+// Nothing about *who* may read changes with this: the caller is still the live sandbox of the
+// Workspace, and the mirror key is still derived from that Workspace's Project, so the reading
+// Project remains the only one that could ever be served.
+func (r *gitReadState) projectServesContent() bool {
+	switch r.projectLifecycle {
+	case "provisioning", "active":
+		return true
+	default:
+		// `deleting` and `deleted`, plus anything a future migration adds to the column's CHECK
+		// constraint: an unrecognized lifecycle is not a state this policy may read from.
+		return false
+	}
 }
 
 // mirrorKey derives the mirror key this workspace is addressed by. It reports false when the
