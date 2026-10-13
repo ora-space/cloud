@@ -34,11 +34,14 @@ import (
 // deployment uses — so what they prove is that the shipped command, wired the way the deployment
 // wires it, issues nothing and delivers nothing it should not.
 //
-// What they deliberately do not prove: that a real *Cloud server* issues the authorization. There is
-// no Cloud process that does that yet — `cloneauth.Issue` has no production caller, because the only
-// call sites sit behind a guard that refuses every credentialed clone (see the repository report).
-// Issuance here runs Cloud's real code, from a real mounted signing key, against a real Store
-// process; the caller is the test rather than the Cloud server, and that is the whole of the gap.
+// What they deliberately do not prove: that a live *Cloud server* issues an authorization for a real
+// request. `cloneauth.Issue` does have a production caller — `CloneDispatcher.Execute` in
+// internal/core/credentialed_clone.go, which signs the `clone` purpose — but it sits behind
+// `requireRepositoryAccess`, and that guard refuses every credentialed clone in a deployment which
+// installed no credentialed-clone executor, so no deployment reaches it today. The `mirror_prepare`
+// purpose has no production caller at all. Issuance here runs Cloud's real code, from a real mounted
+// signing key, against a real Store process; the caller is the test rather than the Cloud server, and
+// that is the whole of the gap.
 
 // syncBuffer collects a child process's output. os/exec copies into a non-file writer from its own
 // goroutine, so every read of the collected text is synchronized: the race detector runs over this
