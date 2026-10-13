@@ -122,3 +122,16 @@ credentials:
   private_key_file: ""
   ca_file: ""
   timeout: 10s
+
+# Where a sandbox reaches the internal Git Server, and therefore the only half of a mirrored clone's
+# input that Cloud cannot derive: the mirror's own address is computed per clone from its key, and
+# this section supplies the base. Leaving the section out — the deployed default — serves no mirror at
+# all, and a credential-bearing Workspace stops at the `mirror_not_ready` gate rather than being
+# pointed at its upstream. Override: CLOUD_GIT_SERVER_SANDBOX_BASE_URL.
+#
+# Naming it is a deployment that serves Workspace content from the mirror, so it must not be set
+# alongside `CLOUD_CLONE_DISPATCH_ENABLED` (two content channels; the credentialed-clone executor would
+# never be dispatched to) and must be set with `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` on (nothing would
+# publish a mirror). Both mismatches refuse startup instead of degrading at runtime.
+# git_server:
+#   sandbox_base_url: "https://git-server:8080"

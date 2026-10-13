@@ -37,7 +37,9 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 	}
 	// A credentialed Workspace clone is executed by Cloud itself, before the ordinary dispatch below
 	// ever runs, so the Controller never sees an execution it would hand to a Node that holds no
-	// credential. Everything else — anonymous clones included — takes the unchanged path.
+	// credential. A deployment that named the internal Git Server is the other channel and is not
+	// intercepted at all: its Workspace clones come from the published mirror, through the ordinary
+	// dispatch below. Everything else — anonymous clones included — takes the unchanged path.
 	if s.credentialedCloner != nil && r.Action == "clone_dispatch" {
 		admitted, err := s.admitCredentialedClone(ctx, r)
 		if err != nil {
@@ -240,10 +242,22 @@ func snapshot(t *transaction, o Object) Object {
 	if p != nil {
 		p["secretRef"], p["repositoryCredentialRefId"] = nil, nil
 	}
+	workspaces := t.list("SELECT w.* FROM workspaces w WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId"))
+	// The clone input a Controller builds is the snapshot's own Project repository and the requested ref
+	// of *its* Workspace (desktop `cloud/operations/steps.rs`, `dispatch_clone`), and for a mirrored
+	// clone both have to name the internal mirror rather than the upstream (D7). The projection happens
+	// here, on the snapshot, and nowhere else: the recorded rows keep naming the Project's real upstream,
+	// which is what the credential binding, the mirror key and every read authorization are derived
+	// from, so the upstream can never be traded for the mirror address in any of them.
+	//
+	// It is scoped to this Operation's Workspace, because the mirror is prepared for one Workspace's
+	// requested ref and a sibling Workspace on another ref is not what that preparation pins. Only the
+	// Workspace actually being cloned is redirected.
+	t.store.projectMirrorInput(t, o, p, workspaces)
 	out := Object{
 		"operation":  o,
 		"project":    p,
-		"workspaces": t.list("SELECT w.* FROM workspaces w WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId")),
+		"workspaces": workspaces,
 		"sandboxes":  t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")),
 		"nodes":      t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")),
 		// Retired plugin effects stay in the table as history and are not part of the live snapshot.
@@ -496,7 +510,7 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 		// way into `clone` — create, start and restart alike — passes through it. A gate placed on one of
 		// those branches would be one more thing to remember when a branch is added.
 		if next == "clone" {
-			requireMirrorPrepared(t, o, wid)
+			t.store.requireMirrorPrepared(t, o, wid)
 		}
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
 	}

@@ -27,6 +27,7 @@ type Config struct {
 	ObjectStore      ObjectStoreConfig       `mapstructure:"object_store"`
 	Credentials      CredentialIngressConfig `mapstructure:"credentials"`
 	ExecutorDispatch ExecutorDispatchConfig  `mapstructure:"clone_dispatch"`
+	GitServer        GitServerConfig         `mapstructure:"git_server"`
 }
 
 // IssueRunsConfig holds the Thread lifecycle policy that belongs to Cloud's own dispatch loop

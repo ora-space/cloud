@@ -2,9 +2,33 @@ package core
 
 import (
 	"context"
-	"strings"
 	"testing"
+
+	"github.com/wanglongan587/cloud/internal/cloneauth"
+	"github.com/wanglongan587/cloud/internal/mirror"
+	"github.com/wanglongan587/cloud/internal/mirrorpublish"
 )
+
+// mirrorCommit is the commit every staged mirror in these tests pins. It is the value the gate writes as
+// the Workspace's baseline and the value `advanceClone` then requires a clone to land on, so a case that
+// changes it says which of the two comparisons it is testing.
+const mirrorCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+// mirrorBaseURL is the internal Git Server's sandbox-facing address these scenes name. Nothing dials it:
+// it is the base the mirror's address is built from, and the assertions are about the address rather than
+// about a reachable host.
+const mirrorBaseURL = "https://git-server.example.invalid"
+
+// installMirrorEndpoint names the internal Git Server on the Store, the way `cmd/server` does at startup.
+func installMirrorEndpoint(t *testing.T, store *Store) *MirrorEndpoint {
+	t.Helper()
+	endpoint, err := NewMirrorEndpoint(mirrorBaseURL)
+	if err != nil {
+		t.Fatalf("name the internal Git Server: %v", err)
+	}
+	store.SetMirrorEndpoint(endpoint)
+	return endpoint
+}
 
 // readyMirror inserts the preparation a credentialed Workspace must have before it may enter `clone`.
 //
@@ -18,9 +42,32 @@ func readyMirror(t *testing.T, store *Store, s credentialedScene) {
 		repository_url,pinned_ref,runtime_generation,control_epoch,state,credential_ref_id,credential_ref_version,commit_id,mirror_generation)
 		VALUES($1,$2,$3,$4,$5,$6,$7,1,'ready',$8,1,$9,1)`,
 		s.operation, s.tenant, s.project, s.workspace, s.repository, "refs/heads/"+s.ref, generation,
-		s.credential, strings.Repeat("a", 40)); err != nil {
+		s.credential, mirrorCommit); err != nil {
 		t.Fatalf("insert a ready mirror preparation: %v", err)
 	}
+}
+
+// publishedMirror stages both halves of the mirror channel — the deployment names the internal Git
+// Server, and the Operation has a ready preparation — and answers with the scene whose dispatch names the
+// mirror, which is what a Controller derives from that state once its Project is credentialed.
+//
+// The address is derived here from the same three facts the Git Server would, rather than read back out
+// of the code under test. A test that took the address from `cloneInputFor` would agree with whatever it
+// produced, including an address the server does not serve.
+func publishedMirror(t *testing.T, store *Store, s credentialedScene) credentialedScene {
+	t.Helper()
+	endpoint := installMirrorEndpoint(t, store)
+	readyMirror(t, store, s)
+	repository, err := cloneauth.CanonicalRepository(s.repository)
+	if err != nil {
+		t.Fatalf("canonicalize the scene's repository: %v", err)
+	}
+	address, err := endpoint.CloneAddress(mirror.Key{ProjectID: s.project, Repository: repository, Commit: mirrorCommit})
+	if err != nil {
+		t.Fatalf("build the mirror's address: %v", err)
+	}
+	s.cloneRepository, s.cloneBranch = address, mirrorpublish.MirrorBranch
+	return s
 }
 
 // mirrorGate runs the gate the way `advance` runs it — inside the control transaction, for the
@@ -28,7 +75,7 @@ func readyMirror(t *testing.T, store *Store, s credentialedScene) {
 func mirrorGate(t *testing.T, store *Store, s credentialedScene) error {
 	t.Helper()
 	_, err := store.transact(context.Background(), func(tx *transaction) Object {
-		requireMirrorPrepared(tx, Object{"id": s.operation, "projectId": s.project, "workspaceId": s.workspace}, s.workspace)
+		tx.store.requireMirrorPrepared(tx, Object{"id": s.operation, "projectId": s.project, "workspaceId": s.workspace}, s.workspace)
 		return Object{}
 	})
 	return err
@@ -120,13 +167,26 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 			want: "repository_credential_frozen",
 		},
 		{
-			// Precedence, not the mirror: the deployment installed no executor, so no credentialed clone
-			// can ever be admitted and the gate must not be the thing that says so.
-			name: "a deployment without an executor outranks the mirror",
+			// Precedence, not the mirror: the deployment installed no channel at all, so no credentialed
+			// clone can ever be admitted and the gate must not be the thing that says so. Both halves are
+			// cleared, because either one alone is a channel that can serve the work.
+			name: "a deployment with neither channel outranks the mirror",
 			apply: func(t *testing.T, store *Store, _ credentialedScene) {
 				store.SetCredentialedCloner(nil)
+				store.SetMirrorEndpoint(nil)
 			},
 			want: repositoryCredentialExecutorUnavailable,
+		},
+		{
+			// The mirror channel is what a deployment names when its Workspace content arrives from the
+			// internal Git Server, and a mirror with no server to read it from is not an input: there is no
+			// address Cloud may write, so the transition must not happen. This is the fail-closed direction
+			// rather than a fallback to the upstream, which is the whole point of the channel decision.
+			name: "a deployment that named no Git Server has no input at all",
+			apply: func(t *testing.T, store *Store, _ credentialedScene) {
+				store.SetMirrorEndpoint(nil)
+			},
+			want: mirrorNotReady,
 		},
 	}
 
@@ -134,6 +194,7 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			store := dispatcherDB(t)
 			store.SetCredentialedCloner(&recordingCloner{})
+			installMirrorEndpoint(t, store)
 			scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private")
 			readyMirror(t, store, scene)
 			c.apply(t, store, scene)
@@ -143,6 +204,13 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 				if err != nil {
 					t.Fatalf("a ready preparation that still agrees must let the transition happen, got %v", err)
 				}
+				// The transition is also where the Workspace's baseline is pinned, and the pin is what makes
+				// the mirror a sandbox is authorized to read the same mirror Cloud recorded: the Git Server
+				// derives its key from this column. A gate that admitted the transition without writing it
+				// would leave every read of the mirror refused.
+				if got := textOf(t, store, "SELECT base_commit_id FROM workspaces WHERE id=$1", scene.workspace); got != mirrorCommit {
+					t.Fatalf("the gate must pin the mirror's commit as the baseline, got %q", got)
+				}
 				return
 			}
 			if err == nil {
@@ -150,6 +218,11 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 			}
 			if got := faultCode(t, err); got != c.want {
 				t.Fatalf("the gate answered %q, want %q", got, c.want)
+			}
+			// A refusal is a refusal of the whole transition, baseline included: the Workspace must not be
+			// left naming a commit no gate admitted.
+			if n := scalarOf(t, store, "SELECT count(*) FROM workspaces WHERE id=$1 AND base_commit_id IS NULL", scene.workspace); n != 1 {
+				t.Fatal("a refused transition moved the Workspace's baseline")
 			}
 		})
 	}
@@ -159,13 +232,105 @@ func TestTheMirrorGateRefusesACloneItsPreparationDoesNotCover(t *testing.T) {
 // names no credential keeps the existing public-clone path, and the gate must not become a new
 // precondition on it. A gate that refused here would break every anonymous clone while looking like it
 // was only about mirrors.
+//
+// The baseline is asserted too, because the pin is the one thing this function writes: an anonymous
+// Workspace's baseline is whatever its own clone produces, so the gate must leave the column alone
+// rather than pinning it to a mirror's commit that does not exist for this Project.
 func TestTheMirrorGateIsInertForAnonymousProjects(t *testing.T) {
 	store := dispatcherDB(t)
 	store.SetCredentialedCloner(&recordingCloner{})
+	installMirrorEndpoint(t, store)
 	scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/public.git", "")
 	execTest(t, store, `UPDATE projects SET credential_ref_id=NULL WHERE id=$1`, scene.project)
 
 	if err := mirrorGate(t, store, scene); err != nil {
 		t.Fatalf("an anonymous Project must not be gated on a mirror, got %v", err)
 	}
+	if n := scalarOf(t, store, "SELECT count(*) FROM workspaces WHERE id=$1 AND base_commit_id IS NULL", scene.workspace); n != 1 {
+		t.Fatal("the gate pinned a baseline for an anonymous Workspace, which owns its own clone result")
+	}
+}
+
+// TestAMirrorDeploymentsWorkspaceCloneNamesTheMirror is the dispatch-level half of D1/D7: on a
+// deployment that named the internal Git Server, a credentialed Workspace's clone is the Node's clone of
+// the published mirror, Cloud executes no clone of its own, and the upstream address never appears in
+// the record the Node is handed.
+//
+// Nothing here installs a credentialed-clone executor, which is the point: on this channel the
+// credential is spent by the preparation, so the clone needs none. The three cases are the three states
+// the dispatch can be in — mirror ready with the mirror named, mirror ready with the upstream named, and
+// no mirror at all — and each asserts what the Controller would get.
+func TestAMirrorDeploymentsWorkspaceCloneNamesTheMirror(t *testing.T) {
+	t.Run("a ready mirror admits exactly the mirror's input and leaves the clone to the Node", func(t *testing.T) {
+		store := dispatcherDB(t)
+		scene := publishedMirror(t, store, seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private"))
+		// The transition first, because that is the order the two run in: the gate admits the move into
+		// `clone` and pins the baseline there, and only then can a Controller dispatch the clone.
+		if err := mirrorGate(t, store, scene); err != nil {
+			t.Fatalf("a ready mirror must admit the transition into clone, got %v", err)
+		}
+
+		out, err := scene.dispatch(store, "exec-mirror")
+		if err != nil {
+			t.Fatalf("a Workspace whose mirror is ready must dispatch its clone, got %v", err)
+		}
+		// The Node's clone is the work this execution stands for, so Cloud leaves the result unwritten.
+		// A result written here would tell the Controller the clone was already done, and the Workspace
+		// would never be cloned at all.
+		if result := out.O("result"); len(result) != 0 {
+			t.Fatalf("the execution must wait for the Node's result, got %v", result)
+		}
+		// D7, read off durable state rather than off the response: the recorded input is what the
+		// Controller's CloneSpec is generated from, so this is the record that must never name the
+		// upstream.
+		recorded := textOf(t, store, "SELECT input->>'repositoryUrl' FROM clone_executions WHERE execution_id=$1", "exec-mirror")
+		if recorded != scene.cloneRepository {
+			t.Fatalf("the recorded clone input must be the mirror's address, got %q", recorded)
+		}
+		if recorded == scene.repository || recorded == scene.repository+".git" {
+			t.Fatal("the recorded clone input names the Project's upstream")
+		}
+		if branch := textOf(t, store, "SELECT input->>'branch' FROM clone_executions WHERE execution_id=$1", "exec-mirror"); branch != mirrorpublish.MirrorBranch {
+			t.Fatalf("the recorded clone input must name the mirror's branch %q, got %q", mirrorpublish.MirrorBranch, branch)
+		}
+		if got := textOf(t, store, "SELECT base_commit_id FROM workspaces WHERE id=$1", scene.workspace); got != mirrorCommit {
+			t.Fatalf("the dispatch must leave the pinned baseline in place, got %q", got)
+		}
+	})
+
+	t.Run("the upstream is not an admissible input on this deployment", func(t *testing.T) {
+		store := dispatcherDB(t)
+		scene := publishedMirror(t, store, seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private"))
+		// A Controller that was handed the upstream — a stale snapshot, or one built before the mirror was
+		// published — must not be able to register it.
+		upstream := scene
+		upstream.cloneRepository, upstream.cloneBranch = scene.repository, scene.ref
+
+		_, err := upstream.dispatch(store, "exec-upstream")
+		if got := faultCode(t, err); got != "dispatch_conflict" {
+			t.Fatalf("dispatch of the upstream input: got %q, want dispatch_conflict", got)
+		}
+		if n := scalarOf(t, store, "SELECT count(*) FROM clone_executions WHERE execution_id=$1", "exec-upstream"); n != 0 {
+			t.Fatal("a refused dispatch registered an execution")
+		}
+	})
+
+	t.Run("a deployment with no mirror yet refuses retryably rather than cloning the upstream", func(t *testing.T) {
+		store := dispatcherDB(t)
+		installMirrorEndpoint(t, store)
+		scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private")
+
+		_, err := scene.dispatch(store, "exec-late")
+		if got := faultCode(t, err); got != mirrorNotReady {
+			t.Fatalf("dispatch before the mirror is ready: got %q, want %q", got, mirrorNotReady)
+		}
+		if n := scalarOf(t, store, "SELECT count(*) FROM clone_executions WHERE execution_id=$1", "exec-late"); n != 0 {
+			t.Fatal("a clone refused for a missing mirror registered an execution")
+		}
+		// Retryable rather than settled: `mirror_not_ready` is not one of the codes that ends an
+		// Operation, because a preparation that is merely late becomes ready.
+		if n := scalarOf(t, store, "SELECT count(*) FROM operations WHERE id=$1 AND state='running' AND step='clone'", scene.operation); n != 1 {
+			t.Fatal("a mirror that is not ready yet settled the Operation instead of leaving it to retry")
+		}
+	})
 }

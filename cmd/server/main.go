@@ -121,6 +121,19 @@ func run() (runErr error) {
 	}
 	// The mirror worker's loop is started below with the other dispatch loops, gated on the same
 	// `dispatch.Mirror` the install above uses.
+	//
+	// Where a sandbox reads a published mirror is the deployment's other half, and the two are checked
+	// together: a deployment that names the internal Git Server serves every credentialed Workspace's
+	// clone from the mirror, so the credentialed-clone executor is not a second capability to install
+	// beside it but the other channel, and naming the Git Server with no publisher is a channel that can
+	// never open. Both are startup errors rather than per-request ones, for the same reason an enabled
+	// but unusable section is. Unconfigured — the default — `endpoint` is nil and nothing about the
+	// clone path changes.
+	endpoint, e := cfg.MirrorEndpoint(dispatch)
+	if e != nil {
+		return e
+	}
+	store.SetMirrorEndpoint(endpoint)
 	configureCollaboration(store, cfg.Collaboration.DevelopmentFixtures, log)
 	// The B side of the Agent Run seam: Cloud's IssueRun/Thread lifecycle is driven by these five
 	// callbacks, each of which runs inside the control-plane transaction that just persisted the

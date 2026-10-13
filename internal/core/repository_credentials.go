@@ -37,9 +37,11 @@ var terminalCredentialRefusals = map[string]bool{
 // querying results, local code access, ordinary restart and cleanup do not call this guard.
 // An available reference alone cannot enable a missing scoped credential provider.
 //
-// The guard is total: a Project that names a credential is refused on every current execution path,
-// so this function is the single place a credentialed clone could ever be admitted, and it must stay
-// a refusal until a Node-side authentication channel exists (D6).
+// The guard is total: a Project that names a credential is refused on every execution path that leads
+// to remote Git work, so this function is the single place a credentialed clone could ever be
+// admitted. It stays a refusal until the deployment installs a channel that can serve the work — the
+// credentialed-clone executor, or the internal Git Server the content arrives through — and the two
+// are alternatives rather than a sequence (D6, D1 of the content-transport decision).
 func requireRepositoryAccess(t *transaction, pid string) {
 	p := t.one("SELECT * FROM projects WHERE id=$1", pid)
 	require(p != nil, 404, "not_found")
@@ -82,11 +84,21 @@ func requireRepositoryAccess(t *transaction, pid string) {
 		normalized, ok := normalizeRepositoryScope(p.S("repositoryUrl"))
 		require(ok && normalized == scope, 409, "repository_credential_scope_mismatch")
 	}
-	// A credentialed clone is executed by Cloud itself, through the credentialed-clone executor, and
-	// only by a deployment that installed one. Without an executor the refusal stands unchanged:
-	// never substitute a global Git/SSH credential, and never issue an anonymous clone for a
-	// credentialed project.
-	if t.store.credentialedCloner == nil {
+	// The work has to be servable by a channel this deployment actually installed, and there are exactly
+	// two of them. Either Cloud executes the credentialed clone itself, through the credentialed-clone
+	// executor, or the content arrives from the internal Git Server's mirror — where the credential was
+	// spent by the preparation rather than by the clone, and the Node's clone is the ordinary anonymous
+	// HTTPS clone the Git Server authorizes by source container. With neither installed the refusal
+	// stands unchanged: never substitute a global Git/SSH credential, and never issue an anonymous clone
+	// for a credentialed project.
+	//
+	// Naming the Git Server is what makes the second channel exist, and it is deliberately a deployment
+	// value rather than a per-request one: `mirrorEndpoint` is installed once at startup, exactly like the
+	// executor, so no caller and no request can open or close this leg. It is also not a weaker promise
+	// than the first: the leg admits the work to a path whose only admissible clone input is the published
+	// mirror (`cloneInputFor`, `workspaceCloneDispatch`), so a deployment that named the Git Server but
+	// cannot address a ready mirror refuses with `mirror_not_ready` rather than cloning the upstream.
+	if t.store.credentialedCloner == nil && t.store.mirrorEndpoint == nil {
 		reject(409, repositoryCredentialExecutorUnavailable)
 	}
 	// The reference has to permit the work, not merely exist. D4 requires the execution plan to fix

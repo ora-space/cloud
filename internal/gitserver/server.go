@@ -134,6 +134,16 @@ func (s *Server) Handler() http.Handler { return s.handler }
 
 const mirrorPrefix = "/mirror/v1/"
 
+// MirrorPath is the request path this server serves one mirror at, including the `.git` suffix Git
+// clients expect appended to a repository URL.
+//
+// It is exported because Cloud has to write that address into a Workspace's clone input once the
+// mirror is published (D7), and the address a Controller is told to clone has to be an address this
+// server actually answers on. Computing it from the same prefix the mux is built from is what keeps
+// the two from drifting: a second spelling of the route elsewhere in Cloud would produce a clone
+// input that the Node dutifully dispatches and this server 404s.
+func MirrorPath(key mirror.Key) string { return mirrorPrefix + key.Digest() + ".git" }
+
 // routes maps the two paths the smart HTTP read protocol uses. There is deliberately no catch-all:
 // a path this mux does not name is a 404 from the standard library, not a refusal this code decides.
 func (s *Server) routes() http.Handler {

@@ -49,6 +49,11 @@ type credentialedScene struct {
 	project, workspace, operation string
 	credential, node, ref         string
 	repository                    string
+	// cloneRepository and cloneBranch override the repository and branch a Controller's dispatch names,
+	// for the scenes whose Workspace clones the internal mirror rather than the Project's upstream. An
+	// empty value means the Project's upstream and the Workspace's requested ref, which is what a
+	// Controller derives on every deployment that has no mirror.
+	cloneRepository, cloneBranch string
 }
 
 // seedCredentialedCloneScene stages one Project that names one credential, the Workspace whose clone
@@ -111,8 +116,13 @@ func seedCredentialedCloneScene(t *testing.T, store *Store, repository, scope st
 }
 
 // dispatch drives one real `clone_dispatch` for the scene's Workspace operation, with the input the
-// Controller derives from the Workspace's own Project repository and requested ref.
+// Controller derives from the snapshot it was handed: the Project's repository and the Workspace's
+// requested ref, unless the scene was staged on the mirror channel, where both are the mirror's.
 func (s credentialedScene) dispatch(store *Store, execution string) (Object, error) {
+	repository, branch := s.repository, s.ref
+	if s.cloneRepository != "" {
+		repository, branch = s.cloneRepository, s.cloneBranch
+	}
 	return store.Control(context.Background(), &ControlRequest{
 		Action: "clone_dispatch",
 		Body: Object{
@@ -120,7 +130,7 @@ func (s credentialedScene) dispatch(store *Store, execution string) (Object, err
 			"operationId": s.operation,
 			"executionId": execution,
 			"nodeId":      s.node,
-			"input":       Object{"kind": "clone", "repositoryUrl": s.repository, "branch": s.ref},
+			"input":       Object{"kind": "clone", "repositoryUrl": repository, "branch": branch},
 		},
 		Service: controllerClaims(),
 	})

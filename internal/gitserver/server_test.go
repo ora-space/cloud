@@ -23,7 +23,7 @@ import (
 const (
 	testTenant     = "tenant-1"
 	testRepository = "https://github.com/ora-space/demo"
-	mirrorRef      = "refs/ora/mirror"
+	mirrorRef      = "refs/heads/ora-mirror"
 )
 
 // runGit runs a real git command, because the only useful evidence about a Git server is Git

@@ -206,9 +206,10 @@ const (
 // and hand it to a Node that holds no credential at all. Registering first and updating later would
 // leave exactly that window open for as long as a clone takes.
 //
-// A nil result with a nil error means "not a credentialed clone" — an anonymous Project, a legacy
-// clone request, or a deployment with no executor configured — and the caller then takes the ordinary
-// path unchanged.
+// A nil result with a nil error means "not a credentialed clone Cloud executes" — an anonymous Project,
+// a legacy clone request, a deployment that named the internal Git Server and therefore serves the
+// content from a published mirror, or a deployment with no executor configured — and the caller then
+// takes the ordinary path unchanged.
 func (s *Store) admitCredentialedClone(ctx context.Context, r *ControlRequest) (*CredentialedClone, error) {
 	var admitted *CredentialedClone
 	_, err := s.transact(ctx, func(t *transaction) Object {
@@ -225,6 +226,20 @@ func (s *Store) admitCredentialedClone(ctx context.Context, r *ControlRequest) (
 		requireRepositoryAccess(t, o.S("projectId"))
 		credential := t.admittedCredential
 		if credential == nil {
+			return nil
+		}
+		// D1 of the content-transport decision: the content channel is exactly one. A deployment that
+		// named the internal Git Server serves a credentialed Workspace's clone from the published mirror,
+		// which the Node clones with the ordinary anonymous HTTPS clone the server authorizes by source
+		// container — so this is not a clone Cloud executes, and declining here is what keeps the two
+		// channels from both being live for one Workspace.
+		//
+		// The decline is placed after the guard rather than before it, so every refusal the guard owns —
+		// an unavailable or frozen reference, a scope mismatch, a deployment with neither channel — is
+		// still given with its own code, and the ordinary dispatch below repeats the guard on its own.
+		// Without this, a mirror deployment would clone the upstream itself and never touch the mirror,
+		// which would leave the ready gate and the pinned baseline enforcing a channel nothing used.
+		if t.store.mirrorEndpoint != nil {
 			return nil
 		}
 		wid := o.S("workspaceId")

@@ -51,6 +51,15 @@ Cloud 向凭据执行器（C）派发两件事，它们共用一段部署配置�
 
 镜像准备由 `PrepareMirrorsOnce` 驱动，只有装配了 `MirrorPreparer` 时 `cmd/server` 才启动该循环（默认关闭）。每次尝试严格三步，**任何事务都不跨越派发**：短事务领取（`FOR UPDATE` + 租约）→ 事务外签发与派发 → 短事务结算。租约 5 分钟、同一 Operation 至多 3 次尝试、失败退避 30 秒；`mirror_preparations.generation` 单调递增，是迟到结果的栅栏——代次已被取代的应答被拒绝而不是写入；尝试耗尽或凭据被终局拒绝时，按 `controller_epoch` 栅栏结算 Operation。授权有效期上界即尝试租约（`internal/config` 在校验配置时强制），避免出现"授权比它服务的租约活得更久"这种结果必被栅栏丢弃的派发。派发方的错误分类只在两处区分：执行器自己给出的稳定原因码，与"执行器不可达"。
 
+### 工作区内容的通道：一张派生、一次基线钉住、一处投影
+
+内容传输决策 D1 把通道定为一条：带凭据的 Workspace 从内部 Git Server 上的不可变镜像 clone。Cloud 侧只有三处实现它，且三处共用**同一个派生**（`mirror_preparation.go` 的 `cloneInputFor`）：`node` → `clone` 转换上的门禁（`requireMirrorPrepared`）、Controller 快照里的克隆输入（`projectMirrorInput`）、派发时对输入的比对（`workspaceCloneDispatch`）。派生就地重算而不读"上次写下的值"：`ready` 本身不是证据——Project 可被重绑到另一个凭据或另一个仓库、Workspace 可被改请求到另一个 ref、运行代次会前移，而准备记录照旧写着 `ready`，所以每一项都在同一个事务里对着**实时状态**重比。唯一的例外是凭据版本，它只在门禁处比对，因为只有那里能从活动引用解析出权威版本。
+
+- **通道由部署决定，不由请求决定**：`mirrorEndpoint` 只在启动时装配（`git_server.sandbox_base_url`）。装配了它，`admitCredentialedClone` 就**拒绝介入**，由 Node 用既有的匿名 HTTPS clone 去 clone 镜像；没装配它，才是 `requireRepositoryAccess` 放行 credentialed clone 的那种部署。两个通道是**替代关系而非先后关系**：同时装配会让 credentialed clone 通路永远派发不出去，`internal/config` 因此在启动时拒绝这种组合，而不是让它静默失效。这也是 D7 的"上游地址从不出现在这条记录里"被强制的地方——被拒的派发不留下 `clone_executions` 行。
+- **基线在转换时钉住，不在 clone 成功之后**：`base_commit_id` 由门禁在放行 `node` → `clone` 的同一次写入里钉成镜像的提交。写成"clone 成功之后再写"是不行的：Git Server 的读取授权要用 `base_commit_id` 现算镜像键，基线晚一步，这次 clone 自己就无处可读。`advanceClone` 随后要求 Node 报回的提交与它逐字相等，所以报另一个提交不是"重绑 Workspace"，而是被拒。
+- **投影只发生在快照上**：`projectMirrorInput` 改写的是快照里的 `repository_url` 与 `requested_ref` 两个字段，**不改任何行**。Project 的真实上游、凭据绑定、镜像键与读取授权全部继续以上游为准，因此凭据授权不可能绑定到镜像地址——D7 原先要求"同步修改 `credentialed_clone.go` 的仓库身份来源"，按这个形状是**构造上不会发生**，而不是"记得改过"。
+- **镜像身份**：地址不落库，由镜像键现算（`MirrorEndpoint.CloneAddress` 经 `gitserver.MirrorPath`）；键是（Project、规范化上游仓库、提交），与 Git Server 授权读取时重算的那个键相同。镜像只暴露一个分支（`mirrorpublish.MirrorBranch`），因此"分支不存在"与"分支已经移动"都不可能被克隆。
+
 ## 边界与不变量
 
 - **严禁长事务**：数据库事务绝对禁止跨越外部网络调用、Git 操作、Substrate 调用或子进程执行。

@@ -162,6 +162,13 @@ type Store struct {
 	// without a published mirror. It is a separate field from credentialedCloner because the two
 	// authorize different work and a deployment may enable one without the other.
 	mirrorPreparer MirrorPreparer
+
+	// mirrorEndpoint is where a sandbox reads a published mirror, installed once at startup by
+	// SetMirrorEndpoint. While it is nil — the default — Cloud publishes no mirror address into a
+	// clone input, so a credentialed Workspace stays behind the `mirror_not_ready` gate even when its
+	// mirror is published: the upstream is not a substitute for the internal channel, because the Node
+	// holds no credential for it and the decision makes the mirror the single content channel.
+	mirrorEndpoint *MirrorEndpoint
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no
