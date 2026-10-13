@@ -28,6 +28,7 @@ const maxJobBody = 16 << 10
 // calling another, and the decisions deliberately keep the authorization off the business protocol.
 type Server struct {
 	executor *Executor
+	mirror   *MirrorExecutor
 	caller   string
 	log      *zap.Logger
 }
@@ -42,6 +43,13 @@ type ServerConfig struct {
 	// the ability to ask for a credentialed clone is the ability to spend an authorization, and a
 	// second dispatcher would be a second party whose jobs this executor cannot distinguish.
 	Caller string
+	// Mirror is the mirror-preparation executor, or nil when the deployment declared no mirror
+	// capability. It is optional in a way the clone executor is not: filling the internal Git Server's
+	// mirrors is a separate capability from cloning into a Workspace, and a deployment that runs only
+	// one of them must be able to say so. A nil value leaves the mirror route answering
+	// `credential_executor_unavailable` rather than absent, so a dispatcher that reaches it learns the
+	// deployment did not establish the capability instead of guessing at a routing mistake.
+	Mirror *MirrorExecutor
 	// Log receives one line per job. It never receives a credential or an authorization.
 	Log *zap.Logger
 }
@@ -61,13 +69,19 @@ func NewServer(executor *Executor, cfg ServerConfig) (*Server, error) {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Server{executor: executor, caller: cfg.Caller, log: log}, nil
+	return &Server{executor: executor, mirror: cfg.Mirror, caller: cfg.Caller, log: log}, nil
 }
 
 // Handler returns the executor's HTTP surface.
+//
+// The two capabilities are two routes rather than one route with a discriminator, because they carry
+// different job shapes and different identities: a clone job names an execution and a Node, a mirror job
+// names an Operation and an attempt. A single route would have to decode both and decide which one it
+// was looking at, and that decision would be C's rather than the signature's (the 2026-10-13 ruling).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/clone-executions", s.dispatch)
+	mux.HandleFunc("POST /v1/mirror-preparations", s.prepare)
 	return mux
 }
 
@@ -78,13 +92,8 @@ func (s *Server) Handler() http.Handler {
 // decoded strictly, and the authorization they carry is a bearer secret that is cleared before any
 // log line or error path can see it.
 func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
-	identity, err := presentedIdentity(r.TLS)
-	if err != nil {
-		s.refuse(w, "", http.StatusUnauthorized, "service_identity_required", err)
-		return
-	}
-	if identity != s.caller {
-		s.refuse(w, identity, http.StatusForbidden, "service_identity_required", errors.New("identity is not the clone dispatcher"))
+	identity, ok := s.callerIdentity(w, r)
+	if !ok {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxJobBody)
@@ -112,12 +121,77 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// prepare performs one mirror preparation for the one caller allowed to ask for it.
+//
+// It is the mirror route's half of `dispatch`, and it differs in one thing that matters: an
+// unconfigured deployment answers `credential_executor_unavailable` rather than 404. Filling the
+// internal Git Server is a capability a deployment either established or did not, and telling a
+// dispatcher which of the two it is by the shape of a routing error would make "this deployment cannot
+// prepare mirrors" indistinguishable from "you sent the request to the wrong path".
+//
+// The authorization is cleared before any log line or error path can see it, exactly as on the clone
+// route.
+func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
+	identity, ok := s.callerIdentity(w, r)
+	if !ok {
+		return
+	}
+	if s.mirror == nil {
+		s.refuse(w, identity, http.StatusInternalServerError, ReasonCodeUnavailable,
+			errors.New("this deployment declared no mirror preparation capability"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxJobBody)
+	var job MirrorJob
+	if !decode(w, r, &job) {
+		return
+	}
+	result, err := s.mirror.Prepare(r.Context(), job)
+	job.Authorization = ""
+	if err != nil {
+		s.failure(w, identity, job.OperationID, err)
+		return
+	}
+	s.log.Info("mirror executor completed a preparation",
+		zap.String("serviceIdentity", identity),
+		zap.String("operationId", job.OperationID),
+		zap.String("commit", result.Commit),
+		zap.Int64("generation", result.Generation),
+	)
+	// The result is written as the type the caller will decode it into, so the wire shape and the
+	// structure cannot drift into two spellings of one answer.
+	respond(w, http.StatusOK, result)
+}
+
+// callerIdentity resolves and checks the dispatching service identity, answering the request itself
+// when the peer is not the one dispatcher this deployment accepts.
+//
+// It is shared by both routes so the two cannot drift into two identity stories: there is one
+// dispatcher, and whether it is asking for a clone or a mirror preparation is a question about the
+// body, not about who it is.
+func (s *Server) callerIdentity(w http.ResponseWriter, r *http.Request) (string, bool) {
+	identity, err := presentedIdentity(r.TLS)
+	if err != nil {
+		s.refuse(w, "", http.StatusUnauthorized, "service_identity_required", err)
+		return "", false
+	}
+	if identity != s.caller {
+		s.refuse(w, identity, http.StatusForbidden, "service_identity_required", errors.New("identity is not the executor's dispatcher"))
+		return "", false
+	}
+	return identity, true
+}
+
 // failure maps a coded refusal to its wire code.
 //
 // The cause is written to the executor's own log and never to the response: it can carry the Store's
 // reason code, a Git error, or a filesystem path, and the caller receives the executor's own stable
 // code instead. A caller that went away is not a job failure and is not logged as one.
-func (s *Server) failure(w http.ResponseWriter, identity, executionID string, err error) {
+//
+// The subject is whichever identifier the route's job carried — an execution for a clone, an operation
+// for a preparation — and it is logged so a refusal can be matched to the request that caused it.
+// Neither identifier is a secret.
+func (s *Server) failure(w http.ResponseWriter, identity, subject string, err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
@@ -135,23 +209,23 @@ func (s *Server) failure(w http.ResponseWriter, identity, executionID string, er
 	case ReasonCodeUnavailable, ReasonCodeCleanupFailed:
 		status = http.StatusInternalServerError
 	}
-	s.log.Error("clone executor refused a job",
+	s.log.Error("credential executor refused a job",
 		zap.String("serviceIdentity", identity),
-		zap.String("executionId", executionID),
+		zap.String("subject", subject),
 		zap.String("reason", failure.ReasonCode()),
 		zap.Error(failure.Unwrap()),
 	)
-	respond(w, status, map[string]string{"code": failure.ReasonCode(), "message": "clone executor refused the job"})
+	respond(w, status, map[string]string{"code": failure.ReasonCode(), "message": "credential executor refused the job"})
 }
 
 // refuse reports a request refused before any job ran.
 func (s *Server) refuse(w http.ResponseWriter, identity string, status int, code string, cause error) {
-	s.log.Warn("clone executor request refused",
+	s.log.Warn("credential executor request refused",
 		zap.String("serviceIdentity", identity),
 		zap.String("reason", code),
 		zap.Error(cause),
 	)
-	respond(w, status, map[string]string{"code": code, "message": "clone executor refused the request"})
+	respond(w, status, map[string]string{"code": code, "message": "credential executor refused the request"})
 }
 
 // decode reads a strict JSON body. Unknown fields, a malformed document, a second JSON value, and an

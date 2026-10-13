@@ -60,6 +60,14 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	// The mirror capability is optional and absent by default. An empty mirror root yields no executor
+	// and the route then answers `credential_executor_unavailable`; a declared but unbuildable mirror
+	// section — a root nested inside the materialization root, a store whose limits are inconsistent —
+	// refuses here, in the same startup gate as the clone path's.
+	mirrorExecutor, e := cfg.MirrorExecutor()
+	if e != nil {
+		return e
+	}
 	serverTLS, e := cfg.ServerTLS()
 	if e != nil {
 		return e
@@ -67,6 +75,7 @@ func run() (runErr error) {
 	server, e := cloneexec.NewServer(executor, cloneexec.ServerConfig{
 		TLS:    serverTLS,
 		Caller: cfg.DispatcherIdentity,
+		Mirror: mirrorExecutor,
 		Log:    log,
 	})
 	if e != nil {
@@ -79,29 +88,57 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	fetched := 0
+	if mirrorExecutor != nil {
+		// The mirror sweep removes only the fetch directories of preparations that never finished. It
+		// touches nothing published and does not reconcile the store, which is why it is safe at every
+		// start while the store's own lifetime is left to the deployment.
+		if fetched, e = mirrorExecutor.Sweep(); e != nil {
+			return e
+		}
+	}
 	listener, e := net.Listen("tcp", cfg.Listen)
 	if e != nil {
 		return e
+	}
+	// The write timeout has to outlast the longest job the deployment can dispatch, because the response
+	// is what the job produced. The two defaults are resolved separately before they are compared: a
+	// deployment that configured a mirror root and left both timeouts at their defaults runs ten-minute
+	// preparations, and comparing the raw zeros would have bounded them with the clone's five.
+	jobTimeout := cloneexec.DefaultCloneTimeout
+	if cfg.Timeout > 0 {
+		jobTimeout = cfg.Timeout
+	}
+	if mirrorExecutor != nil {
+		mirrorTimeout := cloneexec.DefaultMirrorTimeout
+		if cfg.MirrorTimeout > 0 {
+			mirrorTimeout = cfg.MirrorTimeout
+		}
+		jobTimeout = max(jobTimeout, mirrorTimeout)
 	}
 	httpServer := &http.Server{
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		// The write timeout has to outlast a clone, because the response is what the clone produces.
-		WriteTimeout: cfg.Timeout + time.Minute,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout:      jobTimeout + time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	failed := make(chan error, 1)
 	go func() {
-		// Only locations are logged: the listen address, the two roots, and how many leftovers the
-		// sweep removed. A credential and an authorization never reach a log line.
+		// Only locations are logged: the listen address, the roots, and how many leftovers the sweeps
+		// removed. A credential and an authorization never reach a log line. The mirror root is logged as
+		// an empty string when the capability is absent, which is a fact about the deployment rather than
+		// a missing value.
 		log.Info("clone executor listening",
 			zap.String("address", listener.Addr().String()),
 			zap.String("materialRoot", cfg.MaterialRoot),
 			zap.String("checkoutRoot", cfg.CheckoutRoot),
+			zap.String("mirrorRoot", cfg.MirrorRoot),
+			zap.Bool("mirrorCapability", mirrorExecutor != nil),
 			zap.Int("sweptEntries", removed),
+			zap.Int("sweptFetches", fetched),
 		)
 		// The mutual-TLS configuration wraps the listener directly rather than going through ServeTLS,
 		// whose empty-file-name form silently depends on the certificate already being in the config.

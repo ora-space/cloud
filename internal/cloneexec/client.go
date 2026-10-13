@@ -136,3 +136,56 @@ func (c *Client) Dispatch(ctx context.Context, job Job) (Result, error) {
 	}
 	return result, nil
 }
+
+// PrepareMirror asks the executor to prepare one internal mirror and returns what it published.
+//
+// It is a second method rather than a mode on Dispatch because the two jobs are different subjects on
+// different routes, and the reason is the same one the executor's two handlers have: a clone names an
+// execution and a Node, a preparation names an Operation and an attempt, and a client that took both
+// would be a client whose caller decides which identity fields matter. Cloud sends one or the other,
+// and which one it is sending is a fact about the call site rather than about a field.
+//
+// There is no retry here either, and for the same reason: the authorization is spent when the executor
+// redeems it, so an ambiguous result is reconciled by the caller against the operation's state, not
+// hidden behind a second request.
+//
+//nolint:gocritic // By value on purpose: the job carries the bearer authorization, and the copy this method encodes is the copy it sends.
+func (c *Client) PrepareMirror(ctx context.Context, job MirrorJob) (MirrorResult, error) {
+	encoded, err := json.Marshal(job)
+	if err != nil {
+		return MirrorResult{}, fmt.Errorf("encode mirror job: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/mirror-preparations", bytes.NewReader(encoded))
+	if err != nil {
+		return MirrorResult{}, fmt.Errorf("build mirror dispatch request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return MirrorResult{}, fmt.Errorf("clone executor is unreachable: %w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxJobBody))
+	if err != nil {
+		return MirrorResult{}, fmt.Errorf("read mirror dispatch response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Code == "" {
+			refusal.Code = ReasonCodeUnavailable
+		}
+		return MirrorResult{}, &DispatcherRefusal{Code: refusal.Code, Status: response.StatusCode}
+	}
+	var result MirrorResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return MirrorResult{}, errors.New("clone executor returned an unreadable response")
+	}
+	// A preparation that reported no commit published nothing this caller can act on, and the commit is
+	// the value Cloud compares against its own rows before it believes the mirror exists.
+	if strings.TrimSpace(result.Commit) == "" || strings.TrimSpace(result.Repository) == "" {
+		return MirrorResult{}, errors.New("clone executor returned no mirror")
+	}
+	return result, nil
+}

@@ -13,6 +13,63 @@ import (
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 )
 
+// gitDeployment is the part of C's deployment that every path running Git shares: where credential
+// material is staged, which Git and which helper run, and what Git trusts.
+//
+// It exists so the two Git-running paths — the credentialed clone and the mirror preparation — cannot
+// drift into two different Git configurations. They differ in what they ask Git to do, not in how Git
+// is invoked or where the credential comes from, and a deployment that changed one helper without the
+// other would otherwise be a silent asymmetry between the two ways a token reaches a repository.
+type gitDeployment struct {
+	materialRoot  string
+	homeDirectory string
+	helperPath    string
+	gitPath       string
+	sslCAInfo     string
+}
+
+// validate checks every fixed path once, at startup, and refuses rather than defaulting.
+//
+// Each of these is a deployment boundary rather than input validation: a missing or unusable path
+// would otherwise be discovered per job, and a misconfigured deployment would look like an upstream
+// that every repository fails to reach.
+//
+// Existence and mode of the home directory are checked rather than assumed, because `HOME` is one of
+// the few inputs Git reads that the command line cannot override. A missing directory is not a
+// security failure — Git simply finds nothing — but it means the deployment did not create what it
+// declared, and a constructor is the place that says so rather than a job that behaves inexplicably
+// later.
+//
+//nolint:gocritic // Value receiver on purpose: this reads a snapshot of the deployment's own environment, and there is nothing here a caller could write back through.
+func (g gitDeployment) validate() error {
+	for _, part := range []struct{ name, value string }{
+		{"credential materialization root", g.materialRoot},
+		{"executor home directory", g.homeDirectory},
+		{"credential helper path", g.helperPath},
+		{"git path", g.gitPath},
+	} {
+		if err := validateExecutablePath(part.value); err != nil {
+			return fmt.Errorf("%s: %w", part.name, err)
+		}
+	}
+	if g.sslCAInfo != "" {
+		if err := validateExecutablePath(g.sslCAInfo); err != nil {
+			return fmt.Errorf("git certificate authority file: %w", err)
+		}
+	}
+	info, err := os.Stat(g.homeDirectory)
+	if err != nil {
+		return fmt.Errorf("executor home directory: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("executor home directory is not a directory")
+	}
+	if info.Mode().Perm() != homeDirectoryMode {
+		return fmt.Errorf("executor home directory is %#o, not %#o", info.Mode().Perm(), homeDirectoryMode)
+	}
+	return nil
+}
+
 // gitEnvironment is the entire environment a credentialed clone runs with.
 //
 // It is built from nothing rather than inherited and filtered. Inheriting would mean every variable
@@ -233,26 +290,33 @@ func validateBranch(branch string) error {
 	return nil
 }
 
-// runGit runs one constrained Git command and returns Git's error output alongside the exit error.
+// runGit runs one constrained Git command and returns both of its output streams alongside the exit
+// error.
 //
-// Git's stderr is captured rather than streamed: it is the only useful thing a failed clone produces,
-// and it is also the one place a credential could reach a log, because a remote can put arbitrary text
-// in a response and Git may quote it. The caller therefore redacts it against the exact secret it
-// staged before the text goes anywhere, which is a stronger guarantee than trusting the remote not to
-// have echoed it. The text is never returned to the caller of the job in any case.
-func runGit(ctx context.Context, gitPath, home string, arguments []string, workingDirectory string) (string, error) {
+// Git's stderr is captured rather than streamed: it is the only useful thing a failed command
+// produces, and it is also the one place a credential could reach a log, because a remote can put
+// arbitrary text in a response and Git may quote it. The caller therefore redacts it against the
+// exact secret it staged before the text goes anywhere, which is a stronger guarantee than trusting
+// the remote not to have echoed it. The text is never returned to the caller of the job in any case.
+//
+// Standard output is returned for the commands whose whole purpose is to print a fact back — the
+// commit a fetch resolved to, the refs a repository exposes. It is bounded by being what Git was
+// asked for and nothing else: neither command is given a revision or a ref list from outside this
+// package.
+func runGit(ctx context.Context, gitPath, home string, arguments []string, workingDirectory string) (stdout, stderr string, err error) {
 	command := exec.CommandContext(ctx, gitPath, arguments...)
 	command.Dir = workingDirectory
 	command.Env = gitEnvironment(home, nil)
-	// The clone has no stdin. Git would otherwise be able to read a credential or a confirmation from
+	// Git has no stdin. It would otherwise be able to read a credential or a confirmation from
 	// whatever the executor's standard input happens to be attached to.
 	command.Stdin = nil
-	var stderr strings.Builder
-	command.Stderr = &stderr
+	var output, errorOutput strings.Builder
+	command.Stdout = &output
+	command.Stderr = &errorOutput
 	if err := command.Run(); err != nil {
-		return stderr.String(), err
+		return "", errorOutput.String(), err
 	}
-	return stderr.String(), nil
+	return output.String(), errorOutput.String(), nil
 }
 
 // redactFailure turns Git's own error output into a failure the executor may log.

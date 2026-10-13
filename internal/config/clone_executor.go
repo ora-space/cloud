@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/cloneauth"
 	"github.com/wanglongan587/cloud/internal/cloneexec"
 	"github.com/wanglongan587/cloud/internal/logger"
+	"github.com/wanglongan587/cloud/internal/mirror"
 )
 
 // CloneExecutorServiceConfig is the credentialed-clone executor's own configuration.
@@ -71,6 +73,30 @@ type CloneExecutorServiceConfig struct {
 	StorePrivateKeyFile  string `mapstructure:"store_private_key_file"`
 	// StoreCAFile is the authority that signs the Credential Service's server certificate.
 	StoreCAFile string `mapstructure:"store_ca_file"`
+	// MirrorRoot is the directory holding the mirror store this deployment publishes into — the same
+	// volume the internal Git Server reads from. It is optional, and empty is the approved default: a
+	// deployment that prepares no mirrors has no mirror endpoint at all, and the clone path is
+	// unaffected either way.
+	//
+	// It is deliberately not defaulted to anything derived from the other roots. The mirror store
+	// contains published content another process serves, and the materialization root contains only
+	// secrets, so a deployment that let one be inferred from the other would be choosing which of the
+	// two guarantees to lose without saying so; see the containment checks in MirrorExecutor.
+	MirrorRoot string `mapstructure:"mirror_root"`
+	// MirrorMaxBytes caps one published mirror. It is enforced at publication, by this process: the
+	// writer is the only party that publishes, so this is the value that decides what may be stored.
+	// The internal Git Server is configured with its own copy for its own accounting, and a deployment
+	// that set them differently would be describing one volume with two budgets.
+	MirrorMaxBytes int64 `mapstructure:"mirror_max_bytes"`
+	// MirrorVolumeBytes caps the total published size across all mirrors.
+	MirrorVolumeBytes int64 `mapstructure:"mirror_volume_bytes"`
+	// MirrorGrace is how long a mirror stays after Cloud's references stop naming it. This process does
+	// not sweep the store today; the value is carried because the store is opened here with the
+	// deployment's own policy, so a later reconciliation pass wired into this command inherits the
+	// configured grace rather than a zero that would reclaim immediately.
+	MirrorGrace time.Duration `mapstructure:"mirror_grace"`
+	// MirrorTimeout bounds one mirror preparation. Zero selects the executor's default.
+	MirrorTimeout time.Duration `mapstructure:"mirror_timeout"`
 	// Timeout bounds one clone. Zero selects the executor's default.
 	Timeout time.Duration `mapstructure:"timeout"`
 	// Logger is the executor's own log destination.
@@ -146,6 +172,94 @@ func (c *CloneExecutorServiceConfig) Executor() (*cloneexec.Executor, error) {
 		return nil, fmt.Errorf("clone executor: %w", err)
 	}
 	return executor, nil
+}
+
+// MirrorExecutor builds the mirror-preparation executor over the configured mirror store.
+//
+// An empty `mirror_root` yields `(nil, nil)`: the capability is simply absent, and the executor's
+// mirror route answers `credential_executor_unavailable` rather than the deployment serving a store it
+// was never given. That is the approved default, and it is the same shape CloneDispatchConfig uses —
+// an absent capability is not an error, a half-declared one is.
+//
+// The containment checks are the reason this cannot be a plain field assignment. `credentialmaterial.Sweep`
+// removes *every* entry under the materialization root, and the clone executor runs it at startup; a
+// mirror root nested inside it would therefore be deleted on the first restart, published content and
+// all, by a process that was only cleaning up after itself. The reverse nesting puts credential material
+// inside the volume the internal Git Server serves. Both are refused here, where the failure can be
+// reported as the deployment error it is.
+func (c *CloneExecutorServiceConfig) MirrorExecutor() (*cloneexec.MirrorExecutor, error) {
+	root := strings.TrimSpace(c.MirrorRoot)
+	if root == "" {
+		return nil, nil
+	}
+	for _, other := range []struct{ name, path string }{
+		{"credential materialization root", c.MaterialRoot},
+		{"checkout root", c.CheckoutRoot},
+	} {
+		if err := separateRoots(root, other.path); err != nil {
+			return nil, fmt.Errorf("clone executor mirror root: %w; it must be a directory of its own, not one containing or contained by the %s", err, other.name)
+		}
+	}
+	keys, err := cloneauth.LoadVerificationKeys(c.AuthorizationPublicKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("clone executor mirror: %w", err)
+	}
+	storeClient, err := c.StoreClient()
+	if err != nil {
+		return nil, err
+	}
+	mirrors, err := mirror.New(mirror.Config{
+		Root:           root,
+		MaxMirrorBytes: c.MirrorMaxBytes,
+		MaxVolumeBytes: c.MirrorVolumeBytes,
+		Grace:          c.MirrorGrace,
+		Clock:          time.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clone executor mirror store: %w", err)
+	}
+	executor, err := cloneexec.NewMirrorExecutor(cloneexec.MirrorConfig{
+		MaterialRoot:     c.MaterialRoot,
+		HomeDirectory:    c.HomeDirectory,
+		HelperPath:       c.HelperPath,
+		GitPath:          c.GitPath,
+		SSLCAInfo:        c.SSLCAInfo,
+		VerificationKeys: keys,
+		Mirrors:          mirrors,
+		Store:            storeClient,
+		Timeout:          c.MirrorTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clone executor mirror: %w", err)
+	}
+	return executor, nil
+}
+
+// separateRoots refuses two configured directories that contain one another.
+//
+// It is a containment check and not an equality check because of how each directory is swept:
+// `credentialmaterial.Sweep` and the mirror executor's own fetch sweep both remove every entry beneath
+// their root, so nesting one inside the other means one capability's routine cleanup deletes the
+// other's content. An empty path is skipped rather than refused, because a missing root is reported by
+// the builder that needs it, with a message about the root that is actually missing.
+func separateRoots(one, other string) error {
+	one, other = strings.TrimSpace(one), strings.TrimSpace(other)
+	if one == "" || other == "" {
+		return nil
+	}
+	for _, pair := range [][2]string{{one, other}, {other, one}} {
+		rel, err := filepath.Rel(pair[0], pair[1])
+		if err != nil {
+			// Paths on different volumes, or one absolute and one relative: neither can contain the other
+			// in a way this check has to reason about, and the builders reject a non-absolute root on their
+			// own.
+			continue
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return fmt.Errorf("%q and %q are not separate directories", pair[0], pair[1])
+		}
+	}
+	return nil
 }
 
 // StoreClient builds the executor's `broker-resolver` client.

@@ -228,6 +228,47 @@ func (p *Preparation) Dir() string { return p.dir }
 // Key is the key this preparation publishes.
 func (p *Preparation) Key() Key { return p.key }
 
+// Adopt installs content the writer produced elsewhere as this preparation's staged mirror.
+//
+// It exists because of an ordering this store cannot avoid. A mirror is keyed by the commit a ref
+// resolved to, and that commit is only known once the fetch has run — so the content has to exist
+// before the key that will name it does. The writer therefore fetches into a directory of its own,
+// reads the commit back out of the fetched repository, begins the preparation that commit names, and
+// moves the finished repository into the staging directory this preparation reserved.
+//
+// The move is a rename, which is atomic within one filesystem and undefined across two, so a
+// deployment places the fetch directory inside the store root; a deployment that did not gets an
+// error here rather than a silent copy that could double the store's disk use. The staging directory
+// this preparation created is empty, so it is removed first: renaming onto an existing directory is
+// not portable, and an empty directory holds nothing worth keeping.
+//
+// Adopting is not a way to skip the store's own checks. The size and volume limits, the verification
+// against the key, and the atomic publication are all still Publish's, and a preparation that adopts
+// content and then fails leaves no readable mirror — only a failed record and a reclaimed staging
+// directory.
+func (p *Preparation) Adopt(source string) error {
+	if p.closed {
+		return errors.New("preparation is already finished")
+	}
+	if !filepath.IsAbs(source) || filepath.Clean(source) != source {
+		return errors.New("adopted content must be an absolute, clean path")
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !info.IsDir() {
+		return errors.New("adopted content is not a directory")
+	}
+	if err := os.Remove(p.dir); err != nil {
+		return p.finishWithError(fmt.Errorf("%w: clear the staging directory: %v", ErrUnavailable, err))
+	}
+	if err := os.Rename(source, p.dir); err != nil {
+		return p.finishWithError(fmt.Errorf("%w: adopt the staged content: %v", ErrUnavailable, err))
+	}
+	return nil
+}
+
 // Publish verifies, measures and atomically makes the staged content readable.
 //
 // The order is the visibility rule: the content is renamed into place first, and only then is the

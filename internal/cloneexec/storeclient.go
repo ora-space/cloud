@@ -150,6 +150,24 @@ type RedemptionClient interface {
 	Resolve(ctx context.Context, credentialID, authorization string, runtime Runtime) (Credential, error)
 }
 
+// MirrorRedemptionClient is the redemption boundary for the mirror purpose.
+//
+// It is a second interface rather than a second method on RedemptionClient because the two carry
+// different claims. A clone's redemption states the runtime it is executing under, and the Store
+// compares that statement against the authorization's binding. A mirror preparation has no runtime to
+// state: it runs on no Node, and what the Store checks instead is the service identity on the client
+// certificate against the `executorIdentity` the authorization named. A client with one method taking
+// both shapes would have to accept a runtime it is not going to check, which is exactly how a request
+// field becomes decorative.
+//
+// Keeping them separate also keeps each executor's dependency narrow: the clone path cannot call the
+// mirror endpoint and the mirror path cannot state a runtime, because neither has the method.
+type MirrorRedemptionClient interface {
+	// ResolveMirror redeems one `mirror_prepare` authorization for the credential it names. The
+	// caller is identified by the certificate this client presents, never by anything in the call.
+	ResolveMirror(ctx context.Context, credentialID, authorization string) (Credential, error)
+}
+
 // Resolve redeems one authorization for the token it names.
 //
 // The request carries the authorization and the executor's own declaration of which runtime it is.
@@ -185,6 +203,57 @@ func (c *StoreClient) Resolve(ctx context.Context, credentialID, authorization s
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxStoreResponse))
 	if err != nil {
 		return Credential{}, fmt.Errorf("read redemption response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Code == "" {
+			refusal.Code = ReasonCodeStoreUnavailable
+		}
+		return Credential{}, &StoreRefusal{Code: refusal.Code, Status: response.StatusCode}
+	}
+	var resolved Credential
+	if err := json.Unmarshal(raw, &resolved); err != nil {
+		return Credential{}, errors.New("credential service returned an unreadable response")
+	}
+	if strings.TrimSpace(resolved.Token) == "" {
+		return Credential{}, errors.New("credential service returned no credential")
+	}
+	return resolved, nil
+}
+
+// ResolveMirror redeems one `mirror_prepare` authorization for the token it names.
+//
+// The request is the authorization and nothing else, and that is the whole difference from `Resolve`:
+// a clone states the runtime it is executing under, while a mirror preparation has none to state and
+// the Store takes the presenter's identity from the client certificate instead. Sending a runtime field
+// here would be sending a value the Store would have to ignore, which is how a request field becomes
+// something a later reader believes is checked.
+//
+// It is the same endpoint vocabulary — the same refusal codes, the same single-use semantics, the
+// authorization spent exactly once by the Store — reached on the Store's mirror route.
+func (c *StoreClient) ResolveMirror(ctx context.Context, credentialID, authorization string) (Credential, error) {
+	encoded, err := json.Marshal(map[string]any{"authorization": authorization})
+	if err != nil {
+		return Credential{}, fmt.Errorf("encode mirror redemption request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.endpoint+"/v1/credentials/"+url.PathEscape(credentialID)+"/resolve-mirror", bytes.NewReader(encoded))
+	if err != nil {
+		return Credential{}, fmt.Errorf("build mirror redemption request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		// The URL is in the error and a URL never carries a token, because tokens only ever travel in a
+		// response body. The authorization is in the request body and is not repeated here.
+		return Credential{}, fmt.Errorf("credential service is unreachable: %w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxStoreResponse))
+	if err != nil {
+		return Credential{}, fmt.Errorf("read mirror redemption response: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		var refusal struct {

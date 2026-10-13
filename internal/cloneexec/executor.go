@@ -241,36 +241,11 @@ type Executor struct {
 //
 //nolint:gocritic // By value on purpose: the deployment descriptor is copied into the executor, so a caller that keeps its Config and edits it cannot move a running executor's boundary afterwards.
 func New(cfg Config) (*Executor, error) {
-	if err := validateExecutablePath(cfg.MaterialRoot); err != nil {
-		return nil, fmt.Errorf("credential materialization root: %w", err)
+	if err := cfg.gitDeployment().validate(); err != nil {
+		return nil, err
 	}
 	if err := validateExecutablePath(cfg.CheckoutRoot); err != nil {
 		return nil, fmt.Errorf("checkout root: %w", err)
-	}
-	if err := validateExecutablePath(cfg.HomeDirectory); err != nil {
-		return nil, fmt.Errorf("executor home directory: %w", err)
-	}
-	// Existence and mode are checked rather than assumed, because `HOME` is one of the few inputs Git
-	// reads that the command line cannot override. A missing directory is not a security failure — Git
-	// simply finds nothing — but it means the deployment did not create what it declared, and this
-	// constructor is the place that says so rather than a clone that behaves inexplicably later.
-	if info, err := os.Stat(cfg.HomeDirectory); err != nil {
-		return nil, fmt.Errorf("executor home directory: %w", err)
-	} else if !info.IsDir() {
-		return nil, errors.New("executor home directory is not a directory")
-	} else if info.Mode().Perm() != homeDirectoryMode {
-		return nil, fmt.Errorf("executor home directory is %#o, not %#o", info.Mode().Perm(), homeDirectoryMode)
-	}
-	if err := validateExecutablePath(cfg.HelperPath); err != nil {
-		return nil, fmt.Errorf("credential helper path: %w", err)
-	}
-	if err := validateExecutablePath(cfg.GitPath); err != nil {
-		return nil, fmt.Errorf("git path: %w", err)
-	}
-	if cfg.SSLCAInfo != "" {
-		if err := validateExecutablePath(cfg.SSLCAInfo); err != nil {
-			return nil, fmt.Errorf("git certificate authority file: %w", err)
-		}
 	}
 	if len(cfg.VerificationKeys) == 0 {
 		return nil, errors.New("credential executor requires an authorization verification key")
@@ -300,6 +275,19 @@ func New(cfg Config) (*Executor, error) {
 		log = zap.NewNop()
 	}
 	return &Executor{config: cfg, log: log}, nil
+}
+
+// gitDeployment is the shared Git and credential-materialization environment this executor runs with.
+//
+//nolint:gocritic // Value receiver on purpose: it is the same receiver `New` has, so the environment validated here is a snapshot of the deployment rather than a live view a caller could edit afterwards.
+func (c Config) gitDeployment() gitDeployment {
+	return gitDeployment{
+		materialRoot:  c.MaterialRoot,
+		homeDirectory: c.HomeDirectory,
+		helperPath:    c.HelperPath,
+		gitPath:       c.GitPath,
+		sslCAInfo:     c.SSLCAInfo,
+	}
 }
 
 // Sweep removes material left by a previous run.
@@ -451,7 +439,7 @@ func (e *Executor) clone(ctx context.Context, job *Job, repository, token string
 	if err != nil {
 		return "", e.refuse(ReasonCodeUnavailable, err)
 	}
-	if stderr, err := runGit(ctx, e.config.GitPath, e.config.HomeDirectory, arguments, root); err != nil {
+	if _, stderr, err := runGit(ctx, e.config.GitPath, e.config.HomeDirectory, arguments, root); err != nil {
 		// A failed clone may still have created the target. Removing it keeps the checkout root from
 		// filling with partial trees, and it removes no credential: Git never writes the token into the
 		// checkout.
