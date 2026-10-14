@@ -96,6 +96,14 @@ type Store struct {
 	// a safe reason, or skipped when storage is unconfigured. It runs after receipt/Revision writes.
 	OnDeliverySettled func(context.Context, *sql.Tx, string, string, Object) error
 
+	// Secrets is the independent Credential Service's ingress capability (see git_credentials.go).
+	// Cloud hands a user's token to it inside the request that received it and keeps only the reference
+	// it returns; there is no code path that resolves a token back out. Nil means the deployment
+	// configured no credential service, and every credential write then fails closed with
+	// `credential_store_unavailable` — D6 forbids substituting Cloud's own database for a store the
+	// deployment did not establish.
+	Secrets CredentialSecretWriter
+
 	// Collaboration ports (consuming-side seams; see collaboration.go). NewStore wires the real
 	// workflow-backed Directory and Forms, because Cloud owns the workflow document and needs no
 	// external backend to serve those two. The remaining three stay nil ("Unavailable") until a
@@ -140,6 +148,35 @@ type Store struct {
 	// Signals carries at-most-once work hints to the lease-holding Controller's Watch stream;
 	// clone requests stay durable in PostgreSQL whether or not a hint is delivered.
 	Signals *ControlHub
+
+	// credentialedCloner is the credentialed-clone executor boundary, installed once at startup by
+	// SetCredentialedCloner from deployment configuration. While it is nil — the default — a Project
+	// that names a credential is refused on every path with
+	// `repository_credential_executor_unavailable`, which is the approved fail-closed state. It is not
+	// exported because "which executor" is a deployment fact that must not be settable per request.
+	credentialedCloner CredentialedCloner
+
+	// mirrorPreparer is the mirror-preparation executor boundary, installed once at startup by
+	// SetMirrorPreparer. While it is nil — the default — no preparation is ever claimed, so a
+	// credentialed Workspace keeps meeting the `mirror_not_ready` gate rather than entering `clone`
+	// without a published mirror. It is a separate field from credentialedCloner because the two
+	// authorize different work and a deployment may enable one without the other.
+	mirrorPreparer MirrorPreparer
+
+	// mirrorEndpoint is where a sandbox reads a published mirror, installed once at startup by
+	// SetMirrorEndpoint. While it is nil — the default — Cloud publishes no mirror address into a
+	// clone input, so a credentialed Workspace stays behind the `mirror_not_ready` gate even when its
+	// mirror is published: the upstream is not a substitute for the internal channel, because the Node
+	// holds no credential for it and the decision makes the mirror the single content channel.
+	mirrorEndpoint *MirrorEndpoint
+
+	// pushExecutor is the push executor boundary, installed once at startup by SetPushExecutor. While
+	// it is nil — the default, and the only state this change can produce in a deployment — no push is
+	// ever dispatched and every approval is settled `failed` with `push_executor_unavailable`, which is
+	// the approved fail-closed condition for a deployment whose write path does not exist yet. It is a
+	// separate field from credentialedCloner because the two authorize different work in different
+	// directions, and one may be installed without the other.
+	pushExecutor PushExecutor
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no
@@ -204,6 +241,9 @@ type transaction struct {
 	workSignals           []string
 	commandSignals        []string
 	events                []SpaceEvent
+	// admittedCredential is set by requireRepositoryAccess when this deployment executes a credentialed
+	// clone itself. It is read by the dispatch that runs outside this transaction.
+	admittedCredential *admittedCredential
 }
 
 func (t *transaction) exec(q string, args ...any) {

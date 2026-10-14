@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -1009,6 +1010,174 @@ func TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades(t *testing.T) {
 	}
 	_, e = pool.Exec(`INSERT INTO user_git_identities(user_id,name,email) VALUES($1,'Ghost','g@x')`, uuid.NewString())
 	wantPGError(t, e, "23503") // the identity belongs to a real user
+}
+
+// TestMigration0034MirrorPreparationAppliesFreshAndUpgrades proves the mirror preparation's record
+// exists on a fresh database and on an upgrade, and that the rules keeping a preparation from naming a
+// ref or a ready state it cannot support are held by the database rather than only by Cloud's code.
+//
+// It asserts the step vocabulary does NOT admit a mirror step, because 0035 withdraws the one 0034
+// added: the step name crosses to the desktop Controller as a protobuf enum it has no arm for, so an
+// operation entering that step is one the Controller can neither name nor drive. The preparation runs
+// inside the existing node -> clone transition instead, which is why the step must stay out.
+func TestMigration0034MirrorPreparationAppliesFreshAndUpgrades(t *testing.T) {
+	freshPool, _ := testSchema(t, "test_mp34f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !tableExists(t, freshPool, "mirror_preparations") {
+		t.Fatal("a fresh database must have mirror_preparations")
+	}
+	assertMirrorIsNotAnOperationStep(t, freshPool)
+	assertMirrorPreparationConstraints(t, freshPool)
+
+	pool, _ := testSchema(t, "test_mp34_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0034_mirror_preparation.sql"))
+	if tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("mirror_preparations must not exist before 0034")
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("the upgrade must add mirror_preparations")
+	}
+	assertMirrorIsNotAnOperationStep(t, pool)
+	assertMirrorPreparationConstraints(t, pool)
+}
+
+// TestMigration0035WithdrawsTheMirrorStep proves the withdrawal is an upgrade and not a rewrite: a
+// database stopped at 0034 really did admit the mirror step, and applying 0035 removes it without
+// dropping the preparation record that 0034 created. Both halves matter, because a "withdrawal" that
+// only looked correct on a fresh database would leave every deployed database able to enter a step the
+// Controller cannot drive.
+func TestMigration0035WithdrawsTheMirrorStep(t *testing.T) {
+	pool, _ := testSchema(t, "test_mp35_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0035_mirror_is_not_an_operation_step.sql"))
+	assertMirrorStepIsAdmitted(t, pool)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertMirrorIsNotAnOperationStep(t, pool)
+	if !tableExists(t, pool, "mirror_preparations") {
+		t.Fatal("withdrawing the step must not drop the preparation record")
+	}
+	assertMirrorPreparationConstraints(t, pool)
+}
+
+// stepVocabulary reads this schema's operations_step_check definition. The constraint is looked up in
+// the test's own schema because `pg_constraint` is cluster-wide: a query on the name alone could read
+// a sibling test schema's constraint and pass without this schema having been migrated at all.
+func stepVocabulary(t *testing.T, pool *sql.DB) string {
+	t.Helper()
+	var definition string
+	must(t, pool.QueryRow(`SELECT pg_get_constraintdef(c.oid)
+		FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+		WHERE c.conname='operations_step_check' AND n.nspname=current_schema()`).Scan(&definition))
+	return definition
+}
+
+// assertMirrorStepIsAdmitted checks the step constraint rather than inserting an operation row. An
+// operation needs a tenant membership, a Project and a Workspace to exist at all, which would make this
+// a fixture test; the constraint definition is what the migration actually changes.
+func assertMirrorStepIsAdmitted(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	if definition := stepVocabulary(t, pool); !strings.Contains(definition, "'mirror'") {
+		t.Fatalf("operations_step_check must admit the mirror step at 0034, got %s", definition)
+	}
+}
+
+// assertMirrorIsNotAnOperationStep is the standing assertion: no schema may let an operation enter a
+// step the Controller cannot decode, so 'mirror' must be absent from the vocabulary in every schema
+// the full migration set produces.
+func assertMirrorIsNotAnOperationStep(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	if definition := stepVocabulary(t, pool); strings.Contains(definition, "'mirror'") {
+		t.Fatalf("operations_step_check must not admit a mirror step: the Controller maps an unknown step to Unspecified and fails the round, got %s", definition)
+	}
+}
+
+// assertMirrorPreparationConstraints drives the row-level checks with no referents at all. Every
+// rejection below has to come from a CHECK (23514); the deliberate exception is the last case, where
+// reaching the foreign key (23503) is the point — it proves a well-formed row passes every CHECK.
+func assertMirrorPreparationConstraints(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	insert := func(pinnedRef, state, commit string, mirrorGeneration any) error {
+		_, e := pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
+			repository_url,pinned_ref,runtime_generation,control_epoch,state,commit_id,mirror_generation)
+			VALUES($1,$2,$3,$4,'https://example.invalid/r.git',$5,1,0,$6,$7,$8)`,
+			uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), pinnedRef, state, commit, mirrorGeneration)
+		return e
+	}
+	// A short branch name is refused here as well as in cloneauth.ValidateRef, so the two spellings of
+	// one ref cannot both come to exist.
+	wantPGError(t, insert("main", "admitting", "", nil), "23514")
+	// A tag is outside what the mirror purpose may pin.
+	wantPGError(t, insert("refs/tags/v1.0.0", "admitting", "", nil), "23514")
+	// A ready preparation with no commit names no immutable content.
+	wantPGError(t, insert("refs/heads/main", "ready", "", nil), "23514")
+	// A ready preparation with no mirror generation names no artifact a reader could accept.
+	wantPGError(t, insert("refs/heads/main", "ready", "0123456789abcdef0123456789abcdef01234567", nil), "23514")
+	// An abbreviated commit is not a full object name.
+	wantPGError(t, insert("refs/heads/main", "ready", "01234567", 1), "23514")
+	// A state outside the vocabulary is not a state.
+	wantPGError(t, insert("refs/heads/main", "pending", "", nil), "23514")
+	// The well-formed row passes every CHECK and stops at the foreign keys, which is the proof that it
+	// was the checks that rejected the rows above rather than the missing referents.
+	wantPGError(t, insert("refs/heads/main", "ready", "0123456789abcdef0123456789abcdef01234567", 1), "23503")
+}
+
+// TestMigration0036AddsTheMirrorPreparationClaim proves the claim protocol's columns and constraints
+// arrive by forward migration, on a fresh schema and on one upgraded from 0035.
+//
+// The two constraints are the migration's whole point, so they are driven rather than described: a
+// preparation C was asked to fetch has to carry the lease that bounds the attempt, and a settled one
+// has to carry none, or a finished preparation would look claimable to the next pass.
+func TestMigration0036AddsTheMirrorPreparationClaim(t *testing.T) {
+	pool, _ := testSchema(t, "test_mp36_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0036_mirror_preparation_claim.sql"))
+	for _, column := range []string{"lease_expires_at", "retry_at"} {
+		if columnExists(t, pool, "mirror_preparations", column) {
+			t.Fatalf("%s must not exist before 0036", column)
+		}
+	}
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	for _, column := range []string{"lease_expires_at", "retry_at"} {
+		if !columnExists(t, pool, "mirror_preparations", column) {
+			t.Fatalf("0036 must add %s", column)
+		}
+	}
+	assertMirrorPreparationClaimConstraints(t, pool)
+}
+
+// columnExists reads this schema's own column list rather than a shared catalog, for the same reason
+// stepVocabulary reads the constraint definition in `current_schema()`: the catalog is cluster-wide,
+// so a query without the schema filter could read a sibling test schema's column.
+func columnExists(t *testing.T, pool *sql.DB, table, column string) bool {
+	t.Helper()
+	var found bool
+	must(t, pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2)`, table, column).Scan(&found))
+	return found
+}
+
+// assertMirrorPreparationClaimConstraints drives the two constraints 0036 adds. Each rejection has to
+// be a CHECK (23514), and the last case reaching the foreign key (23503) is what proves a well-formed
+// in-flight row passes them.
+func assertMirrorPreparationClaimConstraints(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	insert := func(state string, lease, retry any) error {
+		_, e := pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
+			repository_url,pinned_ref,runtime_generation,control_epoch,state,lease_expires_at,retry_at)
+			VALUES($1,$2,$3,$4,'https://example.invalid/r.git','refs/heads/main',1,0,$5,$6,$7)`,
+			uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), state, lease, retry)
+		return e
+	}
+	// An attempt C was asked to fetch with no deadline on it is the state the lease exists to make
+	// impossible: nothing would ever retry it.
+	wantPGError(t, insert("dispatched", nil, nil), "23514")
+	// A finished preparation that still holds a lease would be claimed again by the next pass.
+	wantPGError(t, insert("ready", time.Now(), nil), "23514")
+	wantPGError(t, insert("failed", nil, time.Now()), "23514")
+	wantPGError(t, insert("superseded", time.Now(), nil), "23514")
+	// A well-formed attempt in flight passes every CHECK and stops at the foreign keys.
+	wantPGError(t, insert("dispatched", time.Now(), nil), "23503")
 }
 
 // 0033 (issue-run resume decision): fresh databases and upgrades from 0032 both get the resume

@@ -196,7 +196,11 @@ func (h *harness) start() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	service, err := New(&Options{Store: h.store, RepositoryRoot: h.root, GitProgram: "git", CloudClient: cloud, Hook: h.hookOf, Health: func(context.Context) error { return nil }})
+	service, err := New(&Options{
+		GitProgram: "git",
+		Repository: &RepositoryOptions{Store: h.store, RepositoryRoot: h.root, CloudClient: cloud, Hook: h.hookOf},
+		Health:     func(context.Context) error { return nil },
+	})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -551,7 +555,11 @@ func TestNewRefusesGitWithoutHTTPBackend(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho "+dir+"\n"), 0o700); err != nil { //nolint:gosec // G306: the fake git must be executable.
 		t.Fatal(err)
 	}
-	_, err := New(&Options{Store: &fakeStore{}, RepositoryRoot: filepath.Join(dir, "repositories"), GitProgram: fake, CloudClient: []byte{1}, Hook: []string{"true"}, Health: func(context.Context) error { return nil }})
+	_, err := New(&Options{
+		GitProgram: fake,
+		Repository: &RepositoryOptions{Store: &fakeStore{}, RepositoryRoot: filepath.Join(dir, "repositories"), CloudClient: []byte{1}, Hook: []string{"true"}},
+		Health:     func(context.Context) error { return nil },
+	})
 	if err == nil || !strings.Contains(err.Error(), "http-backend") {
 		t.Fatalf("New with a git lacking http-backend = %v, want a startup error", err)
 	}

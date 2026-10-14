@@ -27,7 +27,11 @@ func (s *operationService) ClaimOperation(ctx context.Context, req *controlpb.Cl
 	if len(out.O("operation")) == 0 {
 		return &controlpb.ClaimOperationResponse{}, nil
 	}
-	return &controlpb.ClaimOperationResponse{Snapshot: snapshot(out)}, nil
+	snap, e := snapshot(out)
+	if e != nil {
+		return nil, e
+	}
+	return &controlpb.ClaimOperationResponse{Snapshot: snap}, nil
 }
 
 func (s *operationService) PlanEffect(ctx context.Context, req *controlpb.PlanEffectRequest) (*controlpb.PlanEffectResponse, error) {
@@ -39,7 +43,11 @@ func (s *operationService) PlanEffect(ctx context.Context, req *controlpb.PlanEf
 	if e != nil {
 		return nil, e
 	}
-	return &controlpb.PlanEffectResponse{Effect: effect(out.O("effect")), Operation: operation(out.O("operation"))}, nil
+	op, e := operation(out.O("operation"))
+	if e != nil {
+		return nil, e
+	}
+	return &controlpb.PlanEffectResponse{Effect: effect(out.O("effect")), Operation: op}, nil
 }
 
 func (s *operationService) RecordEffectResult(ctx context.Context, req *controlpb.RecordEffectResultRequest) (*controlpb.RecordEffectResultResponse, error) {
@@ -65,7 +73,11 @@ func (s *operationService) RecordEffectResult(ctx context.Context, req *controlp
 	if e != nil {
 		return nil, toStatus(e)
 	}
-	return &controlpb.RecordEffectResultResponse{Effect: effect(out.O("effect")), Operation: operation(out.O("operation"))}, nil
+	op, e := operation(out.O("operation"))
+	if e != nil {
+		return nil, e
+	}
+	return &controlpb.RecordEffectResultResponse{Effect: effect(out.O("effect")), Operation: op}, nil
 }
 
 func (s *operationService) AdvanceOperation(ctx context.Context, req *controlpb.AdvanceOperationRequest) (*controlpb.AdvanceOperationResponse, error) {
@@ -73,7 +85,11 @@ func (s *operationService) AdvanceOperation(ctx context.Context, req *controlpb.
 	if e != nil {
 		return nil, e
 	}
-	return &controlpb.AdvanceOperationResponse{Operation: operation(out)}, nil
+	op, e := operation(out)
+	if e != nil {
+		return nil, e
+	}
+	return &controlpb.AdvanceOperationResponse{Operation: op}, nil
 }
 
 // ListLiveSandboxes is the lease holder's read of every sandbox it should hold a Node session with.
@@ -102,7 +118,11 @@ func (s *operationService) DeferOperation(ctx context.Context, req *controlpb.De
 	if e != nil {
 		return nil, e
 	}
-	return &controlpb.DeferOperationResponse{Operation: operation(out)}, nil
+	op, e := operation(out)
+	if e != nil {
+		return nil, e
+	}
+	return &controlpb.DeferOperationResponse{Operation: op}, nil
 }
 
 // control runs one action for the verified principal and maps its Fault.
@@ -116,13 +136,46 @@ func control(ctx context.Context, store *core.Store, action, operationID, submis
 
 // name turns a contract enum name (EFFECT_KIND_SANDBOX_ENSURE) into the stored value
 // (sandbox_ensure); enum returns the reverse, and 0 (UNSPECIFIED) for a stored value the contract
-// does not carry, such as a retired step of a historical operation.
+// does not carry.
 func name(enumName, prefix string) string {
 	return strings.ToLower(strings.TrimPrefix(enumName, prefix))
 }
 
+// enum maps a stored value to its contract enum number, answering a value the contract does not carry
+// with the zero value rather than an error. That is only safe where the Controller reads the zero
+// value as "unset"; operation steps are not such an enumeration and use operationStep instead.
 func enum(values map[string]int32, prefix, stored string) int32 {
 	return values[prefix+strings.ToUpper(stored)]
+}
+
+// retiredOperationSteps are step names an applied row may still spell that the contract no longer
+// defines: 0016 replaced storage/worktree with clone and left the retired names valid for history
+// (0016, `reject_retired_lifecycle`). A historical operation is never claimed, so projecting it as
+// UNSPECIFIED costs nothing; what must not happen is a *live* operation reaching the Controller under
+// a name the Controller cannot read.
+var retiredOperationSteps = map[string]bool{
+	"storage": true, "worktree": true, "ready": true, "storage_delete": true,
+}
+
+// operationStep maps a stored step to the wire enum, refusing a name that is neither defined by the
+// contract nor a known retired one.
+//
+// It exists because the map lookup it replaces answers a name it does not know with
+// OPERATION_STEP_UNSPECIFIED, and the Controller reads that value as "no step at all" and fails the
+// round (`apps/ora-controller/src/cloud/operations.rs`: `Done | Unspecified => Err(Error::Conflict)`).
+// So a drift between what the database may store and what the contract defines turns into an
+// operation that neither progresses nor says why — nobody is told, and nothing is logged. A step Cloud
+// cannot name is a step Cloud must refuse, loudly, at the moment it is asked to project it.
+func operationStep(stored string) (controlpb.OperationStep, error) {
+	if value, ok := controlpb.OperationStep_value["OPERATION_STEP_"+strings.ToUpper(stored)]; ok {
+		return controlpb.OperationStep(value), nil
+	}
+	if retiredOperationSteps[stored] {
+		return controlpb.OperationStep_OPERATION_STEP_UNSPECIFIED, nil
+	}
+	// The name is this database's own vocabulary, not caller input, and the caller needs it to tell a
+	// typo from a missing migration; the fault carries no secret and this is an internal API.
+	return 0, status.Errorf(codes.Internal, "unknown_operation_step: %q", stored)
 }
 
 // rows reads a list the store returned, whether freshly queried or replayed from JSON.
@@ -157,21 +210,33 @@ func optionalInt(o core.Object, k string) *int64 {
 	return &v
 }
 
-func operation(o core.Object) *controlpb.Operation {
+func operation(o core.Object) (*controlpb.Operation, error) {
+	step, e := operationStep(o.S("step"))
+	if e != nil {
+		return nil, e
+	}
 	return &controlpb.Operation{
 		Id: o.S("id"), ProjectId: o.S("projectId"), WorkspaceId: optionalString(o, "workspaceId"), Version: o.N("version"),
 		Kind:            controlpb.OperationKind(enum(controlpb.OperationKind_value, "OPERATION_KIND_", o.S("kind"))),
 		State:           controlpb.OperationState(enum(controlpb.OperationState_value, "OPERATION_STATE_", o.S("state"))),
-		Step:            controlpb.OperationStep(enum(controlpb.OperationStep_value, "OPERATION_STEP_", o.S("step"))),
+		Step:            step,
 		ControllerEpoch: optionalInt(o, "controllerEpoch"), ErrorCode: optionalString(o, "errorCode"),
-	}
+	}, nil
 }
 
-func snapshot(out core.Object) *controlpb.OperationSnapshot {
+func snapshot(out core.Object) (*controlpb.OperationSnapshot, error) {
 	p := out.O("project")
+	op, e := operation(out.O("operation"))
+	if e != nil {
+		return nil, e
+	}
 	snap := &controlpb.OperationSnapshot{
-		Operation: operation(out.O("operation")),
-		Project:   &controlpb.OperationProject{Id: p.S("id"), RepositoryUrl: p.S("repositoryUrl"), DefaultBranch: p.S("defaultBranch"), CredentialRef: optionalString(p, "secretRef")},
+		Operation: op,
+		// CredentialRef is deliberately never set (D9). The projection carries no credential reference
+		// for a Controller to read, and the field stays declared so an older Controller finds a value
+		// rather than an unknown one — empty is the truthful answer, because resolving repository
+		// credentials is not something a Controller does.
+		Project: &controlpb.OperationProject{Id: p.S("id"), RepositoryUrl: p.S("repositoryUrl"), DefaultBranch: p.S("defaultBranch")},
 	}
 	for _, w := range rows(out["workspaces"]) {
 		snap.Workspaces = append(snap.Workspaces, &controlpb.OperationWorkspace{
@@ -202,7 +267,7 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 	for _, execution := range rows(out["pluginExecutions"]) {
 		snap.PluginExecutions = append(snap.PluginExecutions, record(execution))
 	}
-	return snap
+	return snap, nil
 }
 
 func sandbox(sb core.Object) *controlpb.SandboxRecord {

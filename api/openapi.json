@@ -1033,6 +1033,85 @@
         ],
         "type": "object"
       },
+      "GitCredential": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "enum": [
+              "personal"
+            ],
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "available",
+              "frozen",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "enum": [
+                "clone",
+                "push"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ownerUserId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "repositoryScope": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "tenantId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "unavailableReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "ownerUserId",
+          "name",
+          "repositoryScope",
+          "attribution",
+          "availability",
+          "unavailableReason",
+          "capabilities",
+          "version",
+          "createdAt",
+          "revokedAt"
+        ],
+        "type": "object"
+      },
       "GitIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -2827,6 +2906,107 @@
         ],
         "type": "object"
       },
+      "PushRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actorUserId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "authorizationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "credentialRefId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "credentialRefVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "newCommit": {
+            "type": "string"
+          },
+          "observedCommit": {
+            "nullable": true,
+            "type": "string"
+          },
+          "oldCommit": {
+            "type": "string"
+          },
+          "projectId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "resultCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "settledAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "dispatching",
+              "succeeded",
+              "failed",
+              "uncertain"
+            ],
+            "type": "string"
+          },
+          "tenantId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspaceId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "projectId",
+          "workspaceId",
+          "actorUserId",
+          "requestId",
+          "repository",
+          "ref",
+          "oldCommit",
+          "newCommit",
+          "credentialRefId",
+          "credentialRefVersion",
+          "authorizationId",
+          "state",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "RunPreparation": {
         "additionalProperties": false,
         "properties": {
@@ -4178,7 +4358,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
                   }
                 },
                 "required": [
@@ -4279,7 +4463,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -4318,7 +4502,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
                   }
                 },
                 "required": [
@@ -4419,7 +4607,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -4527,7 +4715,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -4656,7 +4844,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -4762,7 +4950,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -4896,7 +5084,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5041,7 +5229,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5186,7 +5374,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5365,7 +5553,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5525,7 +5713,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5642,7 +5830,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5825,7 +6013,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -5985,7 +6173,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6151,7 +6339,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6259,7 +6447,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6396,7 +6584,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6541,7 +6729,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6686,7 +6874,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6832,7 +7020,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -6986,7 +7174,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7141,7 +7329,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7269,7 +7457,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7408,7 +7596,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7543,7 +7731,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7555,6 +7743,654 @@
         "summary": "GET /api/v1/tenants/:tid/collaboration/targets",
         "tags": [
           "tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{tid}/git-credentials": {
+      "get": {
+        "description": "Lists the caller's own personal HTTPS Git credentials in this tenant, newest last by id. Only credentials attributed to the caller under this tenant are listed, so another member's credential — and a deployment-managed or team reference, which is not personal — cannot appear. No field of any entry is the token: Cloud does not hold it, and the opaque reference that locates it in the independent Credential Service is never returned. `availability` is the one source of truth about whether a credential may be used; a revoked credential stays listed, because its row is where the revocation is recorded.",
+        "operationId": "get_api_v1_tenants_tid_git-credentials",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exclusive UUID cursor, ascending stable ordering.",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/GitCredential"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "GET /api/v1/tenants/:tid/git-credentials",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "post": {
+        "description": "Creates a personal HTTPS Git credential and hands its token to the independent Credential Service within this request. name is 1..120 characters with no surrounding whitespace and no line break or NUL, otherwise 400 invalid_credential_name. repositoryScope is the one HTTPS repository the credential authorizes, otherwise 400 invalid_repository_scope. token is 1..4096 bytes, sent in the body only and refused rather than trimmed, otherwise 400 invalid_credential_token; it is never persisted in, logged by, or returned by Cloud. capabilities is optional and defaults to [\"clone\"]; it is the only way a credential that permits push can be created, unknown, repeated, empty or out-of-order sets are refused with 400 invalid_credential_capabilities, and no other request can add a capability to a credential that already exists. The credential is attributed to the authenticated caller explicitly (attribution personal) and to the tenant path parameter, and Cloud resolves the tenant from the caller's membership, so another user's ownership cannot be requested. The Idempotency-Key is required and also names the credential id, which is what makes the two-store create safe to retry: the same key with the same body replays the original response without touching the store again. Returns 201; when the deployment has no credential service, every create is 503 credential_store_unavailable and no metadata row is written.",
+        "operationId": "post_api_v1_tenants_tid_git-credentials",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scoped to tenant and user. Same key and canonical method/path/body returns the original response before version validation; changed request is 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "capabilities": {
+                    "description": "The repository operations this new credential permits. Omitted means [\"clone\"], which is what every credential created before the push capability existed carries; a credential with a push capability can therefore only be created deliberately. The members are stored and compared as a set in the vocabulary's canonical order — clone before push — and an unknown member, a repeat, an empty array or the members out of that order is refused with 400 invalid_credential_capabilities rather than repaired. A capability is the reference's own authority: adding one here does not authorize any operation by itself, and no later request can add to what a reference already declares.",
+                    "items": {
+                      "enum": [
+                        "clone",
+                        "push"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 2,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "name": {
+                    "description": "The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope.",
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repositoryScope": {
+                    "description": "The one HTTPS repository this credential authorizes. Stored normalized: scheme and host lowercased, port kept, path case preserved, one trailing slash and one trailing .git dropped. Userinfo, query, fragment and percent-encoding are refused, and at least one path segment is required, so a scope never widens past the one repository it names.",
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "token": {
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "repositoryScope",
+                  "token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredential"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "POST /api/v1/tenants/:tid/git-credentials",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/tenants/{tid}/git-credentials/{credId}": {
+      "delete": {
+        "description": "Revokes one credential the caller owns. Cloud's metadata change is authoritative and commits first, so the credential is unusable from that moment; the stored material is destroyed afterwards and best effort, and material that could not be confirmed as destroyed is recorded server-side as residue rather than reported as a failed revocation. Revocation is expressed through availability invalid with a revoked_by_owner reason, never by deleting the row, so the credential stays visible to its owner as revoked rather than absent. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent). Repeating a revocation that already happened is success and writes nothing, which is what makes the required Idempotency-Key's retry safe. Returns 200 with the credential document.",
+        "operationId": "delete_api_v1_tenants_tid_git-credentials_credId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "credId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scoped to tenant and user. Same key and canonical method/path/body returns the original response before version validation; changed request is 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "version": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredential"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "DELETE /api/v1/tenants/:tid/git-credentials/:credId",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "put": {
+        "description": "Rotates the material of one credential the caller owns, leaving its attribution, scope and capabilities unchanged. The new token is written to the independent Credential Service first and the metadata version is advanced afterwards, so a failure between the two leaves material newer than the metadata rather than a reference pointing at material that was never written; the credential keeps working and the version is simply one behind. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent), and a credential that is not available — frozen by a freeze trigger or already revoked — is 409 credential_not_available, because rotating it would leave its availability permanently disagreeing with its contents. Returns 200 with the credential document.",
+        "operationId": "put_api_v1_tenants_tid_git-credentials_credId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "credId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "token": {
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "version": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "token",
+                  "version"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredential"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "PUT /api/v1/tenants/:tid/git-credentials/:credId",
+        "tags": [
+          "credentials"
         ]
       }
     },
@@ -7697,7 +8533,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -7743,7 +8579,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
                   }
                 },
                 "required": [
@@ -7844,7 +8684,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8004,7 +8844,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8151,7 +8991,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8305,7 +9145,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8483,7 +9323,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8643,7 +9483,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8815,7 +9655,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -8969,7 +9809,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9129,7 +9969,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9289,7 +10129,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9443,7 +10283,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9578,7 +10418,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9777,7 +10617,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -9963,7 +10803,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10123,7 +10963,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10249,7 +11089,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10439,7 +11279,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10602,7 +11442,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10765,7 +11605,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -10963,7 +11803,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11132,7 +11972,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11291,7 +12131,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11435,7 +12275,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11614,7 +12454,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11774,7 +12614,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -11918,7 +12758,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12101,7 +12941,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12264,7 +13104,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12430,7 +13270,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12590,7 +13430,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12760,7 +13600,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -12923,7 +13763,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -13102,7 +13942,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -13239,7 +14079,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -13473,7 +14313,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -13645,7 +14485,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -13840,7 +14680,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14008,7 +14848,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14169,7 +15009,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14335,7 +15175,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14479,7 +15319,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14633,7 +15473,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14679,7 +15519,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                    "writeOnly": true
                   }
                 },
                 "required": [
@@ -14780,7 +15624,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -14940,7 +15784,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15094,7 +15938,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15254,7 +16098,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15414,7 +16258,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15568,7 +16412,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15727,7 +16571,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -15887,7 +16731,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16040,7 +16884,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16194,7 +17038,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16354,7 +17198,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16518,7 +17362,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16653,7 +17497,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16829,7 +17673,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -16970,7 +17814,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17124,7 +17968,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17300,7 +18144,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17473,7 +18317,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17599,7 +18443,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17750,7 +18594,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -17913,7 +18757,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18086,7 +18930,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18240,7 +19084,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18394,7 +19238,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18522,7 +19366,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18676,7 +19520,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -18927,7 +19771,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19053,7 +19897,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19226,7 +20070,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19354,7 +20198,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19517,7 +20361,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19702,7 +20546,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -19856,7 +20700,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20019,7 +20863,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20179,7 +21023,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20305,7 +21149,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20462,7 +21306,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20626,7 +21470,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20789,7 +21633,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -20958,7 +21802,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21095,7 +21939,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21258,7 +22102,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21395,7 +22239,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21550,7 +22394,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21727,7 +22571,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21853,7 +22697,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -21981,7 +22825,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22141,7 +22985,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22305,7 +23149,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22469,7 +23313,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22607,7 +23451,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22786,7 +23630,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -22798,6 +23642,482 @@
         "summary": "POST /api/v1/tenants/:tid/workspaces/:wid/force-stop",
         "tags": [
           "workspaces"
+        ]
+      }
+    },
+    "/api/v1/tenants/{tid}/workspaces/{wid}/pushes": {
+      "get": {
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Records one person's approval of one exact remote write to the credential's repository. The approver must be able to use the Workspace and must own its Project or be an administrator of the tenant, otherwise 403 push_approval_forbidden; the Project's bound credential must be available, scoped byte for byte to the Project's canonical upstream, and must declare the push capability, otherwise 409 repository_credential_frozen, repository_credential_scope_mismatch or repository_credential_capability_unsupported — a clone-only credential is never a substitute for a write credential. ref, oldCommit and newCommit are the exact values the authorization binds and are validated as such: a short branch name, a tag, a wildcard, a force prefix, a multi-ref list, an abbreviated or upper-case commit and the all-zero object id are refused, and so is a pair that does not change the ref, so a delete, a ref creation and a no-op are not expressible. requestId is the approver's durable request identity within this Workspace: repeating it with the same inputs returns the recorded approval and dispatches nothing, which is what keeps one request from producing a second write authorization; different inputs are 409 idempotency_conflict. The plan and the idempotency identity are persisted before anything is dispatched, and the signed authorization is never persisted, returned or logged — authorizationId identifies it for the audit and grants nothing. A deployment with no push executor records the approval and settles it failed with push_executor_unavailable in the same transaction: no authorization is signed, no remote is contacted, and the response already carries that state so no caller has to poll to learn it. A read requires the same authorization as the approval, and listing returns the Workspace's approvals by id. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "operationId": "get_api_v1_tenants_tid_workspaces_wid_pushes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "wid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exclusive UUID cursor, ascending stable ordering.",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/PushRequest"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "GET /api/v1/tenants/:tid/workspaces/:wid/pushes",
+        "tags": [
+          "pushes"
+        ]
+      },
+      "post": {
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Records one person's approval of one exact remote write to the credential's repository. The approver must be able to use the Workspace and must own its Project or be an administrator of the tenant, otherwise 403 push_approval_forbidden; the Project's bound credential must be available, scoped byte for byte to the Project's canonical upstream, and must declare the push capability, otherwise 409 repository_credential_frozen, repository_credential_scope_mismatch or repository_credential_capability_unsupported — a clone-only credential is never a substitute for a write credential. ref, oldCommit and newCommit are the exact values the authorization binds and are validated as such: a short branch name, a tag, a wildcard, a force prefix, a multi-ref list, an abbreviated or upper-case commit and the all-zero object id are refused, and so is a pair that does not change the ref, so a delete, a ref creation and a no-op are not expressible. requestId is the approver's durable request identity within this Workspace: repeating it with the same inputs returns the recorded approval and dispatches nothing, which is what keeps one request from producing a second write authorization; different inputs are 409 idempotency_conflict. The plan and the idempotency identity are persisted before anything is dispatched, and the signed authorization is never persisted, returned or logged — authorizationId identifies it for the audit and grants nothing. A deployment with no push executor records the approval and settles it failed with push_executor_unavailable in the same transaction: no authorization is signed, no remote is contacted, and the response already carries that state so no caller has to poll to learn it. A read requires the same authorization as the approval, and listing returns the Workspace's approvals by id. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "operationId": "post_api_v1_tenants_tid_workspaces_wid_pushes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "wid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scoped to tenant and user. Same key and canonical method/path/body returns the original response before version validation; changed request is 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "newCommit": {
+                    "description": "A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string"
+                  },
+                  "oldCommit": {
+                    "description": "A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.",
+                    "pattern": "^[0-9a-f]{40}$",
+                    "type": "string"
+                  },
+                  "ref": {
+                    "description": "The one fully qualified branch ref this approval may update, e.g. refs/heads/main. A short branch name, a tag, a wildcard, a force prefix and a multi-ref list are all refused with 400 invalid_push_ref.",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "pattern": "^refs/heads/[^\\s~^:?*\\[\\\\]+$",
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "requestId",
+                  "ref",
+                  "oldCommit",
+                  "newCommit"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushRequest"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "POST /api/v1/tenants/:tid/workspaces/:wid/pushes",
+        "tags": [
+          "pushes"
+        ]
+      }
+    },
+    "/api/v1/tenants/{tid}/workspaces/{wid}/pushes/{pushId}": {
+      "get": {
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Records one person's approval of one exact remote write to the credential's repository. The approver must be able to use the Workspace and must own its Project or be an administrator of the tenant, otherwise 403 push_approval_forbidden; the Project's bound credential must be available, scoped byte for byte to the Project's canonical upstream, and must declare the push capability, otherwise 409 repository_credential_frozen, repository_credential_scope_mismatch or repository_credential_capability_unsupported — a clone-only credential is never a substitute for a write credential. ref, oldCommit and newCommit are the exact values the authorization binds and are validated as such: a short branch name, a tag, a wildcard, a force prefix, a multi-ref list, an abbreviated or upper-case commit and the all-zero object id are refused, and so is a pair that does not change the ref, so a delete, a ref creation and a no-op are not expressible. requestId is the approver's durable request identity within this Workspace: repeating it with the same inputs returns the recorded approval and dispatches nothing, which is what keeps one request from producing a second write authorization; different inputs are 409 idempotency_conflict. The plan and the idempotency identity are persisted before anything is dispatched, and the signed authorization is never persisted, returned or logged — authorizationId identifies it for the audit and grants nothing. A deployment with no push executor records the approval and settles it failed with push_executor_unavailable in the same transaction: no authorization is signed, no remote is contacted, and the response already carries that state so no caller has to poll to learn it. A read requires the same authorization as the approval, and listing returns the Workspace's approvals by id. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "operationId": "get_api_v1_tenants_tid_workspaces_wid_pushes_pushId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "wid",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pushId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushRequest"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "GET /api/v1/tenants/:tid/workspaces/:wid/pushes/:pushId",
+        "tags": [
+          "pushes"
         ]
       }
     },
@@ -22963,7 +24283,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23140,7 +24460,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23317,7 +24637,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23526,7 +24846,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23690,7 +25010,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23810,7 +25130,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -23938,7 +25258,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24066,7 +25386,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24216,7 +25536,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24345,7 +25665,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24485,7 +25805,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24624,7 +25944,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24759,7 +26079,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -24904,7 +26224,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -25078,7 +26398,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -25250,7 +26570,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -25434,7 +26754,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [
@@ -25579,7 +26899,7 @@
                 }
               }
             },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
           }
         },
         "security": [

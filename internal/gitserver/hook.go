@@ -87,7 +87,7 @@ func (s *Service) decide(ctx context.Context, request hookRequest) bool {
 	if !ok || request.PushOptions != 0 || len(request.Updates) == 0 {
 		return false
 	}
-	access, err := s.options.Store.AuthorizeGitAccess(ctx, p.scope, p.execution, p.project)
+	access, err := s.repository.Store.AuthorizeGitAccess(ctx, p.scope, p.execution, p.project)
 	if err != nil || access.Mode != core.GitWrite || access.DeliveryRef == "" {
 		return false
 	}

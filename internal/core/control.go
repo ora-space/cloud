@@ -15,6 +15,9 @@ type ControlRequest struct {
 	Service                                              *Claims
 	Identity                                             *Claims
 	verification                                         *revisionVerification
+	// credentialedResult is the outcome of a clone Cloud executed itself. It is set only by
+	// registerCredentialedClone, on a copy of the caller's request, so it belongs to one call.
+	credentialedResult *credentialedCloneResult
 }
 
 // Control is the finite internal command API. Controllers have no table-write or SQL interface.
@@ -32,6 +35,46 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		copyRequest.verification = prepared
 		r = &copyRequest
 	}
+	// A credentialed Workspace clone is executed by Cloud itself, before the ordinary dispatch below
+	// ever runs, so the Controller never sees an execution it would hand to a Node that holds no
+	// credential. A deployment that named the internal Git Server is the other channel and is not
+	// intercepted at all: its Workspace clones come from the published mirror, through the ordinary
+	// dispatch below. Everything else — anonymous clones included — takes the unchanged path.
+	if s.credentialedCloner != nil && r.Action == "clone_dispatch" {
+		admitted, err := s.admitCredentialedClone(ctx, r)
+		if err != nil {
+			return nil, s.refusalOutcome(ctx, r, err)
+		}
+		if admitted != nil {
+			return s.registerCredentialedClone(ctx, r, admitted)
+		}
+	}
+	out, err := s.control(ctx, r)
+	if err == nil {
+		return out, nil
+	}
+	return nil, s.refusalOutcome(ctx, r, err)
+}
+
+// refusalOutcome records a refusal Cloud can never reverse as the refused Operation's terminal fact,
+// and returns the refusal exactly as the dispatch produced it.
+//
+// Recording it is a separate write because the refusal unwound its own transaction. See
+// `settleRefusedCredentialedClone`: for every other error the settlement is a no-op.
+//
+// Both places a credentialed clone can be refused go through here. With an executor installed the
+// guard is reached from `admitCredentialedClone`, before the ordinary dispatch runs; without one it is
+// reached from `s.control`. A refusal that settled in only one of the two would leave the wedge the
+// settlement exists to remove, on whichever path the deployment happens to take.
+func (s *Store) refusalOutcome(ctx context.Context, r *ControlRequest, refusal error) error {
+	if settleErr := s.settleRefusedCredentialedClone(ctx, r, refusal); settleErr != nil {
+		return settleErr
+	}
+	return refusal
+}
+
+// control is the finite internal command API as it behaves without the credentialed-clone boundary.
+func (s *Store) control(ctx context.Context, r *ControlRequest) (Object, error) {
 	out, err := s.transact(ctx, func(t *transaction) Object {
 		if r.Action == "access" || r.Action == "admit" {
 			require(r.Service.Role == "controller", 403, "service_forbidden")
@@ -71,7 +114,14 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 			return liveSandboxes(t)
 		}
 		if isCloneAction(r.Action) {
-			return cloneCommand(t, r)
+			out := cloneCommand(t, r)
+			// A clone Cloud executed itself is registered with its result already written, inside the
+			// same transaction that registers it. Anything else would leave a window in which the
+			// Controller could dispatch the execution to a Node.
+			if r.credentialedResult != nil {
+				out = recordCredentialedCloneResult(t, out, r.credentialedResult)
+			}
+			return out
 		}
 		if strings.HasPrefix(r.Action, "report_node_") {
 			return submitted(t, r, func() Object { return nodeReport(t, r) })
@@ -102,9 +152,15 @@ func operationCommand(t *transaction, r *ControlRequest) Object {
 		require(deferCodes[code], 400, "invalid_error_code")
 		delay := r.Body.N("retrySeconds")
 		require(delay >= 1 && delay <= 3600, 400, "invalid_retry_delay")
+		// A failed clone is parked under Cloud's own budget rather than the request's delay: the count
+		// of attempts and the backoff between them are Cloud's (D2), and the request only ever carries a
+		// Controller constant. The delay above is still validated, because it remains part of the
+		// request's shape, and it is still what every other code is parked for. The state is deliberately
+		// not part of this condition: the budget is Cloud's, so a caller cannot step a failed clone out of
+		// it by asking for `blocked` instead of `retry_wait`. `deferCloneFailure` re-checks the failure
+		// against the recorded execution and counts nothing but a settled `clone_failed`.
 		if o.S("step") == "clone" && code == "clone_failed" {
-			deferWorkspaceClone(t, o)
-			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+			return deferCloneFailure(t, o)
 		}
 		t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)
 		return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
@@ -148,7 +204,28 @@ func leaseValid(t *transaction, r *ControlRequest) {
 
 func claim(t *transaction, r *ControlRequest) Object {
 	schedulePluginMaintenance(t)
-	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
+	// Candidates are ordered by whether they are already running, then by how long each has been
+	// runnable. PostgreSQL sorts a boolean false before true, so a queued operation and a due retry
+	// are preferred over an operation that is already running — a running operation is claimed again
+	// when nothing else is waiting, which is what keeps crash recovery, but it can no longer hold the
+	// queue behind it indefinitely. `state='running'` stays a candidate for exactly that recovery, and
+	// nothing about the claim's own effects changes: the same single row is re-selected and the same
+	// UPDATE marks it running under this epoch. This is a scheduling order, not a lifecycle rule: no
+	// operation changes state here because of it, no deadline is inferred, and nothing is failed on its
+	// behalf.
+	//
+	// The second key is the instant a candidate became runnable rather than the instant it was created:
+	// a queued operation became runnable when it was created, and a retry became runnable when the delay
+	// it was parked for expired. Ordering the two populations by `created_at` together would let one
+	// long-retrying operation — a clone that keeps failing against a repository this deployment cannot
+	// reach — stay the oldest candidate for ever, so every claim would hand that same operation back and
+	// a younger Operation would never be scheduled at all, however long it waited. Its own Project would
+	// stay `provisioning` with nothing working on it and nothing to see in the queue. With the runnable
+	// instant as the key the claim serves whichever operation has been waiting for service longest,
+	// whatever kind of wait it is, and a failed attempt returns its Operation to the queue behind the
+	// work that became runnable before it. This stays a scheduling order decided in one place by one
+	// expression, and it stays the only place that decides it.
+	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY (state='running'), CASE WHEN state='retry_wait' THEN retry_at ELSE created_at END, id LIMIT 1")
 	if o == nil {
 		return Object{"operation": nil}
 	}
@@ -175,11 +252,35 @@ func operation(t *transaction, r *ControlRequest) Object {
 // it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM projects p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	// D9: the Project projected to a Controller carries no credential reference at all. The
+	// authoritative binding is `credentialRefId`; the store's own reference is projected nowhere,
+	// because a Controller cannot resolve it and has no reason to hold it, and the 0023 column is
+	// blanked for the same reason it is never read to authorize: it has no writer, and letting it
+	// reappear here would give a Controller a second opinion about which credential a Project uses.
+	//
+	// Both declarations stay in the contract and are now always empty. `secretRef` is required by the
+	// schema, so it is written as an explicit null rather than omitted; the Controller's gRPC message
+	// carries the equivalent empty value (see controlgrpc.snapshot).
+	p := t.one("SELECT * FROM projects WHERE id=$1", o.S("projectId"))
+	if p != nil {
+		p["secretRef"], p["repositoryCredentialRefId"] = nil, nil
+	}
+	workspaces := t.list("SELECT w.* FROM workspaces w WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId"))
+	// The clone input a Controller builds is the snapshot's own Project repository and the requested ref
+	// of *its* Workspace (desktop `cloud/operations/steps.rs`, `dispatch_clone`), and for a mirrored
+	// clone both have to name the internal mirror rather than the upstream (D7). The projection happens
+	// here, on the snapshot, and nowhere else: the recorded rows keep naming the Project's real upstream,
+	// which is what the credential binding, the mirror key and every read authorization are derived
+	// from, so the upstream can never be traded for the mirror address in any of them.
+	//
+	// It is scoped to this Operation's Workspace, because the mirror is prepared for one Workspace's
+	// requested ref and a sibling Workspace on another ref is not what that preparation pins. Only the
+	// Workspace actually being cloned is redirected.
+	t.store.projectMirrorInput(t, o, p, workspaces)
 	out := Object{
 		"operation":  o,
 		"project":    p,
-		"workspaces": t.list("SELECT w.* FROM workspaces w WHERE w.project_id=$1 AND w.deleted_at IS NULL ORDER BY w.id", o.S("projectId")),
+		"workspaces": workspaces,
 		"sandboxes":  t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")),
 		"nodes":      t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")),
 		// Retired plugin effects stay in the table as history and are not part of the live snapshot.
@@ -428,6 +529,12 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			}
 		}
 	} else {
+		// The mirror gate hangs on the transition itself rather than on the steps that reach it, so every
+		// way into `clone` — create, start and restart alike — passes through it. A gate placed on one of
+		// those branches would be one more thing to remember when a branch is added.
+		if next == "clone" {
+			t.store.requireMirrorPrepared(t, o, wid)
+		}
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
 	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))

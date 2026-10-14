@@ -157,33 +157,73 @@ func TestCloneFailureRetriesAsNewExecutionAndUnknownBlocks(t *testing.T) {
 	}
 }
 
-// Durable attempts bound retries even across Controller rounds and explicit user retries.
-func TestCloneFailureExhaustsItsDurableBudget(t *testing.T) {
+// Cloud, not the Controller, owns the clone step's retry budget, and the budget ends the step.
+//
+// Evidence for specs test-cases/cloud/operation/workspace-runtime-lifecycle.md
+// #a-clone-step-is-attempted-at-most-three-times-before-its-operation-is-failed.
+func TestCloneStepStopsAfterItsThirdFailure(t *testing.T) {
 	f := setup(t)
-	created := f.create("clone-exhausted")
+	created := f.create("clone-budget")
 	oid, wid := created.O("operation").S("id"), created.O("workspace").S("id")
 	f.substrate.SetFault("clone", "fail")
-	for attempt := 1; attempt <= 3; attempt++ {
-		if err := f.controller.Drain(context.Background()); err == nil {
-			t.Fatal("fixture did not produce a clone failure")
+
+	// The first two failures are parks, and each park is Cloud's own backoff: five seconds before the
+	// second attempt and ten before the third. The delay the defer request carried is not what is
+	// written, which is the point of the budget being Cloud's — the Controller proposes a constant of
+	// its own and never counts attempts.
+	for _, attempt := range []struct {
+		number  int
+		backoff float64
+	}{{1, 5}, {2, 10}} {
+		if e := f.controller.Drain(context.Background()); e == nil {
+			t.Fatalf("attempt %d: the clone was expected to fail", attempt.number)
 		}
 		op := f.call("GET", f.path("/operations/"+oid), nil, "", 200)
-		want := "retry_wait"
-		if attempt == 3 {
-			want = "failed"
+		if op.S("state") != "retry_wait" || op.S("errorCode") != "clone_failed" {
+			t.Fatalf("attempt %d must be parked as a retry: %v", attempt.number, op)
 		}
-		if op.S("state") != want || op.S("errorCode") != "clone_failed" {
-			t.Fatalf("attempt %d: state/code = %s/%s, want %s/clone_failed", attempt, op.S("state"), op.S("errorCode"), want)
+		var wait float64
+		must(t, f.store.Pool.QueryRow("SELECT extract(epoch FROM retry_at-clock_timestamp()) FROM operations WHERE id=$1", oid).Scan(&wait))
+		if wait < attempt.backoff-1 || wait > attempt.backoff+1 {
+			t.Fatalf("attempt %d must be parked for %.0fs, got %.1fs", attempt.number, attempt.backoff, wait)
 		}
-		if attempt < 3 {
-			f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": op.N("version")}, fmt.Sprintf("bounded-retry-%d", attempt), 202)
+		if got := f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid); got != attempt.number {
+			t.Fatalf("attempt %d must have exactly its own execution record, got %d", attempt.number, got)
 		}
+		// The public retry entry makes the parked Operation due at once, so one test can drive three
+		// attempts without waiting out two backoffs. It also shows what the budget owes it: a manual
+		// retry does not reset the count, because the count is the persisted executions and this entry
+		// deletes none of them.
+		f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": op.N("version")}, fmt.Sprintf("clone-budget-%d", attempt.number), 202)
 	}
-	if f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid) != 3 || f.ws(wid).B("admissionOpen") {
-		t.Fatal("exhausted clone budget changed attempts or opened admission")
+
+	// The third failure is the last one: the step ends instead of parking another retry.
+	if e := f.controller.Drain(context.Background()); e == nil {
+		t.Fatal("the third failing attempt was expected to end the clone step")
 	}
 	op := f.call("GET", f.path("/operations/"+oid), nil, "", 200)
-	f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": op.N("version")}, "exhausted-retry", 409)
+	if op.S("state") != "failed" || op.S("errorCode") != "clone_failed" {
+		t.Fatalf("the third failure must settle the Operation: %v", op)
+	}
+	if f.scalar("SELECT count(*) FROM operations WHERE id=$1 AND retry_at IS NULL", oid) != 1 {
+		t.Fatal("an ended Operation must carry no retry time: claim would read it back as a pending retry")
+	}
+	if got := f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid); got != 3 {
+		t.Fatalf("every attempt's execution record must be kept, got %d", got)
+	}
+	if f.ws(wid).B("admissionOpen") {
+		t.Fatal("admission must stay closed once the clone step has ended")
+	}
+	// Terminal rather than parked: the public retry entry refuses it and no claim picks it up again.
+	if refused := f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": op.N("version")}, "clone-budget-late", 409); refused.S("code") != "operation_not_retryable" {
+		t.Fatalf("a failed Operation must not be retryable, got %v", refused)
+	}
+	if e := f.controller.Drain(context.Background()); e != nil {
+		t.Fatal("an ended clone step must leave nothing for the Controller to work on")
+	}
+	if f.scalar("SELECT count(*) FROM operations WHERE id=$1 AND state='failed'", oid) != 1 {
+		t.Fatal("the failed Operation must stay failed")
+	}
 }
 
 // Cleanup plans a Workspace's data deletion only once none of its sandboxes can still write.

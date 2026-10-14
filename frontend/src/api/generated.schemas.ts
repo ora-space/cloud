@@ -452,6 +452,47 @@ export interface FormDescriptor {
   title?: string | null;
 }
 
+export type GitCredentialAttribution = typeof GitCredentialAttribution[keyof typeof GitCredentialAttribution];
+
+
+export const GitCredentialAttribution = {
+  personal: 'personal',
+} as const;
+
+export type GitCredentialAvailability = typeof GitCredentialAvailability[keyof typeof GitCredentialAvailability];
+
+
+export const GitCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type GitCredentialCapabilitiesItem = typeof GitCredentialCapabilitiesItem[keyof typeof GitCredentialCapabilitiesItem];
+
+
+export const GitCredentialCapabilitiesItem = {
+  clone: 'clone',
+  push: 'push',
+} as const;
+
+export interface GitCredential {
+  attribution: GitCredentialAttribution;
+  availability: GitCredentialAvailability;
+  capabilities: GitCredentialCapabilitiesItem[];
+  createdAt: string;
+  id: string;
+  name: string;
+  ownerUserId: string;
+  repositoryScope: string;
+  /** @nullable */
+  revokedAt: string | null;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason: string | null;
+  version: number;
+}
+
 export interface GitIdentity {
   email: string;
   isDefault: boolean;
@@ -1162,6 +1203,41 @@ export interface Project {
   version: number;
 }
 
+export type PushRequestState = typeof PushRequestState[keyof typeof PushRequestState];
+
+
+export const PushRequestState = {
+  dispatching: 'dispatching',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  uncertain: 'uncertain',
+} as const;
+
+export interface PushRequest {
+  actorUserId: string;
+  authorizationId: string;
+  createdAt: string;
+  credentialRefId: string;
+  credentialRefVersion: number;
+  id: string;
+  newCommit: string;
+  /** @nullable */
+  observedCommit?: string | null;
+  oldCommit: string;
+  projectId: string;
+  ref: string;
+  repository: string;
+  requestId: string;
+  /** @nullable */
+  resultCode?: string | null;
+  /** @nullable */
+  settledAt?: string | null;
+  state: PushRequestState;
+  tenantId: string;
+  updatedAt: string;
+  workspaceId: string;
+}
+
 export type RunPreparationStage = typeof RunPreparationStage[keyof typeof RunPreparationStage];
 
 
@@ -1658,10 +1734,20 @@ export interface WorkspaceListItem {
 }
 
 export type PostApiV1JoinInvitationsRedeemBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
 export type PostApiV1JoinRequestsBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
@@ -1901,6 +1987,74 @@ export type GetApiV1TenantsTidCollaborationTargets200 = {
   nextCursor: string;
 };
 
+export type GetApiV1TenantsTidGitCredentialsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidGitCredentials200 = {
+  items: GitCredential[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem = typeof PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem[keyof typeof PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem = {
+  clone: 'clone',
+  push: 'push',
+} as const;
+
+export type PostApiV1TenantsTidGitCredentialsBody = {
+  /**
+     * The repository operations this new credential permits. Omitted means ["clone"], which is what every credential created before the push capability existed carries; a credential with a push capability can therefore only be created deliberately. The members are stored and compared as a set in the vocabulary's canonical order — clone before push — and an unknown member, a repeat, an empty array or the members out of that order is refused with 400 invalid_credential_capabilities rather than repaired. A capability is the reference's own authority: adding one here does not authorize any operation by itself, and no later request can add to what a reference already declares.
+     * @minItems 1
+     * @maxItems 2
+     */
+  capabilities?: PostApiV1TenantsTidGitCredentialsBodyCapabilitiesItem[];
+  /**
+     * The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope.
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  /**
+     * The one HTTPS repository this credential authorizes. Stored normalized: scheme and host lowercased, port kept, path case preserved, one trailing slash and one trailing .git dropped. Userinfo, query, fragment and percent-encoding are refused, and at least one path segment is required, so a scope never widens past the one repository it names.
+     * @minLength 1
+     * @maxLength 2048
+     */
+  repositoryScope: string;
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
+  token: string;
+};
+
+export type DeleteApiV1TenantsTidGitCredentialsCredIdBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PutApiV1TenantsTidGitCredentialsCredIdBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
+  token: string;
+  /** @minimum 0 */
+  version: number;
+};
+
 export type GetApiV1TenantsTidInvitationsParams = {
 /**
  * @minimum 1
@@ -1919,6 +2073,11 @@ export type GetApiV1TenantsTidInvitations200 = {
 };
 
 export type PostApiV1TenantsTidInvitationsBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
@@ -2481,6 +2640,11 @@ export type GetApiV1TenantsTidJoinLinks200 = {
 };
 
 export type PostApiV1TenantsTidJoinLinksBody = {
+  /**
+     * The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it.
+     * @minLength 1
+     * @maxLength 4096
+     */
   token: string;
 };
 
@@ -2939,6 +3103,44 @@ export type PostApiV1TenantsTidWorkspacesWidForceStopBody = {
 export type PostApiV1TenantsTidWorkspacesWidForceStop202 = {
   forceStop: RuntimeForceStop;
   resource: AdminResource;
+};
+
+export type GetApiV1TenantsTidWorkspacesWidPushesParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidWorkspacesWidPushes200 = {
+  items: PushRequest[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidWorkspacesWidPushesBody = {
+  /**
+     * A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.
+     * @pattern ^[0-9a-f]{40}$
+     */
+  newCommit: string;
+  /**
+     * A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ.
+     * @pattern ^[0-9a-f]{40}$
+     */
+  oldCommit: string;
+  /**
+     * The one fully qualified branch ref this approval may update, e.g. refs/heads/main. A short branch name, a tag, a wildcard, a force prefix and a multi-ref list are all refused with 400 invalid_push_ref.
+     * @minLength 1
+     * @maxLength 200
+     * @pattern ^refs/heads/[^\s~^:?*\[\\]+$
+     */
+  ref: string;
+  requestId: string;
 };
 
 export type PostApiV1TenantsTidWorkspacesWidRestartBody = {

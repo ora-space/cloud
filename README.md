@@ -117,6 +117,9 @@ npm run build          # tsc -b && vite build
   - [服务守护进程 (`cmd/server`)](cmd/server/README.md)：生产环境 HTTP Daemon 核心。
   - [认证 Gateway (`cmd/gateway`)](cmd/gateway/README.md)：华为 IDaaS 或 GitHub OAuth 登录、PostgreSQL 浏览器会话与 `/api/v1` 反向代理。
   - [运维管理工具 (`cmd/cloudctl`)](cmd/cloudctl/README.md)：迁移执行、初始租户引导与凭据引用配置。
+  - [独立凭据服务 (`cmd/credential-store`)](cmd/credential-store/README.md)：用户自管 Git Token 的密封保存与按单次授权兑换，独立进程、独立卷、独立信任根。
+  - [凭据执行器 (`cmd/clone-executor`)](cmd/clone-executor/README.md)：以独立身份兑换授权、物化 Token、执行受约束 `git clone` 并销毁材料。
+  - [凭据 helper (`cmd/git-credential-ora`)](cmd/git-credential-ora/README.md)：部署固定的 Git credential helper，读一个文件、拒绝别的。
   - [本地执行模拟器 (`cmd/simulator`)](cmd/simulator/README.md)：内存与磁盘执行双工演示。
   - [OpenAPI 同步工具 (`cmd/openapi`)](cmd/openapi/README.md)：从 Go 契约自动编译导出 `api/openapi.json`。
   - [代码格式严检门禁 (`cmd/checkformat`)](cmd/checkformat/README.md)：CI 格式静态门禁。
@@ -126,6 +129,10 @@ npm run build          # tsc -b && vite build
   - [HTTP 路由网关 (`internal/api/router`)](internal/api/router/README.md)：Gin 路由分流、双重 JWT 校验、白名单与 Fault 映射。
   - [认证边界 (`internal/gateway`)](internal/gateway/README.md)：登录编排、Login Attempt/Session 存储、内部凭据签发、Cookie/CSRF 与代理；[华为 IDaaS 适配器 (`internal/gateway/idaas`)](internal/gateway/idaas/README.md)；[GitHub 适配器 (`internal/gateway/github`)](internal/gateway/github/README.md)。
   - [API 契约定义 (`internal/contract`)](internal/contract/README.md)：OpenAPI 3.0 数据模型与测试。
+  - [独立凭据服务 (`internal/credentialstore`)](internal/credentialstore/README.md)：密封/轮换/撤销、单次授权兑换与原子消费记录。
+  - [单次 Clone 授权 (`internal/cloneauth`)](internal/cloneauth/README.md)：Cloud 用 Ed25519 签发、Credential Service 用公钥验签的载体与绑定。
+  - [凭据执行器 (`internal/cloneexec`)](internal/cloneexec/README.md)：验签 → 兑换 → 物化 → 克隆 → 销毁的五步契约。
+  - [凭据物化布局 (`internal/credentialmaterial`)](internal/credentialmaterial/README.md)：`<root>/<execution-id>/token` 与 `scope`，0700/0600 常量。
   - [数据库连接池管理 (`internal/repository`)](internal/repository/README.md)：GORM 连接池、快速探活与安全约束。
   - [配置解析与加载 (`internal/config`)](internal/config/README.md)：Viper 强类型配置与环境变量映射。
   - [结构化日志 (`internal/logger`)](internal/logger/README.md)：Zap + Lumberjack 轮转与平台适配。

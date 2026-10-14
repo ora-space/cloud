@@ -9,11 +9,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Config contains only deployment references. No repository, ref or sandbox permission is
 // configured here: every permission comes from Cloud state at request time.
 type Config struct {
+	// RepositoryEnabled starts this process's repository surface: the two listeners below, the
+	// pre-receive hook channel and the bare repository tree.
+	//
+	// It defaults on, and that default is the fail-closed direction: a deployment that leaves it on
+	// without supplying the material `RepositoryTLS` needs is refused at startup rather than served.
+	// Turning it off is a deployment stating that it has no git-access issuer anywhere — it does not
+	// relax anything on the surface it keeps, and the process refuses to start if that leaves it with
+	// no surface at all.
+	RepositoryEnabled bool
 	// RepositoryAddress serves smart HTTP to sandboxes and joins only the sandbox network.
 	RepositoryAddress string
 	// RefAddress serves the read-only ref query to Cloud and joins only the default network.
@@ -35,7 +45,12 @@ func LoadConfig() (Config, error) {
 		}
 		return fallback
 	}
+	enabled, err := strconv.ParseBool(value("REPOSITORY_ENABLED", "true"))
+	if err != nil {
+		return Config{}, errors.New("invalid git server repository enablement")
+	}
 	c := Config{
+		RepositoryEnabled:   enabled,
 		RepositoryAddress:   value("REPOSITORY_ADDR", ":8445"),
 		RefAddress:          value("REF_ADDR", ":8446"),
 		RepositoryRoot:      value("REPOSITORY_ROOT", "/var/lib/ora-git/repositories"),
@@ -45,6 +60,12 @@ func LoadConfig() (Config, error) {
 		PrivateKeyFile:      value("PRIVATE_KEY_FILE", "/etc/ora-git-management/server.key"),
 		SandboxCAFile:       value("SANDBOX_CA_FILE", "/etc/ora-git-management/ca.pem"),
 		CloudClientCertFile: value("CLOUD_CLIENT_CERT_FILE", "/etc/ora-git-management/cloud-client.pem"),
+	}
+	// Only the surface that will be started is validated. A mirror-only deployment reads none of the
+	// repository references, and refusing it at startup over configuration nothing consults would be
+	// a failure about a value the process never opens.
+	if !c.RepositoryEnabled {
+		return c, nil
 	}
 	for _, address := range []string{c.RepositoryAddress, c.RefAddress} {
 		if _, _, err := net.SplitHostPort(address); err != nil {

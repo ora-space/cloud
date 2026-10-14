@@ -105,7 +105,14 @@ func TestGitServerAuthorizesDeliveryPushFromCloudState(t *testing.T) {
 	}
 	cloudLeaf, err := deployment.CloudClient()
 	must(t, err)
-	service, err := gitserver.New(&gitserver.Options{Store: f.store, RepositoryRoot: filepath.Join(t.TempDir(), "repositories"), GitProgram: "git", CloudClient: cloudLeaf, Hook: []string{hook, "-pre-receive"}, Health: f.store.Pool.PingContext})
+	service, err := gitserver.New(&gitserver.Options{
+		GitProgram: "git",
+		Repository: &gitserver.RepositoryOptions{
+			Store: f.store, RepositoryRoot: filepath.Join(t.TempDir(), "repositories"),
+			CloudClient: cloudLeaf, Hook: []string{hook, "-pre-receive"},
+		},
+		Health: f.store.Pool.PingContext,
+	})
 	must(t, err)
 	repoTLS, err := deployment.RepositoryTLS()
 	must(t, err)

@@ -115,6 +115,29 @@ func requireRuntimeSession(t *transaction, w Object, uid, session string) Object
 	return c
 }
 
+// runtimeHoldReleasable reports whether a Project deletion may take over a Workspace's runtime
+// control. An `idle` control it may, and so may a `maintenance` control whose owning Operation is no
+// longer live. That second case is a leak rather than a policy: the hold is released when an
+// Operation finishes, so an Operation that ended without finishing — a clone that ran out its
+// budget, a Node that never came up — leaves it behind for ever, and a hold nobody owns must not be
+// the reason a Project cannot be deleted.
+//
+// Every other state is a live claim on the Workspace — a member's session, an Agent run, another
+// lifecycle intent — and the refusal stands. A `maintenance` control with no Operation at all is one
+// of those claims: it is how an Agent run holds the Workspace.
+func runtimeHoldReleasable(t *transaction, wid string) bool {
+	c := runtimeControl(t, wid)
+	switch c.S("state") {
+	case "idle":
+		return true
+	case "maintenance":
+		oid := c.S("maintenanceOperationId")
+		return oid != "" && t.one("SELECT id FROM operations WHERE id=$1 AND state IN ('queued','running','retry_wait','blocked')", oid) == nil
+	default:
+		return false
+	}
+}
+
 // reserveRuntimeMaintenance shares the user's write boundary with a fixed lifecycle intent.
 func reserveRuntimeMaintenance(t *transaction, wid, oid string) {
 	t.exec("INSERT INTO runtime_controls(workspace_id,state) VALUES($1,'idle') ON CONFLICT(workspace_id) DO NOTHING", wid)

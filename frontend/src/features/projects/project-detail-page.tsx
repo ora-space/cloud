@@ -27,13 +27,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ProjectIcon } from '@/features/projects/components/project-icon'
+import { ProvisioningFailureNotice } from '@/features/projects/components/provisioning-failure-notice'
 import {
   useCloudProject,
   useDeleteProject,
   useProject,
   useUpdateProject,
 } from '@/features/projects/api'
-import { PROJECT_STATUS_LABELS, PROJECT_STATUS_VARIANT } from '@/features/projects/status'
+import { deletionRefusalOf } from '@/features/projects/deletion'
+import { useProjectProvisioning } from '@/features/projects/provisioning'
+import { projectStatusBadge } from '@/features/projects/status'
 import { useIssues, useMembers } from '@/features/issues/api'
 import { IssueRow } from '@/features/issues/components/issue-row'
 import { memberNameById } from '@/features/issues/present'
@@ -74,7 +77,7 @@ export function ProjectDetailPage({ slug }: { slug: string }) {
           <Skeleton className="h-20 w-full" />
         </div>
       ) : (
-        <ProjectDetailBody slug={slug} project={project} />
+        <ProjectDetailBody slug={slug} project={project} cloudMode={cloudMode} />
       )}
     </div>
   )
@@ -155,9 +158,21 @@ function canDeleteProject(role: SpaceRole): boolean {
  * free-text query), so cloud mode filters the tenant board client-side by
  * `projectRef`; demo mode reads the mock store's per-project issues.
  */
-function ProjectDetailBody({ slug, project }: { slug: string; project: Project }) {
+function ProjectDetailBody({
+  slug,
+  project,
+  cloudMode,
+}: {
+  slug: string
+  project: Project
+  cloudMode: boolean
+}) {
   const { tenantId } = useCurrentSpace()
-  const cloudMode = tenantId != null
+  const { phase, failure: provisioningFailure } = useProjectProvisioning(
+    cloudMode ? tenantId : undefined,
+    cloudMode ? project.id : undefined,
+  )
+  const statusBadge = projectStatusBadge(project.status, phase)
   const { data: issues = [] } = useIssues(tenantId ?? '', '')
   const { data: members = [] } = useMembers(tenantId ?? '')
   const memberNames = memberNameById(members)
@@ -174,9 +189,7 @@ function ProjectDetailBody({ slug, project }: { slug: string; project: Project }
         </div>
         <p className="text-sm text-muted-foreground">{project.description}</p>
         <div className="flex flex-wrap items-center gap-4 pt-2 text-sm">
-          <Badge variant={PROJECT_STATUS_VARIANT[project.status]}>
-            {PROJECT_STATUS_LABELS[project.status]}
-          </Badge>
+          <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <ActorAvatar actor={lead} size="sm" />
             {lead?.name}
@@ -187,6 +200,7 @@ function ProjectDetailBody({ slug, project }: { slug: string; project: Project }
             </span>
           )}
         </div>
+        {provisioningFailure && <ProvisioningFailureNotice failure={provisioningFailure} />}
       </div>
       {cloudMode ? (
         <div>
@@ -233,6 +247,7 @@ function ProjectActions({
   const navigate = useNavigate()
   const p = workspacePaths(slug)
   const deleteProject = useDeleteProject()
+  const refusal = deletionRefusalOf(deleteProject.error)
 
   async function confirmDelete() {
     try {
@@ -268,9 +283,12 @@ function ProjectActions({
               <AlertDialogCancel>取消</AlertDialogCancel>
               <AlertDialogAction onClick={() => void confirmDelete()}>确认删除</AlertDialogAction>
             </AlertDialogFooter>
-            {deleteProject.error?.response?.data?.code && (
-              <p className="text-xs text-destructive">
-                删除失败：{deleteProject.error?.response?.data?.code}
+            {refusal && (
+              <p role="alert" className="text-xs text-destructive">
+                {refusal.message}
+                <span className="text-muted-foreground">
+                  （原因码：<code className="font-mono">{refusal.code}</code>）
+                </span>
               </p>
             )}
           </AlertDialogContent>

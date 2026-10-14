@@ -40,6 +40,28 @@ const ThreadPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread"
 // unknown field — so it takes the default request cap.
 const ThreadEndPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/end"
 
+// GitCredentialPath is the collection route for a user's personal HTTPS Git credentials. It is one of
+// exactly two routes that accept a raw user token, and the token travels only in the request body.
+const GitCredentialPath = "/api/v1/tenants/:tid/git-credentials"
+
+// GitCredentialItemPath is the one-credential route: a rotate (PUT) or a revoke (DELETE). The
+// identifier is in the path; the replacement token, when there is one, is in the body and nowhere
+// else.
+const GitCredentialItemPath = "/api/v1/tenants/:tid/git-credentials/:credId"
+
+// credentialIngressPath reports whether one request is a Git credential ingress mutation.
+//
+// Both spellings live in one predicate so the approved exception stays auditable: only these requests
+// may hand a user token onward, and a new route cannot join them by accident. The read is excluded
+// rather than merely ignored: the list carries no token, and routing it through the mutating handler
+// would answer a caller's GET with a method refusal instead of its credentials.
+func credentialIngressPath(method, path string) bool {
+	if method == "GET" {
+		return false
+	}
+	return path == GitCredentialPath || path == GitCredentialItemPath
+}
+
 // defaultBodyLimit is the request cap every other route keeps.
 const defaultBodyLimit = 64 << 10
 
@@ -72,6 +94,10 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants", "", []string{"name", "slug"}},
 		{"GET", "/api/v1/tenants/:tid/members", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/members/:uid", "", []string{"role", "status", "version"}},
+		{"GET", GitCredentialPath, "", nil},
+		{"POST", GitCredentialPath, "", []string{"name", "repositoryScope", "token", "capabilities"}},
+		{"PUT", GitCredentialItemPath, "", []string{"token", "version"}},
+		{"DELETE", GitCredentialItemPath, "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/collaboration/targets", "", nil},
 		{"GET", "/api/v1/tenants/:tid/collaboration/forms/:formRef", "", nil},
 		{"GET", "/api/v1/tenants/:tid/issues", "", nil},
@@ -155,6 +181,9 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/start", "", []string{"version", "sessionId"}},
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/stop", "", []string{"version", "sessionId"}},
 		{"DELETE", "/api/v1/tenants/:tid/workspaces/:wid", "", []string{"version", "sessionId"}},
+		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/pushes", "", nil},
+		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/pushes", "", []string{"requestId", "ref", "oldCommit", "newCommit"}},
+		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/pushes/:pushId", "", nil},
 		{"GET", "/api/v1/tenants/:tid/clones", "", nil},
 		{"POST", "/api/v1/tenants/:tid/clones", "", []string{"requestId", "repository", "branch"}},
 		{"GET", "/api/v1/tenants/:tid/clones/:cloneId", "", nil},
@@ -333,6 +362,31 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 			}
 			var out core.Object
 			status := 200
+			if public && credentialIngressPath(c.Request.Method, route.Path) {
+				// The one place a raw user token is accepted. It is handled here rather than inside
+				// core.Public so the token leaves the decoded body before anything that outlives the
+				// request can see it: no structure the core stores, no idempotency hash it persists, and
+				// no value an error carries. What travels onward is a parameter of the handoff alone.
+				token := body.S("token")
+				delete(body, "token")
+				result, err := store.WriteGitCredential(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), CredentialID: c.Param("credId"), Key: c.GetHeader("Idempotency-Key"), Body: body, Identity: user}, token)
+				if err != nil {
+					f := core.ErrorCode(err)
+					if f.Status == 500 {
+						log.Error("credential ingress failed", zap.String("requestId", c.GetString("requestId")), zap.Error(err))
+					}
+					failure(c, f)
+					return
+				}
+				if result.Reconciliation != "" {
+					// Cloud reported the credential revoked and could not confirm the store destroyed the
+					// material. Only the identifier is recorded: D7 keeps peer text and secret content out
+					// of logs, and this row is the evidence a later sweep works from.
+					log.Warn("credential material remains after revocation", zap.String("requestId", c.GetString("requestId")), zap.String("credentialId", result.Reconciliation))
+				}
+				c.JSON(result.Status, result.Resource)
+				return
+			}
 			if public {
 				var person *core.DirectoryPerson
 				if route.Path == "/api/v1/tenants/:tid/members/huawei" {
@@ -375,7 +429,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), PushID: c.Param("pushId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.
@@ -500,7 +554,10 @@ func validField(name string, value any) bool {
 		}
 		_, e := n.Int64()
 		return e == nil
-	case "ids":
+	case "ids", "capabilities":
+		// A list of strings, and nothing else. For `capabilities` that is as far as the boundary goes:
+		// whether the members are a set this build can store is the vocabulary's question and the core
+		// answers it, so a client error here means the value was not a list of strings at all.
 		arr, ok := value.([]any)
 		if !ok {
 			return false

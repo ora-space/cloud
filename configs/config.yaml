@@ -103,3 +103,35 @@ object_store:
   access_key_id_file: ""
   secret_access_key_file: ""
   upload_grant_ttl: 15m
+
+# Cloud's half of the independent Credential Service boundary: where user-managed personal HTTPS Git
+# tokens are handed over, and the `ingress-writer` identity Cloud authenticates as. Leave the section
+# out — or set `enabled: false` — and every credential write is refused with
+# `credential_store_unavailable` while nothing is stored anywhere else; Cloud never falls back to
+# keeping a token in its own database.
+#
+# The certificate, key and authority are file references, never values: a deployment secret must not
+# live in this file, an environment variable or a log. The identity can replace material but can
+# never read it back, which is what keeps a compromised Cloud process from resolving tokens.
+# Overrides: CLOUD_CREDENTIALS_ENABLED / _ENDPOINT / _CERTIFICATE_FILE / _PRIVATE_KEY_FILE /
+# _CA_FILE / _TIMEOUT.
+credentials:
+  enabled: false
+  endpoint: ""
+  certificate_file: ""
+  private_key_file: ""
+  ca_file: ""
+  timeout: 10s
+
+# Where a sandbox reaches the internal Git Server, and therefore the only half of a mirrored clone's
+# input that Cloud cannot derive: the mirror's own address is computed per clone from its key, and
+# this section supplies the base. Leaving the section out — the deployed default — serves no mirror at
+# all, and a credential-bearing Workspace stops at the `mirror_not_ready` gate rather than being
+# pointed at its upstream. Override: CLOUD_GIT_SERVER_SANDBOX_BASE_URL.
+#
+# Naming it is a deployment that serves Workspace content from the mirror, so it must not be set
+# alongside `CLOUD_CLONE_DISPATCH_ENABLED` (two content channels; the credentialed-clone executor would
+# never be dispatched to) and must be set with `CLOUD_CLONE_DISPATCH_MIRROR_ENABLED` on (nothing would
+# publish a mirror). Both mismatches refuse startup instead of degrading at runtime.
+# git_server:
+#   sandbox_base_url: "https://git-server:8080"

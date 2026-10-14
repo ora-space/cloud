@@ -96,6 +96,30 @@ func Document() map[string]any {
 	// GitIdentity is the identity the caller's Agent runs commit as (identity-access git identity
 	// D1). version is 0 while isDefault is true: no identity is stated and the default applies.
 	s["GitIdentity"] = object(obj{"name": str(), "email": str(), "isDefault": boolean(), "version": number()}, "name", "email", "isDefault", "version")
+	// GitCredential is one of the caller's own personal HTTPS Git credentials (user-managed git
+	// credentials D1/D2), and it is metadata only. The token its owner supplied is held by the
+	// independent Credential Service; neither the token nor the opaque reference that locates it in
+	// that service appears here or anywhere else in this document, so no response can return
+	// credential material (D9).
+	//
+	// `repositoryScope` is the single normalized HTTPS repository the credential may be used against,
+	// and it is the whole of its authority: the name authorizes nothing. `availability` is the one
+	// source of truth about whether the credential may be used at all — `available`, `frozen` when a
+	// freeze trigger withdrew it, `invalid` after its owner revoked it — and `capabilities` is the set
+	// of repository operations this credential may be used for.
+	//
+	// The enumeration has two members as of the push decision
+	// (`20261013-push-capability-vocabulary-extension`, approved 2026-10-13): `clone` reads one
+	// repository into one checkout, and `push` writes one ref of one repository. The set is the
+	// reference's own authority and only the create states it — `capabilities` on `POST` is the one
+	// request in this document that sets it — so the second member being published grants nothing to
+	// anything: a credential that was created with `clone` keeps granting only `clone`, and a `push`
+	// grant only becomes usable once the write path that requires it exists.
+	s["GitCredential"] = resource("id tenantId ownerUserId name repositoryScope attribution availability unavailableReason capabilities version createdAt revokedAt", "unavailableReason revokedAt")
+	gitCredential := properties(s, "GitCredential")
+	gitCredential["attribution"] = enumeration("personal")
+	gitCredential["availability"] = enumeration("available", "frozen", "invalid")
+	gitCredential["capabilities"] = array(enumeration("clone", "push"))
 	s["ModelDefinition"] = object(obj{"id": str(), "name": str(), "contextWindow": number(), "maxTokens": number()}, "id", "name", "contextWindow", "maxTokens")
 	s["ModelConnection"] = object(obj{"id": uuid(), "name": str(), "protocol": enumeration("openai-completions", "anthropic-messages"), "baseUrl": str(), "authMode": enumeration("bearer", "x-api-key"), "models": array(ref("ModelDefinition")), "enabled": boolean(), "credentialConfigured": boolean(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "id", "name", "protocol", "baseUrl", "authMode", "models", "enabled", "credentialConfigured", "version", "createdAt", "updatedAt")
 	s["ModelDefault"] = object(obj{"connectionId": str(), "modelId": str(), "version": number()}, "connectionId", "modelId", "version")
@@ -327,6 +351,32 @@ func Document() map[string]any {
 	}
 	cloneProps["executionId"], cloneProps["nodeId"], cloneProps["state"] = optional(str()), optional(str()), ref("CloneState")
 	s["CloneOperation"] = object(cloneProps, "operationId", "requestId", "repository", "branch", "executionId", "nodeId", "state", "createdAt", "updatedAt")
+	// PushRequest is one person's approval of one exact remote write (identity-access push capability
+	// D3/D8/D9). It is identifiers, one instant pair and one ref — never credential material, and never
+	// the authorization itself: the single-use bearer Cloud signs for an approval is not persisted,
+	// returned or logged anywhere, and `authorizationId` is only the identifier the Credential Service
+	// records consumption under, which grants nothing by being known.
+	//
+	// `state` is the approval's own vocabulary rather than a Git outcome: `dispatching` while Cloud's
+	// executor has not reported, then the three terminal states the execution authority's D7 fixes.
+	// `resultCode` is present exactly when the approval has settled, and `succeeded` is recorded only
+	// for a write whose result is both observed on the remote and attributed to this write — a remote
+	// that holds the commit without that attribution is `uncertain`, never success.
+	//
+	// `observedCommit` is the executor's own reading of the remote ref, carried through unchanged, and
+	// it is what makes an uncertain outcome checkable instead of merely declared: it is the commit a
+	// reader compares against the one this approval was for. It is absent — null — whenever nothing
+	// read the remote, which is every approval a deployment with no executor settles.
+	s["PushRequest"] = object(obj{
+		"id": uuid(), "tenantId": uuid(), "projectId": uuid(), "workspaceId": uuid(),
+		"actorUserId": uuid(), "requestId": str(),
+		"repository": str(), "ref": str(), "oldCommit": str(), "newCommit": str(),
+		"credentialRefId": uuid(), "credentialRefVersion": number(), "authorizationId": uuid(),
+		"state":          enumeration("dispatching", "succeeded", "failed", "uncertain"),
+		"resultCode":     optional(str()),
+		"observedCommit": optional(str()),
+		"createdAt":      timestamp(), "settledAt": optional(timestamp()), "updatedAt": timestamp(),
+	}, "id", "tenantId", "projectId", "workspaceId", "actorUserId", "requestId", "repository", "ref", "oldCommit", "newCommit", "credentialRefId", "credentialRefVersion", "authorizationId", "state", "createdAt", "updatedAt")
 	paths := obj{}
 	for _, r := range router.Routes() {
 		path := r.Path
@@ -439,8 +489,16 @@ func tag(r router.Route) string {
 		return "internal"
 	case strings.HasPrefix(r.Path, "/api/v1/me"):
 		return "me"
+	case strings.Contains(r.Path, "/git-credentials"):
+		// Its own module rather than `tenants`: a credential is the signed-in user's own record, and
+		// the generated client groups operations by tag.
+		return "credentials"
 	case strings.Contains(r.Path, "/clones"):
 		return "clones"
+	case strings.Contains(r.Path, "/pushes"):
+		// Before the `/workspaces` arm, which matches this path too: a push is its own module rather
+		// than a Workspace sub-resource, because what it records is an approval of a repository write.
+		return "pushes"
 	case strings.Contains(r.Path, "/spaces"):
 		return "spaces"
 	case strings.Contains(r.Path, "/workflows"):
@@ -461,7 +519,7 @@ func isList(r router.Route) bool {
 	if r.Path == "/api/v1/me/model-connections" {
 		return r.Method == "GET"
 	}
-	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
+	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones") || strings.HasSuffix(r.Path, "/pushes") || strings.HasSuffix(r.Path, "/git-credentials"))
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
@@ -505,6 +563,17 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		default:
 			return ref("Operation"), "200"
 		}
+	}
+	if r.Path == router.GitCredentialPath || r.Path == router.GitCredentialItemPath {
+		if r.Method == "GET" {
+			return object(obj{"items": array(ref("GitCredential")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		}
+		if r.Method == "POST" {
+			// The only 201 among these: create is the only one that brings a credential into being.
+			// Rotate and revoke answer 200 with the same document, so a client renders one shape.
+			return ref("GitCredential"), "201"
+		}
+		return ref("GitCredential"), "200"
 	}
 	if r.Path == "/api/v1/tenants/:tid/people" {
 		return object(obj{"items": array(ref("DirectoryPerson"))}, "items"), "200"
@@ -720,6 +789,20 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		default:
 			return ref("CloneOperation"), "202"
 		}
+	case strings.Contains(r.Path, "/pushes"):
+		switch {
+		case isList(r):
+			return object(obj{"items": array(ref("PushRequest")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		case r.Method == "GET":
+			return ref("PushRequest"), "200"
+		default:
+			// The approval document itself rather than a wrapper: a push creates no operation, so
+			// there is nothing for the usual `operation` field to point at. 202 because the request is
+			// accepted for a dispatch that has not reported yet — in a deployment with no executor the
+			// same response carries the settled `failed` state and its deployment-level code, so a
+			// caller never has to poll to learn that no write could happen.
+			return ref("PushRequest"), "202"
+		}
 	case r.Path == "/api/v1/tenants" && r.Method == "POST":
 		return ref("TenantCreated"), "201"
 	}
@@ -801,14 +884,27 @@ func optionalField(name string, r router.Route) bool {
 	case "snapshotId":
 		// A run may omit the snapshot to pin the latest published one.
 		return strings.HasSuffix(r.Path, "/runs")
+	case "capabilities":
+		// The set a new credential asks for is optional, and omitting it is the documented default
+		// rather than a gap: a client that has never heard of this field keeps creating exactly the
+		// `clone`-only credential it created before the push decision added the second member.
+		return r.Path == router.GitCredentialPath && r.Method == "POST"
 	case "pluginVersion":
 		// Omitted install pins the catalog's current version.
 		return true
 	case "values":
 		// Confirm must state what it is confirming; assist may be asked with a still-empty form.
 		return strings.HasSuffix(r.Path, "/assist")
+	case "version":
+		if r.Path == router.GitCredentialItemPath {
+			// Every credential mutation is version-guarded, and the guard is not optional here: a
+			// rotate or revoke that named no version would be answered 428 version_required, so the
+			// schema must not let a client build one.
+			return false
+		}
+		return r.Method == "POST" && strings.HasSuffix(r.Path, "/plugins") || r.Method == "PUT"
 	}
-	return name == "version" && r.Method == "POST" && strings.HasSuffix(r.Path, "/plugins") || name == "credentialRefId" || name == "role" && strings.HasSuffix(r.Path, "/members/huawei") || name == "version" && r.Method == "PUT" || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
+	return name == "credentialRefId" || name == "role" && strings.HasSuffix(r.Path, "/members/huawei") || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
 }
 
 func inputSchema(name string, r router.Route) obj {
@@ -884,11 +980,38 @@ func inputSchema(name string, r router.Route) obj {
 		return number()
 	case "slug":
 		return obj{"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Lowercase, immutable, globally unique."}
+	case "repositoryScope":
+		return obj{"type": "string", "format": "uri", "minLength": 1, "maxLength": core.GitCredentialRepositoryScopeMax, "description": "The one HTTPS repository this credential authorizes. Stored normalized: scheme and host lowercased, port kept, path case preserved, one trailing slash and one trailing .git dropped. Userinfo, query, fragment and percent-encoding are refused, and at least one path segment is required, so a scope never widens past the one repository it names."}
+	case "capabilities":
+		// The one request field that names a reference's authority, and it exists only on the create:
+		// it decides what a credential that does not exist yet will permit. It is also the only way a
+		// `push`-capable reference can come to exist — no default, migration or later operation writes
+		// the second member — and declaring it grants nothing on its own, because a push still needs
+		// its own single-use approval and a reference whose scope is not the upstream is refused.
+		return obj{"type": "array", "minItems": 1, "maxItems": 2, "items": enumeration("clone", "push"), "description": "The repository operations this new credential permits. Omitted means [\"clone\"], which is what every credential created before the push capability existed carries; a credential with a push capability can therefore only be created deliberately. The members are stored and compared as a set in the vocabulary's canonical order — clone before push — and an unknown member, a repeat, an empty array or the members out of that order is refused with 400 invalid_credential_capabilities rather than repaired. A capability is the reference's own authority: adding one here does not authorize any operation by itself, and no later request can add to what a reference already declares."}
+	case "token":
+		// writeOnly because the value travels in one direction only: the server stores it in the
+		// independent Credential Service and no response, read or list ever carries it back.
+		return obj{"type": "string", "minLength": 1, "maxLength": core.GitCredentialTokenMax, "writeOnly": true, "description": "The raw HTTPS Git token, in the request body only — never a path, query, header or cookie. Cloud hands it to the independent Credential Service inside this request and keeps only an opaque reference; the value is refused rather than trimmed, and no response echoes any part of it."}
+	case "ref":
+		// The push route's pinned ref. The pattern states the qualified `refs/heads/` spelling the
+		// boundary requires and refuses the characters a ref pattern, a force prefix or a second ref
+		// would need, so a client cannot build a request that names a set of refs or a deletion.
+		return obj{"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^refs/heads/[^\\s~^:?*\\[\\\\]+$", "description": "The one fully qualified branch ref this approval may update, e.g. refs/heads/main. A short branch name, a tag, a wildcard, a force prefix and a multi-ref list are all refused with 400 invalid_push_ref."}
+	case "oldCommit", "newCommit":
+		return obj{"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "A full lowercase Git commit id. An abbreviation, an upper-case spelling and the all-zero object id — the delete and create-from-nothing spelling — are refused with 400 invalid_push_commit, and the two values must differ."}
 	case "workspaceId":
 		if r.Action == "plan" {
 			return str()
 		}
 		return uuid()
+	case "name":
+		if r.Path == router.GitCredentialPath {
+			// Characters, the unit the column's own `char_length` check measures, so the schema and
+			// the boundary cannot disagree about a name that sits exactly at the limit.
+			return obj{"type": "string", "minLength": 1, "maxLength": core.GitCredentialNameMax, "description": "The label the credential is listed under. It authorizes nothing: the credential's authority is its repository scope."}
+		}
+		return str()
 	case "targets":
 		return array(object(obj{"type": enumeration("user", "agent", "team", "workflow"), "id": uuid(), "task": str()}, "type", "id"))
 	case "content":
@@ -938,6 +1061,16 @@ func description(r router.Route) string {
 		return "Tenant administrators search the fixed Tianzhou endpoint through Cloud. Machine credentials stay server-side; only employed people and limited directory fields are returned."
 	case "/api/v1/tenants/:tid/members/huawei":
 		return "Tenant administrators add a selected Huawei person by stable globalUserId. Cloud searches Tianzhou again and verifies current employment before creating or reactivating membership."
+	case router.GitCredentialPath, router.GitCredentialItemPath:
+		switch r.Method {
+		case "GET":
+			return "Lists the caller's own personal HTTPS Git credentials in this tenant, newest last by id. Only credentials attributed to the caller under this tenant are listed, so another member's credential — and a deployment-managed or team reference, which is not personal — cannot appear. No field of any entry is the token: Cloud does not hold it, and the opaque reference that locates it in the independent Credential Service is never returned. `availability` is the one source of truth about whether a credential may be used; a revoked credential stays listed, because its row is where the revocation is recorded."
+		case "POST":
+			return "Creates a personal HTTPS Git credential and hands its token to the independent Credential Service within this request. name is 1..120 characters with no surrounding whitespace and no line break or NUL, otherwise 400 invalid_credential_name. repositoryScope is the one HTTPS repository the credential authorizes, otherwise 400 invalid_repository_scope. token is 1..4096 bytes, sent in the body only and refused rather than trimmed, otherwise 400 invalid_credential_token; it is never persisted in, logged by, or returned by Cloud. capabilities is optional and defaults to [\"clone\"]; it is the only way a credential that permits push can be created, unknown, repeated, empty or out-of-order sets are refused with 400 invalid_credential_capabilities, and no other request can add a capability to a credential that already exists. The credential is attributed to the authenticated caller explicitly (attribution personal) and to the tenant path parameter, and Cloud resolves the tenant from the caller's membership, so another user's ownership cannot be requested. The Idempotency-Key is required and also names the credential id, which is what makes the two-store create safe to retry: the same key with the same body replays the original response without touching the store again. Returns 201; when the deployment has no credential service, every create is 503 credential_store_unavailable and no metadata row is written."
+		case "PUT":
+			return "Rotates the material of one credential the caller owns, leaving its attribution, scope and capabilities unchanged. The new token is written to the independent Credential Service first and the metadata version is advanced afterwards, so a failure between the two leaves material newer than the metadata rather than a reference pointing at material that was never written; the credential keeps working and the version is simply one behind. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent), and a credential that is not available — frozen by a freeze trigger or already revoked — is 409 credential_not_available, because rotating it would leave its availability permanently disagreeing with its contents. Returns 200 with the credential document."
+		}
+		return "Revokes one credential the caller owns. Cloud's metadata change is authoritative and commits first, so the credential is unusable from that moment; the stored material is destroyed afterwards and best effort, and material that could not be confirmed as destroyed is recorded server-side as residue rather than reported as a failed revocation. Revocation is expressed through availability invalid with a revoked_by_owner reason, never by deleting the row, so the credential stays visible to its owner as revoked rather than absent. version is the credential's current version (409 version_conflict otherwise, 428 version_required when absent). Repeating a revocation that already happened is success and writes nothing, which is what makes the required Idempotency-Key's retry safe. Returns 200 with the credential document."
 	}
 	base := "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. "
 	if r.Action != "" {
@@ -981,6 +1114,9 @@ func description(r router.Route) string {
 	}
 	if strings.Contains(r.Path, "/clones") {
 		base += "Unscoped clone submission is retired in production and returns 410 runtime_scope_required; existing requests remain readable by their original submitter. An explicit development store can exercise the legacy coordination fixture without enabling a production bypass. requestId is the caller's durable request identity: repeating it with the same repository and branch returns the original request, a different input is 409 idempotency_conflict. repository must be an https or ssh URL the Controller can clone; branch is a short branch name, never HEAD. executionId and nodeId are null until a dispatch is recorded; a pending state means awaiting reconciliation, never failure. "
+	}
+	if strings.Contains(r.Path, "/pushes") {
+		base += "Records one person's approval of one exact remote write to the credential's repository. The approver must be able to use the Workspace and must own its Project or be an administrator of the tenant, otherwise 403 push_approval_forbidden; the Project's bound credential must be available, scoped byte for byte to the Project's canonical upstream, and must declare the push capability, otherwise 409 repository_credential_frozen, repository_credential_scope_mismatch or repository_credential_capability_unsupported — a clone-only credential is never a substitute for a write credential. ref, oldCommit and newCommit are the exact values the authorization binds and are validated as such: a short branch name, a tag, a wildcard, a force prefix, a multi-ref list, an abbreviated or upper-case commit and the all-zero object id are refused, and so is a pair that does not change the ref, so a delete, a ref creation and a no-op are not expressible. requestId is the approver's durable request identity within this Workspace: repeating it with the same inputs returns the recorded approval and dispatches nothing, which is what keeps one request from producing a second write authorization; different inputs are 409 idempotency_conflict. The plan and the idempotency identity are persisted before anything is dispatched, and the signed authorization is never persisted, returned or logged — authorizationId identifies it for the audit and grants nothing. A deployment with no push executor records the approval and settles it failed with push_executor_unavailable in the same transaction: no authorization is signed, no remote is contacted, and the response already carries that state so no caller has to poll to learn it. A read requires the same authorization as the approval, and listing returns the Workspace's approvals by id. "
 	}
 	if strings.HasSuffix(r.Path, "/thread/messages") {
 		// The Thread POST's own fault vocabulary. It is stated here rather than added to the shared
@@ -1046,7 +1182,7 @@ func errorDescription(code string) string {
 	case "428":
 		return "Version precondition required"
 	case "503":
-		return "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+		return "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable, assist_unavailable or credential_store_unavailable"
 	default:
 		return "Internal error; no SQL or secret details are exposed"
 	}

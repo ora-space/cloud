@@ -17,6 +17,16 @@ type PublicRequest struct {
 	// readPublic and Public, so a query parameter folded into it would let `GET /issues?issueId=…`
 	// hijack routing.
 	FormIssueID string
+	// CredentialID is the `:credId` path parameter of the Git credential routes. The token-bearing
+	// credential writes do not travel through Public: they run their own transactions so the token can
+	// be handed to the credential service between them without ever entering a request body this
+	// aggregate stores or hashes (see WriteGitCredential). This field therefore only ever carries an
+	// identifier, on the read that lists one owner's credentials.
+	CredentialID string
+	// PushID is the `:pushId` path parameter of the Workspace push routes. Like CloneID it is an
+	// identifier the caller chose from a previous response, never an authority: the push routes
+	// re-derive the caller's permission from the Workspace's Project on every request.
+	PushID string
 	// ModelConnectionID addresses an owner-scoped personal connection outside tenant routing.
 	ModelConnectionID string
 	Limit             int
@@ -33,6 +43,7 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 	var dispatches []dispatchTarget
 	var events []SpaceEvent
 	var accepted []string
+	var pushes []string
 	result, e := s.transact(ctx, func(t *transaction) Object {
 		u := identityWithAlias(t, r.Identity)
 		uid := u.S("id")
@@ -148,6 +159,17 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			status = 202
 		case r.WorkspaceID != "" && strings.Contains(r.Path, "/control/"):
 			out = runtimeControlPublic(t, r, uid)
+		case r.WorkspaceID != "" && strings.HasSuffix(r.Path, "/pushes"):
+			// A push approval is accepted work outside the operation model, like a clone request: it
+			// creates no operation and the Controller never sees it. The dispatch it may carry out is
+			// Cloud's own and runs after this transaction commits, so the approval is durable before
+			// anything is sent anywhere (D8).
+			var pending string
+			out, pending = pushRequestPublic(t, r, uid)
+			status = 202
+			if pending != "" {
+				pushes = append(pushes, pending)
+			}
 		case r.WorkspaceID != "":
 			out = workspaceAction(t, r, uid, hash, isAdmin)
 			status = 202
@@ -170,12 +192,22 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				require(r.Method == "DELETE", 405, "method_not_allowed")
 				requireSpaceRole(m, "admin")
 				version(p, r.Body.N("version"))
-				idleProject(t, p.S("id"))
-				require(p.S("lifecycle") == "active", 409, "resource_unavailable")
+				// How far provisioning got is not what decides whether a Project may be deleted. A
+				// Project whose first Operation ended `failed` never leaves `provisioning` — only a
+				// successful step promotes it — and one whose deletion was abandoned never leaves
+				// `deleting`, because nothing else moves either state. Requiring `active` therefore
+				// refused exactly the Projects a member most wants rid of, as `resource_unavailable`
+				// with nothing to act on. The Space role, the version, and what is still running on
+				// the Project are what decide.
+				require(p.S("lifecycle") != "deleted", 404, "not_found")
+				// A live Operation is no more a refusal than a lifecycle state is, with one
+				// exception: a deletion already in flight. Everything else still live is what this
+				// deletion ends, so that it cannot be claimed or dispatched afterwards.
+				settleForDeletion(t, p.S("id"))
 				ws := t.list("SELECT * FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL ORDER BY id", p.S("id"))
 				previous := Object{}
 				for _, w := range ws {
-					require(runtimeControl(t, w.S("id")).S("state") == "idle", 409, "runtime_control_held")
+					require(runtimeHoldReleasable(t, w.S("id")), 409, "runtime_control_held")
 					checkActivities(t, w)
 					previous[w.S("id")] = w
 				}
@@ -350,6 +382,14 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		for _, id := range accepted {
 			s.signalWork(id)
 		}
+		for _, id := range pushes {
+			// The approval committed, so the write it authorizes may now be attempted. This runs here
+			// rather than inside the transaction because a push is external work and the execution
+			// contract forbids holding the control plane's lock across it. Every outcome — including
+			// the deployment's "there is no executor" — is written back by dispatchPush; the response
+			// the caller already has is the approval itself, not the write's result.
+			s.dispatchPush(ctx, id)
+		}
 	}
 	return result, status, e
 }
@@ -417,6 +457,10 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 		}
 	}
 	switch {
+	case strings.HasSuffix(r.Path, "/git-credentials"):
+		// Matched first, so no later arm that keys on a shared substring can swallow the credential
+		// list. The caller's own personal credentials are the only ones it can see, in this tenant.
+		return listGitCredentials(t, r, uid)
 	case strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests"):
 		return adminJoinRead(t, r)
 	case r.CloneID != "" || strings.HasSuffix(r.Path, "/clones"):
@@ -489,8 +533,12 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 		return ownedOperation(t, r, uid)
 	case r.WorkspaceID != "" && strings.HasSuffix(r.Path, "/control"):
 		return runtimeControlPublic(t, r, uid)
+	case r.WorkspaceID != "" && strings.Contains(r.Path, "/pushes"):
+		// Placed before the generic Workspace arm, which would answer with the Workspace document:
+		// the push sub-resource is a different document and its own read.
+		return pushRead(t, r, uid)
 	case r.WorkspaceID != "":
-		return workspace(t, r.TenantID, uid, r.WorkspaceID, false)
+		return workspaceDocument(t, r.TenantID, uid, r.WorkspaceID, false)
 	case r.ProjectID != "":
 		p := project(t, r.TenantID, uid, r.ProjectID)
 		if strings.HasSuffix(r.Path, "/workspaces") {
@@ -556,14 +604,30 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
-		require(t.one("SELECT id FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid) != nil, 404, "credential_ref_not_found")
+		// `projects.credential_ref_id` is the one authoritative binding (D7), and it names the owner's
+		// own credential: `owner_user_id` is part of the lookup, so another member's credential in this
+		// tenant is not bindable — which is also what the table's own foreign key requires.
+		c := t.one("SELECT * FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid)
+		require(c != nil, 404, "credential_ref_not_found")
+		// The two conditions the clone-time guard enforces are enforced here too, with the same reason
+		// codes: binding a credential that can never clone would create a project whose only use is to
+		// fail, and the caller learns why while it can still choose another credential. An ssh
+		// repository URL normalizes to no scope at all, so binding any product credential to one is
+		// refused for the same reason — a scoped HTTPS token can never authorize an ssh clone.
+		require(c.S("availability") == "available", 409, "repository_credential_frozen")
+		if scope := c.S("repositoryScope"); scope != "" {
+			// A deployment-managed reference (`ConfigureCredential`) carries no scope and stays bindable
+			// for compatibility (D7); a product credential always carries one and must match exactly.
+			normalized, ok := normalizeRepositoryScope(repo)
+			require(ok && normalized == scope, 409, "repository_credential_scope_mismatch")
+		}
 		cred = id
 	}
 	pid, wid := newID(), newID()
 	t.exec("INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,credential_ref_id,lifecycle) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'provisioning')", pid, r.TenantID, uid, spaceID, name, repo, branch, cred)
 	insertWorkspace(t, r.TenantID, uid, uid, pid, wid, "main", branch, "")
 	op := newOperation(t, r, uid, pid, wid, "create_project", "sandbox", hash, Object{})
-	return Object{"resource": t.one("SELECT * FROM projects WHERE id=$1", pid), "workspace": t.one("SELECT * FROM workspaces WHERE id=$1", wid), "operation": op}
+	return Object{"resource": t.one("SELECT * FROM projects WHERE id=$1", pid), "workspace": workspaceDocument(t, r.TenantID, uid, wid, false), "operation": op}
 }
 
 func insertWorkspace(t *transaction, tid, owner, creator, pid, wid, kind, ref, title string) {
@@ -591,7 +655,7 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	// tenant member may initiate this action, recorded separately as actor.
 	insertWorkspace(t, r.TenantID, p.S("ownerUserId"), uid, p.S("id"), wid, "isolated", ref, title)
 	op := newOperation(t, r, uid, p.S("id"), wid, "create_workspace", "sandbox", hash, Object{})
-	return Object{"resource": workspace(t, r.TenantID, uid, wid, false), "operation": op}
+	return Object{"resource": workspaceDocument(t, r.TenantID, uid, wid, false), "operation": op}
 }
 
 func newOperation(t *transaction, r *PublicRequest, uid, pid, wid, kind, step, hash string, req Object) Object {
@@ -670,7 +734,7 @@ func workspaceAction(t *transaction, r *PublicRequest, uid, hash string, admin b
 	}
 	op := newOperation(t, r, uid, p.S("id"), w.S("id"), kind, step, hash, req)
 	reserveRuntimeMaintenance(t, w.S("id"), op.S("id"))
-	resource := workspace(t, r.TenantID, uid, w.S("id"), admin)
+	resource := workspaceDocument(t, r.TenantID, uid, w.S("id"), admin)
 	if admin {
 		resource = adminResource(resource)
 		op = adminOperation(op)
