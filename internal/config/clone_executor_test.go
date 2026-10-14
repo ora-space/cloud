@@ -104,6 +104,12 @@ func TestCloneExecutorRefusesAnIncompleteDeployment(t *testing.T) {
 		{"no credential service endpoint", func(c *CloneExecutorServiceConfig) { c.StoreEndpoint = "" }, "the executor could not redeem an authorization"},
 		{"no resolver certificate", func(c *CloneExecutorServiceConfig) { c.StoreCertificateFile = "" }, "the executor could not prove itself to the Service"},
 		{"no resolver authority", func(c *CloneExecutorServiceConfig) { c.StoreCAFile = "" }, "the Service's certificate could not be verified"},
+		{"a proxy URL with no host to use it for", func(c *CloneExecutorServiceConfig) { c.GitProxyURL = "http://172.17.0.1:17890" }, "the policy would route every host, not the ones the deployment named"},
+		{"proxy hosts with no proxy URL", func(c *CloneExecutorServiceConfig) { c.GitProxyHosts = "github.com" }, "the policy would silently route nothing while reading as if it did"},
+		{"a proxy URL carrying credentials", func(c *CloneExecutorServiceConfig) {
+			c.GitProxyURL = "http://user:secret@172.17.0.1:17890"
+			c.GitProxyHosts = "github.com"
+		}, "a credential would reach the command line"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -152,6 +158,8 @@ func TestCloneExecutorBindsOnlyItsOwnEnvironment(t *testing.T) {
 		"CLONE_EXECUTOR_MIRROR_TIMEOUT":                "10m",
 		"CLONE_EXECUTOR_PUSH_ROOT":                     "/var/lib/clone-executor/pushes",
 		"CLONE_EXECUTOR_PUSH_TIMEOUT":                  "5m",
+		"CLONE_EXECUTOR_GIT_PROXY_URL":                 "http://172.17.0.1:17890",
+		"CLONE_EXECUTOR_GIT_PROXY_HOSTS":               "github.com,gist.github.com",
 	} {
 		t.Setenv(name, value)
 	}
@@ -208,6 +216,22 @@ func TestCloneExecutorBindsOnlyItsOwnEnvironment(t *testing.T) {
 	}
 	if cfg.PushTimeout != 5*time.Minute {
 		t.Fatalf("push timeout = %v, want 5m", cfg.PushTimeout)
+	}
+	// The egress policy, whose empty default is what keeps a deployment that never mentions a proxy on
+	// exactly the command line that clears every proxy. It is asserted here because a misspelling would
+	// otherwise show up only as a clone that still cannot reach its upstream — which is the symptom this
+	// option exists to fix, and so the one that would be read as the option not working.
+	if cfg.GitProxyURL != "http://172.17.0.1:17890" || cfg.GitProxyHosts != "github.com,gist.github.com" {
+		t.Fatalf("egress = (%q, %q), want the values from CLONE_EXECUTOR_GIT_PROXY_URL and CLONE_EXECUTOR_GIT_PROXY_HOSTS", cfg.GitProxyURL, cfg.GitProxyHosts)
+	}
+	// The loaded pair is the one the arguments are built from, and a host on the list is the only thing
+	// that routes: the host list is split and validated rather than passed through as one string.
+	egress, err := cfg.gitEgress()
+	if err != nil {
+		t.Fatalf("the deployment's egress policy was refused: %v", err)
+	}
+	if egress.ProxyURL != "http://172.17.0.1:17890" || len(egress.Hosts) != 2 || egress.Hosts[0] != "github.com" || egress.Hosts[1] != "gist.github.com" {
+		t.Fatalf("egress = %+v, want the two named hosts split from the comma-separated setting", egress)
 	}
 	if _, err := os.Stat(cfg.AuthorizationPublicKeyFile); err != nil {
 		t.Fatalf("the verification key the environment named is not the file that was written: %v", err)

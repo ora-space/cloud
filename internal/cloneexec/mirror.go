@@ -124,6 +124,11 @@ type MirrorConfig struct {
 	// SSLCAInfo is the optional absolute path of the certificate authority file Git verifies the
 	// upstream's TLS certificate against. Empty means the system bundle.
 	SSLCAInfo string
+	// Egress is the deployment's optional, default-off proxy for Git's own egress, scoped to the hosts
+	// it names. The zero value is the approved default and routes nothing through a proxy; with it
+	// unset the command line is byte-for-byte the one that clears every proxy (D17's boundary is
+	// unchanged, and see GitEgress for the recorded deviation).
+	Egress GitEgress
 	// VerificationKeys is the deployment's authorization verification key set. A deployment that cannot
 	// verify has no mirror executor at all.
 	VerificationKeys []ed25519.PublicKey
@@ -207,7 +212,7 @@ func (c MirrorConfig) gitDeployment() gitDeployment {
 		homeDirectory: c.HomeDirectory,
 		helperPath:    c.HelperPath,
 		gitPath:       c.GitPath,
-		sslCAInfo:     c.SSLCAInfo,
+		transport:     gitTransport{sslCAInfo: c.SSLCAInfo, egress: c.Egress},
 	}
 }
 

@@ -34,8 +34,9 @@ import {
   useProject,
   useUpdateProject,
 } from '@/features/projects/api'
-import { useProjectProvisioningFailure } from '@/features/projects/provisioning'
-import { PROJECT_STATUS_LABELS, PROJECT_STATUS_VARIANT } from '@/features/projects/status'
+import { deletionRefusalOf } from '@/features/projects/deletion'
+import { useProjectProvisioning } from '@/features/projects/provisioning'
+import { projectStatusBadge } from '@/features/projects/status'
 import { useIssues, useMembers } from '@/features/issues/api'
 import { IssueRow } from '@/features/issues/components/issue-row'
 import { memberNameById } from '@/features/issues/present'
@@ -167,10 +168,11 @@ function ProjectDetailBody({
   cloudMode: boolean
 }) {
   const { tenantId } = useCurrentSpace()
-  const { failure: provisioningFailure } = useProjectProvisioningFailure(
+  const { phase, failure: provisioningFailure } = useProjectProvisioning(
     cloudMode ? tenantId : undefined,
     cloudMode ? project.id : undefined,
   )
+  const statusBadge = projectStatusBadge(project.status, phase)
   const { data: issues = [] } = useIssues(tenantId ?? '', '')
   const { data: members = [] } = useMembers(tenantId ?? '')
   const memberNames = memberNameById(members)
@@ -187,9 +189,7 @@ function ProjectDetailBody({
         </div>
         <p className="text-sm text-muted-foreground">{project.description}</p>
         <div className="flex flex-wrap items-center gap-4 pt-2 text-sm">
-          <Badge variant={PROJECT_STATUS_VARIANT[project.status]}>
-            {PROJECT_STATUS_LABELS[project.status]}
-          </Badge>
+          <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <ActorAvatar actor={lead} size="sm" />
             {lead?.name}
@@ -247,6 +247,7 @@ function ProjectActions({
   const navigate = useNavigate()
   const p = workspacePaths(slug)
   const deleteProject = useDeleteProject()
+  const refusal = deletionRefusalOf(deleteProject.error)
 
   async function confirmDelete() {
     try {
@@ -282,9 +283,12 @@ function ProjectActions({
               <AlertDialogCancel>取消</AlertDialogCancel>
               <AlertDialogAction onClick={() => void confirmDelete()}>确认删除</AlertDialogAction>
             </AlertDialogFooter>
-            {deleteProject.error?.response?.data?.code && (
-              <p className="text-xs text-destructive">
-                删除失败：{deleteProject.error?.response?.data?.code}
+            {refusal && (
+              <p role="alert" className="text-xs text-destructive">
+                {refusal.message}
+                <span className="text-muted-foreground">
+                  （原因码：<code className="font-mono">{refusal.code}</code>）
+                </span>
               </p>
             )}
           </AlertDialogContent>

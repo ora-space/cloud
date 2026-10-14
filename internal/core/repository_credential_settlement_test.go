@@ -275,6 +275,51 @@ func TestAnUnsupportedCapabilitySettlesTheOperationToo(t *testing.T) {
 	}
 }
 
+// TestARevokedReferenceSettlesTheOperationToo is the third permanent refusal, and the only one a
+// member causes through the product. Deleting a credential is a revocation: the reference becomes
+// `invalid` with `revoked_by_owner` and `revoked_at` and its token is destroyed in the Credential
+// Service, and no path in the product writes that state back. So the same wedge the other two
+// refusals are settled for applies here, and it applies to the state the product's own delete button
+// produces rather than to one only an operator could stage.
+//
+// Settling it is what a deletion cannot do by itself: the Project stays bound to the reference —
+// deleting a credential never re-points a binding — so every later dispatch of that Project meets the
+// same refusal for as long as the binding exists, and without a settlement the Project's single
+// operation slot stays occupied and it stays `provisioning` for good.
+//
+// The negative half is the frozen reference in the table above: a reference that is out of use but
+// not destroyed must keep retrying, which is the difference between a state that can end and one that
+// cannot.
+func TestARevokedReferenceSettlesTheOperationToo(t *testing.T) {
+	store := dispatcherDB(t)
+	cloner := &recordingCloner{}
+	store.SetCredentialedCloner(cloner)
+	scene := seedCredentialedCloneScene(t, store, admittedRepository, admittedScope)
+	// Exactly the three columns `DELETE /git-credentials/{id}` writes alongside destroying the token.
+	stagedExec(t, store, `UPDATE credential_refs SET availability='invalid',unavailable_reason='revoked_by_owner',revoked_at=now() WHERE id=$1`, scene.credential)
+
+	_, err := scene.dispatch(store, "exec-revoked-wedge")
+	if got := faultCode(t, err); got != repositoryCredentialRevoked {
+		t.Fatalf("refusal code = %q, want %q", got, repositoryCredentialRevoked)
+	}
+	if len(cloner.calls) != 0 {
+		t.Fatalf("a revoked reference reached the executor %d times", len(cloner.calls))
+	}
+	fact := readTerminalFact(t, store, scene.operation)
+	if fact.state != "failed" || fact.errorCode != repositoryCredentialRevoked {
+		t.Fatalf("a revoked reference must settle the Operation as failed with its own code, got %s/%q", fact.state, fact.errorCode)
+	}
+	if fact.retryAt != nil {
+		t.Fatalf("a terminal Operation must carry no retry deadline, got %v", fact.retryAt)
+	}
+	if n := scalarOf(t, store, "SELECT count(*) FROM clone_executions WHERE operation_id=$1", scene.operation); n != 0 {
+		t.Fatalf("a settled revocation registered %d clone executions", n)
+	}
+	if n := scalarOf(t, store, "SELECT count(*) FROM projects WHERE id=$1 AND credential_ref_id=$2 AND lifecycle='active'", scene.project, scene.credential); n != 1 {
+		t.Fatal("the settlement rewrote the credential binding or the Project's lifecycle")
+	}
+}
+
 // TestSettlementIgnoresActionsThatAreNotACloneDispatch pins the other half of the boundary. The
 // settlement keys on the action as well as on the code, because the code is a property of the
 // deployment and could be reported on a path that is not this Operation's clone admission.

@@ -184,6 +184,14 @@ the executor, and every restriction the decision fixes is on it:
   which CA is trusted), `gitEnvironment`, `repositoryScope`, `validateExecutablePath`, `runGit`,
   `redactFailure`, plus the clone side's `cloneArguments`, `helperArgument`, `validateBranch` and
   `headCommit`.
+- `egress.go`: the deployment's optional, default-off proxy for Git's own egress — `GitEgress`,
+  `NewGitEgress`, `validate`, `proxyEndpoint`, `validateEgressHost` and `arguments`. It is the one
+  place a proxy is ever named for this package, and it is named on the **command line** rather than in
+  the environment, scoped to the hosts the deployment lists: an address the policy does not name
+  contributes no arguments at all, so Cloud, the internal Git Server and the Credential Store are
+  never routed through it and no exclusion list has to be kept current. `gitEnvironment`'s allow-list
+  is untouched by it, so the set of variables that can redirect a credential does not grow. The
+  module doc comment records the departure from two approved decisions, which have not been amended.
 - `mirror.go`: the second capability — `MirrorJob`, `MirrorResult`, the two reason codes
   (`credential_executor_fetch_failed`/`credential_executor_publish_failed`), `MirrorConfig`,
   `MirrorExecutor`, `NewMirrorExecutor`, `Sweep`, `Prepare`, `matchMirrorBinding`,
@@ -295,12 +303,16 @@ the executor, and every restriction the decision fixes is on it:
   (`TestExecuteReportsACleanupFailureRatherThanASuccess`).
 - **argv and the environment are pinned**: `cloneArguments` fixes, position by position, the helper
   path, `credential.useHttpPath=true` (which is what makes Git report the repository path the helper
-  checks against the staged scope), `http.followRedirects=false`, the proxy keys, `core.hooksPath`,
-  `core.symlinks`, submodules and LFS; `gitEnvironment` is the clone process's **entire** environment
-  (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` and the rest). The
-  token never enters argv: it travels only in the `credential` protocol between the helper and Git. The
-  write command and the read-only reconciliation run with that same environment and that same helper,
-  so the write path has no second way of obtaining the secret either.
+  checks against the staged scope), `http.followRedirects=false`, the proxy keys — `http.proxy=`
+  always, plus at most one host-scoped `http.<url>.proxy` when the deployment enabled an egress policy
+  (`egress.go`), never an empty one — `core.hooksPath`, `core.symlinks`, submodules and LFS;
+  `gitEnvironment` is the clone process's **entire** environment (`GIT_CONFIG_GLOBAL`,
+  `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` and the rest). The enabled proxy
+  travels on argv rather than as a variable precisely so that allow-list stays seven entries, and it
+  is refused a userinfo so no credential can reach the command line through it. The token never enters
+  argv: it travels only in the `credential` protocol between the helper and Git. The write command and
+  the read-only reconciliation run with that same environment and that same helper, so the write path
+  has no second way of obtaining the secret either.
 - **Nothing the repository supplies gets run**: no hooks, no LFS filters, no submodules, no following
   symlinks — each of those is a program or a fetch the authorization does not cover.
 - **Failures do not echo the secret**: `redactFailure` removes the token from error strings, and

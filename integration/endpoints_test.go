@@ -177,6 +177,109 @@ func TestDatabaseEffectAndTicketScopes(t *testing.T) {
 	}
 }
 
+// A Project whose provisioning failed is the Project a member most wants to delete, and it is the one
+// the delete used to refuse. Nothing about a failed clone promotes the Project out of `provisioning` —
+// only a successful step does — and the runtime maintenance hold an Operation leaves behind when it
+// ends without finishing is released by nothing else either. Both conditions the delete read,
+// `lifecycle='active'` and a runtime control in `idle`, were therefore permanently false for exactly
+// this Project, and the refusal said `resource_unavailable`, which is not a state any member can act on.
+//
+// Evidence for specs test-cases/cloud/project/space-scoping.md
+// #deleting-a-project-supersedes-what-is-still-running-on-it.
+func TestProjectDeleteAcceptsAProjectWhoseProvisioningFailed(t *testing.T) {
+	f := setup(t)
+	created := f.create("failed-delete")
+	pid, oid, wid := created.O("resource").S("id"), created.O("operation").S("id"), created.O("workspace").S("id")
+	// The clone budget is what ends a provisioning step that cannot succeed, and it is Cloud's, so the
+	// failure is driven the way it happens in a deployment rather than written into a column.
+	f.substrate.SetFault("clone", "fail")
+	for range 3 {
+		if e := f.controller.Drain(context.Background()); e == nil {
+			t.Fatal("the clone was expected to fail")
+		}
+		op := f.call("GET", f.path("/operations/"+oid), nil, "", 200)
+		if op.S("state") == "failed" {
+			break
+		}
+		f.call("POST", f.path("/operations/"+oid+"/retry"), core.Object{"version": op.N("version")}, uuid.NewString(), 202)
+	}
+	f.substrate.SetFault("clone", "")
+
+	ended := f.call("GET", f.path("/operations/"+oid), nil, "", 200)
+	if ended.S("state") != "failed" || ended.S("errorCode") != "clone_failed" {
+		t.Fatalf("this test is about a failed provisioning, got %v", ended)
+	}
+	if f.scalar("SELECT count(*) FROM projects WHERE id=$1 AND lifecycle='provisioning'", pid) != 1 {
+		t.Fatal("a failed provisioning must leave the Project in provisioning, not promote it")
+	}
+	if f.scalar("SELECT count(*) FROM runtime_controls WHERE workspace_id=$1 AND state='maintenance' AND maintenance_operation_id=$2", wid, oid) != 1 {
+		t.Fatal("the ended Operation must still be holding the Workspace: that leaked hold is what the delete has to survive")
+	}
+	attempts := f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid)
+
+	project := f.call("GET", f.path("/projects/"+pid), nil, "", 200)
+	deleting := f.call("DELETE", f.path("/projects/"+pid), core.Object{"version": project.N("version")}, "failed-delete-request", 202)
+	// A deletion already in flight is the one live request the delete still refuses, and it says which.
+	if again := f.call("DELETE", f.path("/projects/"+pid), core.Object{"version": deleting.O("resource").N("version")}, "failed-delete-again", 409); again.S("code") != "operation_in_progress" {
+		t.Fatalf("a second deletion must be refused as the duplicate it is, got %v", again)
+	}
+	f.acknowledgeSimulatorBindings()
+	must(t, f.controller.Drain(context.Background()))
+
+	if f.scalar("SELECT count(*) FROM projects WHERE id=$1 AND lifecycle='deleted'", pid) != 1 {
+		t.Fatal("the deletion must have completed")
+	}
+	if f.scalar("SELECT count(*) FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL", pid) != 0 || f.scalar("SELECT count(*) FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 AND s.terminated_at IS NULL", pid) != 0 {
+		t.Fatal("the deletion must have cleaned up rather than only hidden the Project")
+	}
+	// The failed attempt is history: it is kept, and the Operation that produced it is not rewritten
+	// into a success by the deletion that superseded it.
+	if got := f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid); got != attempts || attempts == 0 {
+		t.Fatalf("every attempt's execution record must be kept, got %d of %d", got, attempts)
+	}
+	if f.scalar("SELECT count(*) FROM operations WHERE id=$1 AND state='failed' AND error_code='clone_failed'", oid) != 1 {
+		t.Fatal("the failed Operation must stay failed and keep its own reason")
+	}
+}
+
+// A Project whose only Operation has not been claimed yet is deletable too, and deleting it has to end
+// that Operation rather than leave it queued: a Project that was deleted must not then be provisioned.
+//
+// The end is recorded as `failed` with this action's own reason code and no retry time, which is how
+// the administrative force stop already records a cancellation the member asked for workspace by
+// workspace. The Operation is not deleted and its request and actor are not rewritten — the reason
+// code is what tells the two kinds of cancellation apart in the audit.
+//
+// Evidence for specs test-cases/cloud/project/space-scoping.md
+// #deleting-a-project-supersedes-what-is-still-running-on-it.
+func TestProjectDeleteSupersedesWaitingWorkAndDeletesTheProject(t *testing.T) {
+	f := setup(t)
+	created := f.create("queued-delete")
+	pid, oid := created.O("resource").S("id"), created.O("operation").S("id")
+	// Never drained: no Controller has taken the Operation, which is the `queued` half of the reported
+	// state and the one a member cannot clear from the UI.
+	if f.scalar("SELECT count(*) FROM operations WHERE id=$1 AND state='queued'", oid) != 1 {
+		t.Fatal("the provisioning must still be waiting for this test to mean anything")
+	}
+	project := f.call("GET", f.path("/projects/"+pid), nil, "", 200)
+	f.call("DELETE", f.path("/projects/"+pid), core.Object{"version": project.N("version")}, "queued-delete-request", 202)
+
+	if f.scalar("SELECT count(*) FROM operations WHERE id=$1 AND state='failed' AND error_code='superseded_by_project_deletion' AND retry_at IS NULL", oid) != 1 {
+		t.Fatal("the waiting provisioning must be ended by the deletion, with no retry time left to claim it again")
+	}
+	f.drain()
+	if f.scalar("SELECT count(*) FROM projects WHERE id=$1 AND lifecycle='deleted'", pid) != 1 {
+		t.Fatal("the Project must be deleted")
+	}
+	if f.scalar("SELECT count(*) FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL", pid) != 0 {
+		t.Fatal("the Project's Workspace must have been deleted with it")
+	}
+	// Work that was never claimed must not have run on the way out.
+	if f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid) != 0 {
+		t.Fatal("a superseded provisioning must not have been carried out")
+	}
+}
+
 func TestProjectDeleteClosesEveryWorkspaceAndWaitsForCleanup(t *testing.T) {
 	f := setup(t)
 	p := f.create("create")

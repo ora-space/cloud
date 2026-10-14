@@ -91,18 +91,18 @@ describe('GitCredentialsPage', () => {
     expect(screen.getByText('https://github.com/acme/app')).toBeInTheDocument()
     expect(screen.getByText('可用')).toBeInTheDocument()
     expect(screen.getByText('old-key')).toBeInTheDocument()
-    expect(screen.getByText('已撤销')).toBeInTheDocument()
+    expect(screen.getByText('已删除')).toBeInTheDocument()
   })
 
-  it('renders a revoked credential as revoked instead of dropping it', async () => {
+  it('renders a deleted credential as deleted instead of dropping it', async () => {
     installCredentials([revoked])
     renderPage()
 
     expect(await screen.findByText('old-key')).toBeInTheDocument()
-    expect(screen.getByText('已撤销')).toBeInTheDocument()
-    expect(screen.getByText(/已被你撤销/)).toBeInTheDocument()
+    expect(screen.getByText('已删除')).toBeInTheDocument()
+    expect(screen.getByText(/Token 已销毁，记录为审计保留/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '轮换' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '删除凭据' })).toBeDisabled()
   })
 
   it('disables rotation for a frozen credential and explains why', async () => {
@@ -112,7 +112,7 @@ describe('GitCredentialsPage', () => {
     expect(await screen.findByText('已冻结')).toBeInTheDocument()
     expect(screen.getByText(/因不再是有效成员被冻结/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '轮换' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '删除凭据' })).toBeDisabled()
   })
 
   it('creates a credential with the exact body and an idempotency key', async () => {
@@ -168,18 +168,64 @@ describe('GitCredentialsPage', () => {
     expect(screen.getByLabelText('新 Token')).toHaveValue('rotated-secret')
   })
 
-  it('explains a version conflict on revoke without removing the row', async () => {
+  it('asks for confirmation and sends no delete before the member confirms it', async () => {
+    const deletes: unknown[] = []
+    installCredentials([available])
+    server.use(
+      http.delete(`${URL}/${available.id}`, () => {
+        deletes.push({})
+        return HttpResponse.json(revoked)
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '删除凭据' }))
+
+    expect(screen.getByText('删除「deploy-key」？')).toBeInTheDocument()
+    expect(deletes).toEqual([])
+
+    await user.click(screen.getByRole('button', { name: '取消' }))
+
+    expect(deletes).toEqual([])
+    expect(screen.getByText('deploy-key')).toBeInTheDocument()
+  })
+
+  it('deletes with the loaded version and an idempotency key once confirmed', async () => {
+    const deletes: { body: unknown; key: string | null }[] = []
+    installCredentials([available])
+    server.use(
+      http.delete(`${URL}/${available.id}`, async ({ request }) => {
+        deletes.push({
+          body: await request.json(),
+          key: request.headers.get('Idempotency-Key'),
+        })
+        return HttpResponse.json(revoked)
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '删除凭据' }))
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+
+    expect(await screen.findByText('已删除，Token 已销毁')).toBeInTheDocument()
+    expect(deletes).toEqual([{ body: { version: 2 }, key: expect.any(String) }])
+  })
+
+  it('explains a version conflict on delete without removing the row', async () => {
     installCredentials([available])
     server.use(http.delete(`${URL}/${available.id}`, () => fault('version_conflict', 409)))
     const user = userEvent.setup()
     renderPage()
 
     await screen.findByText('deploy-key')
-    await user.click(screen.getByRole('button', { name: '撤销' }))
+    await user.click(screen.getByRole('button', { name: '删除凭据' }))
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('凭据已在别处修改，请刷新后重试')
     expect(screen.getByText('deploy-key')).toBeInTheDocument()
-    expect(screen.queryByText('已撤销')).not.toBeInTheDocument()
+    expect(screen.queryByText('已删除')).not.toBeInTheDocument()
   })
 
   it('reports the deployment-unconfigured copy when the store is unavailable', async () => {

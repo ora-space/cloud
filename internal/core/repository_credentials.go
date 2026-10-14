@@ -20,17 +20,37 @@ const repositoryCredentialExecutorUnavailable = "repository_credential_executor_
 // one of them: the reference exists, its scope matches, and it still cannot be used for this work.
 const repositoryCredentialCapabilityUnsupported = "repository_credential_capability_unsupported"
 
+// repositoryCredentialRevoked is the stable code Cloud answers a credentialed clone with when the
+// reference the Project names was revoked by its owner — what the product's "delete credential"
+// writes: `invalid`, `revoked_by_owner`, `revoked_at`, and a token destroyed in the Credential
+// Service.
+//
+// It is a reason of its own rather than a case of `repository_credential_frozen`, because the two
+// call for opposite answers. A frozen reference is out of use for now: the membership a personal
+// reference rests on can become active again, which is why the deployment keeps the Operation
+// retrying. A revoked one is a state nothing in the product writes back — there is no unfreeze and no
+// un-revoke path, and the material the reference named is already destroyed — so reporting it as
+// frozen would tell an operator to wait for something that cannot happen.
+const repositoryCredentialRevoked = "repository_credential_revoked"
+
 // terminalCredentialRefusals are the refusal codes that can never change for as long as the
 // deployment and the reference stay as they are, and that therefore have to settle an Operation
 // rather than leave it retrying.
 //
-// Both are facts about durable state rather than about this attempt: the executor boundary is
-// installed once at startup, and a reference's capability set is written when the reference is
-// created. A Controller that reads either as a retryable conflict would dispatch again forever
-// against an answer that cannot move.
+// Each is a fact about durable state rather than about this attempt, and the guard's answer to it
+// cannot move on a retry: the executor boundary is installed once at startup, a reference's
+// capability set is written when the reference is created, and a revocation is final and recorded.
+// A Controller that read any of them as a retryable conflict would dispatch again forever against an
+// answer that cannot move.
+//
+// `repository_credential_frozen` is deliberately absent. It is retryable because it can end — a
+// departed member can rejoin and a membership can be restored — and settling it would turn a
+// temporary state into a permanent verdict about the Project. A new member belongs here only if it
+// satisfies the two conditions above; see the credentialed-clone refusal decision.
 var terminalCredentialRefusals = map[string]bool{
 	repositoryCredentialExecutorUnavailable:   true,
 	repositoryCredentialCapabilityUnsupported: true,
+	repositoryCredentialRevoked:               true,
 }
 
 // requireRepositoryAccess authorizes only new remote Git work. Finishing accepted executions,
@@ -66,7 +86,17 @@ func requireRepositoryAccess(t *transaction, pid string) {
 	} // Anonymous public Git is the existing real execution path.
 	c := t.one("SELECT * FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", id, p.S("tenantId"))
 	require(c != nil, 409, "repository_credential_unavailable")
-	require(c.S("availability") == "available", 409, "repository_credential_frozen")
+	// The reference's own state is reported before the deployment's, and the two states that are not
+	// `available` are reported apart: an owner's revocation is final, a freeze is not (see
+	// `repositoryCredentialRevoked`). Reporting both as "frozen" would name a condition that resolves
+	// itself for one that never will.
+	switch c.S("availability") {
+	case "available":
+	case "frozen":
+		reject(409, "repository_credential_frozen")
+	default:
+		reject(409, repositoryCredentialRevoked)
+	}
 	if c.S("attribution") != "team" {
 		require(t.one("SELECT m.user_id FROM tenant_memberships m JOIN users u ON u.id=m.user_id WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND u.status='active' AND u.deleted_at IS NULL", c.S("tenantId"), c.S("ownerUserId")) != nil, 409, "repository_credential_frozen")
 	}

@@ -204,6 +204,11 @@ type Config struct {
 	// path like every other input here, so a repository cannot point the clone at a trust anchor of its
 	// own choosing.
 	SSLCAInfo string
+	// Egress is the deployment's optional, default-off proxy for Git's own egress, scoped to the hosts
+	// it names. The zero value is the approved default and routes nothing through a proxy; with it
+	// unset the command line is byte-for-byte the one that clears every proxy (D17's boundary is
+	// unchanged, and see GitEgress for the recorded deviation).
+	Egress GitEgress
 	// VerificationKeys is the deployment's authorization verification key set. It is the public half of
 	// Cloud's signing key, so this executor can refuse a job before spending anything — and so a
 	// deployment that cannot verify has no executor at all.
@@ -286,7 +291,7 @@ func (c Config) gitDeployment() gitDeployment {
 		homeDirectory: c.HomeDirectory,
 		helperPath:    c.HelperPath,
 		gitPath:       c.GitPath,
-		sslCAInfo:     c.SSLCAInfo,
+		transport:     gitTransport{sslCAInfo: c.SSLCAInfo, egress: c.Egress},
 	}
 }
 
@@ -435,7 +440,7 @@ func (e *Executor) clone(ctx context.Context, job *Job, repository, token string
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", e.refuse(ReasonCodeUnavailable, err)
 	}
-	arguments, err := cloneArguments(job, e.config.HelperPath, e.config.MaterialRoot, target, e.config.SSLCAInfo)
+	arguments, err := cloneArguments(job, e.config.HelperPath, e.config.MaterialRoot, target, e.config.gitDeployment().transport)
 	if err != nil {
 		return "", e.refuse(ReasonCodeUnavailable, err)
 	}

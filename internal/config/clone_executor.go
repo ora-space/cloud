@@ -53,6 +53,24 @@ type CloneExecutorServiceConfig struct {
 	// certificate against. A deployment that serves Git from its own authority names it here; an empty
 	// value means the system bundle.
 	SSLCAInfo string `mapstructure:"ssl_ca_info"`
+	// GitProxyURL and GitProxyHosts are the deployment's optional, default-off proxy for Git's own
+	// egress. Both are empty by default, and both must be set together: a URL with no hosts would route
+	// everything and hosts with no URL would do nothing, so a half-declared policy is refused at startup
+	// rather than guessed at.
+	//
+	// It exists for a deployment whose Git transport to a public forge degrades on bulk transfer while an
+	// ordinary forward proxy on the same host carries the same fetch at full speed. The value is
+	// deployment configuration and never comes from a clone job or an authorization, and it must carry no
+	// credentials: it becomes part of the command line, so a proxy needing authentication is refused
+	// rather than passed through. See `cloneexec.GitEgress` for the recorded deviation from the approved
+	// decisions.
+	GitProxyURL string `mapstructure:"git_proxy_url"`
+	// GitProxyHosts is the comma-separated list of bare, lowercased hostnames that may be reached through
+	// GitProxyURL, for example `github.com`. It is a string rather than a slice because the environment
+	// binder skips slice fields, and this value has to be settable from `CLONE_EXECUTOR_GIT_PROXY_HOSTS`
+	// like every other setting here. Every host not listed is dialed directly, which is what keeps the
+	// executor's internal traffic out of the proxy without an exclusion list.
+	GitProxyHosts string `mapstructure:"git_proxy_hosts"`
 	// AuthorizationPublicKeyFile is the deployment-delivered Ed25519 public key Cloud signs
 	// authorizations with. It is the public half only: an executor whose volume and process are both
 	// compromised still cannot mint an authorization. The file may hold several keys, which is how the
@@ -159,6 +177,20 @@ func LoadCloneExecutorConfig(path string) (*CloneExecutorServiceConfig, error) {
 	return &cfg, nil
 }
 
+// gitEgress builds the deployment's optional Git egress policy from its two settings.
+//
+// The host list is split here rather than in each of the three builders, so that trimming the entries and
+// dropping the blank one a trailing comma produces is one behavior rather than three copies of it. An
+// invalid policy is an error, and `Executor` always runs, so a deployment that declared one refuses at
+// startup whichever capabilities it turned on.
+func (c *CloneExecutorServiceConfig) gitEgress() (cloneexec.GitEgress, error) {
+	egress, err := cloneexec.NewGitEgress(c.GitProxyURL, strings.Split(c.GitProxyHosts, ","))
+	if err != nil {
+		return cloneexec.GitEgress{}, fmt.Errorf("clone executor git egress: %w", err)
+	}
+	return egress, nil
+}
+
 // Executor builds the clone executor, including its redemption client toward the Credential Service.
 //
 // The order matters: the verification key and the Store client are both built here, so a deployment
@@ -173,6 +205,10 @@ func (c *CloneExecutorServiceConfig) Executor() (*cloneexec.Executor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("clone executor: %w", err)
 	}
+	egress, err := c.gitEgress()
+	if err != nil {
+		return nil, err
+	}
 	storeClient, err := c.StoreClient()
 	if err != nil {
 		return nil, err
@@ -184,6 +220,7 @@ func (c *CloneExecutorServiceConfig) Executor() (*cloneexec.Executor, error) {
 		HelperPath:       c.HelperPath,
 		GitPath:          c.GitPath,
 		SSLCAInfo:        c.SSLCAInfo,
+		Egress:           egress,
 		VerificationKeys: keys,
 		Store:            storeClient,
 		Timeout:          c.Timeout,
@@ -224,6 +261,10 @@ func (c *CloneExecutorServiceConfig) MirrorExecutor() (*cloneexec.MirrorExecutor
 	if err != nil {
 		return nil, fmt.Errorf("clone executor mirror: %w", err)
 	}
+	egress, err := c.gitEgress()
+	if err != nil {
+		return nil, err
+	}
 	storeClient, err := c.StoreClient()
 	if err != nil {
 		return nil, err
@@ -244,6 +285,7 @@ func (c *CloneExecutorServiceConfig) MirrorExecutor() (*cloneexec.MirrorExecutor
 		HelperPath:       c.HelperPath,
 		GitPath:          c.GitPath,
 		SSLCAInfo:        c.SSLCAInfo,
+		Egress:           egress,
 		VerificationKeys: keys,
 		Mirrors:          mirrors,
 		Store:            storeClient,
@@ -286,6 +328,10 @@ func (c *CloneExecutorServiceConfig) PushExecutor() (*cloneexec.PushExecutor, er
 	if err != nil {
 		return nil, fmt.Errorf("clone executor push: %w", err)
 	}
+	egress, err := c.gitEgress()
+	if err != nil {
+		return nil, err
+	}
 	storeClient, err := c.StoreClient()
 	if err != nil {
 		return nil, err
@@ -297,6 +343,7 @@ func (c *CloneExecutorServiceConfig) PushExecutor() (*cloneexec.PushExecutor, er
 		HelperPath:       c.HelperPath,
 		GitPath:          c.GitPath,
 		SSLCAInfo:        c.SSLCAInfo,
+		Egress:           egress,
 		VerificationKeys: keys,
 		Store:            storeClient,
 		Timeout:          c.PushTimeout,

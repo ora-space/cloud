@@ -5,6 +5,9 @@ package core
 // control action against a real schema; they assert which Operation came back and what Cloud wrote
 // about it, never how long anything took.
 //
+// Evidence for specs test-cases/cloud/operation/operation-claim-order.md
+// #the-claim-prefers-waiting-work-and-serves-the-work-that-has-waited-longest.
+//
 // The ordering under test is a scheduling order and nothing else. An Operation changes state here only
 // because a claim is what moves it to `running`, in the one UPDATE that always did; no deadline is
 // inferred, no Operation is failed on its own behalf, and no state transition is added, removed or
@@ -182,6 +185,80 @@ func TestClaimHonoursTheRetryDelay(t *testing.T) {
 			t.Fatalf("a due retry is waiting work and must be preferred over the running Operation, got %v (running=%s)", ok, running)
 		}
 	})
+}
+
+// TestClaimServesTheOldestWaitingWorkNotTheOldestOperation is the second starvation fix, and the one
+// the queue is actually stuck on.
+//
+// Ordering every candidate by `created_at` made plain age the whole of the policy, so an Operation that
+// kept failing was also the Operation that was always oldest: a clone step failing against a repository
+// this deployment cannot reach returns its Operation to `retry_wait` with a fresh deadline, the next
+// claim finds that deadline due, and the same Operation is handed back — for ever. Waiting work behind
+// it was claimable and never claimed, and the Project that owned it stayed `provisioning` with nothing
+// working on it and nothing in the queue to show for it.
+//
+// The ordering compares the instant each candidate became runnable: a queued Operation was runnable
+// from the moment it was created, and a retry from the moment its delay elapsed. A retry that has just
+// come due after hours of retrying is therefore *younger* waiting work than an Operation that has been
+// queued throughout, and the queued one is served first. Nothing is concluded about the retrying
+// Operation by being passed over: it keeps its state, keeps its version, and is claimed as soon as the
+// work that became runnable before it is done.
+func TestClaimServesTheOldestWaitingWorkNotTheOldestOperation(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := seedClaimScene(t, store)
+	// Six hours old but due a second ago, against two hours queued: created first, waiting last.
+	justDue := -time.Second
+	retrying := seedClaimOperation(t, store, scene, "retry_wait", 6*time.Hour, &justDue)
+	queued := seedClaimOperation(t, store, scene, "queued", 2*time.Hour, nil)
+
+	claimed, ok := claimOperation(t, store, 1)
+	if !ok {
+		t.Fatal("two waiting Operations and the claim offered nothing")
+	}
+	if claimed.S("id") != queued {
+		t.Fatalf("the work that has been waiting longest must be claimed first, got %s (retrying=%s)", claimed.S("id"), retrying)
+	}
+	// Being passed over is not a verdict on the retry: a claim that chooses another Operation writes
+	// nothing to this one.
+	if state, version := operationState(t, store, retrying); state != "retry_wait" || version != 1 {
+		t.Fatalf("the due retry must be left exactly as it was, got %s v%d", state, version)
+	}
+	// And it is still waiting work: the very next claim reaches it.
+	next, ok := claimOperation(t, store, 1)
+	if !ok || next.S("id") != retrying {
+		t.Fatalf("the due retry must be claimed once the work ahead of it is done, got %v", next)
+	}
+}
+
+// TestClaimDoesNotLetARetryingOperationHoldEveryProjectBack is the multi-Project form of the same fix,
+// and the shape the queue was reported stuck in: one Project's Operation retrying a clone for ever must
+// not stop other Projects' Operations from being claimed, however old it is.
+func TestClaimDoesNotLetARetryingOperationHoldEveryProjectBack(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := seedClaimScene(t, store)
+	justDue := -time.Second
+	retrying := seedClaimOperation(t, store, scene, "retry_wait", 8*time.Hour, &justDue)
+	first := seedClaimOperation(t, store, scene, "queued", 5*time.Hour, nil)
+	second := seedClaimOperation(t, store, scene, "queued", 4*time.Hour, nil)
+
+	reached := []string{}
+	for range 2 {
+		claimed, ok := claimOperation(t, store, 1)
+		if !ok {
+			t.Fatalf("work was still queued and the claim offered nothing after %v", reached)
+		}
+		reached = append(reached, claimed.S("id"))
+	}
+	if reached[0] != first || reached[1] != second {
+		t.Fatalf("both queued Operations must be reached in age order, got %v (retrying=%s first=%s second=%s)", reached, retrying, first, second)
+	}
+	if state, version := operationState(t, store, retrying); state != "retry_wait" || version != 1 {
+		t.Fatalf("the retrying Operation must be left exactly as it was, got %s v%d", state, version)
+	}
+	claimed, ok := claimOperation(t, store, 1)
+	if !ok || claimed.S("id") != retrying {
+		t.Fatalf("once nothing else waits the retry must be claimed again, got %v", claimed)
+	}
 }
 
 // TestClaimRejectsAStaleControllerEpoch pins the fencing the ordering sits inside and must not weaken.

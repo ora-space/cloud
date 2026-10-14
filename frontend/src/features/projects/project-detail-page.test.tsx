@@ -59,12 +59,54 @@ function installProjectHandlers(role: string, project = cloudProject('Demo')) {
   )
 }
 
+/**
+ * The two handlers a detail page needs to reach a project's provisioning
+ * Operation: the Workspace that names it and the Operation itself.
+ */
+function installProvisioning(operationId: string, state: string, errorCode: string | null) {
+  server.use(
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
+      HttpResponse.json({ items: [{ id: WORKSPACE_ID, creatorOperationId: operationId }] }),
+    ),
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/operations/${operationId}`, () =>
+      HttpResponse.json({
+        id: operationId,
+        tenantId: TEST_TENANT_ID,
+        projectId: PROJECT_ID,
+        workspaceId: WORKSPACE_ID,
+        kind: 'create_project',
+        state,
+        step: 'clone',
+        errorCode,
+        version: 2,
+      }),
+    ),
+  )
+}
+
 function renderDetail() {
   return renderAtRoute(
     '/w/:workspaceSlug/projects/:projectId',
     <ProjectDetailPage slug="cloud-dev" />,
     `/w/cloud-dev/projects/${PROJECT_ID}`,
   )
+}
+
+/** A delete request the cloud refuses with `code` and the status that code carries. */
+function installRefusedDelete(code: string) {
+  server.use(
+    http.delete(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}`, () =>
+      HttpResponse.json({ code, params: {} }, { status: 409 }),
+    ),
+  )
+}
+
+/** Opens the rendered project's delete dialog and submits it. */
+async function confirmProjectDelete() {
+  const user = userEvent.setup()
+  await screen.findAllByText('Demo')
+  await user.click(screen.getByRole('button', { name: '删除项目' }))
+  await user.click(await screen.findByRole('button', { name: '确认删除' }))
 }
 
 describe('ProjectDetailPage', () => {
@@ -108,41 +150,70 @@ describe('ProjectDetailPage', () => {
       }),
     )
     renderDetail()
-    const user = userEvent.setup()
 
-    await screen.findAllByText('Demo')
-    await user.click(screen.getByRole('button', { name: '删除项目' }))
-    await user.click(await screen.findByRole('button', { name: '确认删除' }))
+    await confirmProjectDelete()
 
     await waitFor(() => expect(deleted).toBe(true))
   })
 
+  it('shows an actionable reason when the cloud refuses the deletion', async () => {
+    installProjectHandlers('admin')
+    installRefusedDelete('runtime_control_held')
+    renderDetail()
+
+    await confirmProjectDelete()
+
+    // The refusal names the runtime holding the project and what ends it, rather
+    // than rendering the bare code — and it stays on the page, so the member can
+    // act and try again instead of being navigated away from a failed delete.
+    const refusal = await screen.findByRole('alert')
+    expect(refusal).toHaveTextContent('运行环境正在被使用')
+    expect(refusal).toHaveTextContent('runtime_control_held')
+    expect(screen.getAllByText('Demo').length).toBeGreaterThan(0)
+  })
+
+  it('reads a duplicate deletion as already in progress, not as a failure', async () => {
+    installProjectHandlers('admin')
+    installRefusedDelete('operation_in_progress')
+    renderDetail()
+
+    await confirmProjectDelete()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('已有一次删除正在进行')
+  })
+
   it('shows why provisioning failed instead of leaving the project looking unfinished', async () => {
     installProjectHandlers('member', cloudProject('Demo', 'provisioning'))
-    server.use(
-      http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
-        HttpResponse.json({ items: [{ id: WORKSPACE_ID, creatorOperationId: OPERATION_ID }] }),
-      ),
-      http.get(`/api/v1/tenants/${TEST_TENANT_ID}/operations/${OPERATION_ID}`, () =>
-        HttpResponse.json({
-          id: OPERATION_ID,
-          tenantId: TEST_TENANT_ID,
-          projectId: PROJECT_ID,
-          workspaceId: WORKSPACE_ID,
-          kind: 'create_project',
-          state: 'failed',
-          step: 'clone',
-          errorCode: 'repository_credential_executor_unavailable',
-          version: 2,
-        }),
-      ),
-    )
+    installProvisioning(OPERATION_ID, 'failed', 'repository_credential_executor_unavailable')
     renderDetail()
 
     const notice = await screen.findByRole('alert')
     expect(notice).toHaveTextContent('项目创建失败')
     expect(notice).toHaveTextContent('本部署未安装仓库凭据执行器')
     expect(notice).toHaveTextContent('repository_credential_executor_unavailable')
+    // The status line says the same thing the notice does: a project whose
+    // creation ended must not keep reading "规划中", which is what the
+    // lifecycle alone — `provisioning` for good — would have shown.
+    expect(await screen.findByText('创建失败')).toBeInTheDocument()
+    expect(screen.queryByText('规划中')).not.toBeInTheDocument()
+  })
+
+  it('keeps a project whose creation is being retried out of the failure state', async () => {
+    installProjectHandlers('member', cloudProject('Demo', 'provisioning'))
+    installProvisioning(OPERATION_ID, 'retry_wait', 'clone_failed')
+    renderDetail()
+
+    expect(await screen.findByText('重试中')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('reports a creation that finished as in progress before the lifecycle catches up', async () => {
+    installProjectHandlers('member', cloudProject('Demo', 'provisioning'))
+    installProvisioning(OPERATION_ID, 'succeeded', null)
+    renderDetail()
+
+    expect(await screen.findByText('进行中')).toBeInTheDocument()
+    expect(screen.queryByText('规划中')).not.toBeInTheDocument()
   })
 
   it('hides delete from a member even when they created the project', async () => {

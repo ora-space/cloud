@@ -140,6 +140,11 @@ C 今天承担**三项能力**,走**三条路由**:`POST /v1/clone-executions` �
   在"用哪个 helper、信哪个 CA"上分叉)、`gitEnvironment`、`repositoryScope`、`validateExecutablePath`、
   `runGit`、`redactFailure`;clone 一侧的 `cloneArguments`、`helperArgument`、`validateBranch`、
   `headCommit`。
+- `egress.go`:部署可选的、默认关闭的 Git 出网代理——`GitEgress`、`NewGitEgress`、`validate`、
+  `proxyEndpoint`、`validateEgressHost` 与 `arguments`。它是本包唯一会写出代理的地方,而且写在**命令行**
+  上而不是环境里,并且只对部署列出的主机生效:名单之外的地址一个参数都不产生,所以 Cloud、内部 Git Server
+  与 Credential Store 永远不会被代理,也就不需要维护一份排除名单。`gitEnvironment` 的白名单不因它变动,
+  "能改道凭据的变量"因此没有增加。它偏离的两条已批准决策记录在 `GitEgress` 的文档注释里,那两条尚未修订。
 - `mirror.go`:第二项能力——`MirrorJob`、`MirrorResult`、两个 reason code
   (`credential_executor_fetch_failed`/`credential_executor_publish_failed`)、`MirrorConfig`、
   `MirrorExecutor`、`NewMirrorExecutor`、`Sweep`、`Prepare`、`matchMirrorBinding`、
@@ -218,9 +223,13 @@ C 今天承担**三项能力**,走**三条路由**:`POST /v1/clone-executions` �
 - **销毁失败不算成功**:`ReasonCodeCleanupFailed` 即使 clone 成功也照样报错——凭据可能还在盘上的 clone 不是
   一次成功的 clone(`TestExecuteReportsACleanupFailureRatherThanASuccess`)。
 - **argv 与环境是固定的**:`cloneArguments` 逐位固定 helper 路径、`credential.useHttpPath=true`(它才是让
-  Git 报出仓库路径、供 helper 与物化 scope 比对的那一项)、`http.followRedirects=false`、代理键、以及
+  Git 报出仓库路径、供 helper 与物化 scope 比对的那一项)、`http.followRedirects=false`、代理键
+  (`http.proxy=` 恒在;部署启用了出网策略时,后面至多多一个按主机限定的 `http.<url>.proxy`,见
+  `egress.go`,且永远不会是空值)、以及
   `core.hooksPath`/`core.symlinks`/子模块/LFS;`gitEnvironment` 是克隆进程的**全部**环境
-  (`GIT_CONFIG_GLOBAL`、`GIT_CONFIG_NOSYSTEM`、`GIT_TERMINAL_PROMPT=0`、`GIT_ASKPASS` 等)。Token 不进
+  (`GIT_CONFIG_GLOBAL`、`GIT_CONFIG_NOSYSTEM`、`GIT_TERMINAL_PROMPT=0`、`GIT_ASKPASS` 等)。启用的代理
+  之所以走 argv 而不是变量,正是为了让这份白名单保持七项;它同时被拒绝携带 userinfo,因此凭据无法经它进入
+  命令行。Token 不进
   argv,只走 helper 与 Git 之间的 `credential` 协议;写命令与只读对账用的是同一份环境与同一个 helper,因此
   写入路径上也没有第二条取得秘密的途径。
 - **不运行仓库给的东西**:没有 hook、没有 LFS filter、没有子模块、没有符号链接跟随——每一项都是授权没有覆盖

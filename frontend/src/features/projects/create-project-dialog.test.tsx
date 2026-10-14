@@ -120,7 +120,7 @@ describe('CreateProjectDialog', () => {
   it.each([
     [
       'repository_credential_frozen',
-      '所选凭据当前不可用（已冻结或已撤销），请改用其他凭据，或选择“不使用凭据（公开仓库）”',
+      '所选凭据当前不可用（已冻结或已删除），请改用其他凭据，或选择“不使用凭据（公开仓库）”',
     ],
     [
       'repository_credential_scope_mismatch',

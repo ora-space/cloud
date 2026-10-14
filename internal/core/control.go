@@ -152,6 +152,13 @@ func operationCommand(t *transaction, r *ControlRequest) Object {
 		require(deferCodes[code], 400, "invalid_error_code")
 		delay := r.Body.N("retrySeconds")
 		require(delay >= 1 && delay <= 3600, 400, "invalid_retry_delay")
+		// A failed clone is parked under Cloud's own budget rather than the request's delay: the count
+		// of attempts and the backoff between them are Cloud's (D2), and the request only ever carries a
+		// Controller constant. The delay above is still validated, because it remains part of the
+		// request's shape, and it is still what every other code is parked for.
+		if state == "retry_wait" && code == "clone_failed" && o.S("step") == "clone" {
+			return deferCloneFailure(t, o)
+		}
 		t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)
 		return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 	default:
@@ -194,15 +201,28 @@ func leaseValid(t *transaction, r *ControlRequest) {
 
 func claim(t *transaction, r *ControlRequest) Object {
 	schedulePluginMaintenance(t)
-	// Candidates are ordered by whether they are already running, then by age. PostgreSQL sorts a
-	// boolean false before true, so a queued operation and a due retry are preferred over an
-	// operation that is already running — a running operation is claimed again when nothing else is
-	// waiting, which is what keeps crash recovery, but it can no longer hold the queue behind it
-	// indefinitely. `state='running'` stays a candidate for exactly that recovery, and nothing about
-	// the claim's own effects changes: the same single row is re-selected and the same UPDATE marks
-	// it running under this epoch. This is a scheduling order, not a lifecycle rule: no operation
-	// changes state here because of it, no deadline is inferred, and nothing is failed on its behalf.
-	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY (state='running'), created_at, id LIMIT 1")
+	// Candidates are ordered by whether they are already running, then by how long each has been
+	// runnable. PostgreSQL sorts a boolean false before true, so a queued operation and a due retry
+	// are preferred over an operation that is already running — a running operation is claimed again
+	// when nothing else is waiting, which is what keeps crash recovery, but it can no longer hold the
+	// queue behind it indefinitely. `state='running'` stays a candidate for exactly that recovery, and
+	// nothing about the claim's own effects changes: the same single row is re-selected and the same
+	// UPDATE marks it running under this epoch. This is a scheduling order, not a lifecycle rule: no
+	// operation changes state here because of it, no deadline is inferred, and nothing is failed on its
+	// behalf.
+	//
+	// The second key is the instant a candidate became runnable rather than the instant it was created:
+	// a queued operation became runnable when it was created, and a retry became runnable when the delay
+	// it was parked for expired. Ordering the two populations by `created_at` together would let one
+	// long-retrying operation — a clone that keeps failing against a repository this deployment cannot
+	// reach — stay the oldest candidate for ever, so every claim would hand that same operation back and
+	// a younger Operation would never be scheduled at all, however long it waited. Its own Project would
+	// stay `provisioning` with nothing working on it and nothing to see in the queue. With the runnable
+	// instant as the key the claim serves whichever operation has been waiting for service longest,
+	// whatever kind of wait it is, and a failed attempt returns its Operation to the queue behind the
+	// work that became runnable before it. This stays a scheduling order decided in one place by one
+	// expression, and it stays the only place that decides it.
+	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY (state='running'), CASE WHEN state='retry_wait' THEN retry_at ELSE created_at END, id LIMIT 1")
 	if o == nil {
 		return Object{"operation": nil}
 	}

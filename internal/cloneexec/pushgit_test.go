@@ -31,7 +31,7 @@ const (
 // a deletion is the absence of a source, a wildcard is a `*` in the refspec, a tag write is a target
 // outside `refs/heads/`, and a multi-ref write is a second refspec or a space inside one.
 func TestTheWriteCommandIsOneRefOneCompareAndSwap(t *testing.T) {
-	arguments, err := pushUpdateArguments(pushTestHelper, pushTestAddress, pushTestRef, pushTestOld, pushLocalRef, pushTestCA)
+	arguments, err := pushUpdateArguments(pushTestHelper, pushTestAddress, pushTestRef, pushTestOld, pushLocalRef, gitTransport{sslCAInfo: pushTestCA})
 	if err != nil {
 		t.Fatalf("pushUpdateArguments: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestTheWriteCommandRefusesAnAddressOrRefItWillNotDial(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if arguments, err := pushUpdateArguments(pushTestHelper, testCase.address, testCase.ref, testCase.old, pushLocalRef, pushTestCA); err == nil {
+			if arguments, err := pushUpdateArguments(pushTestHelper, testCase.address, testCase.ref, testCase.old, pushLocalRef, gitTransport{sslCAInfo: pushTestCA}); err == nil {
 				t.Fatalf("this path built a write it documents as unrepresentable: %v", arguments)
 			}
 		})
@@ -114,7 +114,7 @@ func TestTheWriteCommandRefusesAnAddressOrRefItWillNotDial(t *testing.T) {
 // from it. The read-back is a single ref under `--refs`, and neither command may be given a ref it could
 // interpret as a pattern.
 func TestTheFetchAndReadCommandsStayReads(t *testing.T) {
-	fetch, err := pushFetchArguments(pushTestHelper, pushTestAddress, pushTestCA)
+	fetch, err := pushFetchArguments(pushTestHelper, pushTestAddress, gitTransport{sslCAInfo: pushTestCA})
 	if err != nil {
 		t.Fatalf("pushFetchArguments: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestTheFetchAndReadCommandsStayReads(t *testing.T) {
 		t.Fatalf("the fetch refspec reaches beyond branch heads: %s", pushFetchRefspec)
 	}
 
-	read, err := pushRemoteRefArguments(pushTestHelper, pushTestAddress, pushTestRef, pushTestCA)
+	read, err := pushRemoteRefArguments(pushTestHelper, pushTestAddress, pushTestRef, gitTransport{sslCAInfo: pushTestCA})
 	if err != nil {
 		t.Fatalf("pushRemoteRefArguments: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestTheFetchAndReadCommandsStayReads(t *testing.T) {
 	if !strings.HasSuffix(joinedRead, "ls-remote --refs -- "+pushTestAddress+" "+pushTestRef) {
 		t.Fatalf("the read-back is not one ref of the address: %s", joinedRead)
 	}
-	if _, err := pushRemoteRefArguments(pushTestHelper, pushTestAddress, "refs/heads/*", pushTestCA); err == nil {
+	if _, err := pushRemoteRefArguments(pushTestHelper, pushTestAddress, "refs/heads/*", gitTransport{sslCAInfo: pushTestCA}); err == nil {
 		t.Fatal("the read-back accepted a pattern ref")
 	}
 }

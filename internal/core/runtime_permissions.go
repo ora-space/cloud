@@ -26,6 +26,9 @@ func runtimeListing(t *transaction, r *PublicRequest, uid, pid string) Object {
 		usable := runtimeUsable(t, w, uid)
 		if usable {
 			w["canUse"] = true
+			// A member who can use the runtime is the one who has to act on a creation that failed,
+			// so this is where the creating Operation has to be readable.
+			resolveCreatingOperation(t, w)
 		} else {
 			items[i] = runtimeOverview(w, false)
 		}

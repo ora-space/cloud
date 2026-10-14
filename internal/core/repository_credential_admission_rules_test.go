@@ -133,19 +133,20 @@ func TestAReferenceTheProjectCannotReachIsRefusedRatherThanFallingBackToAnonymou
 	}
 }
 
-// TestARevokedReferenceIsRefusedAsFrozenBeforeTheDeploymentIsConsulted pins two things at once: that
+// TestARevokedReferenceIsRefusedAsRevokedBeforeTheDeploymentIsConsulted pins two things at once: that
 // revocation is observed at admission, and that the reference's own rule is reported before the
 // deployment's. No executor is installed here, so a reference that passed the earlier checks would be
-// refused with `repository_credential_executor_unavailable`; receiving `repository_credential_frozen`
-// instead is what shows the order. The distinction matters to whoever reads the failure: "this
-// deployment cannot clone" and "this reference was revoked" call for different actions.
-func TestARevokedReferenceIsRefusedAsFrozenBeforeTheDeploymentIsConsulted(t *testing.T) {
+// refused with `repository_credential_executor_unavailable`; receiving `repository_credential_revoked`
+// instead is what shows the order. The code is also what makes this refusal terminal rather than
+// retryable, so it is the difference between a Project that fails once and one that keeps a revoked
+// reference's operation slot for good.
+func TestARevokedReferenceIsRefusedAsRevokedBeforeTheDeploymentIsConsulted(t *testing.T) {
 	store := dispatcherDB(t)
 	scene := seedCredentialedCloneScene(t, store, admittedRepository, admittedScope)
 	stagedExec(t, store, `UPDATE credential_refs SET availability='invalid',unavailable_reason='revoked_by_owner' WHERE id=$1`, scene.credential)
 
-	if _, err := scene.dispatch(store, "exec-revoked"); faultCode(t, err) != "repository_credential_frozen" {
-		t.Fatalf("a revoked reference must be refused as frozen, got %v", err)
+	if _, err := scene.dispatch(store, "exec-revoked"); faultCode(t, err) != repositoryCredentialRevoked {
+		t.Fatalf("a revoked reference must be refused as revoked, got %v", err)
 	}
 	if n := scalarOf(t, store, `SELECT count(*) FROM clone_executions WHERE workspace_id=$1`, scene.workspace); n != 0 {
 		t.Fatalf("a revoked reference produced %d clone executions", n)

@@ -380,7 +380,7 @@ func TestCloneArgumentsPinTheWholeConfiguration(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			arguments, err := cloneArguments(&testCase.job, helper, root, target, testCase.ca)
+			arguments, err := cloneArguments(&testCase.job, helper, root, target, gitTransport{sslCAInfo: testCase.ca})
 			if err != nil {
 				t.Fatalf("cloneArguments refused a valid job: %v", err)
 			}
@@ -412,7 +412,7 @@ func TestCloneArgumentsRefuseAJobGitWouldRunSomethingElse(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := cloneArguments(&testCase.job, helper, root, testCase.target, ""); err == nil {
+			if _, err := cloneArguments(&testCase.job, helper, root, testCase.target, gitTransport{}); err == nil {
 				t.Fatal("a job Git could be made to run something else for was accepted")
 			}
 		})

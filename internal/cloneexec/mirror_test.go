@@ -718,7 +718,7 @@ func TestMirrorSweepRemovesAbandonedFetches(t *testing.T) {
 // line, and the refspec is the one the authorization pinned.
 func TestMirrorArgumentsPinTheWholeConfiguration(t *testing.T) {
 	helper := "/usr/local/bin/git-credential-ora"
-	arguments, err := mirrorArguments(helper, testRepository, testRef, "/etc/ora/repositories.pem")
+	arguments, err := mirrorArguments(helper, testRepository, testRef, gitTransport{sslCAInfo: "/etc/ora/repositories.pem"})
 	if err != nil {
 		t.Fatalf("build the mirror arguments: %v", err)
 	}
@@ -780,14 +780,14 @@ func TestMirrorArgumentsRefuseAnUnusableTarget(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := mirrorArguments(helper, testCase.repository, testCase.ref, ""); err == nil {
+			if _, err := mirrorArguments(helper, testCase.repository, testCase.ref, gitTransport{}); err == nil {
 				t.Fatal("an unusable target was accepted")
 			}
 		})
 	}
 	// The controls: the shapes the route does accept.
 	for _, accepted := range []string{"refs/heads/main", "refs/heads/release/2026-10", "refs/heads/feature.x"} {
-		if _, err := mirrorArguments(helper, testRepository, accepted, ""); err != nil {
+		if _, err := mirrorArguments(helper, testRepository, accepted, gitTransport{}); err != nil {
 			t.Fatalf("ref %q was refused: %v", accepted, err)
 		}
 	}

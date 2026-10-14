@@ -32,7 +32,7 @@ import (
 // would be content no key names, and FETCH_HEAD would be a file a later Git command in this repository
 // could be influenced by. `--` separates the options from the repository, so a repository reference
 // that began with `-` cannot be read as another option.
-func mirrorArguments(helper, address, ref, sslCAInfo string) ([]string, error) {
+func mirrorArguments(helper, address, ref string, transport gitTransport) ([]string, error) {
 	// The helper value is the composed `path root identity` triple, so it is deliberately not put
 	// through `validateExecutablePath`: that rule describes one path, and the three components were each
 	// validated by `helperArgument` before they were joined. What is checked here is that the value is
@@ -52,7 +52,7 @@ func mirrorArguments(helper, address, ref, sslCAInfo string) ([]string, error) {
 	if err := validateMirrorRef(ref); err != nil {
 		return nil, err
 	}
-	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, address, transport)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (m *MirrorExecutor) fetch(ctx context.Context, job *MirrorJob, address, ide
 	if err != nil {
 		return mirror.PublishVerification{}, err
 	}
-	arguments, err := mirrorArguments(helper, address, job.Ref, m.config.SSLCAInfo)
+	arguments, err := mirrorArguments(helper, address, job.Ref, m.config.gitDeployment().transport)
 	if err != nil {
 		return mirror.PublishVerification{}, err
 	}

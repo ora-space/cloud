@@ -36,7 +36,21 @@ type gitDeployment struct {
 	homeDirectory string
 	helperPath    string
 	gitPath       string
-	sslCAInfo     string
+	transport     gitTransport
+}
+
+// gitTransport is the deployment-fixed half of how Git reaches a repository: what it trusts and what it
+// may route through.
+//
+// It is a value of its own rather than two more parameters of each argument builder, because the three
+// builders already take four to six and a seventh positional string would be a call site nobody can read.
+// The two settings travel together because they are answered together — a deployment that terminates its
+// Git service with its own authority and one that reaches a public forge through a proxy — and they are
+// carried as one field so a builder is handed the transport rather than assembled from loose settings at
+// each of the five call sites.
+type gitTransport struct {
+	sslCAInfo string
+	egress    GitEgress
 }
 
 // validate checks every fixed path once, at startup, and refuses rather than defaulting.
@@ -63,10 +77,13 @@ func (g gitDeployment) validate() error {
 			return fmt.Errorf("%s: %w", part.name, err)
 		}
 	}
-	if g.sslCAInfo != "" {
-		if err := validateExecutablePath(g.sslCAInfo); err != nil {
+	if sslCAInfo := g.transport.sslCAInfo; sslCAInfo != "" {
+		if err := validateExecutablePath(sslCAInfo); err != nil {
 			return fmt.Errorf("git certificate authority file: %w", err)
 		}
+	}
+	if err := g.transport.egress.validate(); err != nil {
+		return err
 	}
 	info, err := os.Stat(g.homeDirectory)
 	if err != nil {
@@ -94,6 +111,10 @@ func (g gitDeployment) validate() error {
 // global configuration before the command line, so without these two a host-level
 // `credential.helper`, `url.<x>.insteadOf`, or `http.proxy` could take effect in a window the
 // executor never inspected. With them, the command line below is the whole configuration.
+//
+// Nothing here is a way to configure a proxy, and the one proxy a deployment may enable is not added
+// here: it travels on the command line as a host-scoped `http.<url>.proxy` entry (`GitEgress`), so the
+// set of variables that can redirect a credential stays exactly the seven below.
 //
 // `HOME` points at the executor's own directory so Git has somewhere to look and finds nothing: an
 // unset `HOME` makes Git fall back to other sources, and a real home directory could hold a
@@ -204,11 +225,17 @@ func repositoryScope(repository string) (host, path string, err error) {
 // nothing after it is the directive that *clears* the helper — a deployment that produced one would
 // be talking to a repository with no credential at all, and it would look like an upstream that
 // refused anonymous access rather than like a misconfiguration.
-func gitConstraintArguments(helper, sslCAInfo string) ([]string, error) {
+//
+// `address` is the repository Git will dial, and it is passed in solely so the deployment's optional
+// egress policy can decide whether it applies to that host: an address the policy does not name
+// contributes no arguments at all, which is what keeps every internal host off the proxy. The address
+// itself is not otherwise part of this configuration and is not constrained here — each builder
+// validates and appends its own target.
+func gitConstraintArguments(helper, address string, transport gitTransport) ([]string, error) {
 	if strings.TrimSpace(helper) == "" {
 		return nil, errors.New("the credential helper is not configured")
 	}
-	if sslCAInfo != "" {
+	if sslCAInfo := transport.sslCAInfo; sslCAInfo != "" {
 		if err := validateExecutablePath(sslCAInfo); err != nil {
 			return nil, fmt.Errorf("git certificate authority file: %w", err)
 		}
@@ -239,10 +266,18 @@ func gitConstraintArguments(helper, sslCAInfo string) ([]string, error) {
 	// `GIT_SSL_CAINFO` so that the trust anchor is part of the same audited command line as
 	// `http.sslVerify=true`, and so a repository can never influence it. An unset value means the
 	// system bundle, which is what a deployment reaching a public host wants.
-	if sslCAInfo != "" {
+	if sslCAInfo := transport.sslCAInfo; sslCAInfo != "" {
 		arguments = append(arguments, "-c", "http.sslCAInfo="+sslCAInfo)
 	}
-	return arguments, nil
+	// The optional egress policy has the same shape as the trust anchor above: at most one more `-c`, from
+	// deployment configuration alone, and nothing at all when the deployment enabled no proxy or did not
+	// name this host. It is appended rather than spliced in beside `http.proxy=`, because Git resolves
+	// those two keys by URL specificity and not by the order they appear on the command line.
+	egress, err := transport.egress.arguments(address)
+	if err != nil {
+		return nil, err
+	}
+	return append(arguments, egress...), nil
 }
 
 // cloneArguments is the complete Git configuration and command for one credentialed clone.
@@ -265,7 +300,9 @@ func gitConstraintArguments(helper, sslCAInfo string) ([]string, error) {
 //   - Egress: `http.followRedirects=false` stops a redirect from carrying the token to a host the
 //     authorization never named, and `http.proxy=` clears any proxy that would see the request.
 //     `http.sslVerify=true` is stated rather than assumed so a global `sslVerify=false` cannot turn
-//     verification off.
+//     verification off. A deployment that names a proxy appends one host-scoped entry for the
+//     repositories it covers (`GitEgress`); with no such deployment the command line is exactly the one
+//     that clears every proxy.
 //   - Content: hooks are disabled (`core.hooksPath=/dev/null`), because a hook is a program from the
 //     repository running as the credential-executing identity. Symlinks are not created, so a
 //     checkout cannot plant a link the workload later follows out of its own tree. Submodule
@@ -275,7 +312,7 @@ func gitConstraintArguments(helper, sslCAInfo string) ([]string, error) {
 // `--` separates the options from the repository, so a repository reference that began with `-`
 // cannot be read as another option. The URL is passed exactly as canonicalized, and the target is the
 // executor's own path, so neither is taken from Git's own parsing of the other.
-func cloneArguments(job *Job, helperPath, materialRoot, target, sslCAInfo string) ([]string, error) {
+func cloneArguments(job *Job, helperPath, materialRoot, target string, transport gitTransport) ([]string, error) {
 	helper, err := helperArgument(helperPath, materialRoot, job.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -287,7 +324,7 @@ func cloneArguments(job *Job, helperPath, materialRoot, target, sslCAInfo string
 	if err := validateExecutablePath(target); err != nil {
 		return nil, fmt.Errorf("clone target: %w", err)
 	}
-	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, job.Repository, transport)
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,14 @@ export interface ProvisioningFailure {
  * for is exactly when the raw code is most useful.
  */
 const PROVISIONING_FAILURE_MESSAGES: Record<string, string> = {
+  // Settled by Cloud when the mirror the Node clones from could not be prepared
+  // after every attempt. The distinct reason Cloud recorded for the attempt —
+  // a credential GitHub refused, an upstream that never answered — is not part
+  // of the Operation's public code, so the sentence names both possibilities
+  // rather than guessing between them: the member can act on either, and a
+  // guess would send them to the wrong one.
+  mirror_preparation_failed:
+    '无法从仓库准备只读镜像，重试后仍然失败，项目创建已终止。常见原因是凭据无权读取该仓库，或本机无法访问该仓库地址。请确认凭据对该仓库的读取权限并检查网络后，新建项目重试。',
   // Settled by Cloud when this deployment installed no credentialed-clone
   // executor: a Project that names a credential can never be cloned here, so
   // the Operation reaches `failed` instead of retrying forever.
@@ -41,12 +49,56 @@ const PROVISIONING_FAILURE_MESSAGES: Record<string, string> = {
   // act on this one by binding a reference that declares the capability.
   repository_credential_capability_unsupported:
     '绑定的凭据引用未声明本次 Clone 所需的能力，项目创建已终止。请改用声明了所需能力的凭据引用。',
+  // Settled by Cloud when the bound credential was deleted (revoked): the token
+  // is destroyed and the credential can never authorize a clone again, so the
+  // refusal is final rather than a state that ends by itself. Deleting a
+  // credential never re-points a project, so the way out is a new project that
+  // binds a replacement credential — the sentence says which, because "已删除"
+  // alone would read like something that can be undone.
+  repository_credential_revoked:
+    '绑定的凭据已被删除，Token 已销毁，无法再授权任何 Clone，项目创建已终止。请新建项目并绑定替代凭据。',
   administrative_force_stop: '本次创建已被管理员强制停止。',
 }
 
 /** The sentence to show for `code`, falling back to the code itself. */
 export function provisioningFailureMessage(code: string): string {
   return PROVISIONING_FAILURE_MESSAGES[code] ?? `项目创建失败：${code}`
+}
+
+/**
+ * How far the Operation that creates a project has got, in the shape the
+ * project's status badge renders.
+ *
+ * `retrying` is deliberately its own phase rather than a shade of `failed`:
+ * Cloud is still working on the project, and telling a member their project
+ * failed while an attempt is being made would have them give up on something
+ * that is still moving.
+ */
+export type ProvisioningPhase = 'provisioning' | 'retrying' | 'failed' | 'succeeded'
+
+/**
+ * The phase each Operation state reports. A state this module has not been
+ * taught resolves to no phase rather than to a guess: the project falls back to
+ * its own lifecycle, which is the status the page showed before this module
+ * existed.
+ */
+const PHASE_BY_OPERATION_STATE: Record<string, ProvisioningPhase> = {
+  queued: 'provisioning',
+  running: 'provisioning',
+  retry_wait: 'retrying',
+  blocked: 'retrying',
+  failed: 'failed',
+  succeeded: 'succeeded',
+}
+
+/** The phase `operation` is in, or `undefined` while it is unknown or untaught. */
+function provisioningPhaseOf(
+  operation: Operation | AdminOperation | undefined,
+): ProvisioningPhase | undefined {
+  if (!operation) {
+    return undefined
+  }
+  return PHASE_BY_OPERATION_STATE[operation.state]
 }
 
 /**
@@ -75,30 +127,36 @@ function provisioningFailureOf(
 }
 
 /**
- * The terminal failure of the Operation creating `projectId`, or `undefined`
- * when there is none.
+ * The state of the Operation creating `projectId`: how far it has got and, when
+ * it ended in one, the terminal failure behind it.
  *
  * The public contract has no "operations of a project" route, so the Operation
  * is reached through the Workspace it creates: the project's Workspace list
- * carries `creatorOperationId`, and the Operation by id carries the `errorCode`
- * Cloud settled it with. Without this, a project whose credentialed clone was
- * refused renders as `provisioning` — "still being created" — forever, and the
- * reason never reaches the member who has to act on it.
+ * carries `creatorOperationId`, and the Operation by id carries the state and
+ * the `errorCode` Cloud settled it with. Without this, a project whose
+ * credentialed clone was refused renders as `provisioning` — "still being
+ * created" — forever, and the reason never reaches the member who has to act on
+ * it.
  *
- * Only `failed` counts. An Operation that is still running, parked in
- * `retry_wait`/`blocked` for a retry, or already `succeeded` reports no failure:
- * a retry is not a failure, and reporting one would tell the member to give up
- * on work that is still progressing.
+ * Only `failed` produces a failure. An Operation that is still running, parked
+ * in `retry_wait`/`blocked` for a retry, or already `succeeded` reports none: a
+ * retry is not a failure, and reporting one would tell the member to give up on
+ * work that is still progressing. Those states are told apart by `phase`
+ * instead, which is what a caller renders as the project's status.
  *
- * `isPending` is true until the failure can be ruled out, so a caller can avoid
- * flashing "no failure" while the answer is still unknown. A project with no
- * Workspace yet — the common case while `sandbox`/`node` run — resolves to
- * `isPending: false` with no failure, because there is nothing to ask about.
+ * `isPending` is true until the answer can be ruled out, so a caller can avoid
+ * flashing a status while it is still unknown. A project with no Workspace yet
+ * — the common case while `sandbox`/`node` run — resolves to `isPending: false`
+ * with no phase and no failure, because there is nothing to ask about.
  */
-export function useProjectProvisioningFailure(
+export function useProjectProvisioning(
   tenantId: string | undefined,
   projectId: string | undefined,
-): { failure: ProvisioningFailure | undefined; isPending: boolean } {
+): {
+  phase: ProvisioningPhase | undefined
+  failure: ProvisioningFailure | undefined
+  isPending: boolean
+} {
   const enabled = !!tenantId && !!projectId
   // The generated client takes strings; an empty id matches nothing and the
   // query it belongs to is disabled anyway.
@@ -122,6 +180,7 @@ export function useProjectProvisioningFailure(
   })
 
   return {
+    phase: provisioningPhaseOf(operation.data),
     failure: provisioningFailureOf(operation.data),
     isPending: enabled && (workspaces.isPending || (!!operationId && operation.isPending)),
   }

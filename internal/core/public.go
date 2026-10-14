@@ -185,12 +185,22 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				require(r.Method == "DELETE", 405, "method_not_allowed")
 				requireSpaceRole(m, "admin")
 				version(p, r.Body.N("version"))
-				idleProject(t, p.S("id"))
-				require(p.S("lifecycle") == "active", 409, "resource_unavailable")
+				// How far provisioning got is not what decides whether a Project may be deleted. A
+				// Project whose first Operation ended `failed` never leaves `provisioning` — only a
+				// successful step promotes it — and one whose deletion was abandoned never leaves
+				// `deleting`, because nothing else moves either state. Requiring `active` therefore
+				// refused exactly the Projects a member most wants rid of, as `resource_unavailable`
+				// with nothing to act on. The Space role, the version, and what is still running on
+				// the Project are what decide.
+				require(p.S("lifecycle") != "deleted", 404, "not_found")
+				// A live Operation is no more a refusal than a lifecycle state is, with one
+				// exception: a deletion already in flight. Everything else still live is what this
+				// deletion ends, so that it cannot be claimed or dispatched afterwards.
+				settleForDeletion(t, p.S("id"))
 				ws := t.list("SELECT * FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL ORDER BY id", p.S("id"))
 				previous := Object{}
 				for _, w := range ws {
-					require(runtimeControl(t, w.S("id")).S("state") == "idle", 409, "runtime_control_held")
+					require(runtimeHoldReleasable(t, w.S("id")), 409, "runtime_control_held")
 					checkActivities(t, w)
 					previous[w.S("id")] = w
 				}
@@ -521,7 +531,7 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 		// the push sub-resource is a different document and its own read.
 		return pushRead(t, r, uid)
 	case r.WorkspaceID != "":
-		return workspace(t, r.TenantID, uid, r.WorkspaceID, false)
+		return workspaceDocument(t, r.TenantID, uid, r.WorkspaceID, false)
 	case r.ProjectID != "":
 		p := project(t, r.TenantID, uid, r.ProjectID)
 		if strings.HasSuffix(r.Path, "/workspaces") {
@@ -610,7 +620,7 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	t.exec("INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,credential_ref_id,lifecycle) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'provisioning')", pid, r.TenantID, uid, spaceID, name, repo, branch, cred)
 	insertWorkspace(t, r.TenantID, uid, uid, pid, wid, "main", branch, "")
 	op := newOperation(t, r, uid, pid, wid, "create_project", "sandbox", hash, Object{})
-	return Object{"resource": t.one("SELECT * FROM projects WHERE id=$1", pid), "workspace": t.one("SELECT * FROM workspaces WHERE id=$1", wid), "operation": op}
+	return Object{"resource": t.one("SELECT * FROM projects WHERE id=$1", pid), "workspace": workspaceDocument(t, r.TenantID, uid, wid, false), "operation": op}
 }
 
 func insertWorkspace(t *transaction, tid, owner, creator, pid, wid, kind, ref, title string) {
@@ -638,7 +648,7 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	// tenant member may initiate this action, recorded separately as actor.
 	insertWorkspace(t, r.TenantID, p.S("ownerUserId"), uid, p.S("id"), wid, "isolated", ref, title)
 	op := newOperation(t, r, uid, p.S("id"), wid, "create_workspace", "sandbox", hash, Object{})
-	return Object{"resource": workspace(t, r.TenantID, uid, wid, false), "operation": op}
+	return Object{"resource": workspaceDocument(t, r.TenantID, uid, wid, false), "operation": op}
 }
 
 func newOperation(t *transaction, r *PublicRequest, uid, pid, wid, kind, step, hash string, req Object) Object {
@@ -717,7 +727,7 @@ func workspaceAction(t *transaction, r *PublicRequest, uid, hash string, admin b
 	}
 	op := newOperation(t, r, uid, p.S("id"), w.S("id"), kind, step, hash, req)
 	reserveRuntimeMaintenance(t, w.S("id"), op.S("id"))
-	resource := workspace(t, r.TenantID, uid, w.S("id"), admin)
+	resource := workspaceDocument(t, r.TenantID, uid, w.S("id"), admin)
 	if admin {
 		resource = adminResource(resource)
 		op = adminOperation(op)

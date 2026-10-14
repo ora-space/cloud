@@ -57,11 +57,11 @@ func validatePushTarget(address string) error {
 // The constraints are `gitConstraintArguments`, shared with the clone and mirror paths so the three
 // cannot drift; what this function adds is only the fetch's own shape. `--` separates the options from
 // the address, so an address beginning with `-` cannot be read as another option.
-func pushFetchArguments(helper, address, sslCAInfo string) ([]string, error) {
+func pushFetchArguments(helper, address string, transport gitTransport) ([]string, error) {
 	if err := validatePushTarget(address); err != nil {
 		return nil, err
 	}
-	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, address, transport)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func pushFetchArguments(helper, address, sslCAInfo string) ([]string, error) {
 //
 // `--porcelain` is what makes the outcome readable: the plain output is prose meant for a person and
 // would have to be parsed by matching English.
-func pushUpdateArguments(helper, address, ref, oldCommit, source, sslCAInfo string) ([]string, error) {
+func pushUpdateArguments(helper, address, ref, oldCommit, source string, transport gitTransport) ([]string, error) {
 	if err := validatePushTarget(address); err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func pushUpdateArguments(helper, address, ref, oldCommit, source, sslCAInfo stri
 	if err := cloneauth.ValidateCommit(oldCommit); err != nil {
 		return nil, fmt.Errorf("old commit: %w", err)
 	}
-	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, address, transport)
 	if err != nil {
 		return nil, err
 	}
@@ -124,14 +124,14 @@ func pushUpdateArguments(helper, address, ref, oldCommit, source, sslCAInfo stri
 // write. `--refs` drops the peeled `^{}` lines a tag would add; an annotated tag cannot be the target
 // of a push refspec here, but a repository's tags are still listed by a plain `ls-remote` and reading
 // one would only be a second value to explain.
-func pushRemoteRefArguments(helper, address, ref, sslCAInfo string) ([]string, error) {
+func pushRemoteRefArguments(helper, address, ref string, transport gitTransport) ([]string, error) {
 	if err := validatePushTarget(address); err != nil {
 		return nil, err
 	}
 	if err := cloneauth.ValidateRef(ref); err != nil {
 		return nil, err
 	}
-	arguments, err := gitConstraintArguments(helper, sslCAInfo)
+	arguments, err := gitConstraintArguments(helper, address, transport)
 	if err != nil {
 		return nil, err
 	}

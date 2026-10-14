@@ -266,6 +266,10 @@ func TestRevokingACredentialLeavesTheAcceptedExecutionAndItsSettlementIntact(t *
 // the guard would be visibly executed and registered here — the refusal is the revocation's doing, not
 // a missing executor's — and the scene carries no prior execution, so nothing but the guard stands
 // between the dispatch and the executor.
+//
+// The code is the revocation's own rather than `repository_credential_frozen`, and that is what the
+// product's delete button changes about the guard's answer: a revoked reference is destroyed, not
+// paused, so the refusal is one of the terminal ones and the Operation settles instead of retrying.
 func TestRevokingACredentialClosesNewCloneBindings(t *testing.T) {
 	store := dispatcherDB(t)
 	secrets := &lifecycleSecrets{}
@@ -279,8 +283,8 @@ func TestRevokingACredentialClosesNewCloneBindings(t *testing.T) {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	if _, err := scene.dispatch(store, "exec-after-revoke"); faultCode(t, err) != "repository_credential_frozen" {
-		t.Fatalf("a revoked credential must refuse a new clone binding as frozen, got %v", err)
+	if _, err := scene.dispatch(store, "exec-after-revoke"); faultCode(t, err) != repositoryCredentialRevoked {
+		t.Fatalf("a revoked credential must refuse a new clone binding as revoked, got %v", err)
 	}
 	if len(cloner.calls) != 0 {
 		t.Fatalf("a revoked credential reached the executor %d times", len(cloner.calls))

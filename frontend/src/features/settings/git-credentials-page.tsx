@@ -1,6 +1,17 @@
 import { useState } from 'react'
 import { format } from 'date-fns'
 import type { GitCredential } from '@/api/generated.schemas'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,7 +30,7 @@ import {
 const AVAILABILITY_LABELS: Record<GitCredential['availability'], string> = {
   available: '可用',
   frozen: '已冻结',
-  invalid: '已撤销',
+  invalid: '已删除',
 }
 
 const AVAILABILITY_VARIANTS: Record<
@@ -35,7 +46,7 @@ const AVAILABILITY_VARIANTS: Record<
 // unrecognized code falls back to a generic line rather than rendering the raw
 // code, which would mean less than showing only the availability badge.
 const UNAVAILABLE_REASONS: Record<string, string> = {
-  revoked_by_owner: '已被你撤销',
+  revoked_by_owner: 'Token 已销毁，记录为审计保留',
   associated_member_departed: '因不再是有效成员被冻结，重新加入也不会解冻',
 }
 
@@ -133,9 +144,15 @@ function CreateGitCredentialForm({ tenantId }: { tenantId: string | undefined })
 }
 
 /**
- * Per-row rotate and revoke. Both are disabled while the credential is not
+ * Per-row rotate and delete. Both are disabled while the credential is not
  * available because the server would refuse them; the disabled state is a hint,
  * never the authorization — the server checks availability and version again.
+ *
+ * Deleting is confirmed first, and the dialog states the consequences that
+ * outlive the click: the Token is destroyed in the Credential Service, the
+ * credential can never authorize a clone again, and a project already bound to
+ * it is never re-pointed at another credential — that project simply stops
+ * cloning until the member binds a replacement.
  */
 function GitCredentialActions({
   tenantId,
@@ -147,6 +164,7 @@ function GitCredentialActions({
   const rotate = useRotateGitCredential(tenantId)
   const revoke = useRevokeGitCredential(tenantId)
   const [token, setToken] = useState('')
+  const [confirming, setConfirming] = useState(false)
   const available = credential.availability === 'available'
   const busy = rotate.isPending || revoke.isPending
   const failure = rotate.error ?? revoke.error
@@ -179,33 +197,62 @@ function GitCredentialActions({
         >
           轮换
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!available || busy}
-          onClick={() => {
-            rotate.reset()
-            revoke.mutate({ id: credential.id, version: credential.version })
-          }}
-        >
-          撤销
-        </Button>
+        <AlertDialog open={confirming} onOpenChange={setConfirming}>
+          <AlertDialogTrigger
+            render={
+              <Button type="button" variant="destructive" disabled={!available || busy}>
+                删除凭据
+              </Button>
+            }
+          />
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除「{credential.name}」？</AlertDialogTitle>
+              <AlertDialogDescription>
+                删除后 Token
+                立即销毁，该凭据不能再用于任何克隆。已绑定它的项目不会被改绑到其他凭据，在重新绑定之前无法克隆。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  // Close before dispatching: the row is where a refusal is
+                  // reported, and an open modal marks everything outside it
+                  // aria-hidden, so a dialog left open would hide its own
+                  // failure from the member.
+                  setConfirming(false)
+                  rotate.reset()
+                  revoke.mutate({ id: credential.id, version: credential.version })
+                }}
+              >
+                确认删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
       {failure != null && (
         <p role="alert" className="text-xs text-destructive">
           {gitCredentialFailureMessage(failure)}
         </p>
       )}
-      {failure == null && (rotate.isSuccess || revoke.isSuccess) && (
+      {failure == null && revoke.isSuccess && (
         <p role="status" className="text-xs text-muted-foreground">
-          已更新
+          已删除，Token 已销毁
+        </p>
+      )}
+      {failure == null && !revoke.isSuccess && rotate.isSuccess && (
+        <p role="status" className="text-xs text-muted-foreground">
+          已轮换
         </p>
       )}
     </div>
   )
 }
 
-/** One listed credential: identity, availability, and its rotate/revoke row. */
+/** One listed credential: identity, availability, and its rotate/delete row. */
 function GitCredentialRow({
   tenantId,
   credential,
@@ -227,7 +274,7 @@ function GitCredentialRow({
         <AvailabilityBadge credential={credential} />
       </div>
       {explanation && (
-        <p className="text-xs text-muted-foreground">不可用：{explanation}，无法轮换或撤销</p>
+        <p className="text-xs text-muted-foreground">不可用：{explanation}，无法轮换或删除</p>
       )}
       <GitCredentialActions tenantId={tenantId} credential={credential} />
     </li>
@@ -237,8 +284,10 @@ function GitCredentialRow({
 /**
  * Settings → "Git 凭据": the signed-in user's own personal HTTPS Git
  * credentials for this space's tenant. A credential is write-only for its
- * token — no response returns it — and it stays listed when revoked, so a
- * member can see what happened instead of a row silently disappearing.
+ * token — no response returns it — and deleting one destroys the stored Token
+ * while the row stays listed as an audit record, so a member can see what
+ * happened instead of a row silently disappearing. The listed row is never
+ * what authorizes a clone: the server re-reads availability and version.
  */
 export function GitCredentialsPage() {
   const { tenantId } = useCurrentSpace()
