@@ -1,24 +1,21 @@
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { renderAtRoute } from '@/test/render'
-import { db } from '@/mocks/data/store'
 import { AgentDetailPage } from './agent-detail-page'
 
-describe('AgentDetailPage', () => {
-  it("renders the agent's name, role, and assigned issues", async () => {
-    const agent = db.agents[0]
+describe('old Agent detail links', () => {
+  it('shows the same unavailable explanation without looking up the supplied id', () => {
     renderAtRoute(
       '/w/:workspaceSlug/agents/:agentId',
-      <AgentDetailPage slug={db.workspace.slug} />,
-      `/w/${db.workspace.slug}/agents/${agent.id}`,
+      <AgentDetailPage slug="real-workspace" />,
+      '/w/real-workspace/agents/retired-demo-agent',
     )
-
-    expect(await screen.findAllByText(agent.name)).not.toHaveLength(0)
-    expect(screen.getByText(agent.role)).toBeInTheDocument()
-
-    const assigned = db.issues.filter((i) => i.assigneeId === agent.id)
-    expect(
-      await screen.findByText(new RegExp(`已分配任务（${assigned.length}）`)),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '智能体管理暂不可用' })).toBeInTheDocument()
+    expect(screen.queryByText('retired-demo-agent')).not.toBeInTheDocument()
+    expect(screen.queryByText(/已分配任务/)).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '管理插件' })).toHaveAttribute(
+      'href',
+      '/w/real-workspace/plugins',
+    )
   })
 })

@@ -210,6 +210,8 @@ func cloneCommand(t *transaction, r *ControlRequest) Object {
 		return submitted(t, r, func() Object { return recordThreadCommandDelivered(t, r) })
 	case "grant_revision_upload":
 		return revisionGrants(t, r.Body.S("executionId"), r.Body.O("checksums"))
+	case "grant_revision_download":
+		return revisionDownloadGrants(t, r.Body.S("executionId"))
 	default:
 		reject(404, "not_found")
 	}
@@ -276,5 +278,5 @@ func cloneResult(t *transaction, r *ControlRequest, withReceipt bool) Object {
 // isCloneAction reports whether a control action belongs to the execution registry, including the
 // Agent session methods that share its lease and submission rules.
 func isCloneAction(action string) bool {
-	return strings.HasPrefix(action, "clone_") || strings.HasPrefix(action, "thread_") || action == "grant_revision_upload"
+	return strings.HasPrefix(action, "clone_") || strings.HasPrefix(action, "thread_") || action == "grant_revision_upload" || action == "grant_revision_download"
 }

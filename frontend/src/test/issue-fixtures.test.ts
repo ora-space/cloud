@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { makeIssue, makeStatus } from './issue-fixtures'
+import { makeAgentTarget, makeIssue, makeProject, makeStatus } from './issue-fixtures'
 
 describe('makeIssue', () => {
   it('applies the overrides last so they win over the neutral defaults', () => {
@@ -21,5 +21,23 @@ describe('makeStatus', () => {
     expect(column.id).toBe('st-in_progress')
     expect(column.key).toBe('in_progress')
     expect(column.isSystem).toBe(true)
+  })
+})
+
+describe('real task-entry fixtures', () => {
+  it('lets project tests vary scope while preserving the real Task Mode contract', () => {
+    const project = makeProject('p1', { tenantId: 'other-tenant', spaceId: 'other-space' })
+    expect(project).toMatchObject({
+      id: 'p1',
+      tenantId: 'other-tenant',
+      spaceId: 'other-space',
+      lifecycle: 'active',
+      version: 1,
+    })
+    expect(makeAgentTarget('a1')).toMatchObject({
+      type: 'agent',
+      id: 'a1',
+      interactionDescriptor: { mode: 'task', requiresTask: true },
+    })
   })
 })

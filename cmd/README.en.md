@@ -15,6 +15,7 @@ operating-system signal handling, and process exit codes.
 - [clone-executor](clone-executor/README.en.md) is the credential executor process (no database): under its own identity it redeems a single-use authorization, materializes the token, runs one constrained `git clone`, and destroys the material before answering — sweeping crash leftovers before it opens its listener.
 - [git-credential-ora](git-credential-ora/README.en.md) is the deployment-fixed Git credential helper — not a credential store: it reads the one file the executor materialized and enforces the repository scope (the normalized host + path identity, never a prefix) at the point the secret is handed over.
 - [devsetup](devsetup/README.en.md) is the development-only one-shot setup (`task setup`): from `config.toml` it generates the Gateway private keys, the public keys Cloud trusts and the PKCE key, writes the GitHub client secret file and `.local/dev.env`, and applies migrations.
+- [git-server](git-server/README.en.md) serves Project repositories to sandboxes over smart HTTP, authorizing every request from current Cloud state, and answers Cloud's read-only delivery-ref query.
 - [simulator](simulator/README.en.md) provides an all-in-one local demo environment backed by in-process Substrate and Git execution doubles.
 - [openapi](openapi/README.en.md) compiles and synchronizes the canonical OpenAPI 3.0 specification (`api/openapi.json`) from Go contract definitions.
 - [checkformat](checkformat/README.en.md) enforces repository Go formatting standards as a strict failing CI gate.

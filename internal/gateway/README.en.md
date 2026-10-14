@@ -22,6 +22,10 @@
 
 ## Invariants
 
+Personal model credential routes go only to the fixed HTTPS model-gateway after the normal session,
+same-origin and signature checks. Cloud is never a fallback for a malformed credential path or an
+unavailable service. Gateway receives public trust only, not the model vault master key or TLS key.
+
 - Raw session tokens, attempt secrets, OAuth codes, provider tokens, and PKCE verifiers are never persisted, logged, or sent to Cloud.
 - External HTTP calls never run inside a database transaction or row lock; a provider success followed by a failed transaction is a failed login, never an inferred session.
 - Each attempt creates at most one session; of two concurrent callbacks only one passes the unconsumed check after `FOR UPDATE`.

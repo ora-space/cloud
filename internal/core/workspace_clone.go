@@ -16,19 +16,26 @@ var deferCodes = map[string]bool{
 	"plugin_execution_failed": true, "plugin_result_unknown": true,
 }
 
-// cloneAttemptBudget is how many clone executions one Operation's clone step may record before Cloud
-// ends the step, and cloneRetryBackoff is the delay Cloud parks it for while attempts remain. D2 fixes
-// both: "同一 operation 以持久执行记录最多尝试三次；前两次 retry_wait 5/10 秒，第三次 failed，保留执行
-// 记录；重试是新执行". The schedule is Cloud's, not the Controller's, and its 2026-10-11 revision says
+// workspaceCloneAttemptLimit is how many clone executions one Operation's clone step may record before
+// Cloud ends the step, and cloneRetryBackoff is the delay Cloud parks it for while attempts remain. D2
+// fixes both: "同一 operation 以持久执行记录最多尝试三次；前两次 retry_wait 5/10 秒，第三次 failed，保留
+// 执行记录；重试是新执行". The schedule is Cloud's, not the Controller's, and its 2026-10-11 revision says
 // what that means for this budget — "次数和退避由 Cloud 决定，Controller 重启、重复提交或人工 retry 不
-// 重置预算" — so the count is read from durable state here rather than kept anywhere a restart or a
-// repeated request could lose it.
-const cloneAttemptBudget = 3
+// 重置预算".
+const workspaceCloneAttemptLimit = 3
 
-// cloneRetryBackoff is the delay before the retry that follows `attempts` recorded executions: the
-// first retry waits 5 seconds, the second 10, which is D2's schedule. The Controller proposes a delay
-// of its own and Cloud overrides it for this step, because a Controller that restarted mid-retry
-// still proposes its first-attempt constant.
+// workspaceCloneAttempts reads the durable dispatches rather than an in-memory retry counter. Reading
+// them is what makes the budget survive every reset D2 forbids: a Controller restart, a repeated request,
+// and the public retry entry, which moves a parked Operation back to `queued` without deleting the
+// executions that happened.
+func workspaceCloneAttempts(t *transaction, operationID string) int64 {
+	return t.one("SELECT count(*) AS attempts FROM clone_executions WHERE operation_id=$1", operationID).N("attempts")
+}
+
+// cloneRetryBackoff is the delay before the retry that follows `attempts` recorded executions: the first
+// retry waits 5 seconds, the second 10, which is D2's schedule. The Controller proposes a delay of its
+// own and Cloud overrides it for this step, because a Controller that restarted mid-retry still proposes
+// its first-attempt constant.
 func cloneRetryBackoff(attempts int64) time.Duration {
 	if attempts < 1 {
 		attempts = 1
@@ -46,26 +53,36 @@ func cloneRetryBackoff(attempts int64) time.Duration {
 // the Project would stay `provisioning`, and — because the failed Operation keeps coming back as the
 // oldest candidate — no later Operation would be scheduled at all.
 //
-// The count is the Operation's recorded clone executions. A retry is a new execution (D2), so the
-// records are the attempts, including the one this deferral is about; counting them rather than a
-// counter on the Operation is what makes the budget survive every reset D2 forbids, because the public
-// retry entry moves a parked Operation back to `queued` without deleting the executions that happened.
+// Only a settled failure spends a retry. The latest recorded execution must itself report `clone_failed`:
+// an outcome the Node could not tell is the separate `clone_result_unknown` park, and counting it here
+// would spend one of the three attempts on a clone that may still be running in the sandbox.
+//
+// Ending the step also settles what the step was holding. Without the last three statements a Workspace
+// whose repository stays unreachable would keep a never-settled IssueRun and this Operation's runtime
+// reservation — the exact state that starves every later Operation — even though the Operation itself had
+// already failed.
 //
 // Admission is left closed on both paths: only a successful clone opens it (D2), so the Workspace
 // cannot be used while its clone step is failing or after the step has ended.
 func deferCloneFailure(t *transaction, o Object) Object {
-	attempts := t.one("SELECT count(*) AS attempts FROM clone_executions WHERE operation_id=$1", o.S("id")).N("attempts")
-	if attempts >= cloneAttemptBudget {
-		// `retry_at` is cleared rather than left as it was: `claim` moves a due retry to `running`
-		// without clearing the deadline it fired on, so an ended Operation would otherwise carry a
-		// retry time that no longer means anything and would be read back as a pending retry. The
-		// error code stays the one this failure was reported with, so the public contract keeps
-		// showing the failure the Node actually reported.
-		t.exec("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), "clone_failed")
+	latest := t.one("SELECT result FROM clone_executions WHERE operation_id=$1 ORDER BY created_at DESC,execution_id DESC LIMIT 1", o.S("id"))
+	require(latest.O("result").S("outcome") == "clone_failed", 409, "clone_incomplete")
+	attempts := workspaceCloneAttempts(t, o.S("id"))
+	if attempts < workspaceCloneAttemptLimit {
+		t.exec("UPDATE operations SET state='retry_wait',error_code=$2,retry_at=clock_timestamp()+($3 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1",
+			o.S("id"), "clone_failed", int64(cloneRetryBackoff(attempts)/time.Second))
 		return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 	}
-	t.exec("UPDATE operations SET state='retry_wait',error_code=$2,retry_at=clock_timestamp()+($3 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1",
-		o.S("id"), "clone_failed", int64(cloneRetryBackoff(attempts)/time.Second))
+	// `retry_at` is cleared rather than left as it was: `claim` moves a due retry to `running` without
+	// clearing the deadline it fired on, so an ended Operation would otherwise carry a retry time that no
+	// longer means anything and would be read back as a pending retry. The error code stays the one this
+	// failure was reported with, so the public contract keeps showing the failure the Node reported.
+	t.exec("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), "clone_failed")
+	t.exec("UPDATE workspaces SET observed_state='unavailable',admission_open=false,version=version+1 WHERE id=$1", o.S("workspaceId"))
+	finishRuntimeMaintenance(t, o.S("id"))
+	if w := t.one("SELECT issue_run_id FROM workspaces WHERE id=$1", o.S("workspaceId")); w.S("issueRunId") != "" {
+		runWorkspaceSettled(t, w.S("issueRunId"), "failed")
+	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 }
 
@@ -81,6 +98,7 @@ func workspaceCloneDispatch(t *transaction, r *ControlRequest, operation, execut
 	}
 	require(o.S("step") == "clone" && o.S("state") == "running", 409, "dispatch_conflict")
 	require(o.N("controllerEpoch") == r.Body.N("epoch"), 409, "stale_operation")
+	require(workspaceCloneAttempts(t, operation) < workspaceCloneAttemptLimit, 409, "dispatch_conflict")
 	wid := o.S("workspaceId")
 	require(runtimeUsable(t, t.one("SELECT * FROM workspaces WHERE id=$1", wid), o.S("actorUserId")), 403, "runtime_use_forbidden")
 	requireRepositoryAccess(t, o.S("projectId"))

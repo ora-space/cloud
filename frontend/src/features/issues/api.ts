@@ -42,6 +42,7 @@ export interface UpdateIssueInput {
 /** Fields the create endpoint accepts. */
 export interface CreateIssueInput {
   title: string
+  projectRef?: string
   description?: string
   status?: string
   priority?: IssuePriority

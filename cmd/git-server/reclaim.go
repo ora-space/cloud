@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"time"
 
 	"github.com/wanglongan587/cloud/internal/mirror"
@@ -29,7 +28,11 @@ import (
 // reference set it sweeps against is Cloud's own answer, not the store's records.
 //
 // It returns when the context is cancelled, which is what stops it on shutdown.
-func runMirrorReclaim(ctx context.Context, pool *sql.DB, mirrors *mirror.Store, interval time.Duration, log *slog.Logger) {
+//
+// The logger is taken as the key/value shape the reconciler writes rather than as *zap.Logger, so
+// this loop reports into the process's one log stream: `logger.Values` adapts the configured zap
+// logger to it (see internal/logger), and nothing here opens a destination of its own.
+func runMirrorReclaim(ctx context.Context, pool *sql.DB, mirrors *mirror.Store, interval time.Duration, log mirrorpublish.Logger) {
 	reconciler := mirrorpublish.Reconciler{
 		Mirrors:  mirrors,
 		Bindings: &mirrorpublish.References{Pool: pool},

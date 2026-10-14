@@ -155,8 +155,11 @@ func operationCommand(t *transaction, r *ControlRequest) Object {
 		// A failed clone is parked under Cloud's own budget rather than the request's delay: the count
 		// of attempts and the backoff between them are Cloud's (D2), and the request only ever carries a
 		// Controller constant. The delay above is still validated, because it remains part of the
-		// request's shape, and it is still what every other code is parked for.
-		if state == "retry_wait" && code == "clone_failed" && o.S("step") == "clone" {
+		// request's shape, and it is still what every other code is parked for. The state is deliberately
+		// not part of this condition: the budget is Cloud's, so a caller cannot step a failed clone out of
+		// it by asking for `blocked` instead of `retry_wait`. `deferCloneFailure` re-checks the failure
+		// against the recorded execution and counts nothing but a settled `clone_failed`.
+		if o.S("step") == "clone" && code == "clone_failed" {
 			return deferCloneFailure(t, o)
 		}
 		t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)

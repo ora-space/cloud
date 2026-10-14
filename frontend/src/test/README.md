@@ -13,7 +13,7 @@
 | `setup.ts` | vitest `setupFiles`：每个用例后卸载 Testing Library 渲染的树。 |
 | `http.ts` | `installFakeHttp(body, status)`：替换 `AXIOS_INSTANCE` 的 adapter，记录请求并返回固定响应；测试结束自动还原。 |
 | `http.test.ts` | 验证假适配器本身的记录与错误状态语义，其它测试依赖这些行为。 |
-| `issue-fixtures.ts` | `makeIssue(id, title, overrides)` / `makeStatus(key)`：构造符合真实 Cloud 契约的 Issue / 状态列夹具，供 issue 相关测试复用。 |
+| `issue-fixtures.ts` | `makeIssue` / `makeStatus` / `makeProject` / `makeAgentTarget`：构造真实契约形状的任务、状态列、项目及 Task Mode 目录夹具。 |
 | `issue-fixtures.test.ts` | 验证夹具的默认值与 overrides 优先级，其它测试依赖这些行为。 |
 | `msw-server.ts` | MSW node server：mock 域 handler 加上基线 `GET /api/v1/me → 401`（任何渲染默认未登录）与 `GET /auth/providers → ['github']`（生产形态的网关；开发者登录的测试会覆盖它）。 |
 | `cloud-handlers.ts` | 云流程共享 MSW 替身：会话探测及 `/me/spaces` 返回的 `cloud-dev` 租户空间，并提供 `TEST_USER` 等 fixture。 |

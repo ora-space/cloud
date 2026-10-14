@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useCurrentSpace } from '@/features/spaces/current-space'
+import { AgentRequestFailure } from './agent-request-failure'
 import { ActorAvatar, type AvatarActor } from '@/components/common/actor-avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -151,15 +153,20 @@ function ConfirmedWorkflows(props: {
  * the place where new work is created. Everything below the history is a **draft** — a comment, a
  * mention, a task or a workflow configuration reaches the server only when its own button is pressed.
  */
-export function ActivityPanel({
-  slug,
-  issueId,
-  members,
-}: {
+type ActivityPanelProps = {
   slug: string
   issueId: string
   members: TenantMember[]
-}) {
+}
+
+/** Keeps every activity draft within one tenant, space and issue, even for cached navigation. */
+export function ActivityPanel(props: ActivityPanelProps) {
+  const { space, isPending } = useCurrentSpace()
+  if (isPending) return null
+  return <IssueActivity key={`${props.slug}:${space?.id ?? ''}:${props.issueId}`} {...props} />
+}
+
+function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
   const { data: timeline, isPending } = useTimeline(slug, issueId)
   const { data: interactions } = useInteractions(slug, issueId)
   const { data: runs } = useRuns(slug, issueId)
@@ -212,6 +219,9 @@ export function ActivityPanel({
             {createComment.isPending ? '提交中…' : '评论'}
           </Button>
         </div>
+        {createComment.isError && !createComment.variables?.targets?.length && (
+          <AgentRequestFailure error={createComment.error} />
+        )}
       </form>
 
       <ConfirmedWorkflows interactions={interactions ?? []} runs={runs ?? []} catalog={catalog} />

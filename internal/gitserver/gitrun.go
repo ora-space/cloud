@@ -51,8 +51,8 @@ func (g *gitStream) Close() error {
 }
 
 // runGit runs one bounded upload-pack invocation and streams its stdout to out.
-func (s *Server) runGit(ctx context.Context, repoDir, protocol string, out io.Writer, args ...string) error {
-	stream, err := s.startGit(ctx, repoDir, protocol, nil, args...)
+func (m *mirrorRead) runGit(ctx context.Context, repoDir, protocol string, out io.Writer, args ...string) error {
+	stream, err := m.startGit(ctx, repoDir, protocol, nil, args...)
 	if err != nil {
 		return err
 	}
@@ -72,14 +72,15 @@ func (s *Server) runGit(ctx context.Context, repoDir, protocol string, out io.Wr
 // mirror store — never from the request — so no request can steer the read at another directory. And
 // the environment is constructed rather than inherited, because an inherited environment is how a
 // caller's request ends up influencing a child process through a variable nobody meant to expose.
-func (s *Server) startGit(ctx context.Context, repoDir, protocol string, stdin io.Reader, args ...string) (*gitStream, error) {
+func (m *mirrorRead) startGit(ctx context.Context, repoDir, protocol string, stdin io.Reader, args ...string) (*gitStream, error) {
 	argv := append([]string{"upload-pack"}, args...)
 	argv = append(argv, repoDir)
-	//nolint:gosec // G204: the binary is deployment configuration and every argument is built from a
-	// digest the mirror store validated plus fixed service names; no request text reaches the argv.
-	cmd := exec.CommandContext(ctx, s.cfg.GitPath, argv...)
-	cmd.Dir = s.home
-	cmd.Env = s.gitEnv(protocol)
+	//nolint:gosec // G204: the binary is the service's resolved git program and every argument is
+	// built from a digest the mirror store validated plus fixed service names; no request text
+	// reaches the argv.
+	cmd := exec.CommandContext(ctx, m.git, argv...)
+	cmd.Dir = m.home
+	cmd.Env = m.gitEnv(protocol)
 	cmd.Stdin = stdin
 	stderr := &boundedBuffer{limit: stderrLimit}
 	cmd.Stderr = stderr
@@ -108,10 +109,10 @@ func (s *Server) startGit(ctx context.Context, repoDir, protocol string, stdin i
 // GIT_OPTIONAL_LOCKS=0 is not a performance choice: it tells git not to take its optional write
 // locks, so a read can never touch the published tree. A mirror that a read could modify would not
 // be immutable, and immutability is what lets an authorization bind a commit.
-func (s *Server) gitEnv(protocol string) []string {
+func (m *mirrorRead) gitEnv(protocol string) []string {
 	env := []string{
-		"PATH=" + s.cfg.Path,
-		"HOME=" + s.home,
+		"PATH=" + m.cfg.Path,
+		"HOME=" + m.home,
 		"LC_ALL=C",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",

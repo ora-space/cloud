@@ -78,6 +78,20 @@ func (s *agentRunService) GrantRevisionUpload(ctx context.Context, req *controlp
 	return &controlpb.GrantRevisionUploadResponse{Grants: grants}, nil
 }
 
+// GrantRevisionDownload signs the read of a session execution's prior Revision bundle.
+func (s *agentRunService) GrantRevisionDownload(ctx context.Context, req *controlpb.GrantRevisionDownloadRequest) (*controlpb.GrantRevisionDownloadResponse, error) {
+	out, e := control(ctx, s.store, "grant_revision_download", "", "", core.Object{"epoch": req.GetEpoch(), "executionId": req.GetExecutionId()})
+	if e != nil {
+		return nil, e
+	}
+	grants := make([]*controlpb.DownloadGrant, 0)
+	for _, row := range rows(out["grants"]) {
+		upload := grantMessage(row)
+		grants = append(grants, &controlpb.DownloadGrant{ObjectKey: upload.GetObjectKey(), Url: upload.GetUrl(), Method: upload.GetMethod(), Headers: upload.GetHeaders(), ExpiresAt: upload.GetExpiresAt()})
+	}
+	return &controlpb.GrantRevisionDownloadResponse{Grants: grants}, nil
+}
+
 func threadCommand(row core.Object) *controlpb.ThreadCommand {
 	cmd := &controlpb.ThreadCommand{
 		CommandId: row.S("commandId"), RunId: row.S("runId"), ExecutionId: row.S("executionId"),

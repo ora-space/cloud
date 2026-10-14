@@ -25,8 +25,10 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useCreateIssue, useIssues } from '@/features/issues/api'
+import { IssueProjectSelect } from './issue-project-select'
 import { columnLabel, issueNumber } from '@/features/issues/present'
 import type { IssuePriority, IssueStatusColumn, TenantMember } from '@/features/issues/types'
+import { useCurrentSpace } from '@/features/spaces/current-space'
 
 /** Canonical status keys used before the catalog loads (or when it is empty). */
 const FALLBACK_STATUS_KEYS = [
@@ -43,20 +45,29 @@ const FALLBACK_STATUS_KEYS = [
 const EMPTY_STATUSES: IssueStatusColumn[] = []
 const EMPTY_MEMBERS: TenantMember[] = []
 
-// oxlint-disable-next-line max-lines-per-function -- this dialog owns one cohesive create-issue form and its reset lifecycle.
-export function CreateIssueDialog({
-  slug,
-  statuses = EMPTY_STATUSES,
-  members = EMPTY_MEMBERS,
-  defaultStatus = 'backlog',
-  trigger,
-}: {
+type CreateIssueDialogProps = {
   slug: string
   statuses?: IssueStatusColumn[]
   members?: TenantMember[]
   defaultStatus?: string
   trigger?: React.ReactElement
-}) {
+}
+
+/** Optional project association; drafts never survive a change of tenant or collaboration space. */
+export function CreateIssueDialog(props: CreateIssueDialogProps) {
+  const { space, isPending } = useCurrentSpace()
+  if (isPending) return null
+  return <IssueDraftDialog key={`${props.slug}:${space?.id ?? ''}`} {...props} />
+}
+
+// oxlint-disable-next-line max-lines-per-function -- this dialog owns one cohesive create-issue form and its reset lifecycle.
+function IssueDraftDialog({
+  slug,
+  statuses = EMPTY_STATUSES,
+  members = EMPTY_MEMBERS,
+  defaultStatus = 'backlog',
+  trigger,
+}: CreateIssueDialogProps) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -64,6 +75,7 @@ export function CreateIssueDialog({
   const [priority, setPriority] = useState<IssuePriority>('none')
   const [assigneeId, setAssigneeId] = useState<string>('none')
   const [parentIssueId, setParentIssueId] = useState<string>('none')
+  const [projectRef, setProjectRef] = useState('none')
   const createIssue = useCreateIssue(slug)
   const { data: issues = [] } = useIssues(slug)
 
@@ -76,6 +88,7 @@ export function CreateIssueDialog({
     setPriority('none')
     setAssigneeId('none')
     setParentIssueId('none')
+    setProjectRef('none')
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -89,6 +102,7 @@ export function CreateIssueDialog({
         priority,
         ...(assigneeId !== 'none' ? { assigneeType: 'user' as const, assigneeId } : {}),
         ...(parentIssueId !== 'none' ? { parentIssueId } : {}),
+        ...(projectRef !== 'none' ? { projectRef } : {}),
       },
       {
         onSuccess: () => {
@@ -121,6 +135,7 @@ export function CreateIssueDialog({
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
             />
+            <IssueProjectSelect value={projectRef} onChange={setProjectRef} />
             <div className="flex flex-wrap gap-2">
               <Select
                 value={status}
@@ -204,6 +219,11 @@ export function CreateIssueDialog({
             </Select>
           </div>
           <DialogFooter>
+            {createIssue.isError && (
+              <p role="alert" className="text-xs text-destructive">
+                创建任务失败，请稍后重试。
+              </p>
+            )}
             <DialogClose
               render={
                 <Button type="button" variant="outline">

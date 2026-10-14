@@ -68,9 +68,13 @@ function EndSessionControl({ threadRef, closed }: { threadRef: ThreadRef; closed
 export function ThreadComposer({
   threadRef,
   threadState,
+  canAppend,
+  canEnd,
 }: {
   threadRef: ThreadRef
   threadState: ThreadState
+  canAppend: boolean
+  canEnd: boolean
 }) {
   const send = useSendThreadMessage(threadRef)
   const [text, setText] = useState('')
@@ -80,7 +84,7 @@ export function ThreadComposer({
   function submit(event: React.FormEvent) {
     event.preventDefault()
     const message = text.trim()
-    if (!message) return
+    if (!message || closed || !canAppend) return
     send.mutate({ text: message }, { onSuccess: () => setText('') })
   }
 
@@ -93,18 +97,27 @@ export function ThreadComposer({
         id={inputId}
         value={text}
         onChange={(event) => setText(event.target.value)}
-        disabled={closed}
+        disabled={closed || !canAppend}
         placeholder={closed ? '会话已结束' : '输入消息…'}
         rows={3}
       />
+      {!canAppend && !closed && (
+        <p className="text-xs text-muted-foreground">
+          此会话当前只读；只有发起者且模型连接仍有效时可继续发送。
+        </p>
+      )}
       {send.isError && (
         <p role="alert" className="text-xs text-destructive">
           {sendFailureMessage(send.error)}
         </p>
       )}
       <div className="flex items-start justify-between gap-2">
-        <EndSessionControl threadRef={threadRef} closed={closed} />
-        <Button type="submit" size="sm" disabled={closed || send.isPending || !text.trim()}>
+        {canEnd && <EndSessionControl threadRef={threadRef} closed={closed} />}
+        <Button
+          type="submit"
+          size="sm"
+          disabled={closed || !canAppend || send.isPending || !text.trim()}
+        >
           发送
         </Button>
       </div>

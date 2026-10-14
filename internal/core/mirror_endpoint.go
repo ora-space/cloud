@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/wanglongan587/cloud/internal/gitserver"
 	"github.com/wanglongan587/cloud/internal/mirror"
 )
 
@@ -71,11 +70,11 @@ func NewMirrorEndpoint(baseURL string) (*MirrorEndpoint, error) {
 //
 // The key is validated rather than trusted: an address built from a key that names no mirror would be
 // an address the Git Server cannot serve, and an Operation's recorded clone input is far too late a
-// place to discover that. The path comes from the server itself, so the address Cloud records is one
-// that server answers on.
+// place to discover that. The path is the mirror's own route, so the address Cloud records is one the
+// Git Server answers on by construction rather than by two spellings agreeing.
 func (e *MirrorEndpoint) CloneAddress(key mirror.Key) (string, error) {
 	if err := key.Validate(); err != nil {
 		return "", err
 	}
-	return e.base.JoinPath(gitserver.MirrorPath(key)).String(), nil
+	return e.base.JoinPath(key.Route()).String(), nil
 }

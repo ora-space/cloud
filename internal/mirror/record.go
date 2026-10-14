@@ -106,6 +106,21 @@ func (k Key) Digest() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// RoutePrefix is the path prefix every mirror is served under, and Route completes it.
+//
+// The route is spelled here, beside the digest that names the same mirror on disk, because Cloud and
+// the Git Server must agree on it to the character: Cloud writes the address into a durable clone
+// input (D7) and the Git Server answers that address or nothing. Two spellings of this prefix — one
+// in the reader and one in the component that hands out the URL — would produce a clone input the
+// Node dutifully dispatches and the server 404s, which is indistinguishable from a mirror that was
+// never published.
+const RoutePrefix = "/mirror/v1/"
+
+// Route is the request path one mirror is served at, including the `.git` suffix Git clients expect
+// appended to a repository URL. The path names an opaque digest rather than a project, a repository
+// or a commit, so a caller cannot construct one from facts it already holds.
+func (k Key) Route() string { return RoutePrefix + k.Digest() + ".git" }
+
 // String renders the key for logs. It is not reversible and is not used as an identifier.
 func (k Key) String() string {
 	short := k.Commit

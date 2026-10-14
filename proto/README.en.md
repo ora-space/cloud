@@ -59,3 +59,10 @@ carries the fields.
 ## Approved runtime control contract
 
 RuntimeControlService carries Cloud-decided target bindings, closure acknowledgement, fresh dispatch permits and independent force-stop plans. Tenant/workspace, actor/server session and control epoch bind trusted execution scope; they do not authorize caller-asserted membership. User control epoch, Controller lease epoch, runtime generation, Node incarnation, execution ID and Node operation ID remain distinct. Components without runtime_control capability are refused. Idempotent history cannot revive eligibility: Controller refreshes before dispatch and Node checks acceptance and first execution. Cloud–Controller uses mutual TLS. New file/terminal/plugin/Agent execution entry points stay closed until equally protected. Authority: specs/decisions/cloud/controller-integration/20260927-fenced-runtime-control-delivery.md.
+
+## Personal-model execution
+
+`AgentSessionSpec.model_binding_id` is a Cloud-frozen configuration reference containing no key
+or temporary token. `RegisterNodeRequest.model_proxy` and `NodeRecord.model_proxy` preserve the
+handshake capability; older Nodes default to false. Both dispatch and authorization require this
+capability. See [model connections](../docs/model-connections.en.md).

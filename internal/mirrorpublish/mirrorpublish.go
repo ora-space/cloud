@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/wanglongan587/cloud/internal/mirror"
@@ -154,8 +153,24 @@ type Reconciler struct {
 	// Clock stamps the sweep. Nil means time.Now.
 	Clock func() time.Time
 	// Logger records what happened. Nil discards.
-	Logger *slog.Logger
+	Logger Logger
 }
+
+// Logger records what a reconciliation did. It is the key/value logging shape this package writes,
+// declared at the consuming boundary so a caller can hand it whatever destination its process already
+// logs to: *slog.Logger satisfies it directly, and `internal/logger.Values` satisfies it for a
+// command that logs through Cloud's configured zap logger. A package that insisted on one of the two
+// would make such a command open a second log stream.
+type Logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+}
+
+// discardLogger is the Logger a Reconciler reports to when it was given none.
+type discardLogger struct{}
+
+func (discardLogger) Info(string, ...any) {}
+func (discardLogger) Warn(string, ...any) {}
 
 // ErrNotAuthorized reports a key Cloud's rows do not reference. Publishing it would put content in
 // the store that no tenant, repository and clone execution bind, which is exactly what D2 forbids.
@@ -198,7 +213,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Report, error) {
 			// single unreachable upstream must not stop every other tenant's mirror from being
 			// published. The failure is counted and named, and the next pass retries it.
 			report.Failed = append(report.Failed, key)
-			r.log().WarnContext(ctx, "mirror could not be published", "mirror", key.String(), "error", err.Error())
+			r.log().Warn("mirror could not be published", "mirror", key.String(), "error", err.Error())
 			continue
 		}
 		switch outcome {
@@ -394,9 +409,9 @@ func (r *Reconciler) now() time.Time {
 	return r.Clock()
 }
 
-func (r *Reconciler) log() *slog.Logger {
+func (r *Reconciler) log() Logger {
 	if r.Logger == nil {
-		return slog.New(slog.DiscardHandler)
+		return discardLogger{}
 	}
 	return r.Logger
 }

@@ -11,6 +11,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/server ./cmd/server && \
     CGO_ENABLED=0 go build -trimpath -o /out/gateway ./cmd/gateway && \
+    CGO_ENABLED=0 go build -trimpath -o /out/model-gateway ./cmd/model-gateway && \
+    CGO_ENABLED=0 go build -trimpath -o /out/git-server ./cmd/git-server && \
     CGO_ENABLED=0 go build -trimpath -o /out/cloudctl ./cmd/cloudctl && \
     CGO_ENABLED=0 go build -trimpath -o /out/devsetup ./cmd/devsetup && \
     CGO_ENABLED=0 go build -trimpath -o /out/credential-store ./cmd/credential-store && \
@@ -60,10 +62,13 @@ EXPOSE 8444
 ENTRYPOINT ["/app/clone-executor"]
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 ora && \
-    install -d -o ora -g ora -m 0700 /app/logs
+# git serves sandbox repositories through `git http-backend` (cmd/git-server), which Alpine ships in
+# git-daemon rather than git; /var/lib/ora-git is
+# its repository volume, owned by the service user so a fresh named volume inherits that owner.
+RUN apk add --no-cache ca-certificates tzdata git git-daemon && adduser -D -u 10001 ora && \
+    install -d -o ora -g ora -m 0700 /app/logs /var/lib/ora-git
 WORKDIR /app
-COPY --from=build /out/server /out/gateway /out/cloudctl /out/credential-store /app/
+COPY --from=build /out/server /out/gateway /out/model-gateway /out/git-server /out/cloudctl /out/credential-store /app/
 COPY configs/config.yaml configs/gateway.yaml /app/configs/
 COPY --from=web-build /src/frontend/dist /app/web
 USER ora

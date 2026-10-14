@@ -76,8 +76,15 @@ func enqueueRun(t *transaction, tid, iid, executorType, executorID string, input
 	if input == nil {
 		input = Object{}
 	}
+	// This opaque reference is server-owned even for agents that do not use personal models.
+	delete(input, "modelBindingId")
 	id := newID()
 	t.exec("INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,input,status,trigger_evidence_kind,trigger_evidence_ref_id) VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8)", id, tid, iid, executorType, executorID, jsonText(input), triggerKind, triggerRef)
+	if executorType == "agent" {
+		// Caller-supplied private bindings cannot authorize a model connection. The production
+		// OpenCode path always creates its own owner-scoped binding in this transaction.
+		bindRunModel(t, id, actorID, input)
+	}
 	appendActivity(t, tid, iid, actorType, actorID, "run.enqueued", runActivityDetails(id, executorType, executorID, nil))
 	return run(t, tid, iid, id)
 }

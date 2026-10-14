@@ -67,3 +67,9 @@
 和 Controller 租约代次。控制确认用于核对入口关闭及未完成责任；派发前还须取得新鲜执行许可。
 迟到快照返回 `ABORTED stale_runtime_control`，不能续期或复活已撤回的会话。
 业务权威与证据边界见 [运行时控制](../../docs/runtime-control.md)。
+
+## 个人模型引用与能力
+
+会话编解码仅在非空时携带 `model_binding_id`，Echo 输入保持兼容。Node 注册将握手模型代理能力
+保存到权威记录，记录回放拒绝同一宿主代次的能力改变。个人模型的派发和授权不接受缺能力的
+旧 Node；服务不传递 API Key 或模型代理临时令牌。见 [模型连接](../../docs/model-connections.md)。

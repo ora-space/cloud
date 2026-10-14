@@ -4,6 +4,7 @@ import { ActorAvatar } from '@/components/common/actor-avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { WorkflowInteractionComposer } from '@/features/issues/components/workflow-interaction-composer'
+import { AgentRequestFailure } from '@/features/issues/components/agent-request-failure'
 import type { CollaborationTargetSummary, CommentTargetInput } from '@/features/issues/types'
 
 /** The inline message a target carries: a task for agent/team, a plain note for a human mention. */
@@ -36,48 +37,55 @@ function PendingTargetRow({
 }) {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<unknown>(null)
   const displayName = meta?.displayName ?? target.id
 
   async function submit() {
     setBusy(true)
+    setFailure(null)
     try {
       await onSubmit(message.trim())
+    } catch (error) {
+      setFailure(error)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
-      <ActorAvatar actor={avatarActor(target, meta)} size="sm" />
-      <span className="shrink-0 font-medium">{displayName}</span>
-      <Input
-        value={message}
-        onChange={(event) => setMessage(event.target.value)}
-        placeholder={messagePlaceholder(target.type)}
-        className="h-7 min-w-0 flex-1"
-        aria-label={`${displayName} 的留言`}
-      />
-      <Button
-        type="button"
-        size="sm"
-        disabled={message.trim() === '' || busy}
-        onClick={() => {
-          void submit()
-        }}
-      >
-        {busy ? '提交中…' : '提交'}
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-6 shrink-0"
-        onClick={onRemove}
-        aria-label={`移除 ${displayName}`}
-      >
-        <X className="size-3.5" />
-      </Button>
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
+        <ActorAvatar actor={avatarActor(target, meta)} size="sm" />
+        <span className="shrink-0 font-medium">{displayName}</span>
+        <Input
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          placeholder={messagePlaceholder(target.type)}
+          className="h-7 min-w-0 flex-1"
+          aria-label={`${displayName} 的留言`}
+        />
+        <Button
+          type="button"
+          size="sm"
+          disabled={message.trim() === '' || busy}
+          onClick={() => {
+            void submit()
+          }}
+        >
+          {busy ? '提交中…' : '提交'}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-6 shrink-0"
+          onClick={onRemove}
+          aria-label={`移除 ${displayName}`}
+        >
+          <X className="size-3.5" />
+        </Button>
+      </div>
+      {failure !== null && <AgentRequestFailure error={failure} />}
     </div>
   )
 }

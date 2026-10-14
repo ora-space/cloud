@@ -37,6 +37,7 @@
 - 私有邀请和申请链接里的令牌不写入 Gateway 的 `returnTo`；外部登录往返只保存 `/join/continue`，原链接暂存在当前浏览器标签。
 - 自动登录每次挂载最多发起一次：失败后显示显式重试，绝不形成跳转循环。
 - `signOut` 先调 Gateway 再清缓存：会话置空，其余查询全部移除，避免下一个登录者看到上一个人的数据。
+- 已登录会话收到 401 时，同样清除之前用户的查询缓存，包括个人模型连接；首次匿名探测的 401 保留登录 provider 的公开查询。
 - Ora 无法结束 github.com 的会话：Gateway 从不持有 GitHub token（读完资料立刻丢弃），所以"退出 GitHub"只能打开 GitHub 自己的注销页，且总是先吊销 Ora 会话，并在新标签页打开，让成员在当前页直接回到登录界面。该 URL 是公网 github.com；GitHub Enterprise Server 部署需要把它做成可配置。
 - 登录页从不构造 provider URL，也不解析 callback；那是 Gateway 的事。它也从不自行判断开发者登录是否存在：只有 `/auth/providers` 列出 `dev` 时才显示按钮，而 Gateway 只在 loopback 开发 origin 上允许该 provider。
 

@@ -65,7 +65,8 @@ export function TargetPicker({
   targets: CommentTargetInput[]
   onChange: (targets: CommentTargetInput[]) => void
 }) {
-  const { data: available = [] } = useCollaborationTargets(slug)
+  const query = useCollaborationTargets(slug)
+  const available = query.data ?? []
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -98,12 +99,39 @@ export function TargetPicker({
             className="mb-1.5 h-7"
             autoFocus
           />
-          {available.length === 0 && (
+          {query.isPending && (
+            <p role="status" className="px-2 py-1 text-xs text-muted-foreground">
+              正在加载协作对象…
+            </p>
+          )}
+          {query.isError && (
+            <div className="space-y-1 px-2 py-1">
+              <p role="alert" className="text-xs text-destructive">
+                协作对象加载失败，请重试。
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={query.isFetching}
+                onClick={() => {
+                  void query.refetch()
+                }}
+              >
+                重试加载
+              </Button>
+            </div>
+          )}
+          {!query.isPending && !query.isError && available.length === 0 && (
             <p className="px-2 py-1 text-xs text-muted-foreground">暂无协作对象。</p>
           )}
-          {visible.map((target) => (
-            <SuggestionRow key={target.id} target={target} onAdd={() => add(target)} />
-          ))}
+          {!query.isPending && !query.isError && available.length > 0 && visible.length === 0 && (
+            <p className="px-2 py-1 text-xs text-muted-foreground">没有匹配的协作对象。</p>
+          )}
+          {!query.isError &&
+            visible.map((target) => (
+              <SuggestionRow key={target.id} target={target} onAdd={() => add(target)} />
+            ))}
           <div className="mt-1 border-t pt-1">
             <Button
               type="button"

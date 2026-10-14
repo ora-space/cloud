@@ -13,6 +13,7 @@
 - [clone-executor](clone-executor/README.md)：凭据执行器进程（无数据库），以独立身份兑换单次授权、物化 Token、执行受约束 `git clone` 并在作答前销毁材料；启动前先清扫崩溃残留。
 - [git-credential-ora](git-credential-ora/README.md)：部署固定的 Git credential helper——不是凭据仓库，只读执行器物化的那一个文件，并在交出秘密的那一处强制**仓库范围**（主机 + 路径的规范化身份，不是前缀匹配）。
 - [devsetup](devsetup/README.md)：仅限本地开发的一键配置（`task setup`），按 `config.toml` 生成 Gateway 私钥、Cloud 信任公钥与 PKCE 密钥，写出 GitHub client secret 文件与 `.local/dev.env`，并应用迁移。
+- [git-server](git-server/README.md)：以 smart HTTP 向沙盒提供 Project 仓库，每个请求按 Cloud 当前状态授权，并为 Cloud 提供只读的交付 ref 查询。
 - [simulator](simulator/README.md)：基于进程内 Substrate 和 Git 执行替身提供一体化的本地演示环境。
 - [openapi](openapi/README.md)：根据 Go 契约定义生成并同步权威 OpenAPI 3.0 规范（`api/openapi.json`）。
 - [checkformat](checkformat/README.md)：作为严格的 CI 校验门禁，强制执行仓库 Go 代码格式化规范。

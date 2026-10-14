@@ -13,7 +13,7 @@ Environment setup and test doubles shared by every test. The goal is that each t
 | `setup.ts` | vitest `setupFiles`: unmounts Testing Library trees after each case. |
 | `http.ts` | `installFakeHttp(body, status)`: swaps the adapter of `AXIOS_INSTANCE`, records requests and answers with a fixed response; restored automatically when the test finishes. |
 | `http.test.ts` | Verifies the fake adapter's own recording and error-status semantics, which other tests rely on. |
-| `issue-fixtures.ts` | `makeIssue(id, title, overrides)` / `makeStatus(key)`: builds `Issue` / status-column fixtures matching the real Cloud contract, for reuse across issue tests. |
+| `issue-fixtures.ts` | `makeIssue` / `makeStatus` / `makeProject` / `makeAgentTarget`: real-contract issue, status, project and Task Mode directory fixtures. |
 | `issue-fixtures.test.ts` | Verifies the fixtures' defaults and override precedence, which other tests rely on. |
 | `msw-server.ts` | MSW node server: the mock-domain handlers plus a baseline `GET /api/v1/me → 401` (every render starts signed out) and `GET /auth/providers → ['github']` (a production-shaped gateway; tests of the developer login override it). |
 | `cloud-handlers.ts` | Shared MSW doubles for the session probe and the `cloud-dev` tenant space returned by `/me/spaces`, plus fixtures such as `TEST_USER`. |

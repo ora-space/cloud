@@ -46,3 +46,12 @@ Upstream reconciliation coverage: `tenant_upstream_migration_test.go` verifies 0
 `task test:revision` requires real PostgreSQL and S3. Set `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_FILE` and `TEST_S3_SECRET_KEY_FILE` and create the `revisions` bucket; credentials are temporary file references. `REQUIRE_S3=1` makes missing storage fatal. Sandbox acceptance additionally needs `TEST_S3_PUBLIC_ENDPOINT`, `TEST_S3_SANDBOX_NETWORK` and `REQUIRE_S3_SANDBOX=1`; the cluster companion's `task agent:acceptance` configures these automatically.
 
 Revision tests directly cover real uploads, checksum/size/missing objects, expired-grant refresh, post-I/O fencing, transaction failures, replay, both doubles restarting and historical upgrades. Hook tests cover ready/failed, Thread, session end, delivery and deletion committing/rolling back with control evidence. Enable mandatory storage/network environments for full `task test` and `task test:race` too; skipped S3 is not acceptance. See the [control-plane report](../docs/agent-run-control-plane-review.en.md).
+
+## Test-scoped contract validation
+
+Each test process loads, validates and compiles the OpenAPI router once, then shares it read-only.
+Every fixture retains its own HTTP transport, requests/responses, PostgreSQL schema, signing keys
+and Git data. Every real response is still strictly validated; validation outcomes are never cached.
+`contract_suite_test.go` covers reuse across two real fixtures, concurrent reads, malformed-response
+rejection and schema immutability. This cache is test-only and does not add production global state
+or relax the existing test timeout.

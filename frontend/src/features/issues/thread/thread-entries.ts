@@ -3,6 +3,7 @@ import type {
   ThreadEntry,
 } from '@/api/generated.schemas'
 import type { IssueRun } from '@/features/issues/types'
+import { sessionFailureMessage } from './thread-failure'
 
 /** The Thread lifecycle states the Thread GET reports, as the contract enumerates them. */
 export type ThreadState = GetApiV1TenantsTidIssuesIidRunsRidThread200ThreadState
@@ -115,6 +116,9 @@ function updateItem(entry: ThreadEntry): ThreadItem | undefined {
 /** Maps one entry to its row, or undefined when the entry carries nothing worth showing. */
 function itemOf(entry: ThreadEntry): ThreadItem | undefined {
   if (entry.source === 'system') {
+    if (entry.kind === 'session_failed') {
+      return { variant: 'note', key: entry.seq, text: sessionFailureMessage(entry.record['code']) }
+    }
     return { variant: 'prompt', key: entry.seq, text: textOfBlocks(entry.record['content']) }
   }
   if (entry.source === 'user') {
@@ -127,7 +131,11 @@ function itemOf(entry: ThreadEntry): ThreadItem | undefined {
   }
   if (entry.kind === 'update') return updateItem(entry)
   if (entry.kind === 'meta') return { variant: 'note', key: entry.seq, text: '会话已开始' }
-  if (entry.kind === 'turnEnded') return { variant: 'separator', key: entry.seq }
+  if (entry.kind === 'turnEnded') {
+    return entry.record['stopReason'] === 'cancelled'
+      ? { variant: 'note', key: entry.seq, text: '本轮已取消' }
+      : { variant: 'separator', key: entry.seq }
+  }
   return { variant: 'note', key: entry.seq, text: entry.kind }
 }
 

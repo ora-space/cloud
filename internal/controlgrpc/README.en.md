@@ -81,3 +81,10 @@ user control epoch and Controller lease epoch bindings. Binding acknowledgements
 and unfinished responsibility; a fresh execution permit is required before dispatch. Delayed snapshots
 return `ABORTED stale_runtime_control` and cannot renew or revive a withdrawn session.
 See [runtime-control](../../docs/runtime-control.en.md) for the business authority and evidence limits.
+
+## Personal model references and capabilities
+
+Session codecs carry nonempty `model_binding_id` only, preserving Echo input compatibility.
+Node registration stores the handshake's model-proxy capability; replay rejects capability changes
+for the same incarnation. Personal-model dispatch and authorization refuse older Nodes without it.
+No API key or temporary model access token enters this service. See [model connections](../../docs/model-connections.en.md).

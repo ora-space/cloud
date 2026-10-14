@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/wanglongan587/cloud/internal/gitread"
 	"github.com/wanglongan587/cloud/internal/mirror"
 )
@@ -195,7 +197,7 @@ func testKey(commit string) mirror.Key {
 
 type fixture struct {
 	store    *mirror.Store
-	server   *Server
+	server   *mirrorRead
 	http     *httptest.Server
 	resolver *stubResolver
 	state    *stubState
@@ -208,18 +210,32 @@ func newFixture(t *testing.T) *fixture {
 
 // newFixtureWithGit is newFixture with the two settings that decide what the git child process is:
 // the binary to run and the bound on one invocation. Both are deployment configuration, so a test
-// injects a git that is missing, hangs, or dies partway by pointing GitPath at a script.
+// injects a git that is missing, hangs, or dies partway by naming a script as the program.
+//
+// The surface is built the way the service builds it — with a resolved git program and a HOME the
+// caller owns — because that is the only way to construct one. The resolution below stands in for
+// the service's, and is skipped when the test named a program itself, so a path that does not exist
+// still reaches the child-process fault the test is about.
 func newFixtureWithGit(t *testing.T, gitPath string, timeout time.Duration) *fixture {
 	t.Helper()
+	if gitPath == "" {
+		resolved, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatalf("resolve the git program: %v", err)
+		}
+		if gitPath, err = filepath.Abs(resolved); err != nil {
+			t.Fatalf("resolve the git program: %v", err)
+		}
+	}
 	store := newMirrorStore(t)
 	resolver := &stubResolver{origin: testOrigin()}
 	state := &stubState{}
-	server, err := New(Config{Mirrors: store, Origins: resolver, State: state, GitPath: gitPath, Timeout: timeout})
+	server, err := newMirrorRead(MirrorOptions{Mirrors: store, Origins: resolver, State: state, Timeout: timeout},
+		gitPath, t.TempDir(), zap.NewNop())
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("newMirrorRead: %v", err)
 	}
-	t.Cleanup(func() { server.Close() })
-	httpServer := httptest.NewServer(server.Handler())
+	httpServer := httptest.NewServer(server)
 	t.Cleanup(httpServer.Close)
 	return &fixture{store: store, server: server, http: httpServer, resolver: resolver, state: state}
 }

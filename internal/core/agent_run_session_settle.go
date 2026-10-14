@@ -31,8 +31,8 @@ const agentSessionEndedOutcome = "agent_session_ended"
 //	Delivery release:  the Revision delivery work item is released in this same transaction
 //	                   (IssueRun D3; controller-integration D6 spells the whole obligation as one
 //	                   hook: "Thread `ended`、排队轮次 `discarded`、进入 `delivering` 并放出交付工作项").
-//	Hint:              `issue_run.thread_changed` — the REST representation changed. No entry is
-//	                   appended, so no `thread_appended` and no seq is allocated (Thread D5/A4).
+//	Hint:              `issue_run.thread_changed` — the REST representation changed. AgentFailed
+//	                   also appends one safe Cloud-owned failure entry and its thread_appended hint.
 //
 // It never opens its own transaction, spawns a goroutine, or defers a post-commit effect. Identity
 // is the two ids the control plane passes (run and execution); every business field is re-read here,
@@ -82,6 +82,9 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	if !sessionEndReasons[ended.S("reason")] {
 		return fmt.Errorf("sessionEnded: run %s execution %s carries end reason %q, outside the closed set", runID, executionID, ended.S("reason"))
 	}
+	if ended.S("reason") == "agent_failed" {
+		t.exec("UPDATE issue_runs SET failure_reason=$2 WHERE id=$1", runID, publicSessionFailureCode(ended.S("detail")))
+	}
 
 	// One CAS for both run-level transitions, so they cannot even in principle happen apart: the
 	// Thread reaches its terminal state and the run leaves the session phases in the same row write.
@@ -111,6 +114,13 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	t.execRows(`
 		UPDATE thread_entries SET status='discarded'
 		WHERE run_id=$1 AND source='user' AND status='queued'`, runID)
+	if ended.S("reason") == "agent_failed" {
+		appendSessionFailure(t, o, ended.S("detail"))
+	}
+
+	// A restore that found the prior Revision's base commit gone from the remote refuses that Revision
+	// for later runs in this same transaction (resume decision D3).
+	refuseResumedRevision(t, executionID, ended)
 
 	// The delivery work item is released in this transaction (IssueRun D3). A failure returns the
 	// error, which the seam turns into a databaseFailure: the whole takeover rolls back, so the run
@@ -129,7 +139,8 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	// Last, so lastSeq is the high-water mark this transaction is about to commit. `ended` is a
 	// state-only change with a cleared idleSince, and the discards change per-turn status: both
 	// change the Thread's REST representation, so A4's generalized hint is exactly the one that
-	// covers them. No entry was appended, so no append hint and no seq are produced.
+	// covers them. Agent failure additionally appended its bounded system entry above; normal
+	// endings allocate no entry or append hint.
 	threadChanged(t, o)
 	return nil
 }
@@ -141,6 +152,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 //	sessionExecutionId:  the ended session execution.
 //	checkoutExecutionId: the clone execution that produced the run Workspace's recorded baseline.
 //	baseCommit:          workspaces.base_commit_id, the commit the bundle is relative to.
+//	priorRevision:       the Revision the session resumed, without bundle (resume decision D5).
 //	kind:                the work item kind, which the control plane's enqueue re-checks.
 //
 // The three server-owned locations — the per-attempt `bundleKey`/`historyKey` and the
@@ -171,10 +183,14 @@ func (s *Store) sessionDeliverySpec(t *transaction, o Object, sessionExecutionID
 	if checkout == nil {
 		return nil, fmt.Errorf("sessionEnded: run %s workspace %s has no successful clone execution for base commit %s", runID, wid, base)
 	}
-	return Object{
+	spec := Object{
 		"kind":                "deliver_revision",
 		"sessionExecutionId":  sessionExecutionID,
 		"checkoutExecutionId": checkout.S("executionId"),
 		"baseCommit":          base,
-	}, nil
+	}
+	if prior := deliveryPriorRevision(t, sessionExecutionID); prior != nil {
+		spec["priorRevision"] = prior
+	}
+	return spec, nil
 }

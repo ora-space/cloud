@@ -53,6 +53,7 @@ func registerReportedNode(t *transaction, r *ControlRequest) Object {
 	w := nodeScope(t, sandbox.S("workspaceId"), sid, generation)
 	if existing := t.one("SELECT * FROM node_instances WHERE sandbox_instance_id=$1 AND node_incarnation_id=$2", sid, incarnation); existing != nil {
 		require(existing.S("nodeId") == nodeID && existing["endedAt"] == nil, 409, "stale_node")
+		require(existing.B("modelProxy") == r.Body.B("modelProxy"), 409, "node_capability_conflict")
 		return existing
 	}
 	require(w.S("desiredState") == "running", 409, "execution_closed")
@@ -64,6 +65,6 @@ func registerReportedNode(t *transaction, r *ControlRequest) Object {
 	// The handshake is complete when the Controller reports: a desktop Node finishes its own
 	// recovery before it accepts a session, so the incarnation is initialized from the start.
 	id := newID()
-	t.exec("INSERT INTO node_instances(id,sandbox_instance_id,workspace_id,service_subject,connection_state,protocol_version,initialized,node_id,node_incarnation_id) VALUES($1,$2,$3,$4,'connected',1,true,$5,$6)", id, sid, w.S("id"), r.Service.Subject, nodeID, incarnation)
+	t.exec("INSERT INTO node_instances(id,sandbox_instance_id,workspace_id,service_subject,connection_state,protocol_version,initialized,node_id,node_incarnation_id,model_proxy) VALUES($1,$2,$3,$4,'connected',1,true,$5,$6,$7)", id, sid, w.S("id"), r.Service.Subject, nodeID, incarnation, r.Body.B("modelProxy"))
 	return t.one("SELECT * FROM node_instances WHERE id=$1", id)
 }

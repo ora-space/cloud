@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -48,15 +47,15 @@ type originIdentity struct {
 type OriginClient struct {
 	endpoint *url.URL
 	client   *http.Client
-	log      *slog.Logger
 }
 
 // NewOriginClient builds the resolver client. baseURL is the resolver's origin, which must be HTTPS:
 // a plaintext resolver call would state the peer address to anyone on the path.
+//
 // keeps its configuration and edits it afterwards cannot move a running client's trust anchor.
 //
 //nolint:gocritic // By value on purpose: the identity is a construction snapshot, so a caller that
-func NewOriginClient(baseURL string, identity OriginIdentity, timeout time.Duration, log *slog.Logger) (*OriginClient, error) {
+func NewOriginClient(baseURL string, identity OriginIdentity, timeout time.Duration) (*OriginClient, error) {
 	endpoint, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return nil, fmt.Errorf("parse the origin resolver URL: %w", err)
@@ -71,9 +70,6 @@ func NewOriginClient(baseURL string, identity OriginIdentity, timeout time.Durat
 	if err != nil {
 		return nil, err
 	}
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
 	transport := &http.Transport{
 		TLSClientConfig: tlsConfig,
 		// One connection per resolution: the resolver queries the Engine on every call, and a
@@ -81,10 +77,13 @@ func NewOriginClient(baseURL string, identity OriginIdentity, timeout time.Durat
 		DisableKeepAlives:   true,
 		MaxIdleConnsPerHost: 1,
 	}
+	// No logger is taken here. This client writes nothing: every outcome it can produce is returned to
+	// the mirror surface, which is where the request, the digest and the decision are all still in
+	// scope — a second log line here would restate a refusal the surface already recorded, without the
+	// caller it was for.
 	return &OriginClient{
 		endpoint: endpoint,
 		client:   &http.Client{Transport: transport, Timeout: timeout},
-		log:      log,
 	}, nil
 }
 

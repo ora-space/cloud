@@ -179,10 +179,16 @@ func TestDatabaseEffectAndTicketScopes(t *testing.T) {
 
 // A Project whose provisioning failed is the Project a member most wants to delete, and it is the one
 // the delete used to refuse. Nothing about a failed clone promotes the Project out of `provisioning` —
-// only a successful step does — and the runtime maintenance hold an Operation leaves behind when it
-// ends without finishing is released by nothing else either. Both conditions the delete read,
-// `lifecycle='active'` and a runtime control in `idle`, were therefore permanently false for exactly
-// this Project, and the refusal said `resource_unavailable`, which is not a state any member can act on.
+// only a successful step does — so the condition the delete read, `lifecycle='active'`, was
+// permanently false for exactly this Project, and the refusal said `resource_unavailable`, which is
+// not a state any member can act on.
+//
+// Two halves of that are asserted here, because they are two different guarantees and only one of
+// them is about this release. The clone step's own end settles the runtime hold it took, so a
+// Workspace is not left reserved for an Operation that is over. And the deletion takes over a hold
+// whose Operation is no longer live regardless, because a database migrated from a release that ended
+// the step without settling it still carries exactly that hold — the state the second half writes
+// directly rather than waits to inherit.
 //
 // Evidence for specs test-cases/cloud/project/space-scoping.md
 // #deleting-a-project-supersedes-what-is-still-running-on-it.
@@ -212,8 +218,14 @@ func TestProjectDeleteAcceptsAProjectWhoseProvisioningFailed(t *testing.T) {
 	if f.scalar("SELECT count(*) FROM projects WHERE id=$1 AND lifecycle='provisioning'", pid) != 1 {
 		t.Fatal("a failed provisioning must leave the Project in provisioning, not promote it")
 	}
-	if f.scalar("SELECT count(*) FROM runtime_controls WHERE workspace_id=$1 AND state='maintenance' AND maintenance_operation_id=$2", wid, oid) != 1 {
-		t.Fatal("the ended Operation must still be holding the Workspace: that leaked hold is what the delete has to survive")
+	if f.scalar("SELECT count(*) FROM runtime_controls WHERE workspace_id=$1 AND state='maintenance' AND maintenance_operation_id=$2", wid, oid) != 0 {
+		t.Fatal("the ended Operation must not still be holding the Workspace: a hold owned by an Operation that is over starves every later Operation on that Workspace")
+	}
+	// The pre-fix hold, written the way a deployment that ran the older binary carries it: the control
+	// is still `maintenance`, still names an Operation, and that Operation has already ended. The
+	// deletion below is what has to survive it.
+	if _, err := f.store.Pool.Exec("UPDATE runtime_controls SET state='maintenance',maintenance_operation_id=$2,maintenance_run_id=NULL,version=version+1 WHERE workspace_id=$1", wid, oid); err != nil {
+		t.Fatal(err)
 	}
 	attempts := f.scalar("SELECT count(*) FROM clone_executions WHERE operation_id=$1", oid)
 

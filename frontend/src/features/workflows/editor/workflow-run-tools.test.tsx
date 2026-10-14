@@ -1,17 +1,28 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it, vi } from 'vitest'
-import { useLocation } from 'react-router-dom'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { WorkflowRun, WorkflowSnapshot } from '@/api/generated.schemas'
 import { WorkflowRunTools } from '@/features/workflows/editor/workflow-run-tools'
-import { TEST_TENANT_ID, installCloudSpaceHandlers } from '@/test/cloud-handlers'
+import { routes } from '@/routes'
+import {
+  TEST_TENANT_ID,
+  installCloudSpaceHandlers,
+  installWorkflowHandlers,
+  workflowFixture,
+} from '@/test/cloud-handlers'
 import { server } from '@/test/msw-server'
-import { renderWithProviders } from '@/test/render'
+import { renderRoutes } from '@/test/render'
+import { stubViewportGeometry } from '@/test/viewport'
 
 const WORKFLOW_ID = '44444444-4444-4444-4444-444444444444'
-// The tools navigate with the tenant id as the workspace slug segment, exactly
-// as `workspacePaths(tenantId)` builds it everywhere else.
-const BASE = `/w/${TEST_TENANT_ID}/workflows/${WORKFLOW_ID}`
+/**
+ * The readable workspace slug the browser route carries. It is deliberately not
+ * `TEST_TENANT_ID`: the tenant UUID scopes API calls, and using it as the slug is
+ * exactly the navigation bug these tests pin down.
+ */
+const WORKSPACE_SLUG = 'cloud-dev'
+const EDITOR_ROUTE = '/w/:workspaceSlug/workflows/:workflowId'
+const EDITOR_PATH = `/w/${WORKSPACE_SLUG}/workflows/${WORKFLOW_ID}`
 
 /** A published snapshot the run button needs to arm. */
 function snapshotFixture(id: string, version: number): WorkflowSnapshot {
@@ -54,14 +65,17 @@ interface RunToolsOptions {
   onCreate?: (body: unknown) => void
 }
 
-/** Installs the run endpoints and mounts the tools behind a location probe. */
-function renderRunTools({
+/**
+ * Installs the run endpoints (all keyed by the tenant UUID, so a request built
+ * from the workspace slug would not answer) and mounts the tools at the editor
+ * route, behind a location probe.
+ */
+function installRunHandlers({
   snapshots = [snapshotFixture('snap-1', 1)],
   runs = [],
   onCreate = () => {},
-}: RunToolsOptions = {}) {
-  installCloudSpaceHandlers('admin')
-  const created: WorkflowRun = runFixture('run-new', '巡检运行')
+  created = runFixture('run-new', '巡检运行'),
+}: RunToolsOptions & { created?: WorkflowRun } = {}) {
   server.use(
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/workflows/${WORKFLOW_ID}/snapshots`, () =>
       HttpResponse.json({ items: snapshots, nextCursor: '' }),
@@ -76,22 +90,32 @@ function renderRunTools({
         return HttpResponse.json({ resource: created })
       },
     ),
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/workflows/${WORKFLOW_ID}/runs/:rid`, () =>
+      HttpResponse.json(created),
+    ),
   )
-  const locationSpy = vi.fn<(pathname: string) => void>()
-  function Probe() {
-    const location = useLocation()
-    locationSpy(location.pathname)
-    return null
-  }
-  renderWithProviders(
-    <>
-      <WorkflowRunTools tenantId={TEST_TENANT_ID} workflowId={WORKFLOW_ID} />
-      <Probe />
-    </>,
-    { route: BASE, slug: TEST_TENANT_ID },
-  )
-  return locationSpy
 }
+
+/** Mounts the tools alone at the real editor route, with the run route as their destination. */
+function renderRunTools(options: RunToolsOptions = {}) {
+  installCloudSpaceHandlers('admin')
+  installRunHandlers(options)
+  const { router } = renderRoutes(
+    [
+      {
+        path: EDITOR_ROUTE,
+        element: <WorkflowRunTools tenantId={TEST_TENANT_ID} workflowId={WORKFLOW_ID} />,
+      },
+      { path: `${EDITOR_ROUTE}/runs/:runId`, element: <p>运行详情</p> },
+    ],
+    EDITOR_PATH,
+  )
+  return router
+}
+
+beforeEach(() => {
+  stubViewportGeometry()
+})
 
 describe('WorkflowRunTools', () => {
   it('disables the run button while no snapshot exists to execute', async () => {
@@ -106,25 +130,26 @@ describe('WorkflowRunTools', () => {
 
   it('arms the run button once a snapshot exists, creating the run and navigating to it', async () => {
     const bodies: unknown[] = []
-    const locationSpy = renderRunTools({ runs: [], onCreate: (body) => bodies.push(body) })
+    const router = renderRunTools({ runs: [], onCreate: (body) => bodies.push(body) })
     const runButton = await screen.findByRole('button', { name: '运行' })
     await waitFor(() => expect(runButton).toBeEnabled())
 
     fireEvent.click(runButton)
 
-    await waitFor(() => expect(locationSpy).toHaveBeenCalledWith(`${BASE}/runs/run-new`))
+    // The browser path carries the workspace slug, never the tenant UUID.
+    await waitFor(() => expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-new`))
     expect(bodies).toEqual([{}])
   })
 
   it('lists run history and opens a run from a row', async () => {
-    const locationSpy = renderRunTools({
+    const router = renderRunTools({
       runs: [runFixture('run-1', '巡检运行'), runFixture('run-2', '发布检查')],
     })
 
     fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
 
     fireEvent.click(await screen.findByRole('button', { name: '打开运行 巡检运行' }))
-    expect(locationSpy).toHaveBeenCalledWith(`${BASE}/runs/run-1`)
+    await waitFor(() => expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`))
   })
 
   it('shows the quiet empty state when nothing has ever run', async () => {
@@ -133,5 +158,63 @@ describe('WorkflowRunTools', () => {
     fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
 
     expect(await screen.findByText('还没有运行记录。')).toBeInTheDocument()
+  })
+})
+
+/**
+ * The reported navigation bug needs the real boundary to show up: only the app's
+ * own routes have `DashboardLayout` resolving the URL slug against the joined
+ * spaces, `CloudScope` forwarding the tenant id, and the run detail page as the
+ * destination. Mounting the tools bare cannot fail this way.
+ */
+describe('workflow run navigation through the app routes', () => {
+  /** Mounts the app's real routes inside the workspace and installs what the editor reads. */
+  function renderAppAt(path: string, runs: WorkflowRun[] = []) {
+    installCloudSpaceHandlers('admin')
+    installWorkflowHandlers([workflowFixture({ id: WORKFLOW_ID })])
+    const bodies: unknown[] = []
+    installRunHandlers({
+      runs,
+      created: runFixture('run-new', '巡检运行'),
+      onCreate: (body) => bodies.push(body),
+    })
+    const view = renderRoutes(routes, path)
+    return { ...view, bodies }
+  }
+
+  it('creates one run and stays on the same workspace route instead of the UUID one', async () => {
+    const { router, bodies } = renderAppAt(EDITOR_PATH)
+    const runButton = await screen.findByRole('button', { name: '运行' })
+    await waitFor(() => expect(runButton).toBeEnabled())
+
+    fireEvent.click(runButton)
+
+    // The destination is the real run detail page: a UUID workspace path would have
+    // been redirected to Issues by the Layout before this page ever mounted.
+    expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-new`)
+    expect(bodies).toHaveLength(1)
+  })
+
+  it('opens an existing run from the history with the same slug and creates nothing', async () => {
+    const { router, bodies } = renderAppAt(EDITOR_PATH, [runFixture('run-1', '巡检运行')])
+    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: '打开运行 巡检运行' }))
+
+    expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`)
+    expect(bodies).toHaveLength(0)
+  })
+
+  it('opens and reloads the run URL directly, with a breadcrumb back to the editor', async () => {
+    const { router } = renderAppAt(`${EDITOR_PATH}/runs/run-1`, [runFixture('run-1', '巡检运行')])
+
+    expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`)
+    expect(await screen.findByRole('link', { name: '工作流' })).toHaveAttribute(
+      'href',
+      `/w/${WORKSPACE_SLUG}/workflows`,
+    )
   })
 })

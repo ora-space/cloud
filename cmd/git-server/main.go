@@ -1,14 +1,18 @@
-// Command git-server runs the read-only internal Git Server.
+// Command git-server serves Project repositories to sandboxes over smart HTTP, answers Cloud's
+// read-only delivery-ref query, and serves published mirrors to Workspaces. Git also runs it as the
+// pre-receive hook (-pre-receive).
 //
-// It is a separate process in this repository (git-server D1) and it is off by default: it is in no
-// deployment manifest, publishes no port, and refuses every request until it is wired with an origin
-// resolver identity, Cloud's database and a populated mirror store. Nothing here enables it, and
-// nothing here relaxes the fail-closed behavior it starts with.
+// It is one process with two surfaces and two trust models, and `internal/gitserver` records why they
+// cannot share a listener: the repository surface authenticates a caller by an mTLS client
+// certificate that names a runtime target and can write; the mirror surface authenticates a caller by
+// the address its connection arrived from and can only read. What is left here is configuration,
+// dependency wiring, lifecycle and exit behavior — which surfaces this deployment turned on, where
+// each listens, and which identity each presents.
 //
-// The command is deliberately thin. Every decision it could get wrong lives in internal/gitserver,
-// internal/gitread, internal/mirror and internal/core: which services are served, how a caller is
-// identified, what Cloud's authoritative state is for one request, and when a mirror is readable.
-// What is left here is configuration, dependency wiring, lifecycle and exit behavior.
+// The repository surface is on unless the deployment says otherwise (GIT_SERVER_REPOSITORY_ENABLED),
+// because the fail-closed direction for a deployment that did not mention it is to demand the
+// material it needs or refuse to start. The mirror surface is off unless the deployment names a
+// mirror volume (-mirror-root), because having mirrors to serve is what opting into it means.
 //
 // It holds no upstream credential. The commit it serves was fetched by the credentialed executor,
 // which is the only component that ever held one (D1).
@@ -17,232 +21,359 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/wanglongan587/cloud/internal/config"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/gitserver"
+	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/mirror"
 	"github.com/wanglongan587/cloud/internal/repository"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "git-server:", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	var (
-		configPath = flag.String("config", "", "Cloud configuration file; supplies the database the read authorization is decided from")
-		addr       = flag.String("addr", "127.0.0.1:18002", "listen address of the sandbox-facing read listener")
-		mirrorRoot = flag.String("mirror-root", "", "directory holding the mirror store; required")
-		originURL  = flag.String("origin-url", "", "origin resolver base URL, e.g. https://sandbox-server:18001; required")
-		identityTo = flag.String("identity-dir", "", "directory holding the Git Server's own identity: client.pem, client.key, ca.pem, origin.pem; required")
-		serverName = flag.String("origin-server-name", "", "name the origin resolver's certificate must carry; required")
-		tlsCert    = flag.String("tls-cert", "", "certificate the sandbox-facing listener presents; with -tls-key it serves HTTPS")
-		tlsKey     = flag.String("tls-key", "", "private key for -tls-cert")
-		gitPath    = flag.String("git", "git", "git binary used for upload-pack")
-		timeout    = flag.Duration("timeout", 5*time.Minute, "time allowed for one clone")
-		originWait = flag.Duration("origin-timeout", 10*time.Second, "time allowed for one origin resolution")
-		maxMirror  = flag.Int64("max-mirror-bytes", 4<<30, "largest single mirror; reaching it fails the mirror instead of publishing a partial one")
-		maxVolume  = flag.Int64("max-volume-bytes", 64<<30, "largest total the mirror volume may hold")
-		grace      = flag.Duration("mirror-grace", 24*time.Hour, "how long an unreferenced mirror is kept before it may be reclaimed")
-		reclaim    = flag.Bool("mirror-reclaim", false, "reclaim mirrors Cloud no longer references; off unless the deployment asks for it")
-		reclaimFor = flag.Duration("mirror-reclaim-interval", 5*time.Minute, "how often the reclaim pass runs when -mirror-reclaim is set")
-	)
+// run owns every listener this deployment asked for and the hook channel; shutdown drains HTTP before
+// closing the channel that in-flight pushes still need for their pre-receive decision.
+func run() (runErr error) {
+	path := flag.String("config", "", "Cloud configuration file; supplies the database both surfaces authorize from")
+	health := flag.Bool("healthcheck", false, "verify readiness through the ref listener's health route")
+	preReceive := flag.Bool("pre-receive", false, "run as the pre-receive hook (invoked by git)")
+	mirrorSurface := mirrorFlags()
 	flag.Parse()
-	if *mirrorRoot == "" {
-		return errors.New("-mirror-root is required")
+	if *preReceive {
+		// The hook inherits receive-pack's environment, which already fixes the git binary on PATH.
+		return gitserver.RunPreReceive(os.Stdin, os.Stderr, "git")
 	}
-	// A zero or negative interval would turn the reclaim pass into a busy loop against PostgreSQL and
-	// the mirror volume. It is refused at startup rather than clamped, because a deployment that asked
-	// for a period it did not get should hear about it instead of running at one it never chose.
-	if *reclaim && *reclaimFor <= 0 {
-		return errors.New("-mirror-reclaim-interval must be positive")
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return serve(settings{
-		configPath: *configPath, addr: *addr, mirrorRoot: *mirrorRoot, originURL: *originURL,
-		identityDir: *identityTo, serverName: *serverName, tlsCert: *tlsCert, tlsKey: *tlsKey,
-		gitPath: *gitPath, timeout: *timeout,
-		originTimeout: *originWait, maxMirrorBytes: *maxMirror, maxVolumeBytes: *maxVolume, grace: *grace,
-		mirrorReclaim: *reclaim, reclaimInterval: *reclaimFor,
-	}, log)
-}
-
-// listenerTLS builds the sandbox-facing listener's TLS configuration from the Git Server's own
-// certificate pair.
-//
-// Only the server's identity is configured, and that is the design rather than an omission: the
-// sandbox that clones holds no certificate — Cloud gives it a clone URL and a CA to verify, and
-// nothing else — so who the caller is comes from the address the connection arrived from, resolved
-// per request (D3). A listener without TLS is not an option either: Git's own policy prefix in the
-// sandbox allows only https, so a plaintext endpoint is unreachable by the client it exists for.
-func listenerTLS(certFile, keyFile string) (*tls.Config, error) {
-	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load the listener certificate: %w", err)
-	}
-	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}, nil
-}
-
-// settings is everything the process was told, gathered so the wiring below takes one argument
-// rather than eight.
-type settings struct {
-	configPath      string
-	addr            string
-	mirrorRoot      string
-	originURL       string
-	identityDir     string
-	serverName      string
-	tlsCert         string
-	tlsKey          string
-	gitPath         string
-	timeout         time.Duration
-	originTimeout   time.Duration
-	maxMirrorBytes  int64
-	maxVolumeBytes  int64
-	grace           time.Duration
-	mirrorReclaim   bool
-	reclaimInterval time.Duration
-}
-
-// the wiring below must be readable as one snapshot rather than as a live shared struct.
-//
-//nolint:gocritic // By value on purpose: what the process was told is fixed before it starts, and
-func serve(s settings, log *slog.Logger) error {
-	if s.originURL == "" || s.identityDir == "" || s.serverName == "" {
-		return errors.New("-origin-url, -identity-dir and -origin-server-name are required: a Git Server that cannot identify its callers must not start")
-	}
-	// Half a key pair is refused rather than ignored: a deployment that meant to serve HTTPS and
-	// mistyped one flag would otherwise come up on plaintext without saying so.
-	if (s.tlsCert == "") != (s.tlsKey == "") {
-		return errors.New("-tls-cert and -tls-key are required together")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	cfg, err := config.Load(s.configPath)
+	deployment, err := gitserver.LoadConfig()
 	if err != nil {
 		return err
 	}
+	if *health {
+		// Readiness is served by the ref listener, and only the repository surface opens one. A
+		// deployment that turned that surface off has no health route, and reporting "not ready"
+		// forever would be reporting a component it never asked to run.
+		if !deployment.RepositoryEnabled {
+			return errors.New("-healthcheck verifies the ref listener, and this process serves no repository surface")
+		}
+		return checkHealth(&deployment)
+	}
+	if err := mirrorSurface.validate(); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	db, err := repository.InitDB(ctx, cfg.Database)
 	if err != nil {
 		return err
 	}
-	pool, err := db.DB()
-	if err != nil {
-		return fmt.Errorf("get the PostgreSQL pool: %w", err)
-	}
-	defer func() { _ = pool.Close() }()
 	store, err := core.NewStore(db)
 	if err != nil {
 		return err
 	}
-	// The mirror store refuses to open a volume it cannot prove it owns, and validates its own
-	// capacity limits. A Git Server with no usable mirror volume has nothing to serve and must not
-	// come up as one that answers "forbidden" to everything, which is indistinguishable from a
-	// working server refusing correctly.
-	mirrors, err := mirror.New(mirror.Config{
-		Root:           s.mirrorRoot,
-		MaxMirrorBytes: s.maxMirrorBytes,
-		MaxVolumeBytes: s.maxVolumeBytes,
-		Grace:          s.grace,
-		Clock:          time.Now,
-	})
+	defer store.Pool.Close()
+	if err := store.CheckSchema(ctx); err != nil {
+		return err
+	}
+	log, err := logger.New(cfg.Logger)
 	if err != nil {
 		return err
 	}
-	dir := s.identityDir
-	origins, err := gitserver.NewOriginClient(s.originURL, gitserver.OriginIdentity{
-		CertFile:          dir + "/client.pem",
-		KeyFile:           dir + "/client.key",
-		CAFile:            dir + "/ca.pem",
-		ServerCertificate: dir + "/origin.pem",
-		ServerName:        s.serverName,
-	}, s.originTimeout, log)
-	if err != nil {
-		return err
-	}
-	state, err := gitserver.MirrorState(store, mirrors)
-	if err != nil {
-		return err
-	}
-	// The reclaim loop is a goroutine of this process, so it is started here and ends with the context
-	// the shutdown below already cancels. It is off unless the deployment set -mirror-reclaim: with the
-	// flag unset this process behaves exactly as it did before the loop existed, serving reads and
-	// removing nothing.
-	if s.mirrorReclaim {
-		reclaim, cancelReclaim := context.WithCancel(ctx)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			runMirrorReclaim(reclaim, pool, mirrors, s.reclaimInterval, log)
-		}()
-		// The loop is stopped and awaited before the deferred pool close below runs, because a pass in
-		// flight holds a connection and closing the pool under it would report a failure on the way out
-		// of a shutdown that was not one. The wait is bounded: canceling the context ends every
-		// database call the pass makes, so what could still outlast it is a volume walk, and a
-		// shutdown must not be held open by housekeeping.
-		defer func() {
-			cancelReclaim()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				log.Warn("the mirror reclaim pass did not stop in time; exiting anyway")
-			}
-		}()
-		log.Info("mirror reclaim enabled", "interval", s.reclaimInterval.String(), "grace", s.grace.String())
-	}
-	server, err := gitserver.New(gitserver.Config{
-		Mirrors: mirrors, Origins: origins, State: state,
-		GitPath: s.gitPath, Timeout: s.timeout, Logger: log,
-	})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = server.Close() }()
+	defer func() { runErr = errors.Join(runErr, logger.Sync(log)) }()
+	// The reclaim loop writes through this adapter rather than through a logger of its own, so both
+	// surfaces and the housekeeping between them land in one stream an operator reads in one place.
+	values := logger.NewValues(log)
 
-	listener, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return err
-	}
-	if s.tlsCert != "" {
-		serverTLS, err := listenerTLS(s.tlsCert, s.tlsKey)
+	options := &gitserver.Options{GitProgram: deployment.GitProgram, Health: store.Pool.PingContext, Logger: log}
+	var repositoryTLS, refTLS *tls.Config
+	if deployment.RepositoryEnabled {
+		// Read before the service is built so that a deployment which cannot present its identity, or
+		// name the one certificate allowed to ask about refs, hears about it instead of serving.
+		cloudClient, err := deployment.CloudClient()
 		if err != nil {
 			return err
 		}
-		// The TLS configuration wraps the listener directly rather than going through ServeTLS,
-		// matching cmd/credential-store and cmd/clone-executor.
-		listener = tls.NewListener(listener, serverTLS)
-	}
-	httpServer := &http.Server{Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	failed := make(chan error, 1)
-	go func() {
-		log.Info("git server listening", "address", listener.Addr().String(), "mirrorRoot", s.mirrorRoot)
-		failed <- httpServer.Serve(listener)
-	}()
-	select {
-	case err := <-failed:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		if repositoryTLS, err = deployment.RepositoryTLS(); err != nil {
+			return err
 		}
-		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		log.Info("shutting down")
-		return httpServer.Shutdown(shutdown)
+		if refTLS, err = deployment.RefTLS(); err != nil {
+			return err
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		options.Repository = &gitserver.RepositoryOptions{
+			Store:          store,
+			RepositoryRoot: deployment.RepositoryRoot,
+			CloudClient:    cloudClient,
+			// The hook is this binary, and the path is this process's own, so a deployment cannot
+			// point a repository at a hook it did not install.
+			Hook: []string{self, "-pre-receive"},
+		}
 	}
+	if mirrorSurface.enabled() {
+		// The mirror store refuses to open a volume it cannot prove it owns, and validates its own
+		// capacity limits. A Git Server with no usable mirror volume has nothing to serve and must not
+		// come up as one that answers "forbidden" to everything, which is indistinguishable from a
+		// working server refusing correctly.
+		mirrors, err := mirror.New(mirror.Config{
+			Root:           mirrorSurface.root,
+			MaxMirrorBytes: mirrorSurface.maxMirrorBytes,
+			MaxVolumeBytes: mirrorSurface.maxVolumeBytes,
+			Grace:          mirrorSurface.grace,
+			Clock:          time.Now,
+		})
+		if err != nil {
+			return err
+		}
+		// The Git Server's own identity toward the resolver, which is not the Controller's: this
+		// process resolves one address per read request and nothing else.
+		origins, err := gitserver.NewOriginClient(mirrorSurface.originURL, gitserver.OriginIdentity{
+			CertFile:          filepath.Join(mirrorSurface.identityDir, "client.pem"),
+			KeyFile:           filepath.Join(mirrorSurface.identityDir, "client.key"),
+			CAFile:            filepath.Join(mirrorSurface.identityDir, "ca.pem"),
+			ServerCertificate: filepath.Join(mirrorSurface.identityDir, "origin.pem"),
+			ServerName:        mirrorSurface.originName,
+		}, mirrorSurface.originTimeout)
+		if err != nil {
+			return err
+		}
+		state, err := gitserver.MirrorState(store, mirrors)
+		if err != nil {
+			return err
+		}
+		options.Mirror = &gitserver.MirrorOptions{Mirrors: mirrors, Origins: origins, State: state, Timeout: mirrorSurface.timeout}
+		if mirrorSurface.reclaim {
+			// The loop is a goroutine of this process, so it is started here and stopped by the
+			// shutdown below. It is off unless the deployment asked for it: with the flag unset this
+			// process removes nothing it did not remove before the loop existed.
+			reclaimCtx, stopReclaim := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runMirrorReclaim(reclaimCtx, store.Pool, mirrors, mirrorSurface.reclaimEvery, values)
+			}()
+			// Stopped and awaited before the deferred pool close runs, because a pass in flight holds a
+			// connection and closing the pool under it would report a failure on the way out of a
+			// shutdown that was not one. The wait is bounded: canceling the context ends every database
+			// call the pass makes, so what could still outlast it is a volume walk, and a shutdown must
+			// not be held open by housekeeping.
+			defer func() {
+				stopReclaim()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					log.Warn("the mirror reclaim pass did not stop in time; exiting anyway")
+				}
+			}()
+			log.Info("mirror reclaim enabled", zap.Duration("interval", mirrorSurface.reclaimEvery), zap.Duration("grace", mirrorSurface.grace))
+		}
+	}
+	service, err := gitserver.New(options)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, service.Close()) }()
+
+	// Which surfaces exist was decided above, and this is the whole of what the process listens on:
+	// one listener per surface, each presenting the identity that surface's callers expect, and no
+	// listener at all for a surface this deployment did not turn on. The repository surface's two
+	// listeners are upstream's, unchanged in address and TLS posture.
+	servers := make([]*http.Server, 0, 3)
+	if deployment.RepositoryEnabled {
+		servers = append(servers,
+			&http.Server{Addr: deployment.RepositoryAddress, Handler: http.HandlerFunc(service.RepositoryHandler), TLSConfig: repositoryTLS},
+			&http.Server{Addr: deployment.RefAddress, Handler: http.HandlerFunc(service.RefHandler), TLSConfig: refTLS},
+		)
+	}
+	if mirrorSurface.enabled() {
+		mirrorTLS, err := mirrorListenerTLS(mirrorSurface.certFile, mirrorSurface.keyFile)
+		if err != nil {
+			return err
+		}
+		servers = append(servers, &http.Server{Addr: mirrorSurface.address, Handler: http.HandlerFunc(service.MirrorHandler), TLSConfig: mirrorTLS})
+	}
+	for _, server := range servers {
+		// No write timeout: pack transfers are bounded by the client and by request cancellation.
+		server.ReadHeaderTimeout = 5 * time.Second
+		server.IdleTimeout = time.Minute
+		server.BaseContext = func(net.Listener) context.Context { return ctx }
+		log.Info("git server listening", zap.String("address", server.Addr))
+	}
+	failed := make(chan error, len(servers))
+	for _, server := range servers {
+		go func() { failed <- server.ListenAndServeTLS("", "") }()
+	}
+	waits := len(servers)
+	select {
+	case err = <-failed:
+		waits--
+	case <-ctx.Done():
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	cancel()
+	shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	for _, server := range servers {
+		err = errors.Join(err, server.Shutdown(shutdown))
+	}
+	for range waits {
+		select {
+		case <-failed:
+		case <-shutdown.Done():
+			return errors.Join(err, shutdown.Err())
+		}
+	}
+	return err
+}
+
+// mirrorSettings is everything the mirror surface was told. It is one value rather than a flag
+// variable per case so that "did this deployment ask for the surface, and is it completely
+// configured?" is answered once, by validate, instead of by the wiring reading flags in whatever
+// order it happens to reach them.
+type mirrorSettings struct {
+	address        string
+	root           string
+	originURL      string
+	identityDir    string
+	originName     string
+	certFile       string
+	keyFile        string
+	timeout        time.Duration
+	originTimeout  time.Duration
+	maxMirrorBytes int64
+	maxVolumeBytes int64
+	grace          time.Duration
+	reclaim        bool
+	reclaimEvery   time.Duration
+}
+
+// mirrorFlags registers the mirror surface's flags and returns them. The value is a pointer because
+// the flag package must keep writing into the same struct the caller reads.
+func mirrorFlags() *mirrorSettings {
+	s := &mirrorSettings{}
+	flag.StringVar(&s.address, "mirror-addr", "127.0.0.1:18002", "listen address of the Workspace-facing mirror listener")
+	flag.StringVar(&s.root, "mirror-root", "", "directory holding the mirror store; naming it is what turns the mirror surface on")
+	flag.StringVar(&s.originURL, "origin-url", "", "origin resolver base URL, e.g. https://sandbox-server:18001")
+	flag.StringVar(&s.identityDir, "identity-dir", "", "directory holding this surface's identity toward the resolver: client.pem, client.key, ca.pem, origin.pem")
+	flag.StringVar(&s.originName, "origin-server-name", "", "name the origin resolver's certificate must carry")
+	flag.StringVar(&s.certFile, "mirror-tls-cert", "", "certificate the mirror listener presents")
+	flag.StringVar(&s.keyFile, "mirror-tls-key", "", "private key for -mirror-tls-cert")
+	flag.DurationVar(&s.timeout, "mirror-timeout", 5*time.Minute, "time allowed for one clone on the mirror listener")
+	flag.DurationVar(&s.originTimeout, "origin-timeout", 10*time.Second, "time allowed for one origin resolution")
+	flag.Int64Var(&s.maxMirrorBytes, "max-mirror-bytes", 4<<30, "largest single mirror; reaching it fails the mirror instead of publishing a partial one")
+	flag.Int64Var(&s.maxVolumeBytes, "max-volume-bytes", 64<<30, "largest total the mirror volume may hold")
+	flag.DurationVar(&s.grace, "mirror-grace", 24*time.Hour, "how long an unreferenced mirror is kept before it may be reclaimed")
+	flag.BoolVar(&s.reclaim, "mirror-reclaim", false, "reclaim mirrors Cloud no longer references; off unless the deployment asks for it")
+	flag.DurationVar(&s.reclaimEvery, "mirror-reclaim-interval", 5*time.Minute, "how often the reclaim pass runs when -mirror-reclaim is set")
+	return s
+}
+
+// enabled reports whether the deployment asked for the mirror surface at all. Naming the volume is
+// what turns it on: a mirror surface without a volume has nothing to serve, so there is no second
+// flag that could disagree with this one.
+func (s *mirrorSettings) enabled() bool { return s.root != "" }
+
+// validate refuses an incomplete or contradictory mirror surface at startup, and it says nothing
+// about a surface this deployment did not ask for — a value nothing consults is not a value to fail
+// a startup over.
+func (s *mirrorSettings) validate() error {
+	if !s.enabled() {
+		if s.reclaim {
+			return errors.New("-mirror-reclaim needs -mirror-root: the reclaim loop sweeps the mirror volume and there is none")
+		}
+		return nil
+	}
+	if s.address == "" {
+		return errors.New("-mirror-addr is required by the mirror surface")
+	}
+	if s.originURL == "" || s.identityDir == "" || s.originName == "" {
+		return errors.New("-origin-url, -identity-dir and -origin-server-name are required by the mirror surface: a Git Server that cannot identify its callers must not start")
+	}
+	// Both halves of the pair, always. This surface's only client is a Node, whose clone policy
+	// permits it to verify an https endpoint and nothing else, so a plaintext listener would be one
+	// no caller could reach — and a listener nobody can reach is not a safe default, it is a
+	// misconfiguration that looks like a working one.
+	if s.certFile == "" || s.keyFile == "" {
+		return errors.New("-mirror-tls-cert and -mirror-tls-key are required by the mirror surface")
+	}
+	// A zero or negative interval would turn the reclaim pass into a busy loop against PostgreSQL and
+	// the mirror volume. It is refused rather than clamped, because a deployment that asked for a
+	// period it did not get should hear about it instead of running at one it never chose.
+	if s.reclaim && s.reclaimEvery <= 0 {
+		return errors.New("-mirror-reclaim-interval must be positive")
+	}
+	return nil
+}
+
+// mirrorListenerTLS builds the mirror listener's TLS configuration from its own certificate pair.
+//
+// Only the server's identity is configured, and that is the design rather than an omission: the Node
+// that clones holds no certificate — Cloud gives it a clone URL and a CA to verify, and nothing else
+// — so who the caller is comes from the address the connection arrived from, resolved per request
+// (D3). Client authentication is not relaxed here; there is nothing to relax, and the repository
+// listener's requirement is untouched by this one existing.
+func mirrorListenerTLS(certFile, keyFile string) (*tls.Config, error) {
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load the mirror listener certificate: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}, nil
+}
+
+// checkHealth calls the ref listener's health route, verifying the server identity
+// against the deployment CA; it reads no private key.
+func checkHealth(deployment *gitserver.Config) error {
+	trust, err := os.ReadFile(deployment.SandboxCAFile)
+	if err != nil {
+		return errors.New("git health trust unavailable")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(trust) {
+		return errors.New("invalid git health trust")
+	}
+	// The ref listener may be bound to one network's address, so dial its configured host.
+	host, port, err := net.SplitHostPort(deployment.RefAddress)
+	if err != nil {
+		return errors.New("invalid git health address")
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: deployment.HealthServerName}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("git health redirect forbidden") }}
+	response, err := client.Get("https://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return errors.New("git server not ready")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("git server not ready")
+	}
+	return nil
 }

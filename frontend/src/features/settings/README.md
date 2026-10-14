@@ -4,13 +4,13 @@
 
 承载设置导航、空间基本信息页，以及当前用户的「Git 身份」与「Git 凭据」页。管理员可按版本修改空间名称，同步更新租户名称；slug 保持不变。Git 身份属于登录用户而非空间：Agent 提交代码时以它作为 Git 作者与提交者，修改只对之后启动的会话生效。Git 凭据也是登录用户个人的 HTTPS 仓库凭据，`repositoryScope` 是它唯一被授权的仓库，`availability` 是它能否使用的唯一依据；Token 只写不读，任何响应都不会返回它。用户看到的「删除凭据」就是撤销：Token 在凭据服务中被销毁，凭据立即不能再授权任何克隆，行使审计的记录仍留在列表中。成员与计费页面由各自功能模块负责。
 
-不负责成员权限实现或空间归档。
+不负责成员权限实现或空间归档；个人模型连接由 `features/model-connections` 的专用模块负责。
 
 ## 文件
 
 | 文件 | 说明 |
 | --- | --- |
-| `settings-layout.tsx` | 设置页导航和子路由容器 |
+| `settings-layout.tsx` | 设置页导航和子路由容器，含当前用户的「模型连接」入口 |
 | `general-settings-page.tsx` | 空间名称编辑及只读 slug |
 | `git-identity-api.ts` | `/api/v1/me/git-identity` 的读取、按版本保存（PUT）、恢复默认（DELETE，带稳定幂等键）hooks 与故障文案 |
 | `git-identity-page.tsx` | 「Git 身份」卡片：名称/邮箱、「默认身份」徽章、「保存」「恢复默认」 |

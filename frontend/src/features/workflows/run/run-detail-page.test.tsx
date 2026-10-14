@@ -12,9 +12,9 @@ import { renderAtRoute } from '@/test/render'
 const WORKFLOW_ID = '44444444-4444-4444-4444-444444444444'
 const RUN_ID = '55555555-5555-5555-5555-555555555555'
 const RUN_PATH = `/w/:workspaceSlug/workflows/:workflowId/runs/:runId`
-// The run entry navigates with the tenant id as the workspace slug segment,
-// exactly as `workspacePaths(tenantId)` builds it everywhere else.
-const RUN_URL = `/w/${TEST_TENANT_ID}/workflows/${WORKFLOW_ID}/runs/${RUN_ID}`
+// The browser URL carries the readable workspace slug; the tenant id (the `slug`
+// prop CloudScope forwards) only scopes the API calls below.
+const RUN_URL = `/w/cloud-dev/workflows/${WORKFLOW_ID}/runs/${RUN_ID}`
 
 /** A stored run row as the detail endpoint returns it. */
 function runFixture(overrides: Partial<WorkflowRun> = {}): WorkflowRun {

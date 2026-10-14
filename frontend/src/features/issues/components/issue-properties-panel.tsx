@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { ActorAvatar } from '@/components/common/actor-avatar'
 import {
   PRIORITY_ORDER,
@@ -8,7 +8,6 @@ import {
   parseIssuePriority,
 } from '@/components/common/issue-badges'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -17,6 +16,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ContextRefsPanel } from '@/features/issues/components/context-refs-panel'
+import { IssueProjectSelect } from './issue-project-select'
+import { workspacePaths } from '@/lib/paths'
 import type { UpdateIssueInput, useIssueStatuses } from '@/features/issues/api'
 import {
   assigneeName,
@@ -36,10 +37,12 @@ function StatusField({
   issue,
   statuses,
   onCommit,
+  saving,
 }: {
   issue: Issue
   statuses: ReturnType<typeof useIssueStatuses>['data']
   onCommit: (patch: UpdateIssueInput) => void
+  saving: boolean
 }) {
   const keys = orderedColumns(statuses ?? [], [issue.status])
   return (
@@ -47,6 +50,7 @@ function StatusField({
       <PropertyLabel>状态</PropertyLabel>
       <Select
         value={issue.status}
+        disabled={saving}
         onValueChange={(v) => {
           if (v !== null) onCommit({ status: v })
         }}
@@ -76,15 +80,18 @@ function StatusField({
 function PriorityField({
   issue,
   onCommit,
+  saving,
 }: {
   issue: Issue
   onCommit: (patch: UpdateIssueInput) => void
+  saving: boolean
 }) {
   return (
     <div className="space-y-1.5">
       <PropertyLabel>优先级</PropertyLabel>
       <Select
         value={issue.priority}
+        disabled={saving}
         onValueChange={(v) => {
           const next = parseIssuePriority(v)
           if (next !== undefined) onCommit({ priority: next })
@@ -114,10 +121,12 @@ function ParentField({
   issue,
   issues,
   onCommit,
+  saving,
 }: {
   issue: Issue
   issues: Issue[]
   onCommit: (patch: UpdateIssueInput) => void
+  saving: boolean
 }) {
   const candidates = issues.filter((i) => i.id !== issue.id)
   return (
@@ -125,6 +134,7 @@ function ParentField({
       <PropertyLabel>父任务</PropertyLabel>
       <Select
         value={issue.parentIssueId ?? 'none'}
+        disabled={saving}
         onValueChange={(v) => {
           if (v !== null) onCommit({ parentIssueId: v === 'none' ? '' : v })
         }}
@@ -205,17 +215,46 @@ function SubIssuesField({
   )
 }
 
-function ProjectField({ issue }: { issue: Issue }) {
+function ProjectField({
+  issue,
+  onCommit,
+  saving,
+}: {
+  issue: Issue
+  onCommit: (patch: UpdateIssueInput) => void
+  saving: boolean
+}) {
+  return (
+    <IssueProjectSelect
+      id="issue-project"
+      value={issue.projectRef || 'none'}
+      disabled={saving}
+      onChange={(value) => {
+        const projectRef = value === 'none' ? '' : value
+        if (projectRef !== (issue.projectRef ?? '')) onCommit({ projectRef })
+      }}
+    />
+  )
+}
+
+function AgentExecutionEntry() {
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  const paths = workspaceSlug ? workspacePaths(workspaceSlug) : undefined
   return (
     <div className="space-y-1.5">
-      <PropertyLabel>项目</PropertyLabel>
-      {issue.projectRef ? (
-        <div className="text-sm">
-          <p className="text-muted-foreground">项目详情暂不可用</p>
-          <p className="truncate font-mono text-xs text-muted-foreground">{issue.projectRef}</p>
+      <PropertyLabel>Agent 执行</PropertyLabel>
+      <p className="text-xs text-muted-foreground">
+        关联项目后，在活动栏的“提及 / 任务”中选择已安装的 Agent 并提交任务。
+      </p>
+      {paths && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <Link className="underline" to={paths.modelConnections}>
+            模型连接设置
+          </Link>
+          <Link className="underline" to={paths.plugins}>
+            管理插件
+          </Link>
         </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">未关联项目</p>
       )}
     </div>
   )
@@ -262,6 +301,8 @@ export interface IssuePropertiesPanelProps {
   members: TenantMember[]
   issueHref: (id: string) => string
   onCommit: (patch: UpdateIssueInput) => void
+  /** Disables project changes while a versioned task update is awaiting its result. */
+  saving?: boolean
 }
 
 /**
@@ -278,27 +319,22 @@ export function IssuePropertiesPanel({
   members,
   issueHref,
   onCommit,
+  saving = false,
 }: IssuePropertiesPanelProps) {
   return (
     <div className="w-full shrink-0 space-y-4 md:w-64">
-      <StatusField issue={issue} statuses={statuses} onCommit={onCommit} />
-      <PriorityField issue={issue} onCommit={onCommit} />
+      <StatusField issue={issue} statuses={statuses} onCommit={onCommit} saving={saving} />
+      <PriorityField issue={issue} onCommit={onCommit} saving={saving} />
       <AssigneeField issue={issue} members={members} />
-      <ParentField issue={issue} issues={issues} onCommit={onCommit} />
+      <ParentField issue={issue} issues={issues} onCommit={onCommit} saving={saving} />
       <SubIssuesField issue={issue} issues={issues} issueHref={issueHref} />
-      <ProjectField issue={issue} />
+      <ProjectField issue={issue} onCommit={onCommit} saving={saving} />
       <LabelsAndPropertiesFields issue={issue} />
       <div className="space-y-1.5">
         <PropertyLabel>上下文引用</PropertyLabel>
         <ContextRefsPanel slug={tid} issueId={issue.id} />
       </div>
-      <div className="space-y-1.5">
-        <PropertyLabel>执行</PropertyLabel>
-        <Button variant="outline" size="sm" className="w-full" disabled>
-          运行（暂不可用）
-        </Button>
-        <p className="text-xs text-muted-foreground">Agent / Team / Workflow 执行尚未接入。</p>
-      </div>
+      <AgentExecutionEntry />
     </div>
   )
 }

@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
-	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -184,7 +183,7 @@ func (p *originPKI) client(t *testing.T, server *httptest.Server, identity Origi
 		t.Fatal(err)
 	}
 	parsed.Host = net.JoinHostPort("127.0.0.1", parsed.Port())
-	return NewOriginClient(parsed.String(), identity, 5*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewOriginClient(parsed.String(), identity, 5*time.Second)
 }
 
 func TestOriginClientResolvesThroughTheGitServerIdentity(t *testing.T) {
@@ -381,7 +380,7 @@ func TestOriginIdentityMustBeTheGitServersOwnClientIdentity(t *testing.T) {
 	})
 
 	t.Run("a plaintext resolver URL", func(t *testing.T) {
-		if _, err := NewOriginClient("http://127.0.0.1:18001", base, time.Second, nil); err == nil {
+		if _, err := NewOriginClient("http://127.0.0.1:18001", base, time.Second); err == nil {
 			t.Fatal("a plaintext resolver URL was accepted")
 		}
 	})

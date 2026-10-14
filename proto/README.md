@@ -48,3 +48,9 @@
 ## 已批准的运行时控制契约
 
 RuntimeControlService 传递 Cloud 已裁决的目标绑定、关闭确认、即时执行许可和独立强停计划。目标包含 tenant/workspace、实际用户/服务端会话与控制代次；它们用于受信执行端核验范围，不作为客户端自行声明的成员权限。用户控制代次、Controller 租约代次、运行时代次、Node 进程代次及稳定 execution/Node operation ID 分别保存。旧组件未声明 runtime_control 能力时明确拒绝。许可不由幂等响应复活，Controller 派发前重新获取；Node 接受与首次执行入口再次核验。Cloud–Controller 使用双向 TLS。文件/终端/插件/Agent 的新执行入口须具备同样保障后才开放。权威依据为 specs/decisions/cloud/controller-integration/20260927-fenced-runtime-control-delivery.md。
+
+## 个人模型执行
+
+`AgentSessionSpec.model_binding_id` 是 Cloud 冻结的个人模型配置引用，不含密钥或临时令牌。
+`RegisterNodeRequest.model_proxy` 与 `NodeRecord.model_proxy` 保存 Node 握手声明的模型代理能力，
+旧 Node 默认为 false；个人模型会话派发和授权都要求具备该能力。语义见 [模型连接](../docs/model-connections.md)。

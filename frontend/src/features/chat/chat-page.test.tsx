@@ -1,59 +1,27 @@
-import { screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { renderAtRoute } from '@/test/render'
 import { db } from '@/mocks/data/store'
+import { renderAtRoute } from '@/test/render'
 import { ChatPage } from './chat-page'
 
-function renderChat(sessionId?: string) {
-  const path = sessionId
-    ? `/w/${db.workspace.slug}/chat/${sessionId}`
-    : `/w/${db.workspace.slug}/chat`
-  return renderAtRoute(
-    '/w/:workspaceSlug/chat/:sessionId?',
-    <ChatPage slug={db.workspace.slug} />,
-    path,
+describe('standalone chat entry', () => {
+  it.each(['/chat', '/chat/old-session'])(
+    'keeps %s unavailable and links to real tasks',
+    (suffix) => {
+      renderAtRoute(
+        '/w/:workspaceSlug/chat/:sessionId?',
+        <ChatPage slug="real-workspace" />,
+        `/w/real-workspace${suffix}`,
+      )
+      expect(screen.getByRole('heading', { name: '聊天暂不可用' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: '前往任务' })).toHaveAttribute(
+        'href',
+        '/w/real-workspace/issues',
+      )
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+      for (const session of db.chatSessions) {
+        expect(screen.queryByText(session.title)).not.toBeInTheDocument()
+      }
+    },
   )
-}
-
-describe('ChatPage', () => {
-  it('lists every seeded session and shows the most recently updated one selected by default', async () => {
-    renderChat()
-    await Promise.all(
-      db.chatSessions.map(async (session) => {
-        expect(await screen.findAllByText(session.title)).not.toHaveLength(0)
-      }),
-    )
-    // The API sorts sessions by updatedAt desc, same as the component's default pick.
-    const defaultSession = db.chatSessions.toSorted((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
-    )[0]
-    if (!defaultSession) throw new Error('chat seed data must contain a session')
-    const firstMessage = db.chatMessages
-      .filter((m) => m.sessionId === defaultSession.id)
-      .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))[0]
-    if (!firstMessage) throw new Error('chat seed data must contain a message')
-    // The filler phrase bank is small and can repeat within a session, so
-    // assert presence rather than a single unique match.
-    expect(await screen.findAllByText(firstMessage.content)).not.toHaveLength(0)
-  })
-
-  it('sends a message and receives a canned agent reply', async () => {
-    const session = db.chatSessions[1]
-    if (!session) throw new Error('chat seed data must contain a second session')
-    const user = userEvent.setup()
-    renderChat(session.id)
-    await screen.findAllByText(session.title)
-
-    const beforeCount = db.chatMessages.filter((m) => m.sessionId === session.id).length
-
-    await user.type(screen.getByPlaceholderText(/给智能体发消息/), 'Ping!')
-    await user.click(screen.getByRole('button', { name: '发送消息' }))
-
-    await waitFor(() => {
-      const afterCount = db.chatMessages.filter((m) => m.sessionId === session.id).length
-      expect(afterCount).toBe(beforeCount + 2)
-    })
-    expect(await screen.findByText('Ping!')).toBeInTheDocument()
-  })
 })

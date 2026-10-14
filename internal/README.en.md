@@ -21,6 +21,7 @@
 - [cloneauth](cloneauth/README.en.md) is the single-use clone authorization: its carrier, its binding and its lifetime ceiling. Cloud signs with Ed25519; the Credential Service and the executor hold public keys to verify with.
 - [cloneexec](cloneexec/README.en.md) is the credential executor C — the five-step contract (verify, redeem, materialize, constrained clone, destroy), its mutually authenticated listener and its `broker-resolver` client.
 - [credentialmaterial](credentialmaterial/README.en.md) is the materialization layout itself (`<root>/<execution-id>/token` plus `scope`, with the 0700/0600 constants), shared by the executor and the deployment-fixed helper.
+- [gitserver](gitserver/README.en.md) serves sandbox Git access: git-access mTLS, per-request authorization from Core, `git http-backend`, the pre-receive delivery-ref rules and Cloud's ref query.
 - [config](config/README.en.md) loads and validates application configuration files and environment overrides.
 - [logger](logger/README.en.md) provides structured, non-blocking JSON logging via Zap and Lumberjack.
 - [simulator](simulator/README.en.md) implements in-process doubles for the Substrate execution engine, Controller, and Workspace Node.

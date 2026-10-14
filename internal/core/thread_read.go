@@ -113,6 +113,13 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 		// the run resource because it is Thread lifecycle, like `threadState`.
 		"idleSince": run["idleSince"],
 	}
+	if state == "ended" && run.S("failureReason") != "" {
+		out["failureCode"] = publicSessionFailureCode(run.S("failureReason"))
+	}
+	uid := identityWithAlias(t, r.Identity).S("id")
+	for key, value := range threadModelPermissions(t, run, uid) {
+		out[key] = value
+	}
 	// The window's two ends, so a panel can page in both directions without inventing a cursor: feed
 	// `nextCursor` back as `after` and `prevCursor` back as `before`. An empty window has neither.
 	if len(items) > 0 {

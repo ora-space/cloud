@@ -3,6 +3,7 @@ import { PageHeader } from '@/components/layout/page-header'
 import { cn } from '@/lib/utils'
 import { workspacePaths } from '@/lib/paths'
 
+/** Workspace settings navigation; personal settings keep their signed-in user scope. */
 export function SettingsLayout({ slug }: { slug: string }) {
   const p = workspacePaths(slug)
   const tabs = [
@@ -11,6 +12,7 @@ export function SettingsLayout({ slug }: { slug: string }) {
     { to: p.billing, label: '账单', end: false },
     { to: p.gitIdentity, label: 'Git 身份', end: false },
     { to: p.gitCredentials, label: 'Git 凭据', end: false },
+    { to: p.modelConnections, label: '模型连接', end: false },
   ]
 
   return (

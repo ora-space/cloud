@@ -102,3 +102,29 @@ func TestPresignPUTUsesTheCanonicalObjectPath(t *testing.T) {
 		}
 	}
 }
+
+// A restore read is signed against the sandbox-reachable public endpoint like an upload, but as a
+// plain GET: the create-only condition and checksum headers belong to writes only.
+func TestPresignGETReadsThroughThePublicEndpointWithoutWriteConditions(t *testing.T) {
+	cfg := Config{
+		Endpoint: "http://objectstore:9000", PublicEndpoint: "http://ora-revisions:9000", Region: "us-east-1", Bucket: "revisions",
+		PathStyle: true, AccessKeyID: "test-access", SecretAccessKey: "test-secret", UploadGrantTTL: 15 * time.Minute,
+	}
+	now := time.Date(2026, 10, 10, 1, 2, 3, 0, time.UTC)
+	grant, err := PresignGET(&cfg, "revisions/tenant/run/work/revision.bundle", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Method != "GET" || !grant.Expires.Equal(now.Add(15*time.Minute)) {
+		t.Fatalf("method %q expiry %v", grant.Method, grant.Expires)
+	}
+	if !strings.HasPrefix(grant.URL, "http://ora-revisions:9000/revisions/revisions/tenant/run/work/revision.bundle?") {
+		t.Fatalf("a read grant must name the public endpoint and the object, got %s", grant.URL)
+	}
+	if len(grant.Headers) != 1 || grant.Headers["host"] != "ora-revisions:9000" {
+		t.Fatalf("a read grant signs only the host, got %v", grant.Headers)
+	}
+	if _, err = PresignGET(&cfg, "../escape", now); err == nil {
+		t.Fatal("escaped key was signed")
+	}
+}

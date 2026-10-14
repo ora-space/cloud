@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -55,14 +56,30 @@ func (v *validatingTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return res, nil
 }
 
-func validateHTTP(t *testing.T, f *fixture) {
-	t.Helper()
+// responseContract belongs only to this test process. Publication happens once after all schema
+// loading, validation and router construction; every fixture subsequently uses it read-only.
+// Requests, response bodies, path parameters, database schemas and transports remain fixture-owned.
+// In particular, this does not cache validation outcomes or skip any real HTTP response assertion.
+var responseContract = sync.OnceValues(func() (routers.Router, error) {
 	b, e := json.Marshal(contract.Document())
-	must(t, e)
+	if e != nil {
+		return nil, fmt.Errorf("marshal response contract: %w", e)
+	}
 	doc, e := openapi3.NewLoader().LoadFromData(b)
-	must(t, e)
+	if e != nil {
+		return nil, fmt.Errorf("load response contract: %w", e)
+	}
 	doc.Servers = nil
 	routes, e := legacy.NewRouter(doc)
+	if e != nil {
+		return nil, fmt.Errorf("build response contract router: %w", e)
+	}
+	return routes, nil
+})
+
+func validateHTTP(t *testing.T, f *fixture) {
+	t.Helper()
+	routes, e := responseContract()
 	must(t, e)
 	f.client.HTTP.Transport = &validatingTransport{base: http.DefaultTransport, cloudURL: f.cloud.URL, routes: routes}
 }

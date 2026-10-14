@@ -20,6 +20,8 @@
 | `mock-api-client.ts` | MSW mock 域（`/mock-api/*`）的 axios 客户端，与真实后端生成客户端分离。把真实 space slug 重写为 demo 种子 workspace，使尚无后端的页面在任意 Space 下继续显示演示数据，直到它们接入真实 API。mock 域没有认证。 |
 | `utils.ts` | 重新导出 `cn`（Tailwind 感知的类名合并），shadcn 组件通过 `@/lib/utils` 引用。 |
 
+个人模型设置的路由由 `workspacePaths().modelConnections` 构造，为 `/w/:slug/settings/model-connections`；路由不包含任何凭据。
+
 ## 依赖方向
 
 只依赖第三方库与本目录内的兄弟模块。**禁止** import `react`、`@/components`、`@/api`（`@/api` 反向依赖这里，否则成环）。

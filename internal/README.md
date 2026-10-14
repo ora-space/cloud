@@ -21,6 +21,7 @@
 - [cloneauth](cloneauth/README.md)：单次 Clone 授权的载体、绑定与有效期上限；Cloud 用 Ed25519 签发，Credential Service 与执行器只持公钥验签。
 - [cloneexec](cloneexec/README.md)：凭据执行器 C——验签 → 兑换 → 物化 → 受约束克隆 → 销毁的五步契约、双向认证监听端与 `broker-resolver` 客户端。
 - [credentialmaterial](credentialmaterial/README.md)：物化布局本身（`<root>/<execution-id>/token` 与 `scope`，0700/0600 常量），由执行器与部署固定的 helper 共享。
+- [gitserver](gitserver/README.md)：沙盒 Git 访问：git-access mTLS、按 Core 逐请求授权、`git http-backend`、pre-receive 交付 ref 规则与 Cloud 的 ref 查询。
 - [config](config/README.md)：加载并校验应用程序配置文件及环境变量覆盖。
 - [logger](logger/README.md)：基于 Zap 和 Lumberjack 提供结构化、非阻塞的 JSON 日志记录。
 - [simulator](simulator/README.md)：实现 Substrate 执行引擎、Controller 与 Workspace Node 的进程内替身。

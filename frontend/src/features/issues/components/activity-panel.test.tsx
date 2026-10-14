@@ -2,8 +2,11 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { renderWithProviders } from '@/test/render'
 import { server } from '@/test/msw-server'
+import { installSignedInSession } from '@/test/cloud-handlers'
 import type {
   CollaborationTargetSummary,
   IssueInteraction,
@@ -89,8 +92,10 @@ function interaction(over: Partial<IssueInteraction> = {}): IssueInteraction {
 
 /** Serves every endpoint an ActivityPanel mount needs; returns a spy on comment creation. */
 function servePanel(items: TimelineEntry[] = [], interactions: IssueInteraction[] = []) {
+  installSignedInSession()
   const posted = vi.fn<(body: unknown) => void>()
   server.use(
+    http.get('/api/v1/me/spaces', () => HttpResponse.json({ items: [], nextCursor: '' })),
     http.get('/api/v1/tenants/t1/issues/i1/timeline', () =>
       HttpResponse.json({ items, nextCursor: '' }),
     ),
@@ -120,7 +125,7 @@ function servePanel(items: TimelineEntry[] = [], interactions: IssueInteraction[
 
 /** Opens the `@` picker and returns the suggestion button whose name matches. */
 async function openPicker(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
-  await user.click(screen.getByRole('button', { name: /提及/ }))
+  await user.click(await screen.findByRole('button', { name: /提及/ }))
   return screen.findByRole('button', { name })
 }
 
@@ -128,7 +133,59 @@ async function pickTarget(user: ReturnType<typeof userEvent.setup>, name: RegExp
   await user.click(await openPicker(user, name))
 }
 
+function SwitchIssue() {
+  const [id, setId] = useState('i1')
+  const cache = useQueryClient()
+  function switchIssue() {
+    for (const collection of ['timeline', 'interactions', 'runs']) {
+      cache.setQueryData([`issue-${collection}`, 't1', 'i2'], [])
+    }
+    setId(id === 'i1' ? 'i2' : 'i1')
+  }
+  return (
+    <>
+      <button onClick={switchIssue}>Switch issue</button>
+      <ActivityPanel slug="t1" issueId={id} members={[]} />
+    </>
+  )
+}
+
 describe('ActivityPanel', () => {
+  it('keeps an ordinary comment draft visible when submission fails', async () => {
+    servePanel()
+    server.use(
+      http.post('/api/v1/tenants/t1/issues/i1/comments', () =>
+        HttpResponse.json({ code: 'unavailable', params: {}, requestId: 'r' }, { status: 503 }),
+      ),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<ActivityPanel slug="t1" issueId="i1" members={[]} />)
+    await user.type(await screen.findByPlaceholderText('添加评论…'), 'Keep this comment')
+    await user.click(screen.getByRole('button', { name: '评论' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('提交失败')
+    expect(screen.getByPlaceholderText('添加评论…')).toHaveValue('Keep this comment')
+  })
+
+  it('never carries comment or staged Agent drafts into a cached different issue', async () => {
+    const { posted } = servePanel()
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i2/:collection', () =>
+        HttpResponse.json({ items: [], nextCursor: '' }),
+      ),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<SwitchIssue />)
+    await user.type(await screen.findByPlaceholderText('添加评论…'), 'Private comment')
+    await pickTarget(user, /Backend Agent/)
+    await user.type(screen.getByLabelText('Backend Agent 的留言'), 'Private task')
+    await user.click(screen.getByRole('button', { name: 'Switch issue' }))
+    expect(screen.getByPlaceholderText('添加评论…')).toHaveValue('')
+    expect(screen.queryByLabelText('Backend Agent 的留言')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Switch issue' }))
+    expect(screen.getByPlaceholderText('添加评论…')).toHaveValue('')
+    expect(screen.queryByLabelText('Backend Agent 的留言')).not.toBeInTheDocument()
+    expect(posted).not.toHaveBeenCalled()
+  })
   it('renders the merged timeline from the real endpoint', async () => {
     servePanel([comment(), activity('run.enqueued')])
     renderWithProviders(<ActivityPanel slug="t1" issueId="i1" members={[]} />)

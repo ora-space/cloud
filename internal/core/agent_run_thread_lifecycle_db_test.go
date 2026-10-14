@@ -253,6 +253,26 @@ func TestThreadTakeoverIdleWhenTurnEndedAndNoQueuedTurn(t *testing.T) {
 	}
 }
 
+// A cancelled provider turn is not proof of successful completion; terminal takeover follows.
+func TestCancelledTurnNeverMarksTheThreadIdle(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := seedTakeoverScene(t, store)
+	ended := threadRecord("turnEnded", 1, "")
+	ended["stopReason"] = "cancelled"
+	if _, err := takeOver(t, store, scene, scene.execution, []Object{
+		threadEvent(1, threadRecord("update", 0, "a"), ""),
+		threadEvent(2, ended, ""),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state := runThreadState(t, store, scene.run); !state.Valid || state.String != "active" {
+		t.Fatalf("cancelled turn incorrectly idled the Thread: %v", state)
+	}
+	if since, _ := idleAge(t, store, scene.run); since.Valid {
+		t.Fatal("failed/cancelled turn acquired an idle timeout")
+	}
+}
+
 // TestThreadTakeoverIdleNeedsTheLastRecordToBeTurnEnded (T4C-29, D-4C-09): idle is decided by the
 // batch's *last* taken-over record, never by "a TurnEnded appeared somewhere in the batch" — any
 // record the agent produced afterwards means the conversation is still going.

@@ -28,3 +28,10 @@
   4. `frontend/src/api` (regenerated via `task frontend:generate`; CI fails on drift).
 
 See [OpenAPI JSON artifact](../../api/openapi.json), [HTTP router](../api/router/README.en.md), [cmd/openapi](../../cmd/openapi/README.en.md), and [Web frontend](../../frontend/README.en.md).
+
+## Model and Thread additions
+
+`ModelDefinition`, `ModelConnection` and `ModelDefault` describe personal configuration. API keys
+are write-only; Gateway/model-gateway own credential routes and Cloud never reads their bodies.
+Thread adds its initiator, nullable model summary and append/end capabilities. Regenerate OpenAPI
+and the frontend client from these authoritative Go sources.

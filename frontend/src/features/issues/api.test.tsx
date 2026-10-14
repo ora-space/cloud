@@ -71,42 +71,36 @@ describe('useUpdateIssue', () => {
 })
 
 describe('useCreateIssue', () => {
-  it('sends an idempotency key and unwraps the created resource', async () => {
-    let idempotencyKey: string | null = null
-    server.use(
-      http.post('/api/v1/tenants/t1/issues', async ({ request }) => {
-        idempotencyKey = request.headers.get('Idempotency-Key')
-        return HttpResponse.json({ resource: issueFixture })
-      }),
-    )
-    const { result } = renderHook(() => useCreateIssue('t1'), {
-      wrapper: wrapper(new QueryClient()),
-    })
+  it.each([
+    {
+      kind: 'associated repository task',
+      input: { title: 'Fix the login', projectRef: 'project-1' },
+    },
+    { kind: 'sub-issue', input: { title: 'Child task', parentIssueId: 'p1' } },
+  ])(
+    'sends the complete $kind request with an idempotency key and unwraps its resource',
+    async ({ input }) => {
+      let idempotencyKey: string | null = null
+      let body: unknown
+      server.use(
+        http.post('/api/v1/tenants/t1/issues', async ({ request }) => {
+          idempotencyKey = request.headers.get('Idempotency-Key')
+          body = await request.json()
+          return HttpResponse.json({ resource: issueFixture })
+        }),
+      )
+      const { result } = renderHook(() => useCreateIssue('t1'), {
+        wrapper: wrapper(new QueryClient()),
+      })
 
-    result.current.mutate({ title: 'Fix the login' })
+      result.current.mutate(input)
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(idempotencyKey).toBeTruthy()
-    expect(result.current.data).toEqual(issueFixture)
-  })
-
-  it('sends the parentIssueId when creating a sub-issue', async () => {
-    let body: unknown
-    server.use(
-      http.post('/api/v1/tenants/t1/issues', async ({ request }) => {
-        body = await request.json()
-        return HttpResponse.json({ resource: issueFixture })
-      }),
-    )
-    const { result } = renderHook(() => useCreateIssue('t1'), {
-      wrapper: wrapper(new QueryClient()),
-    })
-
-    result.current.mutate({ title: 'Child task', parentIssueId: 'p1' })
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(body).toEqual({ title: 'Child task', parentIssueId: 'p1' })
-  })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(idempotencyKey).toBeTruthy()
+      expect(body).toEqual(input)
+      expect(result.current.data).toEqual(issueFixture)
+    },
+  )
 })
 
 describe('useFormDescriptor', () => {

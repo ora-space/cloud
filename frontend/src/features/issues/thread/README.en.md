@@ -16,7 +16,10 @@ Not owned: creating and listing runs (`useRuns` in `features/issues/api`), the S
 | `thread-api.ts` | TanStack Query layer: `threadQueryKey`, `useThread` (tail first read + incremental reads + 404 waiting + fallback poll), `useLoadOlderThread`, `useSendThreadMessage`, `useEndThread`, fault messages |
 | `thread-messages.tsx` | Presentational: the message list (`role=list`, named "会话消息") and the "加载更早" button |
 | `thread-composer.tsx` | The "给 Agent 发送消息" textarea, "发送", and "结束会话" with a confirm step |
-| `run-delivery.tsx` | The Revision delivery line under the Thread (`role=status`, named "Revision 交付"): a registered Revision shows its short commit and whether files changed; otherwise `result.deliveryState` explains a skip or failure, and an ended session whose run has not settled shows saving |
+| `run-delivery.tsx` | The Revision delivery line under the Thread (`role=status`, named "Revision 交付"): a registered Revision shows its short commit and whether files changed (or, for a resumed run with no new commits, that it reused the resumed work); otherwise `result.deliveryState` explains a skip or failure, and an ended session whose run has not settled shows saving |
+| `run-resume.tsx` | The resume line above the Thread (`role=note`, named "续接"): when the run resumed an earlier Revision of the same Issue, it finds that Revision among the Issue's runs and shows its short commit; a fresh run renders nothing |
+| `run-preparation.tsx` | `RunPreparation` displays server-projected environment, clone, Agent preparation/start phases, the three-attempt clone budget and retry waiting; `SessionFailure` renders only allowlisted safe codes, with no waiting/idle presentation after failure |
+| `thread-failure.ts` | `sessionFailureMessage`: shared finite failure messages for status and durable entries; unknown fields become fixed messages without provider diagnostics |
 | `thread-panel.tsx` | `IssueThreadPanel`: run selection, the "Agent 会话" heading, the state badge, the waiting notice and composition |
 | `*.test.ts(x)` | Pure-function unit tests and MSW integration tests |
 
@@ -31,7 +34,9 @@ Depends on `src/api` (generated Thread client and types), `features/issues/api` 
 - An event's `lastSeq` is a hint and is never used as a cursor.
 - A GET 404 means the session is not declared yet; it is a normal waiting state (polled every 2.5s), not an error. Once declared, a 5s fallback poll runs in every state but `ended`, in case SSE drops.
 - A Revision shows public metadata only (commits, changed, sizes); run settlement publishes no space event, so the line relies on `useRuns` polling while an agent run is unsettled.
-- Sending and ending are disabled in `ending` / `ended` (the server's 409 `thread_closed` rule); each submission's idempotency key stays stable across its retries.
+- Sending and ending are disabled in `ending` / `ended` (the server's 409 `thread_closed` rule); each submission's idempotency key stays stable across its retries. Server-provided `canAppend` / `canEnd` control actions: only the initiator may append model requests, administrators may end, and other members remain read-only. The panel shows frozen connection/model metadata and member display names, never credentials.
+
+A revoked model authorization leaves the old run read-only. Reconfiguring the connection does not reopen that Thread; the send fault asks the user to end it and launch a new task.
 
 ## Testing
 

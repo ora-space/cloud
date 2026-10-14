@@ -40,6 +40,18 @@ describe('deliverySummary', () => {
     ).toBe('已保存 Revision 1234567（无文件改动）')
   })
 
+  it('says a resumed run without new commits reused the resumed Revision', () => {
+    expect(
+      deliverySummary(
+        {
+          ...base,
+          revision: { ...revision, changed: false, bundleSize: null, priorRevisionId: 'rev-0' },
+        },
+        true,
+      ),
+    ).toBe('已保存 Revision 1234567（无新改动，沿用续接的成果）')
+  })
+
   it('explains a skipped or failed delivery from the run result', () => {
     expect(
       deliverySummary({ ...base, result: { deliveryState: 'skipped', revisionId: null } }, true),

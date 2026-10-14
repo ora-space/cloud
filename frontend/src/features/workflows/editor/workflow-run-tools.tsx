@@ -2,7 +2,7 @@ import { format } from 'date-fns'
 import { Play, ScrollText } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import type { WorkflowRunStatus } from '@/api/generated.schemas'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -23,7 +23,8 @@ import { workspacePaths } from '@/lib/paths'
  * a run navigates to it; browsing history opens the popover, whose rows lead to each run's
  * read-only detail page.
  *
- * @param props.tenantId - Tenant the workflow belongs to.
+ * @param props.tenantId - Tenant the workflow belongs to; scopes the API calls only, never a
+ * browser path segment (the route's workspace slug is the one paths are built from).
  * @param props.workflowId - Workflow being edited.
  */
 export function WorkflowRunTools({
@@ -35,7 +36,11 @@ export function WorkflowRunTools({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const paths = workspacePaths(tenantId)
+  // `tenantId` scopes the API calls; the browser path must carry the workspace slug from the
+  // route instead, or the Layout cannot resolve the workspace and bounces the member to Issues
+  // (IssueCard follows the same rule). Only a bare mount outside the workspace route has no slug.
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  const paths = workspacePaths(workspaceSlug ?? tenantId)
   const snapshots = useWorkflowSnapshots(tenantId, workflowId)
   const runs = useWorkflowRuns(tenantId, workflowId)
   const createRun = useCreateWorkflowRun(tenantId)

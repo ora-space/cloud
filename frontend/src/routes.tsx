@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { createBrowserRouter, Navigate, useParams } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useParams, type RouteObject } from 'react-router-dom'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { AgentDetailPage } from '@/features/agents/agent-detail-page'
 import { AgentsPage } from '@/features/agents/agents-page'
@@ -22,6 +22,7 @@ import { RuntimesPage } from '@/features/runtimes/runtimes-page'
 import { GeneralSettingsPage } from '@/features/settings/general-settings-page'
 import { GitCredentialsPage } from '@/features/settings/git-credentials-page'
 import { GitIdentityPage } from '@/features/settings/git-identity-page'
+import { ModelConnectionsPage } from '@/features/model-connections/model-connections-page'
 import { SettingsLayout } from '@/features/settings/settings-layout'
 import { SkillsPage } from '@/features/skills/skills-page'
 import { SquadDetailPage } from '@/features/squads/squad-detail-page'
@@ -63,8 +64,12 @@ function CloudScope({ component: Component }: { component: ComponentType<{ slug:
  * have a workspace, so it doubles as the signed-in landing route. Workspaces
  * live under the reserved `/w/` prefix, so top-level routes and slugs never
  * compete for the same path.
+ *
+ * The table is exported so route-level tests mount the real boundary —
+ * `DashboardLayout` resolving the slug and `CloudScope` resolving the tenant
+ * id — instead of a hand-built approximation that could disagree with it.
  */
-export const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   { path: '/', element: <Navigate to="/onboarding" replace /> },
   { path: '/login', element: <LoginPage /> },
   {
@@ -142,9 +147,13 @@ export const router = createBrowserRouter([
           { path: 'billing', element: <WithSlug component={BillingPage} /> },
           { path: 'git-identity', element: <GitIdentityPage /> },
           { path: 'git-credentials', element: <GitCredentialsPage /> },
+          { path: 'model-connections', element: <ModelConnectionsPage /> },
         ],
       },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },
-])
+]
+
+/** The browser router the application entry mounts. */
+export const router = createBrowserRouter(routes)

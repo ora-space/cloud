@@ -53,6 +53,12 @@ func PresignPUTChecksum(cfg *Config, key, digest string, now time.Time) (Grant, 
 	return presign(cfg, key, "PUT", map[string]string{"x-amz-sdk-checksum-algorithm": "SHA256", "x-amz-checksum-sha256": base64.StdEncoding.EncodeToString(checksum)}, now)
 }
 
+// PresignGET signs a single-object read for the Node that restores a prior Revision. It carries no
+// condition: the Node verifies size and SHA-256 itself before Git sees the bytes.
+func PresignGET(cfg *Config, key string, now time.Time) (Grant, error) {
+	return presign(cfg, key, "GET", map[string]string{}, now)
+}
+
 // presign shares canonicalization between the Node-facing PUT and Cloud's private HEAD.
 func presign(cfg *Config, key, method string, headers map[string]string, now time.Time) (Grant, error) {
 	if cfg == nil || cfg.Endpoint == "" || cfg.Region == "" || cfg.Bucket == "" || cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {

@@ -1,4 +1,5 @@
-import type { Issue, IssueStatusColumn } from '@/features/issues/types'
+import type { Project } from '@/api/generated.schemas'
+import type { CollaborationTargetSummary, Issue, IssueStatusColumn } from '@/features/issues/types'
 
 /**
  * Builds a complete Cloud `Issue` so a test only names the fields it varies
@@ -49,5 +50,39 @@ export function makeStatus(
     createdAt: '',
     updatedAt: '',
     ...overrides,
+  }
+}
+
+/** A real Cloud Project shape; overrides can place it in the tenant/space under test. */
+export function makeProject(id: string, overrides: Partial<Project> = {}): Project {
+  return {
+    id,
+    tenantId: 't1',
+    spaceId: 's1',
+    name: `Repository ${id}`,
+    repositoryUrl: 'https://example.invalid/repository.git',
+    defaultBranch: 'main',
+    credentialRefId: null,
+    repositoryCredentialRefId: null,
+    deletedAt: null,
+    ownerUserId: 'u1',
+    lifecycle: 'active',
+    version: 1,
+    createdAt: '2026-10-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+/** Installed-Agent directory entry with the server's Task Mode descriptor. */
+export function makeAgentTarget(
+  id: string,
+  displayName = 'Installed Agent',
+): CollaborationTargetSummary {
+  return {
+    type: 'agent',
+    id,
+    displayName,
+    description: 'Installed Agent plugin',
+    interactionDescriptor: { mode: 'task', requiresTask: true },
   }
 }

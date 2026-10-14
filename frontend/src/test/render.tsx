@@ -66,19 +66,25 @@ export function renderAtRoute(path: string, element: ReactElement, initialPath: 
 /**
  * Mounts the given routes in a memory router at `initialPath` under the
  * QueryClient and session providers, for tests of route gates and layouts.
+ * Returns the router alongside the render result, so a test can assert where
+ * navigation ended up (`router.state.location.pathname`) — the memory router
+ * keeps the URL out of `window.location`.
  */
 export function renderRoutes(
   routes: Parameters<typeof createMemoryRouter>[0],
   initialPath: string,
 ) {
   const router = createMemoryRouter(routes, { initialEntries: [initialPath] })
-  return render(
-    <QueryClientProvider client={newQueryClient()}>
-      <SessionProvider>
-        <SidebarProvider>
-          <RouterProvider router={router} />
-        </SidebarProvider>
-      </SessionProvider>
-    </QueryClientProvider>,
-  )
+  return {
+    router,
+    ...render(
+      <QueryClientProvider client={newQueryClient()}>
+        <SessionProvider>
+          <SidebarProvider>
+            <RouterProvider router={router} />
+          </SidebarProvider>
+        </SessionProvider>
+      </QueryClientProvider>,
+    ),
+  }
 }

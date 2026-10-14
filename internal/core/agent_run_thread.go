@@ -131,6 +131,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	// prompt's echo is not effective at all — seq=1 already presents it and it says nothing about
 	// what the session did afterwards.
 	lastKind := ""
+	lastStopReason := ""
 	for _, ev := range events {
 		echo := userTurnEcho(ev.O("record"))
 		if turnID := ev.S("turnId"); echo && turnID != "" && turnID == initialTurnID {
@@ -141,6 +142,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 			return fmt.Errorf("settleThreadEvents: run %s node sequence %d carries unknown record type %q", runID, ev.N("sequence"), ev.O("record").S("type"))
 		}
 		lastKind = kind
+		lastStopReason = ev.O("record").S("stopReason")
 		// A Cloud-written user turn echoed back by the Node (Thread D3, D-4C-08). The event carries
 		// the turn_id of the entry Cloud wrote when the turn was accepted, so taking it over is a
 		// lifecycle transition on that existing row: never a new entry, a new seq, a rewrite of the
@@ -242,7 +244,9 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		return nil
 	}
 	threadState := after.S("threadState")
-	ended := lastKind == "turnEnded"
+	// Cancellation also terminates a turn, but is not evidence of a successful idle session.
+	// The subsequent authoritative session end decides its terminal state and safe failure code.
+	ended := lastKind == "turnEnded" && lastStopReason != "cancelled"
 	queued := t.one("SELECT seq FROM thread_entries WHERE run_id=$1 AND source='user' AND status='queued' LIMIT 1", runID) != nil
 	switch {
 	case threadState == "active" && ended && !queued:
