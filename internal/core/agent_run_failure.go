@@ -10,7 +10,7 @@ func appendSessionFailure(t *transaction, run Object, detail string) {
 	threadAppended(t, run)
 }
 
-// publicSessionFailureCode accepts only bounded Node-owned classifications. Raw ACP/provider
+// publicSessionFailureCode accepts only bounded startup or Node classifications. Raw ACP/provider
 // diagnostics are never a public failureReason, even when supplied by a registered Node.
 func publicSessionFailureCode(detail string) string {
 	switch detail {

@@ -205,7 +205,9 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 
 	// The running transition (§15/§30). The gate is re-read here rather than passed in: a run that
 	// a cancel, a settlement or an earlier batch already moved must not be moved again, and an
-	// unusable workspace fails closed (G-011) instead of being recorded as a terminal state.
+	// unusable workspace fails closed (G-011) instead of being recorded as a terminal state. A late
+	// first record proves execution occurred, but must preserve an already-accepted ending request:
+	// changing it back to active would reopen user input while the Node is being asked to terminate.
 	if o.S("phase") == "starting" && o.S("status") == "dispatched" && o.S("cancelRequestedAt") == "" && runWorkspaceLive(t, o.S("workspaceId"), runID) {
 		// The CAS must move exactly the row the gate above approved. The gate reads and this write
 		// share one transaction snapshot while the caller's advisory lock excludes the other
@@ -215,7 +217,9 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		// never be committed without the transition it is the authority for.
 		if moved := t.execRows(`
 			UPDATE issue_runs
-			SET phase='running', status='running', thread_state='active', version=version+1, updated_at=now()
+			SET phase='running', status='running',
+			    thread_state=CASE WHEN thread_state='ending' THEN 'ending' ELSE 'active' END,
+			    version=version+1, updated_at=now()
 			WHERE id=$1 AND executor_type='agent' AND phase='starting' AND status='dispatched' AND cancel_requested_at IS NULL`, runID); moved != 1 {
 			return fmt.Errorf("settleThreadEvents: run %s was not moved to running (rows affected %d)", runID, moved)
 		}

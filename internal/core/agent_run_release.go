@@ -84,6 +84,9 @@ func (s *Store) releaseAfterDelivery(t *transaction, o Object, state, revisionID
 	}
 	reason := sess.O("result").S("reason")
 	status := runReleaseStatus(reason)
+	if reason == "cancelled" && o.O("result").O("startup").B("policyCancellation") {
+		status = "failed"
+	}
 	if status == "" {
 		return fmt.Errorf("release agent run: run %s session execution %s carries end reason %q, outside the closed set", runID, sess.S("executionId"), reason)
 	}

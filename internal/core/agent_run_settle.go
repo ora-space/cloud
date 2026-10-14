@@ -79,6 +79,7 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 		if s.settleReadyGuard(t, runID) == 0 {
 			return nil // stale under the serialized lock; see call site doc
 		}
+		s.freezeAgentStartup(t, runID)
 		return nil
 	default:
 		// ready=false with no cancel: generic create_workspace terminal failure.

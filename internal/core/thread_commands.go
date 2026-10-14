@@ -17,6 +17,7 @@ func enqueueThreadCommand(t *transaction, runID, kind string, body Object) Objec
 	require(validID(runID), 400, "invalid_command")
 	require(t.one("SELECT id FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil, 404, "not_found")
 	require(kind == "submit_user_turn" || kind == "end_session", 400, "invalid_command")
+	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
 	validateThreadCommand(kind, body)
 	id := newID()
 	t.exec("INSERT INTO thread_commands(id,run_id,kind,body) VALUES($1,$2,$3,$4)", id, runID, kind, jsonText(body))
@@ -45,7 +46,7 @@ func claimThreadCommands(t *transaction, limit int64) Object {
 		JOIN node_executions e ON e.operation_id=c.run_id AND e.kind='agent_session' AND e.result IS NULL AND e.terminated_by_force_stop_id IS NULL
 		JOIN workspaces w ON w.id=e.workspace_id
 		JOIN sandbox_instances s ON s.workspace_id=w.id AND s.generation=w.runtime_generation AND s.terminated_at IS NULL
-		WHERE c.delivered_at IS NULL
+		WHERE c.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=c.run_id)
 		ORDER BY c.run_id,c.queue_sequence
 		LIMIT $1`, limit)
 	return Object{"commands": rows}

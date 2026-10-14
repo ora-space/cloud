@@ -34,6 +34,7 @@ func reconcileRuntimeControls(t *transaction) {
 	rows := t.list(`SELECT c.* FROM runtime_controls c JOIN workspaces w ON w.id=c.workspace_id
  WHERE c.state IN ('draining','reconciling')
  AND NOT EXISTS(SELECT 1 FROM runtime_force_stops f WHERE f.workspace_id=w.id AND f.state<>'succeeded')
+ AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.workspace_id=w.id AND ar.cleared_at IS NULL)
  AND (c.input_closed OR (w.observed_state IN ('stopped','deleted')
  AND NOT EXISTS(SELECT 1 FROM sandbox_instances s WHERE s.workspace_id=w.id AND s.terminated_at IS NULL)))
  AND NOT EXISTS(SELECT 1 FROM execution_tickets a WHERE a.workspace_id=w.id AND a.state='active' AND a.terminated_by_force_stop_id IS NULL)

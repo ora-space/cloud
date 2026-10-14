@@ -169,6 +169,10 @@ func TestFollowUpRunResumesTheIssueLatestRevision(t *testing.T) {
 	first := savedRun(t, f)
 	scene := seedFollowUpRun(t, f, first.scene, false)
 	scene.start(t, f)
+	if f.scalar("SELECT extract(epoch FROM startup_deadline_at-startup_ready_at)::bigint FROM issue_runs WHERE id=$1", scene.runID) != 360 ||
+		f.scalar("SELECT extract(epoch FROM startup_deadline_at-startup_ready_at)::bigint FROM issue_runs WHERE id=$1", first.scene.runID) != 120 {
+		t.Fatal("restore must use one ready-based 6m window; fresh startup must use 2m")
+	}
 
 	in := f.sessionInput(scene.executionID)
 	prior := in.O("priorRevision")

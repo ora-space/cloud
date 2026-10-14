@@ -2,7 +2,7 @@ package core
 
 // Resuming a new IssueRun from its Issue's latest Revision (issue-run 20261010 resume decision).
 //
-// Selection runs once, in the session-start transaction, and its result is frozen into the
+// Selection runs once when the ready-based startup budget is frozen, and its result is copied into the
 // AgentSession spec; the Node restores exactly what the spec names and never queries Cloud for it.
 // Runs on one Issue are assumed serial: two overlapping runs may select the same prior Revision.
 

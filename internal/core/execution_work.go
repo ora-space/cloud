@@ -17,6 +17,7 @@ func enqueueExecutionWork(t *transaction, runID, kind string, input, target Obje
 	require(validID(runID), 400, "invalid_dispatch")
 	run := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	require(run != nil, 404, "not_found")
+	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
 	if kind == "deliver_revision" {
 		if t.one("SELECT run_id FROM revision_delivery_skips WHERE run_id=$1", runID) != nil {
 			return Object{"skipped": true}
@@ -79,7 +80,7 @@ func claimWorkItem(t *transaction) Object {
 	} else if t.one("SELECT id FROM clone_requests WHERE state='queued'") != nil {
 		reject(410, "runtime_scope_required")
 	}
-	work := t.one("SELECT * FROM execution_work WHERE execution_id IS NULL AND available_at<=clock_timestamp() ORDER BY created_at,id LIMIT 1")
+	work := t.one("SELECT * FROM execution_work ew WHERE execution_id IS NULL AND available_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id) ORDER BY created_at,id LIMIT 1")
 	if work != nil && (request == nil || work.S("createdAt") < request.S("createdAt")) {
 		return Object{"work": work}
 	}

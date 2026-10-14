@@ -112,7 +112,11 @@ func nodeStatus(t *transaction, r *ControlRequest, n, w Object) {
 	} else if r.Body.B("initialized") && w.S("desiredState") == "running" && w.S("observedState") == "unavailable" && w.S("baseCommitId") != "" {
 		// Transport recovery restores availability of the already initialized runtime only.
 		// Its withdrawn page qualification still requires durable closure and a fresh epoch.
-		t.exec("UPDATE workspaces SET observed_state='ready',admission_open=true,version=version+1 WHERE id=$1", w.S("id"))
+		// A business-abandoned execution still owns residual resources after it reconnects;
+		// connection evidence must not reopen their admission or imply physical cleanup.
+		t.exec(`UPDATE workspaces SET observed_state='ready',admission_open=NOT EXISTS(
+		 SELECT 1 FROM agent_run_residuals WHERE workspace_id=$1 AND cleared_at IS NULL),
+		 version=version+1 WHERE id=$1`, w.S("id"))
 	}
 }
 

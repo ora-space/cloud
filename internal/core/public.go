@@ -673,6 +673,7 @@ func newOperation(t *transaction, r *PublicRequest, uid, pid, wid, kind, step, h
 }
 
 func checkActivities(t *transaction, w Object) {
+	require(t.one("SELECT run_id FROM agent_run_residuals WHERE workspace_id=$1 AND cleared_at IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	require(t.one("SELECT id FROM execution_tickets WHERE workspace_id=$1 AND state='active' AND terminated_by_force_stop_id IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE workspace_id=$1 AND result IS NULL AND terminated_by_force_stop_id IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	require(t.one("SELECT execution_id FROM node_executions WHERE workspace_id=$1 AND result IS NULL AND terminated_by_force_stop_id IS NULL", w.S("id")) == nil, 409, "resource_in_use")

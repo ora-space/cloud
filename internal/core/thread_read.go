@@ -113,7 +113,7 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 		// the run resource because it is Thread lifecycle, like `threadState`.
 		"idleSince": run["idleSince"],
 	}
-	if state == "ended" && run.S("failureReason") != "" {
+	if run.S("failureReason") != "" && (state == "ended" || state == "ending" && run.O("result").O("startup").S("state") == "awaiting_node") {
 		out["failureCode"] = publicSessionFailureCode(run.S("failureReason"))
 	}
 	uid := identityWithAlias(t, r.Identity).S("id")

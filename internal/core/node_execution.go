@@ -5,6 +5,9 @@ package core
 func nodeDispatch(t *transaction, r *ControlRequest) Object {
 	operation, execution, node := r.Body.S("operationId"), r.Body.S("executionId"), r.Body.S("nodeId")
 	input := r.Body.O("input")
+	if input.S("kind") == "agent_session" || input.S("kind") == "deliver_revision" {
+		require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", operation) == nil, 409, "dispatch_conflict")
+	}
 	require(execution != "" && node != "" && len(input) > 0, 400, "invalid_dispatch")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE execution_id=$1", execution) == nil, 409, "dispatch_conflict")
 	if existing := t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution); existing != nil {
@@ -39,6 +42,7 @@ func dispatchPluginExecution(t *transaction, r *ControlRequest, operation, execu
 }
 
 func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, node string, input Object) Object {
+	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
 	work := t.one("SELECT * FROM execution_work WHERE run_id=$1 AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
 	require(work != nil, 409, "dispatch_conflict")
 	require(jsonText(work.O("input")) == jsonText(input), 409, "dispatch_conflict")

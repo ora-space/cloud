@@ -82,8 +82,22 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	if !sessionEndReasons[ended.S("reason")] {
 		return fmt.Errorf("sessionEnded: run %s execution %s carries end reason %q, outside the closed set", runID, executionID, ended.S("reason"))
 	}
+	if o.S("phase") == "done" && t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) != nil {
+		t.exec("UPDATE agent_run_residuals SET session_ended_at=COALESCE(session_ended_at,clock_timestamp()) WHERE run_id=$1", runID)
+		return nil
+	}
 	if ended.S("reason") == "agent_failed" {
 		t.exec("UPDATE issue_runs SET failure_reason=$2 WHERE id=$1", runID, publicSessionFailureCode(ended.S("detail")))
+	}
+	if startup := o.O("result").O("startup"); startup.S("state") == "awaiting_node" {
+		startup["state"] = "settled"
+		t.exec(`UPDATE issue_runs SET result=COALESCE(result,'{}'::jsonb)||jsonb_build_object('startup',$2::jsonb)
+			WHERE id=$1`, runID, jsonText(startup))
+		// An explicit user end keeps its own outcome. A policy timeout cancellation remains
+		// a startup failure even when Node later confirms the requested cancellation.
+		if ended.S("reason") != "agent_failed" && (!startup.B("policyCancellation") || ended.S("reason") == "user_ended" || ended.S("reason") == "idle_timeout") {
+			t.exec("UPDATE issue_runs SET failure_reason='' WHERE id=$1", runID)
+		}
 	}
 
 	// One CAS for both run-level transitions, so they cannot even in principle happen apart: the

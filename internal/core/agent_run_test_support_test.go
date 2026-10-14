@@ -328,8 +328,14 @@ func claimAgentWork(t *testing.T, store *Store, claims *Claims) Object {
 		t.Fatalf("claim work: %v", err)
 	}
 	work := pick.O("work")
-	if work == nil {
-		t.Fatalf("claim must discover the declared agent_session work")
+	if work == nil || !validID(work.S("id")) {
+		var count, ready int
+		var clock string
+		if probeErr := store.Pool.QueryRow(`SELECT count(*),count(*) FILTER (WHERE available_at<=clock_timestamp()),clock_timestamp()::text
+			FROM execution_work WHERE execution_id IS NULL`).Scan(&count, &ready, &clock); probeErr != nil {
+			t.Fatalf("claim did not discover declared work; diagnostic failed: %v", probeErr)
+		}
+		t.Fatalf("claim must discover declared work: queued=%d eligible=%d databaseClock=%s", count, ready, clock)
 	}
 	return work
 }

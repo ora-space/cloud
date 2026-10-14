@@ -7,7 +7,10 @@ package core
 // before an issue_runs or workspaces resource reaches the API. The AgentRunDispatcher
 // that reads and writes them is a later change and reads through the same transaction
 // helpers, not through these shaping functions.
-var agentRunSkeletonFields = []string{"phase", "workspaceId", "cancelRequestedAt", "threadState", "idleSince", "issueRunId"}
+var agentRunSkeletonFields = []string{
+	"phase", "workspaceId", "cancelRequestedAt", "threadState", "idleSince", "issueRunId",
+	"startupReadyAt", "startupDeadlineAt", "startupResume", "startupEndingDeadlineAt",
+}
 
 // stripAgentRunSkeleton removes the migration-0018 agent columns from a resource in
 // place and returns it, keeping the public contract byte-identical for now.
