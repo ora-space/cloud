@@ -1,0 +1,27 @@
+-- The push approval's requester is a member of the tenant that approval belongs to, and the schema now
+-- says so. See specs decisions/node/repository/20261012-push-execution-authority.md D3 and D9.
+--
+-- 0037 declared `actor_user_id` inline and left it without a foreign key. Every other actor column in
+-- this schema carries one — `operations` and `execution_tickets` in 0001, `clone_requests` in 0014,
+-- `runtime_control_sessions` in 0019, `force_stop_intents` in 0020 — and every one of them is the
+-- composite `(tenant_id, actor_user_id) REFERENCES tenant_memberships(tenant_id, user_id)` rather than
+-- a bare reference to `users(id)`. The composite is the stronger statement and the one this table
+-- needs: the approval's audit answers "which person, in this tenant, authorized this write", so a row
+-- naming a user who is no member of the tenant it belongs to does not describe a weaker approval — it
+-- describes a row that cannot be an approval at all. A bare `users(id)` key would admit exactly that.
+--
+-- The column is not decorative. It is part of the identity key `(workspace_id, actor_user_id,
+-- request_id)`, so the requester is part of what makes an approval unique, and both `pushApproval` and
+-- `requirePushAccess` derive the authority to write the row from an active tenant membership. This
+-- constraint states at rest what the grant path already enforces in code, which is what the audit
+-- should not have to depend on code for.
+--
+-- Membership rows are never deleted — a member leaves by `status`, and no product path deletes from
+-- `tenant_memberships` — so the reference cannot be invalidated afterwards and this key cannot make an
+-- existing approval unreadable or unretirable. The migration is the forward kind because 0037 is
+-- already applied wherever it exists and its checksum is verified; adding a foreign key validates the
+-- rows already there, and every row the product wrote already satisfies it. A database holding a row
+-- this key refuses is one whose approval was written by something other than the product, and failing
+-- loudly is the right outcome — the row is not an audit of anything.
+ALTER TABLE push_requests ADD CONSTRAINT push_request_actor_membership
+ FOREIGN KEY(tenant_id, actor_user_id) REFERENCES tenant_memberships(tenant_id, user_id);
