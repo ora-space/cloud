@@ -115,7 +115,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	// an error path.
 	job.Authorization = ""
 	if err != nil {
-		s.failure(w, identity, job.ExecutionID, err)
+		s.failure(w, r, identity, job.ExecutionID, err)
 		return
 	}
 	s.log.Info("clone executor completed a job",
@@ -158,7 +158,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	result, err := s.mirror.Prepare(r.Context(), job)
 	job.Authorization = ""
 	if err != nil {
-		s.failure(w, identity, job.OperationID, err)
+		s.failure(w, r, identity, job.OperationID, err)
 		return
 	}
 	s.log.Info("mirror executor completed a preparation",
@@ -207,7 +207,7 @@ func (s *Server) pushExecution(w http.ResponseWriter, r *http.Request) {
 	result, err := s.push.Push(r.Context(), job)
 	job.Authorization = ""
 	if err != nil {
-		s.failure(w, identity, job.OperationID, err)
+		s.failure(w, r, identity, job.OperationID, err)
 		return
 	}
 	s.log.Info("push executor completed a job",
@@ -251,12 +251,27 @@ func (s *Server) callerIdentity(w http.ResponseWriter, r *http.Request) (string,
 // The subject is whichever identifier the route's job carried — an execution for a clone, an operation
 // for a preparation — and it is logged so a refusal can be matched to the request that caused it.
 // Neither identifier is a secret.
-func (s *Server) failure(w http.ResponseWriter, identity, subject string, err error) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return
-	}
+//
+// A refusal the job itself decided is answered whatever else its error carries, and that ordering is
+// the point rather than a detail. The job's own deadline expiring is the ordinary way a redeem, a
+// fetch, or a write runs out of time — and the refusal it produced was written to stand on its own
+// with the deadline as its *cause*, which is exactly the shape a test for "did this reach the
+// network" looks for. Reading the cause first dropped those refusals: the handler returned without
+// writing anything, and net/http sent `200` with an empty body, which is not an answer any caller can
+// settle a request with. A push settled from it is recorded as an outcome nobody stated, when the
+// executor had in fact concluded that the write never happened.
+func (s *Server) failure(w http.ResponseWriter, r *http.Request, identity, subject string, err error) {
 	var failure *Failure
 	if !errors.As(err, &failure) {
+		// Nothing decided the failure, so the only thing left to read is who ended the job. A
+		// cancellation or deadline that belongs to the *caller* — a dispatch Cloud abandoned, a
+		// connection that dropped, a listener shutting down — has nobody left to answer it and is not a
+		// job failure, so this route writes nothing and logs nothing.
+		if r.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+		// Anything else is an executor that could not carry the job to an answer. The caller is still
+		// waiting for one, so it is answered rather than left with a `200` whose body says nothing.
 		s.refuse(w, identity, http.StatusInternalServerError, ReasonCodeUnavailable, err)
 		return
 	}

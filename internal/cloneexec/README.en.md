@@ -493,7 +493,7 @@ the executor, and every restriction the decision fixes is on it:
   accept or reject, so "what was written" is what the **server** saw; and the repository's request count
   separates "a second read after the refusal" from "a second write" (the write side has no ambiguity — one
   receive-pack exchange is one attempt, so the count is pinned there rather than the read side's round
-  trips, which are a property of the Git protocol's negotiation). Its eleven cases: a controlled push moves
+  trips, which are a property of the Git protocol's negotiation). Its fourteen cases: a controlled push moves
   one ref of a real upstream from old to new, with the server seeing **exactly one** receive-pack and the
   hook recording **one** line — the one update the authorization named; when a third party moves the ref
   the compare-and-swap refuses and **does not overwrite**; a ref already at the target commit reports
@@ -509,7 +509,11 @@ the executor, and every restriction the decision fixes is on it:
   approval cannot write twice**; a redemption cannot be spent on another purpose; an upstream that cannot
   be reached is killed and reaped inside the configured timeout, leaving no secret in the materialization
   or scratch root, and the same executor then completes a real push immediately afterwards; the startup
-  sweep removes an abandoned scratch repository; and an incomplete push deployment is refused at startup.
+  sweep removes an abandoned scratch repository; an incomplete push deployment is refused at startup; a job
+  whose **own** deadline expired is answered with its own refusal code rather than the empty `200` that
+  settles it as an outcome nobody stated; an interrupted write is reported as neither shape of a concluded
+  failure, and the shape whose answer was lost is proved to have written; and a push the remote accepted is
+  still reported as the state it reached when its cleanup fails.
   **What this file cannot prove** is the OS-level separation of C from W — the whole chain runs under one
   test process and one uid, and that boundary is a deployment property evidenced by the container-level
   acceptance run (stated honestly in the same place as the clone acceptance run).

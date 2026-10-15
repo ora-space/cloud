@@ -776,6 +776,52 @@ func TestAnInterruptedWriteIsNotAConcludedFailure(t *testing.T) {
 	}
 }
 
+// TestAJobWhoseOwnDeadlineExpiredIsAnsweredWithItsOwnCode is the reply half of every job that runs out
+// of its own time, and it is deliberately driven through the listener rather than through the executor.
+//
+// A job's deadline expiring is the ordinary way a redemption, a fetch, or a write runs out of time, and
+// the executor concludes something definite when it does: the push above never reached the write, which
+// this layer states as its own refusal code. That conclusion travels as an error whose *cause* is the
+// deadline, because the deadline is what happened and the refusal is what the executor decided about it.
+// A reply written by reading the cause first therefore answers nothing at all — and a handler that writes
+// nothing leaves net/http to send `200` with an empty body, which the client cannot settle a request
+// with: it becomes "an unreadable push result", and Cloud records an outcome nobody stated. What this
+// case pins is that the decided refusal is answered as itself, code and all, whatever else its error
+// carries.
+//
+// The push timeout is one nanosecond so the executor's own push context is already expired when the job
+// is decoded, which is the real shape of the failure rather than a stand-in for it: the deadline is the
+// executor's, not the caller's, and the Store is never reached.
+func TestAJobWhoseOwnDeadlineExpiredIsAnsweredWithItsOwnCode(t *testing.T) {
+	deployment := newPushDeploymentWith(t, time.Nanosecond, nil)
+	repository := deployment.repository
+	version := deployment.storeCredential(t, repository.Token)
+	repository.forgetHookUpdates(t)
+	write := deployment.write(version, repository.Old, repository.New)
+
+	_, err := deployment.client.Push(context.Background(), write.job(write.sign(t, deployment.signingKey, nil)))
+	var refusal *cloneexec.DispatcherRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a job the executor concluded was not answered with its code: %v", err)
+	}
+	if refusal.Code != cloneexec.ReasonCodeRedemptionFailed {
+		t.Fatalf("refusal code = %q, want %q", refusal.Code, cloneexec.ReasonCodeRedemptionFailed)
+	}
+	if refusal.Status == http.StatusOK {
+		t.Fatalf("a refusal was reported as a successful reply")
+	}
+	// The conclusion the code carries is about the remote, so the remote is checked: an expired job
+	// never reached the upstream, which is what makes this a failure Cloud may settle as concluded.
+	if updates := repository.hookUpdates(t); len(updates) != 0 {
+		t.Fatalf("a job whose deadline had expired reached the upstream: %v", updates)
+	}
+	if got := repository.ref(t, pushRef); got != repository.Old {
+		t.Fatalf("the upstream's %s = %q, want it untouched at %q", pushRef, got, repository.Old)
+	}
+	deployment.assertNothingWasLeftBehind(t)
+	deployment.assertNoSecretInLog(t)
+}
+
 // TestThePushDoesNotOverwriteARefAnotherWriterMoved is the compare-and-swap's first refusal.
 //
 // The upstream's ref moved after the approval was recorded and before the write ran, so the lease
