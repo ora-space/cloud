@@ -502,18 +502,23 @@ func writeAndFlush(file *os.File, raw []byte) error {
 // syncDirectory flushes one directory entry.
 //
 // Flushing a file only guarantees its contents; the name that makes it findable is a separate entry in
-// the directory, and on a crash the entry can be lost after the contents were written. The credential
-// records deliberately stop at the file's own flush — they are rewritten on every rotation and a lost
-// entry costs only a retry — but a consumption record is the evidence that an authorization is spent,
-// so its directory is flushed too.
+// the directory, and on a crash the entry can be lost after the contents were written. Every directory
+// this Store publishes into is flushed, for the same reason in each case: the record is the only copy
+// of something nobody can reconstruct afterwards.
+//
+// It was once the consumption records alone, on the reading that a credential record is rewritten on
+// every rotation and a lost entry costs only a retry. That reading does not survive the create and the
+// revoke. Cloud commits its `credential_refs` row and never keeps the token, so a create whose entry is
+// lost is a credential no one can write again; and a revoke whose entry is lost brings back material
+// Cloud has already reported as unusable. Both are permanent, and neither is a retry.
 func syncDirectory(directory string) error {
 	handle, err := os.Open(directory)
 	if err != nil {
-		return fmt.Errorf("open consumption record directory: %w", err)
+		return fmt.Errorf("open record directory for flushing: %w", err)
 	}
 	defer handle.Close()
 	if err := handle.Sync(); err != nil {
-		return fmt.Errorf("flush consumption record directory: %w", err)
+		return fmt.Errorf("flush record directory: %w", err)
 	}
 	return nil
 }

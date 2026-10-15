@@ -40,7 +40,10 @@ service identities" right.
 - `record.go`: `record`/`material`/`retained` and `fileStore`. One JSON record per credential at
   `credentials/<id>.json` inside the volume; `validCredentialID` accepts the canonical lowercase UUID
   form and nothing else, and `fileStore.path` re-checks that the id cannot escape the record directory.
-  A write stages a sibling temporary file, `Sync`s it, and renames it over the target. `revokedAt` is
+  A write stages a sibling temporary file, `Sync`s it, renames it over the target, and then flushes the
+  record directory as well — flushing the file does not make the directory entry durable, and a lost
+  create is a credential Cloud has already committed a `credential_refs` row for and can never supply
+  again (Cloud does not keep the token), while a lost revoke brings the sealed material back. `revokedAt` is
   the tombstone and `retained.retainUntil` the grace period of a superseded version. `record.version`
   selects the requested version as either `current` or a `previous` still inside its window, and a
   version it cannot select is "this version is unavailable" — the redemption-time version check reads

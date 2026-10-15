@@ -28,7 +28,9 @@ Cloud 在同一次请求内交出 Token,此后只保留 `credential_refs` 元数
   材料,同时使持有卷的攻击者无法离线校验候选 Token。任何不可用 KEK 一律报 `ErrKeyMissing`。
 - `record.go`:`record`/`material`/`retained` 与 `fileStore`。卷内 `credentials/<id>.json`,一个凭据一条记录;
   `validCredentialID` 只接受规范小写 UUID,`fileStore.path` 再校验一次不让 id 逃出记录目录;写入走同目录临时
-  文件加 `Sync` 后 `Rename` 原子替换。记录里的 `revokedAt` 是墓碑,`retained.retainUntil` 是旧版本的保留期限。
+  文件加 `Sync` 后 `Rename` 原子替换,并在 `Rename` 之后对记录目录再 `Sync` 一次——只刷文件保证不了目录项,
+  而一条丢失的创建是 Cloud 已经落下 `credential_refs` 行、再也补不回来的凭据(Cloud 不留 Token),一条丢失的
+  撤销则让已封存的材料重新出现。`.json` 记录里的 `revokedAt` 是墓碑,`retained.retainUntil` 是旧版本的保留期限。
   `record.version` 按请求的版本号取出 `current` 或保留窗口内的 `previous`,取不到即"该版本不可用"——
   兑换时的版本绑定校验的是 Store 自己的状态,而不是授权里的自述。`authorizationDirectory`
   (`authorizations/`)是与 `credentials/` 并列的第二个目录,因为一次授权即使对应的凭据后来被销毁,它也已经被消费过了。

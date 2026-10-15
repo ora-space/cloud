@@ -225,6 +225,14 @@ func (f *fileStore) read(credentialID string) (*record, bool, error) {
 // ciphertext" and D6 forbids treating that as anything but a hard failure — so the new bytes land in
 // a sibling temporary file, are flushed, and are renamed over the target. The temporary file is
 // always removed, on every path.
+//
+// The rename is not durable on its own. Flushing the file guarantees its bytes, not the directory entry
+// that makes them findable, so a crash after this function returned can leave the *previous* record in
+// place or no record at all. Neither is recoverable here the way it would be elsewhere in the Store: a
+// lost create is a credential Cloud has already committed a `credential_refs` row for and can never
+// re-supply, because Cloud does not keep the token, and a lost revocation restores the sealed material
+// of a credential Cloud has already answered `revoked` for. The record directory is therefore flushed
+// as well, so a write that returned is a write a restart still sees.
 func (f *fileStore) write(stored *record) error {
 	path, err := f.path(stored.CredentialID)
 	if err != nil {
@@ -259,5 +267,5 @@ func (f *fileStore) write(stored *record) error {
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("publish credential record: %w", err)
 	}
-	return nil
+	return syncDirectory(filepath.Dir(path))
 }
