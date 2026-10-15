@@ -465,12 +465,12 @@ func (p *PushExecutor) materialize(ctx context.Context, address, identity, scrat
 	if err != nil {
 		return err
 	}
-	if _, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
+	if output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
 		[]string{"init", "--quiet", "--bare", "--", scratch}, scratch); err != nil {
-		return redactFailure(stderr, token)
+		return redactFailure(output.stderr, token)
 	}
-	if _, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch); err != nil {
-		return redactFailure(stderr, token)
+	if output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch); err != nil {
+		return redactFailure(output.stderr, token)
 	}
 	return nil
 }
@@ -490,17 +490,17 @@ func (p *PushExecutor) materialize(ctx context.Context, address, identity, scrat
 // different questions about two different repositories. A non-fast-forward rewrite is therefore refused
 // even when the lease would have held, and the refusal is local, before the remote is told anything.
 func (p *PushExecutor) verifyWriteIsExpressible(ctx context.Context, scratch string, job *PushJob) error {
-	if _, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
+	if output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
 		pushFactArguments("cat-file", "-e", job.NewCommit+"^{commit}"), scratch); err != nil {
-		return fmt.Errorf("the authorized new commit is not in the authorized upstream: %s", strings.TrimSpace(stderr))
+		return fmt.Errorf("the authorized new commit is not in the authorized upstream: %s", strings.TrimSpace(output.stderr))
 	}
-	if _, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
+	if output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
 		pushFactArguments("merge-base", "--is-ancestor", job.OldCommit, job.NewCommit), scratch); err != nil {
-		return fmt.Errorf("the authorized old commit is not an ancestor of the new commit: %s", strings.TrimSpace(stderr))
+		return fmt.Errorf("the authorized old commit is not an ancestor of the new commit: %s", strings.TrimSpace(output.stderr))
 	}
-	if _, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
+	if output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory,
 		pushFactArguments("update-ref", pushLocalRef, job.NewCommit), scratch); err != nil {
-		return fmt.Errorf("the authorized commit could not be named locally: %s", strings.TrimSpace(stderr))
+		return fmt.Errorf("the authorized commit could not be named locally: %s", strings.TrimSpace(output.stderr))
 	}
 	return nil
 }
@@ -536,17 +536,19 @@ func (p *PushExecutor) update(ctx context.Context, job *PushJob, address, identi
 	// The exit status is deliberately not consulted: the report Git wrote is the outcome, and a Git that
 	// failed before writing one is exactly the unreported case below, whose handling does not depend on
 	// why it failed.
-	stdout, stderr, _ := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch)
-	report, reported := parsePushReport(stdout, job.Ref)
-	if !reported {
-		// A Git that failed before it could report, or that reported something this package does not
-		// recognize, leaves the attempt's outcome unestablished. The remote's own error text goes to the
+	output, _ := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch)
+	report, reported := parsePushReport(output.stdout, job.Ref)
+	if !reported || output.stdoutCut {
+		// A Git that failed before it could report, that reported something this package does not
+		// recognize, or that printed more than this executor keeps — a report is read from the line the
+		// remote wrote, and a stream cut at the bound may have stopped before that line or in the middle
+		// of it — leaves the attempt's outcome unestablished. The remote's own error text goes to the
 		// executor's log with the staged secret redacted, and never to the caller: it can carry the
 		// upstream's words, and the caller's action is the same whatever it said.
 		p.log.Warn("the push attempt produced no readable report",
 			zap.String("operationId", job.OperationID),
 			zap.String("ref", job.Ref),
-			zap.Error(redactFailure(stderr, token)),
+			zap.Error(redactFailure(output.stderr, token)),
 		)
 		return PushUnknown, ""
 	}
@@ -600,12 +602,24 @@ func (p *PushExecutor) reconcile(ctx context.Context, job *PushJob, address, ide
 	if err != nil {
 		return PushUnknown, ""
 	}
-	stdout, stderr, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch)
+	output, err := runGit(ctx, p.config.GitPath, p.config.HomeDirectory, arguments, scratch)
 	if err != nil {
 		p.log.Warn("the authorized ref could not be read back after a refusal",
 			zap.String("operationId", job.OperationID),
 			zap.String("ref", job.Ref),
-			zap.Error(redactFailure(stderr, token)),
+			zap.Error(redactFailure(output.stderr, token)),
+		)
+		return PushUnknown, ""
+	}
+	// The command succeeded, so what it printed is read as a fact or not at all: a listing of what the
+	// remote advertises that stopped at the capture bound is a prefix, and a prefix of an advertisement
+	// is not an answer about this ref.
+	stdout, err := output.stdoutFact()
+	if err != nil {
+		p.log.Warn("the read back of the authorized ref was cut short",
+			zap.String("operationId", job.OperationID),
+			zap.String("ref", job.Ref),
+			zap.Error(err),
 		)
 		return PushUnknown, ""
 	}

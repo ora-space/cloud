@@ -446,7 +446,7 @@ func (e *Executor) clone(ctx context.Context, job *Job, repository, token string
 	if err != nil {
 		return "", e.refuse(ReasonCodeUnavailable, err)
 	}
-	if _, stderr, err := runGit(ctx, e.config.GitPath, e.config.HomeDirectory, arguments, root); err != nil {
+	if output, err := runGit(ctx, e.config.GitPath, e.config.HomeDirectory, arguments, root); err != nil {
 		// A failed clone may still have created the target. Removing it keeps the checkout root from
 		// filling with partial trees, and it removes no credential: Git never writes the token into the
 		// checkout.
@@ -455,7 +455,7 @@ func (e *Executor) clone(ctx context.Context, job *Job, repository, token string
 		}
 		// Git's own message is the only diagnosable part of a failed clone, and it is redacted against
 		// the exact secret staged for this job before it becomes a failure the executor logs.
-		return "", e.refuse(ReasonCodeCloneFailed, redactFailure(stderr, token))
+		return "", e.refuse(ReasonCodeCloneFailed, redactFailure(output.stderr, token))
 	}
 	return target, nil
 }

@@ -2,7 +2,6 @@ package gitserver
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,12 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wanglongan587/cloud/internal/capture"
 	"github.com/wanglongan587/cloud/internal/processgroup"
 )
 
 // stderrLimit bounds how much of git's standard error is kept for the log. The limit exists because
 // the stream is a child process's diagnostics, and an unbounded buffer fed by a child is a memory
-// budget handed to whatever the child decides to print.
+// budget handed to whatever the child decides to print. `upload-pack` is the child here, and what it
+// prints includes whatever the remote sent over the sideband.
 const stderrLimit = 8 << 10
 
 // reapDelay bounds how long Wait may spend on I/O after the process it waited for is gone.
@@ -30,7 +31,7 @@ type gitStream struct {
 	*bufio.Reader
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
-	stderr *boundedBuffer
+	stderr *capture.Buffer
 	// release stops the context callback that ends the read. It is called by Close so a stream that
 	// finished on its own does not fire it afterwards.
 	release func() bool
@@ -84,7 +85,7 @@ func (m *mirrorRead) startGit(ctx context.Context, repoDir, protocol string, std
 	cmd.Dir = m.home
 	cmd.Env = m.gitEnv(protocol)
 	cmd.Stdin = stdin
-	stderr := &boundedBuffer{limit: stderrLimit}
+	stderr := &capture.Buffer{Limit: stderrLimit}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -143,36 +144,4 @@ func gitProtocol(header string) string {
 	default:
 		return ""
 	}
-}
-
-// boundedBuffer keeps at most limit bytes and counts the rest, so a child that writes without end
-// cannot grow the parent's memory. It reports the truncation rather than hiding it: diagnostics that
-// stop mid-sentence should look like diagnostics that stop mid-sentence.
-type boundedBuffer struct {
-	limit   int
-	dropped int
-	buf     bytes.Buffer
-}
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	remaining := b.limit - b.buf.Len()
-	if remaining <= 0 {
-		b.dropped += len(p)
-		return len(p), nil
-	}
-	if len(p) > remaining {
-		b.dropped += len(p) - remaining
-		p = p[:remaining]
-	}
-	b.buf.Write(p)
-	return len(p), nil
-}
-
-func (b *boundedBuffer) Len() int { return b.buf.Len() + b.dropped }
-
-func (b *boundedBuffer) String() string {
-	if b.dropped == 0 {
-		return b.buf.String()
-	}
-	return fmt.Sprintf("%s…(%d bytes dropped)", b.buf.String(), b.dropped)
 }

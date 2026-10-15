@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wanglongan587/cloud/internal/capture"
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 	"github.com/wanglongan587/cloud/internal/mirror"
 	"github.com/wanglongan587/cloud/internal/processgroup"
@@ -73,6 +74,15 @@ const (
 	stallLimit = 1000
 	stallTime  = 60 * time.Second
 )
+
+// captureLimit bounds each of the two streams one fetch may write into this process.
+//
+// The largest thing this package reads on standard output is a ref listing that must contain exactly
+// one ref, and the diagnostics are cut to 2048 bytes before they become an error, so the bound is far
+// above anything read here and far below what an upstream can print: a fetch forwards whatever the
+// remote sends over the sideband, and the remote decides how much that is. It is a second copy of the
+// executor's value rather than a shared constant, for the reason `reapDelay` is.
+const captureLimit = 64 << 10
 
 // Material is one credential the deployment-fixed helper can read for the duration of one fetch.
 type Material struct {
@@ -281,6 +291,15 @@ func (f *GitFetcher) arguments(helper, repository, branch string) ([]string, err
 // remote can put arbitrary text in a response and Git may quote it, so the one party that could leak
 // a credential is the remote, and the executor's own redaction is applied to what it staged. Here
 // the credential never reaches this process — the helper holds it — so what is bounded is the size.
+// Both streams share that bound, because both are written by a party this process does not choose.
+//
+// What came back cut is treated as what it is: standard output that stopped at the bound is not a
+// fact — a ref listing that was cut short is a prefix of what the upstream advertises, and a caller
+// comparing a prefix against the one ref it requires would be comparing against a value Git never
+// finished printing. Standard error carries no such role: it is reproduced with the bound's own
+// marker in it, so a diagnosis that stopped early reads as one that stopped early. Withholding it
+// instead would cost the first 2048 bytes of the diagnosis and hide nothing, because a remote that
+// wanted to put something in those bytes can do so whatever the bound is.
 func (f *GitFetcher) run(ctx context.Context, directory string, arguments []string) (string, error) {
 	//nolint:gosec // The program is a deployment-fixed absolute path validated at construction and
 	// every argument is a fixed list built above; the only values from a reference are a canonical
@@ -306,11 +325,15 @@ func (f *GitFetcher) run(ctx context.Context, directory string, arguments []stri
 		"GIT_OPTIONAL_LOCKS=0",
 	}
 	command.Stdin = nil
-	var output, stderr strings.Builder
-	command.Stdout = &output
-	command.Stderr = &stderr
+	output := &capture.Buffer{Limit: captureLimit}
+	stderr := &capture.Buffer{Limit: captureLimit}
+	command.Stdout = output
+	command.Stderr = stderr
 	if err := command.Run(); err != nil {
 		return "", fmt.Errorf("%w: %s", err, truncate(stderr.String(), 2048))
+	}
+	if output.Truncated() {
+		return "", errors.New("git printed more than the fetcher keeps, so what it printed is not a fact it can read")
 	}
 	return output.String(), nil
 }

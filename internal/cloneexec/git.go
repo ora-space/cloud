@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wanglongan587/cloud/internal/capture"
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 	"github.com/wanglongan587/cloud/internal/processgroup"
 )
@@ -47,6 +48,18 @@ const (
 	stallLimit = 1000
 	stallTime  = 60 * time.Second
 )
+
+// captureLimit bounds each of the two streams one Git invocation may write into this process.
+//
+// The largest thing this package reads on standard output is a single line — the report of one ref,
+// or a ref listing that must contain exactly one — and the diagnostics it keeps from standard error
+// are redacted and then cut to 4096 bytes before they reach a log. So the bound is far above anything
+// read here and far below what a repository can print: `git fetch` forwards whatever a remote sends
+// over the sideband, and the remote decides how much that is.
+//
+// It is also far above the 4096-byte window a failure detail keeps, which is what makes the two
+// bounds independent: redaction sees every byte that can reach a log whatever the capture dropped.
+const captureLimit = 64 << 10
 
 // gitDeployment is the part of C's deployment that every path running Git shares: where credential
 // material is staged, which Git and which helper run, and what Git trusts.
@@ -393,6 +406,33 @@ func validateBranch(branch string) error {
 	return nil
 }
 
+// gitOutput is what one constrained Git invocation wrote.
+//
+// Standard output is where the facts are read from — the report of a push, the commit a ref holds —
+// and whether it was cut short is part of the result rather than something a caller infers from the
+// text: a stream that stopped at the capture bound is a prefix, and a prefix is not what a command
+// stated. Standard error needs no such flag. It is a diagnostic that this package redacts and then
+// cuts to the first 4096 bytes for the log, and 4096 is far below the capture bound, so no byte that
+// can reach a log is affected by where the capture stopped; what the bound does to it is stated in
+// the text rather than hidden (see `capture.Buffer.String`).
+type gitOutput struct {
+	stdout string
+	stderr string
+	// stdoutCut says standard output was longer than this executor keeps.
+	stdoutCut bool
+}
+
+// stdoutFact returns standard output as a fact, refusing one that was cut short.
+//
+// A reader that took a prefix as the answer would record a value the command never finished stating,
+// and the commands read here state facts by printing them in full.
+func (o gitOutput) stdoutFact() (string, error) {
+	if o.stdoutCut {
+		return "", errors.New("git printed more than the executor keeps, so what it printed is not a fact it can read")
+	}
+	return o.stdout, nil
+}
+
 // runGit runs one constrained Git command and returns both of its output streams alongside the exit
 // error.
 //
@@ -408,11 +448,10 @@ func validateBranch(branch string) error {
 // exact secret it staged before the text goes anywhere, which is a stronger guarantee than trusting
 // the remote not to have echoed it. The text is never returned to the caller of the job in any case.
 //
-// Standard output is returned for the commands whose whole purpose is to print a fact back — the
-// commit a fetch resolved to, the refs a repository exposes. It is bounded by being what Git was
-// asked for and nothing else: neither command is given a revision or a ref list from outside this
-// package.
-func runGit(ctx context.Context, gitPath, home string, arguments []string, workingDirectory string) (stdout, stderr string, err error) {
+// Both streams are bounded rather than captured whole, because both are written by a party this
+// process does not choose: a remote decides how much arrives, and it sends that into a process that
+// is running other people's work.
+func runGit(ctx context.Context, gitPath, home string, arguments []string, workingDirectory string) (gitOutput, error) {
 	command := exec.CommandContext(ctx, gitPath, arguments...)
 	// The deadline has to end the process tree and not only the process: the descendants of a Git
 	// invocation are what inherit these pipes and hold the staged token in their own memory.
@@ -423,11 +462,16 @@ func runGit(ctx context.Context, gitPath, home string, arguments []string, worki
 	// Git has no stdin. It would otherwise be able to read a credential or a confirmation from
 	// whatever the executor's standard input happens to be attached to.
 	command.Stdin = nil
-	var output, errorOutput strings.Builder
-	command.Stdout = &output
-	command.Stderr = &errorOutput
-	err = command.Run()
-	return output.String(), errorOutput.String(), err
+	output := &capture.Buffer{Limit: captureLimit}
+	errorOutput := &capture.Buffer{Limit: captureLimit}
+	command.Stdout = output
+	command.Stderr = errorOutput
+	err := command.Run()
+	return gitOutput{
+		stdout:    output.String(),
+		stderr:    errorOutput.String(),
+		stdoutCut: output.Truncated(),
+	}, err
 }
 
 // redactFailure turns Git's own error output into a failure the executor may log.
@@ -437,6 +481,12 @@ func runGit(ctx context.Context, gitPath, home string, arguments []string, worki
 // Authorization header — into a message Git prints, and the executor is the one party that knows
 // exactly what to look for. The text is then truncated, so a server cannot use a clone failure to
 // write an unbounded amount into the executor's log.
+//
+// The order is what makes the first bound real rather than nominal: the secret is removed from the
+// whole capture and only then cut to the log's window, so a credential printed where the window ends
+// is replaced before the window decides, and `[redacted]` is what is cut instead of the credential.
+// The capture's own bound is larger than that window for the same reason — redaction covers every
+// byte that can reach a log even when the remote wrote far more than this process kept.
 //
 // What survives is the repository path and the protocol error, which is what makes a failed clone
 // diagnosable. The result is a log line and never a response body: the executor reports its own stable

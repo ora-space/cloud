@@ -126,12 +126,12 @@ func (m *MirrorExecutor) fetch(ctx context.Context, job *MirrorJob, address, ide
 	// directory, and a bare repository is that directory rather than a working tree inside one. The
 	// destination already exists, because the caller created it as the place a fetch of unknown size
 	// can be abandoned without leaving anything behind.
-	if _, stderr, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory,
+	if output, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory,
 		[]string{"init", "--quiet", "--bare", "--", destination}, destination); err != nil {
-		return mirror.PublishVerification{}, redactFailure(stderr, token)
+		return mirror.PublishVerification{}, redactFailure(output.stderr, token)
 	}
-	if _, stderr, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory, arguments, destination); err != nil {
-		return mirror.PublishVerification{}, redactFailure(stderr, token)
+	if output, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory, arguments, destination); err != nil {
+		return mirror.PublishVerification{}, redactFailure(output.stderr, token)
 	}
 	commit, err := m.gitFact(ctx, destination, "rev-parse", "--verify", "--quiet", mirrorpublish.MirrorRef+"^{commit}")
 	if err != nil {
@@ -166,11 +166,18 @@ func (m *MirrorExecutor) fetch(ctx context.Context, job *MirrorJob, address, ide
 // commands never touch the network and therefore have no error output that could contain one.
 func (m *MirrorExecutor) gitFact(ctx context.Context, directory string, arguments ...string) (string, error) {
 	prefixed := append([]string{"-c", "protocol.allow=never", "-c", "core.hooksPath=/dev/null"}, arguments...)
-	output, stderr, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory, prefixed, directory)
+	output, err := runGit(ctx, m.config.GitPath, m.config.HomeDirectory, prefixed, directory)
 	if err != nil {
-		return "", redactFailure(stderr, "")
+		return "", redactFailure(output.stderr, "")
 	}
-	return strings.TrimSpace(output), nil
+	// A fact is read from a stream that ended, or it is not read at all: a listing cut at the capture
+	// bound is a prefix, and a caller comparing a prefix against what it required would be comparing
+	// against a value Git never finished printing.
+	stdout, err := output.stdoutFact()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stdout), nil
 }
 
 // publish installs the fetched repository as the mirror of the commit it contains.
