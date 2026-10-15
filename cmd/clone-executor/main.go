@@ -151,37 +151,68 @@ func run() (runErr error) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// A job runs under the process's own context rather than under its connection's, so that a stopping
+	// process can end it. Every job holds a staged credential until it destroys it, and each destruction
+	// is deferred inside the handler that staged it: a job the shutdown cannot reach is a job whose
+	// material outlives this process, and only the next start's sweep can remove it.
+	jobContext, endJobs := context.WithCancel(context.Background())
+	defer endJobs()
+	httpServer.BaseContext = func(net.Listener) context.Context { return jobContext }
+	// Only locations are logged: the listen address, the roots, and how many leftovers the sweeps
+	// removed. A credential and an authorization never reach a log line. The mirror root is logged as an
+	// empty string when the capability is absent, which is a fact about the deployment rather than a
+	// missing value.
+	log.Info("clone executor listening",
+		zap.String("address", listener.Addr().String()),
+		zap.String("materialRoot", cfg.MaterialRoot),
+		zap.String("checkoutRoot", cfg.CheckoutRoot),
+		zap.String("mirrorRoot", cfg.MirrorRoot),
+		zap.Bool("mirrorCapability", mirrorExecutor != nil),
+		zap.String("pushRoot", cfg.PushRoot),
+		zap.Bool("pushCapability", pushExecutor != nil),
+		zap.Int("sweptEntries", removed),
+		zap.Int("sweptFetches", fetched),
+		zap.Int("sweptPushes", pushed),
+	)
+	// The mutual-TLS configuration wraps the listener directly rather than going through ServeTLS, whose
+	// empty-file-name form silently depends on the certificate already being in the config.
+	return serveUntilStopped(httpServer, tls.NewListener(listener, serverTLS), ctx.Done(), endJobs)
+}
+
+// shutdownGrace bounds how long a stopping process waits for the jobs still in flight.
+//
+// It is not the jobs' own timeout and is not derived from one: a job is asked to stop rather than waited
+// out, so what this bounds is the destruction of the material it staged, not the clone or the write.
+const shutdownGrace = 10 * time.Second
+
+// serveUntilStopped serves the executor until the process is asked to stop or the server fails, and
+// returns the reason it ended.
+//
+// The order inside the stop branch is the point of this function. In-flight jobs are ended *before* the
+// wait begins, not after it. A job here is not a connection to drain: it is a clone, a preparation or a
+// write running under the process's own context, and `Shutdown` accepts no new work and then waits.
+// Left to itself it waits out the whole grace period and returns with the handler still running, so the
+// token that handler staged stays on the volume for the next start to sweep. Canceling first reaches
+// the same deferred destruction every other outcome reaches — success, Git failure, timeout, panic —
+// and the wait that follows is the short one it takes to remove a directory.
+//
+// A cancelled clone answers nothing, which is what "the executor went away" means for a clone. A
+// cancelled push may already have written to the upstream, and Cloud settles that as uncertain rather
+// than as a failure — the same answer it gives a reply that was lost, which is why the push route's
+// contract is stated as "did this job reach the write" rather than as a verdict about the reply.
+func serveUntilStopped(server *http.Server, listener net.Listener, stop <-chan struct{}, endJobs context.CancelFunc) error {
 	failed := make(chan error, 1)
-	go func() {
-		// Only locations are logged: the listen address, the roots, and how many leftovers the sweeps
-		// removed. A credential and an authorization never reach a log line. The mirror root is logged as
-		// an empty string when the capability is absent, which is a fact about the deployment rather than
-		// a missing value.
-		log.Info("clone executor listening",
-			zap.String("address", listener.Addr().String()),
-			zap.String("materialRoot", cfg.MaterialRoot),
-			zap.String("checkoutRoot", cfg.CheckoutRoot),
-			zap.String("mirrorRoot", cfg.MirrorRoot),
-			zap.Bool("mirrorCapability", mirrorExecutor != nil),
-			zap.String("pushRoot", cfg.PushRoot),
-			zap.Bool("pushCapability", pushExecutor != nil),
-			zap.Int("sweptEntries", removed),
-			zap.Int("sweptFetches", fetched),
-			zap.Int("sweptPushes", pushed),
-		)
-		// The mutual-TLS configuration wraps the listener directly rather than going through ServeTLS,
-		// whose empty-file-name form silently depends on the certificate already being in the config.
-		failed <- httpServer.Serve(tls.NewListener(listener, serverTLS))
-	}()
+	go func() { failed <- server.Serve(listener) }()
 	select {
-	case e = <-failed:
-		if errors.Is(e, http.ErrServerClosed) {
+	case err := <-failed:
+		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return e
-	case <-ctx.Done():
-		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stop()
-		return httpServer.Shutdown(shutdown)
+		return err
+	case <-stop:
+		endJobs()
+		shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		return server.Shutdown(shutdown)
 	}
 }
