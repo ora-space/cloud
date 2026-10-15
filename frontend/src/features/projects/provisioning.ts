@@ -132,8 +132,10 @@ function provisioningFailureOf(
  *
  * The public contract has no "operations of a project" route, so the Operation
  * is reached through the Workspace it creates: the project's Workspace list
- * carries `creatorOperationId`, and the Operation by id carries the state and
- * the `errorCode` Cloud settled it with. Without this, a project whose
+ * carries `kind` and `creatorOperationId`, and the Operation by id carries the
+ * state and the `errorCode` Cloud settled it with. The main Workspace is the one
+ * whose Operation creates the project; an isolated Workspace has an Operation of
+ * its own, whose outcome the project does not share. Without this, a project whose
  * credentialed clone was refused renders as `provisioning` — "still being
  * created" — forever, and the reason never reaches the member who has to act on
  * it.
@@ -168,10 +170,15 @@ export function useProjectProvisioning(
       getApiV1TenantsTidProjectsPidWorkspaces(tid, pid, undefined, undefined, signal),
     enabled,
   })
-  // A project's main Workspace is created once, so the first Workspace naming a
-  // creator Operation is the one whose progress this project is waiting on.
-  const operationId =
-    workspaces.data?.items.find((item) => item.creatorOperationId)?.creatorOperationId ?? undefined
+  // The project's creation is carried by its main Workspace, and by that one
+  // alone: an isolated Workspace is created by its own Operation, which may be
+  // refused for its own reasons while the project is fine. `kind` is what says
+  // which is which. Taking the first Workspace that names a creator Operation
+  // instead would follow whichever one the list happened to put first — the
+  // list is ordered by a random id — and report a failure the project never
+  // had, or leave a real one unreported.
+  const main = workspaces.data?.items.find((item) => item.kind === 'main')
+  const operationId = main?.creatorOperationId ?? undefined
   const oid = operationId ?? ''
   const operation = useQuery({
     queryKey: getGetApiV1TenantsTidOperationsOidQueryKey(tid, oid),

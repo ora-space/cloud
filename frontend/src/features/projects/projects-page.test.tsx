@@ -40,7 +40,9 @@ function installProjects(projects: unknown[], provisioning?: { id: string; state
   }
   server.use(
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${provisioning.id}/workspaces`, () =>
-      HttpResponse.json({ items: [{ id: WORKSPACE_ID, creatorOperationId: OPERATION_ID }] }),
+      HttpResponse.json({
+        items: [{ id: WORKSPACE_ID, kind: 'main', creatorOperationId: OPERATION_ID }],
+      }),
     ),
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/operations/${OPERATION_ID}`, () =>
       HttpResponse.json({

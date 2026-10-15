@@ -13,6 +13,9 @@ import { server } from '@/test/msw-server'
 const TENANT_ID = '11111111-1111-1111-1111-111111111111'
 const PROJECT_ID = '55555555-5555-5555-5555-555555555555'
 const OPERATION_ID = '99999999-9999-9999-9999-999999999999'
+const MAIN_WORKSPACE_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const ISOLATED_WORKSPACE_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+const ISOLATED_OPERATION_ID = '88888888-8888-8888-8888-888888888888'
 
 function wrapper(client: QueryClient) {
   return function Wrapper({ children }: { children: React.ReactNode }) {
@@ -24,29 +27,38 @@ function newClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
-function installHandlers(workspaces: unknown[], found?: unknown) {
+function installHandlers(workspaces: unknown[], operations: Record<string, unknown>) {
   server.use(
     http.get(`/api/v1/tenants/${TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
       HttpResponse.json({ items: workspaces, nextCursor: '' }),
     ),
-    http.get(`/api/v1/tenants/${TENANT_ID}/operations/${OPERATION_ID}`, () =>
-      HttpResponse.json(found ?? {}),
+    http.get(`/api/v1/tenants/${TENANT_ID}/operations/:oid`, ({ params }) =>
+      HttpResponse.json(operations[String(params['oid'])] ?? {}),
     ),
   )
 }
 
-/** The one field the hook reads off a Workspace: the Operation it was created by. */
+/** The fields the hook reads off a Workspace: its kind and its creator Operation. */
 function workspace(creatorOperationId: string | null) {
-  return { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', creatorOperationId }
+  return { id: MAIN_WORKSPACE_ID, kind: 'main', creatorOperationId }
+}
+
+/**
+ * A Workspace created by its own Operation rather than by the project's
+ * creation. The project does not share its outcome, so the hook must not read
+ * one.
+ */
+function isolatedWorkspace(creatorOperationId: string | null) {
+  return { id: ISOLATED_WORKSPACE_ID, kind: 'isolated', creatorOperationId }
 }
 
 /** The member-facing Operation shape, which is the only one carrying `errorCode`. */
-function operation(state: string, errorCode: string | null) {
+function operation(state: string, errorCode: string | null, id = OPERATION_ID) {
   return {
-    id: OPERATION_ID,
+    id,
     tenantId: TENANT_ID,
     projectId: PROJECT_ID,
-    workspaceId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    workspaceId: MAIN_WORKSPACE_ID,
     kind: 'create_project',
     state,
     step: 'clone',
@@ -59,17 +71,25 @@ function operation(state: string, errorCode: string | null) {
  * What the hook settles on once it has stopped loading, for a project whose
  * Workspace list and Operation are the given doubles.
  */
-async function settled(
+async function settledOn(
   workspaces: unknown[],
-  found?: unknown,
+  operations: Record<string, unknown>,
 ): Promise<{ phase: ProvisioningPhase | undefined; failure: ProvisioningFailure | undefined }> {
-  installHandlers(workspaces, found)
+  installHandlers(workspaces, operations)
   const { result } = renderHook(() => useProjectProvisioning(TENANT_ID, PROJECT_ID), {
     wrapper: wrapper(newClient()),
   })
 
   await waitFor(() => expect(result.current.isPending).toBe(false))
   return { phase: result.current.phase, failure: result.current.failure }
+}
+
+/** The common case: the project's own Operation, and nothing else answering. */
+async function settled(
+  workspaces: unknown[],
+  found?: unknown,
+): Promise<{ phase: ProvisioningPhase | undefined; failure: ProvisioningFailure | undefined }> {
+  return settledOn(workspaces, { [OPERATION_ID]: found ?? {} })
 }
 
 /** The phase the hook reports for one Operation state, with no failure involved. */
@@ -175,6 +195,36 @@ describe('useProjectProvisioning', () => {
     // A server that grows a state must not have it read as a phase the badge
     // would then render; the project falls back to its lifecycle status.
     await expect(settledPhase('some_future_state')).resolves.toBeUndefined()
+  })
+
+  it('reads the main Workspace rather than an isolated one that failed', async () => {
+    // An isolated Workspace is created by its own Operation, and that Operation
+    // can be refused while the project itself is created without trouble. The
+    // list is ordered by a random id, so picking the first Workspace naming a
+    // creator Operation would let one of them decide what the project shows.
+    const { phase, failure } = await settledOn(
+      [isolatedWorkspace(ISOLATED_OPERATION_ID), workspace(OPERATION_ID)],
+      {
+        [ISOLATED_OPERATION_ID]: operation('failed', 'clone_failed', ISOLATED_OPERATION_ID),
+        [OPERATION_ID]: operation('succeeded', null),
+      },
+    )
+
+    expect(phase).toBe('succeeded')
+    expect(failure).toBeUndefined()
+  })
+
+  it('reports the main Workspace failure even when an isolated one is fine', async () => {
+    const { phase, failure } = await settledOn(
+      [isolatedWorkspace(ISOLATED_OPERATION_ID), workspace(OPERATION_ID)],
+      {
+        [ISOLATED_OPERATION_ID]: operation('succeeded', null, ISOLATED_OPERATION_ID),
+        [OPERATION_ID]: operation('failed', 'repository_credential_revoked'),
+      },
+    )
+
+    expect(phase).toBe('failed')
+    expect(failure?.code).toBe('repository_credential_revoked')
   })
 
   it('asks nothing until both the tenant and the project are known', () => {

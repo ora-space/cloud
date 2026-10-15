@@ -66,7 +66,9 @@ function installProjectHandlers(role: string, project = cloudProject('Demo')) {
 function installProvisioning(operationId: string, state: string, errorCode: string | null) {
   server.use(
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${PROJECT_ID}/workspaces`, () =>
-      HttpResponse.json({ items: [{ id: WORKSPACE_ID, creatorOperationId: operationId }] }),
+      HttpResponse.json({
+        items: [{ id: WORKSPACE_ID, kind: 'main', creatorOperationId: operationId }],
+      }),
     ),
     http.get(`/api/v1/tenants/${TEST_TENANT_ID}/operations/${operationId}`, () =>
       HttpResponse.json({
