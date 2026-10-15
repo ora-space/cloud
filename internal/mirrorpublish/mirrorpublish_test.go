@@ -610,6 +610,8 @@ func TestGitFetcherCommandLineIsTheHardenedOne(t *testing.T) {
 		"credential.useHttpPath=true",
 		"http.followRedirects=false",
 		"http.sslVerify=true",
+		"http.lowSpeedLimit=1000",
+		"http.lowSpeedTime=60",
 		"http.sslCAInfo=/etc/ora/ca.pem",
 		"fetch --quiet --no-tags --no-write-fetch-head",
 		"-- " + testRepoA + " +refs/heads/main:" + MirrorRef,

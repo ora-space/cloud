@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
+	"github.com/wanglongan587/cloud/internal/processgroup"
 )
 
 // reapDelay bounds how long a Git invocation may spend on I/O after the process it started is gone.
@@ -22,7 +24,29 @@ import (
 // executor's own Timeout would be advisory, which matters here more than in a read-only server: the
 // cleanup that destroys the staged credential material is deferred, so a wait that never returns is
 // also a credential that outlives the execution that was supposed to end it.
+//
+// The descendant itself is what `processgroup.Isolate` ends, on the same deadline; this delay is the
+// backstop for the pipes rather than the mechanism that removes the process. The two are kept because
+// they answer different questions: the group says no process of this execution is left running, and
+// the delay says this call returns even if one somehow is.
 const reapDelay = 5 * time.Second
+
+// stallLimit and stallTime end a transfer that is not moving.
+//
+// The executor's timeout bounds how long a job may take. It does not bound how long a remote may
+// hold a connection open while sending nothing, and a stalled transfer is the one shape that would
+// otherwise spend the whole of that budget — including, in this component, the staged credential's
+// lifetime. Git measures the transfer's own throughput and aborts below `stallLimit` bytes per second
+// sustained for `stallTime`, so the bound is on the remote's progress rather than on the clock.
+//
+// The values are deliberately low and slow, because the cost of being wrong is asymmetric: a link
+// that cannot sustain a kilobyte per second for a minute is not a link this job will finish on, while
+// a healthy slow link — a large clone over a thin pipe — has bursts far above the floor and only
+// needs to average it.
+const (
+	stallLimit = 1000
+	stallTime  = 60 * time.Second
+)
 
 // gitDeployment is the part of C's deployment that every path running Git shares: where credential
 // material is staged, which Git and which helper run, and what Git trusts.
@@ -255,6 +279,8 @@ func gitConstraintArguments(helper, address string, transport gitTransport) ([]s
 		"-c", "http.followRedirects=false",
 		"-c", "http.proxy=",
 		"-c", "http.sslVerify=true",
+		"-c", "http.lowSpeedLimit=" + strconv.Itoa(stallLimit),
+		"-c", "http.lowSpeedTime=" + strconv.Itoa(int(stallTime/time.Second)),
 		"-c", "submodule.recurse=false",
 		"-c", "fetch.recurseSubmodules=false",
 		"-c", "filter.lfs.smudge=",
@@ -302,7 +328,9 @@ func gitConstraintArguments(helper, address string, transport gitTransport) ([]s
 //     `http.sslVerify=true` is stated rather than assumed so a global `sslVerify=false` cannot turn
 //     verification off. A deployment that names a proxy appends one host-scoped entry for the
 //     repositories it covers (`GitEgress`); with no such deployment the command line is exactly the one
-//     that clears every proxy.
+//     that clears every proxy. The stall bound (`http.lowSpeedLimit`/`http.lowSpeedTime`) is here
+//     because a transfer that is not moving is an egress condition: it is the remote's silence, not
+//     the local clock, that has to end it.
 //   - Content: hooks are disabled (`core.hooksPath=/dev/null`), because a hook is a program from the
 //     repository running as the credential-executing identity. Symlinks are not created, so a
 //     checkout cannot plant a link the workload later follows out of its own tree. Submodule
@@ -386,6 +414,9 @@ func validateBranch(branch string) error {
 // package.
 func runGit(ctx context.Context, gitPath, home string, arguments []string, workingDirectory string) (stdout, stderr string, err error) {
 	command := exec.CommandContext(ctx, gitPath, arguments...)
+	// The deadline has to end the process tree and not only the process: the descendants of a Git
+	// invocation are what inherit these pipes and hold the staged token in their own memory.
+	processgroup.Isolate(command)
 	command.Dir = workingDirectory
 	command.Env = gitEnvironment(home, nil)
 	command.WaitDelay = reapDelay
@@ -437,6 +468,10 @@ func headCommit(ctx context.Context, gitPath, home, repository string) (string, 
 		"-c", "core.hooksPath=/dev/null",
 		"rev-parse", "HEAD",
 	)
+	// Isolated like every other Git invocation, although this one reads a local repository: an
+	// invocation that outlives its deadline is the same defect here, and a rule with one exception is
+	// a rule the next reader has to re-derive.
+	processgroup.Isolate(command)
 	command.Dir = repository
 	command.Env = gitEnvironment(home, nil)
 	command.Stdin = nil

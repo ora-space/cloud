@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/wanglongan587/cloud/internal/processgroup"
 )
 
 // stderrLimit bounds how much of git's standard error is kept for the log. The limit exists because
@@ -90,6 +92,10 @@ func (m *mirrorRead) startGit(ctx context.Context, repoDir, protocol string, std
 	}
 	// The delay is set before Start because exec reads it when it builds the reaping path.
 	cmd.WaitDelay = reapDelay
+	// The deadline ends the process *tree*. `upload-pack` starts a packer, so killing the process
+	// started here leaves the process actually doing the work running with this handler's output,
+	// and the close below only ends the read.
+	processgroup.Isolate(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start git: %w", err)
 	}

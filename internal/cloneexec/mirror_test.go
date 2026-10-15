@@ -737,6 +737,8 @@ func TestMirrorArgumentsPinTheWholeConfiguration(t *testing.T) {
 		"http.followRedirects=false",
 		"http.proxy=",
 		"http.sslVerify=true",
+		"http.lowSpeedLimit=1000",
+		"http.lowSpeedTime=60",
 		"http.sslCAInfo=/etc/ora/repositories.pem",
 		"submodule.recurse=false",
 		"fetch.recurseSubmodules=false",

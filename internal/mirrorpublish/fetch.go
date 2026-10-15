@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 	"github.com/wanglongan587/cloud/internal/mirror"
+	"github.com/wanglongan587/cloud/internal/processgroup"
 )
 
 // MirrorBranch is the short name of the one branch a mirror exposes, and MirrorRef is that branch.
@@ -58,6 +60,19 @@ const (
 // copy rather than a shared constant for the same reason: this package and those two do not import
 // each other, and one value shared across them is how the three would drift back together.
 const reapDelay = 5 * time.Second
+
+// stallLimit and stallTime end a fetch that is not moving.
+//
+// GitConfig.Timeout bounds how long a fetch may take; it does not bound how long an upstream may hold
+// the connection open while sending nothing, and a stalled transfer is the one shape that would
+// otherwise spend the whole of that budget. Git aborts a transfer whose own throughput stays below
+// `stallLimit` bytes per second for `stallTime`, so the bound is on the upstream's progress rather
+// than on the clock. The values are copied rather than shared, for the reason `reapDelay` is: these
+// are per-component deployment values, and one shared constant is how the three drift back together.
+const (
+	stallLimit = 1000
+	stallTime  = 60 * time.Second
+)
 
 // Material is one credential the deployment-fixed helper can read for the duration of one fetch.
 type Material struct {
@@ -241,6 +256,8 @@ func (f *GitFetcher) arguments(helper, repository, branch string) ([]string, err
 		"-c", "http.followRedirects=false",
 		"-c", "http.proxy=",
 		"-c", "http.sslVerify=true",
+		"-c", "http.lowSpeedLimit=" + strconv.Itoa(stallLimit),
+		"-c", "http.lowSpeedTime=" + strconv.Itoa(int(stallTime/time.Second)),
 		"-c", "submodule.recurse=false",
 		"-c", "fetch.recurseSubmodules=false",
 		"-c", "filter.lfs.smudge=",
@@ -269,6 +286,9 @@ func (f *GitFetcher) run(ctx context.Context, directory string, arguments []stri
 	// every argument is a fixed list built above; the only values from a reference are a canonical
 	// https URL and a ref name that was checked against Git's own ref rules.
 	command := exec.CommandContext(ctx, f.config.GitPath, arguments...)
+	// The timeout has to end the process tree and not only the process: this is a fetch, so the
+	// descendants are the transport helper and the indexer, and they are what holds the pipes open.
+	processgroup.Isolate(command)
 	command.Dir = directory
 	// Set before Start, because exec reads it when it builds the reaping path. Without it the wait
 	// outlives the deadline whenever a descendant holds the pipes; see reapDelay.

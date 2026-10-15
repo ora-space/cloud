@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+// descendantLog is where a hanging Git double records the pid of the process it leaves behind.
+//
+// The background sleeper is the descendant every Git invocation here has: it inherits the double's
+// standard output, exactly as a transport helper inherits Git's, and it is the process that holds the
+// staged token in its own memory after the executor has given up. Recording the pid is what lets a
+// test ask whether that process is gone rather than only whether the call returned; the answer is read
+// in `descendant_unix_test.go`, which is where the platform's signal API lives.
+func descendantLog(gitPath string) string { return gitPath + ".descendants" }
+
 // hangingMirrorGitDouble writes a Git double that behaves like the ordinary one for every command
 // except the fetch, which leaves a descendant holding its output.
 //
@@ -32,6 +41,7 @@ case "$mode" in
     ;;
   fetch)
     sleep 60 &
+    echo $! >> ` + shellQuote(descendantLog(fixture.config.GitPath)) + `
     exec sleep 60
     ;;
 esac
@@ -112,6 +122,7 @@ if [ "$mode" = revparse ]; then
   exit 0
 fi
 sleep 60 &
+echo $! >> ` + shellQuote(descendantLog(fixture.config.GitPath)) + `
 exec sleep 60
 `
 	if err := os.WriteFile(fixture.config.GitPath, []byte(script), 0o700); err != nil {

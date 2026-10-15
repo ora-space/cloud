@@ -346,6 +346,8 @@ func TestCloneArgumentsPinTheWholeConfiguration(t *testing.T) {
 			"-c", "http.followRedirects=false",
 			"-c", "http.proxy=",
 			"-c", "http.sslVerify=true",
+			"-c", "http.lowSpeedLimit=1000",
+			"-c", "http.lowSpeedTime=60",
 			"-c", "submodule.recurse=false",
 			"-c", "fetch.recurseSubmodules=false",
 			"-c", "filter.lfs.smudge=",
