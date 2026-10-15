@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1216,4 +1218,592 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_bundle_shape,revisions_resume_refused" {
 		t.Fatalf("after 0033: columns %d constraints %q", got, names)
 	}
+}
+
+// pushApprovalChain is the whole referent chain one push approval names: the ownership chain every
+// write in this schema needs, plus the personal credential reference the approval pins. The approval
+// is the only row in the schema whose rules are about a *decision* — which person, which exact write,
+// which credential version — so most of its columns are non-null and all of them are checked.
+type pushApprovalChain struct {
+	skeletonSeed
+	credentialRefID string
+}
+
+// seedPushApprovalChain inserts that chain and returns the ids the approval has to name.
+func seedPushApprovalChain(t *testing.T, pool *sql.DB) pushApprovalChain {
+	t.Helper()
+	chain := pushApprovalChain{skeletonSeed: seedOwnershipChain(t, pool), credentialRefID: uuid.NewString()}
+	_, e := pool.Exec(`INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref)
+		VALUES($1,$2,$3,'git','cs_upgrade_skeleton')`, chain.credentialRefID, chain.tenantID, chain.userID)
+	must(t, e)
+	return chain
+}
+
+// pushApproval is one `push_requests` row with every column at a value the schema accepts, so a case
+// can change the one field it is about and leave the rest well formed. The two commits are different,
+// non-zero, full object names, because "the ref moved from this to that" is what an approval is.
+type pushApproval struct {
+	ID string
+	// ActorID is the requester, set only by a case that is about who it is. Empty means the chain's
+	// member, which is the only requester a well-formed approval can have.
+	ActorID         string
+	RequestID       string
+	PinnedRef       string
+	OldCommit       string
+	NewCommit       string
+	CredentialVer   int64
+	AuthorizationID string
+	State           string
+	ResultCode      *string
+	SettledAt       *time.Time
+	ObservedCommit  *string
+}
+
+// validPushApproval returns one approval whose request id is fresh. The id has to be fresh because the
+// identity key is (workspace, approver, request id): two rows built by this helper are two distinct
+// approvals, and only the case that is about the key repeats one.
+func validPushApproval() pushApproval {
+	return pushApproval{
+		ID:              uuid.NewString(),
+		RequestID:       "approval-" + uuid.NewString(),
+		PinnedRef:       "refs/heads/main",
+		OldCommit:       strings.Repeat("a", 40),
+		NewCommit:       strings.Repeat("b", 40),
+		CredentialVer:   1,
+		AuthorizationID: uuid.NewString(),
+		State:           "dispatching",
+	}
+}
+
+// insert writes the approval. Every column is named, including the ones that have defaults, because a
+// default that happened to satisfy a CHECK would hide the value the case was about.
+func (a pushApproval) insert(t *testing.T, pool *sql.DB, chain pushApprovalChain) error {
+	t.Helper()
+	actor := a.ActorID
+	if actor == "" {
+		actor = chain.userID
+	}
+	_, e := pool.Exec(`INSERT INTO push_requests(id,tenant_id,project_id,workspace_id,actor_user_id,
+		request_id,repository_url,pinned_ref,old_commit,new_commit,credential_ref_id,credential_ref_version,
+		authorization_id,state,result_code,settled_at,observed_commit)
+		VALUES($1,$2,$3,$4,$5,$6,'https://example.invalid/skeleton.git',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		a.ID, chain.tenantID, chain.projectID, chain.mainWorkspaceID, actor,
+		a.RequestID, a.PinnedRef, a.OldCommit, a.NewCommit, chain.credentialRefID, a.CredentialVer,
+		a.AuthorizationID, a.State, a.ResultCode, a.SettledAt, a.ObservedCommit)
+	return e
+}
+
+// assertPushRequestRules drives every rule 0037 states by breaking exactly one of them. The well-formed
+// approval is inserted first and has to succeed: that is what makes the refusals below refusals of one
+// rule rather than of a row that could never have been written at all.
+//
+// The rules are the schema's rather than the code's on purpose. What makes a push an approval is that
+// one identified person authorized one exact write, and the columns a row cannot be written without —
+// the person, the pinned ref, both commit ids, the credential version — are the same values the signed
+// authorization binds. A code-only check would let a row exist that names a write nobody approved.
+func assertPushRequestRules(t *testing.T, pool *sql.DB) {
+	t.Helper()
+	chain := seedPushApprovalChain(t, pool)
+	first := validPushApproval()
+	must(t, first.insert(t, pool, chain))
+	now := time.Now()
+	code := "push_failed"
+
+	cases := []struct {
+		name   string
+		change func(*pushApproval)
+		code   string
+	}{
+		{"an approval names no requester", func(a *pushApproval) { a.RequestID = "" }, "23514"},
+		{"a request id beyond the column's bound", func(a *pushApproval) { a.RequestID = strings.Repeat("x", 201) }, "23514"},
+		{"a short branch name is not the signed spelling", func(a *pushApproval) { a.PinnedRef = "main" }, "23514"},
+		{"a ref beyond the column's bound", func(a *pushApproval) { a.PinnedRef = "refs/heads/" + strings.Repeat("x", 190) }, "23514"},
+		{"the null object id is not a commit", func(a *pushApproval) { a.OldCommit = strings.Repeat("0", 40) }, "23514"},
+		{"an abbreviated commit is not an object name", func(a *pushApproval) { a.NewCommit = "0123456" }, "23514"},
+		{"an approval pins no credential version", func(a *pushApproval) { a.CredentialVer = 0 }, "23514"},
+		{"an unknown state is not a state", func(a *pushApproval) { a.State = "pending" }, "23514"},
+		{"a settled approval with no time", func(a *pushApproval) { a.State = "succeeded" }, "23514"},
+		{"an unsettled approval with a settlement time", func(a *pushApproval) { a.SettledAt = &now }, "23514"},
+		{"a settled approval with no outcome code", func(a *pushApproval) { a.State, a.SettledAt = "failed", &now }, "23514"},
+		{"an unsettled approval with an outcome code", func(a *pushApproval) { a.ResultCode = &code }, "23514"},
+		{"an authorization that would authorize a second write", func(a *pushApproval) { a.AuthorizationID = first.AuthorizationID }, "23505"},
+		{"an approver repeating their own request id", func(a *pushApproval) { a.RequestID = first.RequestID }, "23505"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			approval := validPushApproval()
+			// A fresh request id per case, so the failure under test is the rule the case breaks rather
+			// than the identity key of the row inserted above.
+			approval.RequestID = "approval-case-" + strconv.Itoa(i)
+			c.change(&approval)
+			wantPGError(t, approval.insert(t, pool, chain), c.code)
+		})
+	}
+}
+
+// TestMigration0037PushRequestsAppliesFreshAndUpgrades proves the approval table arrives by forward
+// migration and that a fresh database gets the same rules an upgraded one does. The upgrade half is
+// the one that matters for a table nothing has written yet: it is the migration that has to produce
+// the rules, not the code that follows it.
+func TestMigration0037PushRequestsAppliesFreshAndUpgrades(t *testing.T) {
+	freshPool, _ := testSchema(t, "test_pr37f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !tableExists(t, freshPool, "push_requests") {
+		t.Fatal("a fresh database must have push_requests")
+	}
+	t.Run("fresh", func(t *testing.T) { assertPushRequestRules(t, freshPool) })
+
+	pool, _ := testSchema(t, "test_pr37_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0037_push_requests.sql"))
+	if tableExists(t, pool, "push_requests") {
+		t.Fatal("push_requests must not exist before 0037")
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !tableExists(t, pool, "push_requests") {
+		t.Fatal("the upgrade must add push_requests")
+	}
+	t.Run("upgraded", func(t *testing.T) { assertPushRequestRules(t, pool) })
+}
+
+// TestMigration0038PushRequestObservedCommitAppliesFreshAndUpgrades proves the observation column
+// arrives as its own forward migration rather than as an edit to 0037, and that it is what it claims
+// to be: a record of what was seen, deliberately not tied to what was concluded. The two combinations
+// asserted at the end are the ones a CHECK coupling the column to the state would have refused — a
+// settlement that concluded without observing anything, and a failure decided from a value it saw.
+func TestMigration0038PushRequestObservedCommitAppliesFreshAndUpgrades(t *testing.T) {
+	constrained := func(t *testing.T, pool *sql.DB) {
+		t.Helper()
+		chain := seedPushApprovalChain(t, pool)
+		now := time.Now()
+		commit, code := strings.Repeat("c", 40), "push_confirmed"
+		settled := func(a *pushApproval) pushApproval {
+			a.State, a.SettledAt, a.ResultCode = "succeeded", &now, &code
+			return *a
+		}
+
+		observed := validPushApproval()
+		observed.ObservedCommit = &commit
+		observed = settled(&observed)
+		must(t, observed.insert(t, pool, chain))
+
+		// The two states the column is expressly not tied to.
+		blind := validPushApproval()
+		blind = settled(&blind)
+		must(t, blind.insert(t, pool, chain))
+
+		failed := validPushApproval()
+		failed.State, failed.SettledAt, failed.ResultCode, failed.ObservedCommit = "failed", &now, &code, &commit
+		must(t, failed.insert(t, pool, chain))
+
+		// An observation is a commit id or nothing: a partial one is not the thing that was read.
+		partial := validPushApproval()
+		short := "0123456"
+		partial.ObservedCommit = &short
+		wantPGError(t, partial.insert(t, pool, chain), "23514")
+	}
+
+	freshPool, _ := testSchema(t, "test_pr38f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !columnExists(t, freshPool, "push_requests", "observed_commit") {
+		t.Fatal("a fresh database must have push_requests.observed_commit")
+	}
+	t.Run("fresh", func(t *testing.T) { constrained(t, freshPool) })
+
+	pool, _ := testSchema(t, "test_pr38_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0038_push_request_observed_commit.sql"))
+	if columnExists(t, pool, "push_requests", "observed_commit") {
+		t.Fatal("observed_commit must not exist before 0038")
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !columnExists(t, pool, "push_requests", "observed_commit") {
+		t.Fatal("the upgrade must add observed_commit")
+	}
+	t.Run("upgraded", func(t *testing.T) { constrained(t, pool) })
+}
+
+// TestMigration0039PushDispatchLeaseAppliesFreshAndUpgrades proves the columns an interrupted dispatch
+// is recognized and retried by arrive by forward migration, and that a row written before them reads
+// back as what it is: an approval no attempt has claimed.
+//
+// The two constraints are the migration's point, so they are driven rather than described. A settled
+// approval that kept its lease would read as one still being dispatched, and a negative generation
+// would fence nothing.
+func TestMigration0039PushDispatchLeaseAppliesFreshAndUpgrades(t *testing.T) {
+	constrained := func(t *testing.T, pool *sql.DB) {
+		t.Helper()
+		chain := seedPushApprovalChain(t, pool)
+
+		// The default is the state of every row written before this migration, and it has to be
+		// readable rather than merely implied.
+		unclaimed := validPushApproval()
+		must(t, unclaimed.insert(t, pool, chain))
+		var generation int64
+		must(t, pool.QueryRow(`SELECT dispatch_generation FROM push_requests WHERE id=$1`, unclaimed.ID).Scan(&generation))
+		if generation != 0 {
+			t.Fatalf("an approval no attempt has claimed reads dispatch_generation=%d, want 0", generation)
+		}
+
+		claimable := `UPDATE push_requests SET dispatch_lease_expires_at=now() WHERE id=$1`
+		must(t, execErr(pool, claimable, unclaimed.ID))
+
+		// A generation counts claimed attempts, so it cannot be negative...
+		negative := `UPDATE push_requests SET dispatch_generation=-1 WHERE id=$1`
+		wantPGError(t, execErr(pool, negative, unclaimed.ID), "23514")
+
+		// ...and settling an approval ends every attempt it had, so a settled row keeping its lease
+		// would read as one still being dispatched.
+		settledWithLease := `UPDATE push_requests SET state='succeeded', settled_at=now(), result_code='push_failed',
+			dispatch_lease_expires_at=now() WHERE id=$1`
+		wantPGError(t, execErr(pool, settledWithLease, unclaimed.ID), "23514")
+	}
+
+	assertColumns := func(t *testing.T, pool *sql.DB, present bool) {
+		t.Helper()
+		for _, column := range []string{"dispatch_generation", "dispatch_lease_expires_at"} {
+			if got := columnExists(t, pool, "push_requests", column); got != present {
+				t.Fatalf("push_requests.%s exists = %v, want %v", column, got, present)
+			}
+		}
+		if got := indexExists(t, pool, "push_requests_dispatch_pending"); got != present {
+			t.Fatalf("push_requests_dispatch_pending exists = %v, want %v", got, present)
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_pr39f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	assertColumns(t, freshPool, true)
+	t.Run("fresh", func(t *testing.T) { constrained(t, freshPool) })
+
+	pool, _ := testSchema(t, "test_pr39_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0039_push_dispatch_lease.sql"))
+	assertColumns(t, pool, false)
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertColumns(t, pool, true)
+	t.Run("upgraded", func(t *testing.T) { constrained(t, pool) })
+}
+
+// execErr runs one statement and returns its error, for driving a constraint with an UPDATE rather
+// than an INSERT.
+func execErr(pool *sql.DB, statement string, args ...any) error {
+	_, e := pool.Exec(statement, args...)
+	return e
+}
+
+// indexExists reads this schema's own index list, for the same reason the other catalog helpers filter
+// on `current_schema()`: the catalog is cluster-wide and a name-only query could pass on a sibling
+// schema's index.
+func indexExists(t *testing.T, pool *sql.DB, name string) bool {
+	t.Helper()
+	var found bool
+	must(t, pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname=$1)`, name).Scan(&found))
+	return found
+}
+
+// TestMigration0040MirrorPreparationAttemptsAppliesFreshAndUpgrades proves the attempt budget is
+// counted by its own column and that the upgrade derives the count for the rows that were already in
+// the field. The derived values are the whole point: a preparation that was left `dispatched` after an
+// attempt that wrote nothing has spent that attempt, and reading its generation as the count would
+// refuse it the next one forever — the wedge the budget exists to prevent.
+func TestMigration0040MirrorPreparationAttemptsAppliesFreshAndUpgrades(t *testing.T) {
+	driven := func(t *testing.T, pool *sql.DB) {
+		t.Helper()
+		chain := seedPushApprovalChain(t, pool)
+		operation := seedPreparationRow(t, pool, chain, "failed", 1, false)
+		statement := `UPDATE mirror_preparations SET attempts=-1 WHERE operation_id=$1`
+		wantPGError(t, execErr(pool, statement, operation), "23514")
+	}
+
+	freshPool, _ := testSchema(t, "test_mp40f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !columnExists(t, freshPool, "mirror_preparations", "attempts") {
+		t.Fatal("a fresh database must have mirror_preparations.attempts")
+	}
+	t.Run("fresh", func(t *testing.T) { driven(t, freshPool) })
+
+	pool, _ := testSchema(t, "test_mp40_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0040_mirror_preparation_attempts.sql"))
+	if columnExists(t, pool, "mirror_preparations", "attempts") {
+		t.Fatal("attempts must not exist before 0040")
+	}
+	// The rows the backfill has to derive a count for are written first, on the schema as it was, and
+	// read back after the upgrade: what the migration derived is the evidence, not what it was told to.
+	chain := seedPushApprovalChain(t, pool)
+	seeded := seedPreparationCases(t, pool, chain)
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !columnExists(t, pool, "mirror_preparations", "attempts") {
+		t.Fatal("the upgrade must add attempts")
+	}
+	assertPreparationAttempts(t, pool, seeded)
+
+	// A row written under the new column agrees with the rule the backfill applied: publishing a mirror
+	// ends the streak the budget counts, so a published preparation starts at zero rather than carrying
+	// the attempts that produced it.
+	operation := seedPreparationRow(t, pool, chain, "ready", 2, false)
+	var attempts int64
+	must(t, pool.QueryRow(`SELECT attempts FROM mirror_preparations WHERE operation_id=$1`, operation).Scan(&attempts))
+	if attempts != 0 {
+		t.Fatalf("a published preparation reads attempts=%d, want 0", attempts)
+	}
+}
+
+// TestMigration0033UserGitCredentialsAddsTheOwnerFacingColumns proves the two columns a user-managed
+// personal Git credential needs arrive by forward migration, on a fresh schema and on one upgraded from
+// the schema that predates them.
+//
+// The name is the one column here with a rule of its own, so it is driven rather than described: the
+// bound is 120 characters and the row that breaks it has to be refused. The empty default is asserted
+// too, because it is the value `ConfigureCredential` — the deployment CLI path, which knows no name —
+// writes, and it is what the product's own list filters out by attribution rather than by name.
+func TestMigration0033UserGitCredentialsAddsTheOwnerFacingColumns(t *testing.T) {
+	columnsPresent := func(t *testing.T, pool *sql.DB) bool {
+		t.Helper()
+		return columnExists(t, pool, "credential_refs", "name") && columnExists(t, pool, "credential_refs", "revoked_at")
+	}
+	// driven reads the columns' meaning off one credential row rather than describing it. The chain is a
+	// parameter because `seedOwnershipChain` writes one collaboration space per schema, so each schema
+	// gets one — and in the upgrade half it is the row written before the migration that is read back.
+	driven := func(t *testing.T, pool *sql.DB, chain pushApprovalChain) {
+		t.Helper()
+		// A row written without a name reads back as the empty string, and one written without a
+		// revocation reads back as no audit timestamp: both are the meaning of the defaults, not an
+		// absence the readers have to special-case.
+		var name string
+		var revoked *time.Time
+		must(t, pool.QueryRow(`SELECT name, revoked_at FROM credential_refs WHERE id=$1`, chain.credentialRefID).Scan(&name, &revoked))
+		if name != "" || revoked != nil {
+			t.Fatalf("a credential written before the columns existed must read as the defaults, got %q and %v", name, revoked)
+		}
+
+		longest := strings.Repeat("n", 120)
+		_, e := pool.Exec(`UPDATE credential_refs SET name=$1 WHERE id=$2`, longest, chain.credentialRefID)
+		must(t, e)
+		overlong := strings.Repeat("n", 121)
+		wantPGError(t, execErr(pool, `UPDATE credential_refs SET name=$1 WHERE id=$2`, overlong, chain.credentialRefID), "23514")
+	}
+
+	freshPool, _ := testSchema(t, "test_ugc33f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if !columnsPresent(t, freshPool) {
+		t.Fatal("a fresh database must have credential_refs.name and credential_refs.revoked_at")
+	}
+	t.Run("fresh", func(t *testing.T) { driven(t, freshPool, seedPushApprovalChain(t, freshPool)) })
+
+	pool, _ := testSchema(t, "test_ugc33_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0033_user_git_credentials.sql"))
+	if columnsPresent(t, pool) {
+		t.Fatal("the owner-facing columns must not exist before 0033_user_git_credentials")
+	}
+	// The credential row the upgrade has to leave alone is written on the schema as it was, and read
+	// back after it: what the columns mean for an existing row is the migration's own answer.
+	chain := seedPushApprovalChain(t, pool)
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if !columnsPresent(t, pool) {
+		t.Fatal("the upgrade must add credential_refs.name and credential_refs.revoked_at")
+	}
+	t.Run("upgraded", func(t *testing.T) { driven(t, pool, chain) })
+}
+
+// pushRequestActorMembershipKey returns this schema's key on the approval's requester, or the empty
+// string when the key is absent. It reads the constraint's own definition rather than counting rows,
+// because "the key exists" and "the key says what it is supposed to say" are two claims and the
+// migration has to satisfy both. An absent key is an answer here, not a failure: the upgrade half asks
+// this question of a schema that must not have the key yet.
+func pushRequestActorMembershipKey(t *testing.T, pool *sql.DB) string {
+	t.Helper()
+	var definition string
+	e := pool.QueryRow(`SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+		WHERE c.conrelid='push_requests'::regclass AND c.contype='f' AND c.conname='push_request_actor_membership'`).Scan(&definition)
+	if errors.Is(e, sql.ErrNoRows) {
+		return ""
+	}
+	must(t, e)
+	return definition
+}
+
+// TestMigration0041PushRequestActorMembershipAppliesFreshAndUpgrades proves the approval's requester is
+// bound to the tenant's membership by the schema and not only by the grant path that writes the row.
+//
+// The gap 0037 left is shown rather than described: the migration is applied to the schema that has the
+// gap, and the row the product would never write — an approval whose requester is a real, active user
+// and no member of the tenant it belongs to — is inserted successfully there, before the key exists.
+// The two halves after it are what make that row impossible: on a fresh database and on that same
+// upgraded one, the well-formed approval still inserts and both spellings of a stranger are refused.
+func TestMigration0041PushRequestActorMembershipAppliesFreshAndUpgrades(t *testing.T) {
+	// refused drives the key against the chain's own member, who is the one requester it admits, and
+	// against two users it must not. The chain is a parameter rather than seeded here because
+	// `seedOwnershipChain` writes one collaboration space per schema, so a schema gets one.
+	refused := func(t *testing.T, pool *sql.DB, chain pushApprovalChain) {
+		t.Helper()
+		// The stranger is a real user in the schema, because the key being asserted is the membership
+		// one: a nonexistent user id would be refused by any key at all and would prove nothing about
+		// which tenants the reference carries.
+		stranger := uuid.NewString()
+		_, e := pool.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Stranger','active')`, stranger)
+		must(t, e)
+		// A second person, a member of a different tenant, is the other way a requester can be a
+		// non-member: present in `tenant_memberships`, under a tenant the approval does not name. The
+		// tenant and its administrator are written in one transaction because 0002 defers "an active
+		// tenant has an active administrator" to commit, so an autocommitted tenant would be a tenant
+		// with no administrator for as long as it took to write the next statement.
+		elsewhere, outsider := uuid.NewString(), uuid.NewString()
+		tx, e := pool.Begin()
+		must(t, e)
+		defer func() { _ = tx.Rollback() }()
+		_, e = tx.Exec(`INSERT INTO tenants(id,name,status) VALUES($1,'Elsewhere','active')`, elsewhere)
+		must(t, e)
+		_, e = tx.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Outsider','active')`, outsider)
+		must(t, e)
+		_, e = tx.Exec(`INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, elsewhere, outsider)
+		must(t, e)
+		must(t, tx.Commit())
+
+		// The requester the schema accepts, so the refusals below are refusals of one rule rather than
+		// of a row that could never be written at all.
+		must(t, validPushApproval().insert(t, pool, chain))
+
+		for _, c := range []struct {
+			name  string
+			actor string
+		}{
+			{"a requester who is no member of the tenant", stranger},
+			{"a requester who is a member of another tenant", outsider},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				approval := validPushApproval()
+				approval.ActorID = c.actor
+				wantPGError(t, approval.insert(t, pool, chain), "23503")
+			})
+		}
+	}
+	// The gap, driven on the schema that has it: the pre-0041 schema takes an approval whose requester
+	// is no member of the tenant it belongs to. The row is deleted before the upgrade because the
+	// migration validates the rows it finds — which is what the refusal cases below assert — and a
+	// violating row left in place would turn the upgrade into a wedge rather than a failure of the key.
+	unboundApproval := func(t *testing.T, pool *sql.DB, chain pushApprovalChain) string {
+		t.Helper()
+		stranger := uuid.NewString()
+		_, e := pool.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Stranger','active')`, stranger)
+		must(t, e)
+		approval := validPushApproval()
+		approval.ActorID = stranger
+		if e := approval.insert(t, pool, chain); e != nil {
+			t.Fatalf("the schema before 0041 must admit an approval by a non-member, got %v", e)
+		}
+		return approval.ID
+	}
+
+	freshPool, _ := testSchema(t, "test_pram41f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got := pushRequestActorMembershipKey(t, freshPool); got == "" {
+		t.Fatal("a fresh database must carry the requester's membership key")
+	}
+	t.Run("fresh", func(t *testing.T) { refused(t, freshPool, seedPushApprovalChain(t, freshPool)) })
+
+	pool, _ := testSchema(t, "test_pram41_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0041_push_request_actor_membership.sql"))
+	if got := pushRequestActorMembershipKey(t, pool); got != "" {
+		t.Fatalf("the requester's membership key must not exist before 0041, got %s", got)
+	}
+	chain := seedPushApprovalChain(t, pool)
+	unbound := unboundApproval(t, pool, chain)
+	_, e := pool.Exec(`DELETE FROM push_requests WHERE id=$1`, unbound)
+	must(t, e)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	definition := pushRequestActorMembershipKey(t, pool)
+	if definition == "" {
+		t.Fatal("the upgrade must add the requester's membership key")
+	}
+	// The key the migration added has to be the composite one, not merely a key of that name: a bare
+	// `users(id)` reference would carry the same name and admit every stranger above.
+	for _, want := range []string{"tenant_memberships", "tenant_id", "actor_user_id"} {
+		if !strings.Contains(definition, want) {
+			t.Fatalf("the requester's key must reference the membership and name %s, got %s", want, definition)
+		}
+	}
+	t.Run("upgraded", func(t *testing.T) { refused(t, pool, chain) })
+}
+
+// preparationAttemptCase is one preparation row of a shape the pre-0040 schema accepts, and the attempt
+// count 0040 has to derive for it from the evidence the row carries: its state and its generation.
+type preparationAttemptCase struct {
+	name             string
+	state            string
+	generation       int64
+	lease            bool
+	expectedAttempts int64
+}
+
+// seededPreparation is one such row after it was written, so its derived count can be read back once
+// the upgrade has run.
+type seededPreparation struct {
+	name      string
+	operation string
+	expected  int64
+}
+
+// seedPreparationCases writes every shape a row can have when the column does not exist yet.
+//
+// The shapes are the ones where generation and the attempt count disagree, which is the whole reason
+// 0040 separates them: `ready` because publishing ends a streak, `dispatched` because the attempt it is
+// in has not concluded, and the settled states because they concluded every attempt they made.
+func seedPreparationCases(t *testing.T, pool *sql.DB, chain pushApprovalChain) []seededPreparation {
+	t.Helper()
+	cases := []preparationAttemptCase{
+		{"a published preparation starts a new streak", "ready", 2, false, 0},
+		{"a dispatched attempt has concluded every earlier one", "dispatched", 2, true, 1},
+		{"a failed preparation concluded every attempt it made", "failed", 3, false, 3},
+		{"a superseded preparation concluded the attempts it made", "superseded", 1, false, 1},
+		{"an admitted preparation has concluded nothing yet", "admitting", 1, false, 1},
+	}
+	var seeded []seededPreparation
+	for _, c := range cases {
+		seeded = append(seeded, seededPreparation{
+			name:      c.name,
+			operation: seedPreparationRow(t, pool, chain, c.state, c.generation, c.lease),
+			expected:  c.expectedAttempts,
+		})
+	}
+	return seeded
+}
+
+// assertPreparationAttempts reads back what 0040 derived for the rows that predate it.
+func assertPreparationAttempts(t *testing.T, pool *sql.DB, seeded []seededPreparation) {
+	t.Helper()
+	for _, s := range seeded {
+		var attempts int64
+		must(t, pool.QueryRow(`SELECT attempts FROM mirror_preparations WHERE operation_id=$1`, s.operation).Scan(&attempts))
+		if attempts != s.expected {
+			t.Fatalf("%s: the upgrade derived attempts=%d, want %d", s.name, attempts, s.expected)
+		}
+	}
+}
+
+// seedPreparationRow inserts one operation and the mirror preparation that belongs to it, in a shape
+// the pre-0040 schema accepts, and returns the operation id.
+//
+// The operation is real rather than a random referent because the backfill reads its rows: a
+// preparation whose operation does not exist cannot be inserted at all, and one that cannot be
+// inserted cannot show what the upgrade derived for it.
+func seedPreparationRow(t *testing.T, pool *sql.DB, chain pushApprovalChain, state string, generation int64, lease bool) string {
+	t.Helper()
+	operation := uuid.NewString()
+	_, e := pool.Exec(`INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash)
+		VALUES($1,$2,$3,$4,$5,'create_workspace','succeeded','done','{}',$6,$6)`,
+		operation, chain.tenantID, chain.userID, chain.projectID, chain.mainWorkspaceID, "preparation-"+operation)
+	must(t, e)
+	var expires any
+	if lease {
+		expires = time.Now()
+	}
+	var commit, mirrorGeneration any
+	if state == "ready" {
+		commit, mirrorGeneration = strings.Repeat("c", 40), 1
+	}
+	_, e = pool.Exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,repository_url,
+		pinned_ref,runtime_generation,control_epoch,generation,state,commit_id,mirror_generation,lease_expires_at)
+		VALUES($1,$2,$3,$4,'https://example.invalid/skeleton.git','refs/heads/main',1,0,$5,$6,$7,$8,$9)`,
+		operation, chain.tenantID, chain.projectID, chain.mainWorkspaceID, generation, state, commit, mirrorGeneration, expires)
+	must(t, e)
+	return operation
 }
