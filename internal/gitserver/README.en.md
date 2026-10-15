@@ -51,6 +51,19 @@ tell "no such mirror" from "not yours"; a resolver or database that cannot answe
 becomes an allow. A mirror republished between the authorization and the open is refused, and the
 caller retries, which re-authorizes.
 
+A negotiation body reaches `upload-pack` decoded according to its `Content-Encoding`. A git client
+compresses a request body over 1 KiB and declares `gzip`, and crossing that line is normal for an
+incremental fetch: a first clone asks for one ref, sends `done` and stays small, while a Workspace
+that has committed locally and now fetches the next mirror generation sends its `have` lines in
+growing batches until one crosses. Handing the deflate bytes to `upload-pack` as a packet stream is
+what the caller sees as a 500 — a server that looks broken rather than a request with a problem. The
+repository surface does not have this fault because it delegates to `git http-backend`, which inflates
+the body itself. An encoding this surface does not implement (`deflate`, say) and a body that claims
+gzip without being it are both refused before git runs (`415` and `400`), for the same reason: passing
+them on produces that 500, and a 500 tells the caller to retry what can never work. `MaxRequestBytes`
+bounds both the bytes on the wire and the bytes after inflation: the first is what a caller cannot
+send, the second what a caller's claimed encoding cannot expand into.
+
 Repository policy and the hook path are applied to every git process through `GIT_CONFIG_*`
 environment variables rather than stored in repositories, so a restart (new hook directory) or an
 older repository cannot weaken them. The mirror surface's child environment is a closed set built from
@@ -58,8 +71,11 @@ nothing, with `GIT_OPTIONAL_LOCKS=0`, so a read can never modify the published t
 a database transaction or an upstream credential.
 
 Tests use the real git client, `git http-backend` and TLS with a policy double for the boundary matrix
-(`service_test.go`, `server_test.go`, `fault_test.go`); `surface_test.go` covers serving only the
-surfaces a process was given and the routes not crossing between them; Core's PostgreSQL tests cover
-the decision, and `integration/git_server_test.go` drives a real delivery from Cloud state through the
-shipped command as the hook. Long fetches are not re-authorized mid-transfer; writes are, in
-pre-receive.
+(`service_test.go`, `server_test.go`, `fault_test.go`, `negotiation_test.go`); `surface_test.go` covers
+serving only the surfaces a process was given and the routes not crossing between them; Core's
+PostgreSQL tests cover the decision, and `integration/git_server_test.go` drives a real delivery from
+Cloud state through the shipped command as the hook. `negotiation_test.go` reproduces the incremental
+fetch that crosses the compression threshold with a real client (once per protocol version) and
+compares the compressed body's answer with the plain one — which shows not merely that the 500 is gone
+but that git read the packet stream the client meant. Long fetches are not re-authorized mid-transfer;
+writes are, in pre-receive.

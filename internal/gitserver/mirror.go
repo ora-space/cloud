@@ -1,6 +1,7 @@
 package gitserver
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -254,7 +255,11 @@ func (m *mirrorRead) writeAdvertisement(handle *mirror.Handle, w http.ResponseWr
 func (m *mirrorRead) runUploadPack(handle *mirror.Handle, w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), m.cfg.Timeout)
 	defer cancel()
-	body := http.MaxBytesReader(w, r.Body, m.cfg.MaxRequestBytes)
+	body, ok := m.negotiationBody(w, r)
+	if !ok {
+		return
+	}
+	defer func() { _ = body.Close() }()
 	// The status line cannot be un-sent, so the first byte of git's answer is read before any header
 	// is written: a git that fails immediately becomes a 500 the client can act on, instead of a 200
 	// with an empty body that looks like a protocol error.
@@ -278,6 +283,53 @@ func (m *mirrorRead) runUploadPack(handle *mirror.Handle, w http.ResponseWriter,
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, stream); err != nil {
 		m.log.Warn("streaming a fetch failed", zap.String("mirror", handle.Record.Key.String()), zap.Error(err))
+	}
+}
+
+// negotiationBody hands git the request body as the packet stream the client meant, or answers the
+// request itself and reports false when the body is not one this surface can read.
+//
+// The body of a fetch is not always the bytes on the wire. A git client compresses a negotiation body
+// it has to send more than 1 KiB for — `remote-curl.c` gzips when `1024 < rpc->len` — and says so in
+// `Content-Encoding`. That is exactly the shape of an incremental fetch: a first clone asks for one
+// ref, sends `done` and stays small, while a fetch that has to negotiate sends its `have` lines in
+// growing batches, and the third POST crosses the threshold. Passing those bytes on as they arrived
+// is what turned the third POST of a fetch into a 500: `upload-pack` parses deflate output as a
+// packet stream, fails on it, and the caller sees an infrastructure fault for a request that was
+// well-formed. The repository surface does not have this fault because it delegates to `git
+// http-backend`, which inflates the body itself before its child reads it; this surface starts
+// `upload-pack` directly, so the step belongs here.
+//
+// An encoding this surface does not implement is refused rather than passed through. Handing
+// unknown-encoded bytes to `upload-pack` produces the same 500 as above, and a 500 would tell the
+// caller to retry a request that can never work; 415 says what is wrong with the request instead.
+// A body that claims gzip and is not is answered as the caller's mistake, for the same reason.
+//
+// Both limits are the same setting, and both are needed. The wire bound is what a caller cannot
+// exceed by sending; the bound on the inflated stream is what a caller cannot exceed by *claiming*,
+// because deflate expands by orders of magnitude and the child reads the inflated bytes. Exceeding
+// either leaves git with a truncated packet stream, which is the pre-existing behavior for a body
+// that arrives short and is not a decision this file makes.
+func (m *mirrorRead) negotiationBody(w http.ResponseWriter, r *http.Request) (io.ReadCloser, bool) {
+	wire := http.MaxBytesReader(w, r.Body, m.cfg.MaxRequestBytes)
+	switch encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); encoding {
+	case "", "identity":
+		return wire, true
+	case "gzip", "x-gzip":
+		inflated, err := gzip.NewReader(wire)
+		if err != nil {
+			// The message here is gzip's own and carries no part of the body.
+			m.log.Info("a fetch negotiation body could not be inflated", zap.Error(err))
+			http.Error(w, "malformed request body", http.StatusBadRequest)
+			return nil, false
+		}
+		return http.MaxBytesReader(w, inflated, m.cfg.MaxRequestBytes), true
+	default:
+		// The header is the caller's text, so it is named by what the server did with it rather than
+		// echoed into the log, the way every other caller-supplied field on this surface is handled.
+		m.log.Info("a fetch negotiation used an unsupported content encoding")
+		http.Error(w, "unsupported content encoding", http.StatusUnsupportedMediaType)
+		return nil, false
 	}
 }
 

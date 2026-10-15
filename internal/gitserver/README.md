@@ -40,11 +40,21 @@ handler 都到不了另一面的路由，因此一个面的可达地址不会决
 拒绝都是同一个 `403` 与同一段响应体，调用方无法用它区分「不存在」与「无权」；解析器或数据库读不到时返回 `503`，绝不
 变成放行。授权与开卷之间镜像被重新发布（代次变化）时拒绝，读由调用方重试并重新授权。
 
+镜像面的协商体按 `Content-Encoding` 解码后才交给 `upload-pack`。git 客户端协商体超过 1 KiB 时会自行压缩并声明
+`gzip`，而越线正是增量 fetch 的常态：首次 clone 只要一个 ref、随即 `done`，请求体很小；Workspace 提交过本地工作后
+再取下一代镜像时，`have` 分批增长，第三批就会越线。把 deflate 字节当作 packet stream 交给 `upload-pack`，调用方只会
+得到一个 500——它读起来像服务坏了，而不是请求有什么问题。仓库面没有这个缺陷，因为它交给 `git http-backend`，由后者
+自己解压。本面不实现的编码（例如 `deflate`）与自称 gzip 而不是 gzip 的请求体都在跑 git 之前拒绝（`415` / `400`），
+理由相同：交给子进程也只是那个 500，而 500 会让调用方重试一个永远不会成功的请求。线上大小与解开后的大小都由
+`MaxRequestBytes` 兜住——前者是调用方「发」不出来的，后者是调用方「声称的编码」撑不出来的。
+
 仓库策略与 hook 路径通过 `GIT_CONFIG_*` 环境变量作用于每个 git 进程，而不写进仓库，因此重启（hook 目录变化）
 或旧仓库都无法削弱它们。镜像面的子进程环境是从零构造的封闭集合，且 `GIT_OPTIONAL_LOCKS=0`，所以一次读取不可能改动
 已发布的树。两条路径都不持有数据库事务，也不持有上游凭据。
 
 测试用真实 git 客户端、`git http-backend` 与 TLS，配合策略替身覆盖边界矩阵（`service_test.go`、`server_test.go`、
-`fault_test.go`）；`surface_test.go` 覆盖「只服务被装配的面、路由互不串门」；Core 的 PostgreSQL 测试覆盖判定本身，
-`integration/git_server_test.go` 用真实 Cloud 状态下的交付、以发布的命令作为 hook 跑通全链路。长时间的 fetch 不在传输
-中途重新授权；写入在 pre-receive 中重新授权。
+`fault_test.go`、`negotiation_test.go`）；`surface_test.go` 覆盖「只服务被装配的面、路由互不串门」；Core 的
+PostgreSQL 测试覆盖判定本身，`integration/git_server_test.go` 用真实 Cloud 状态下的交付、以发布的命令作为 hook 跑通全链路。
+`negotiation_test.go` 用真实 git 客户端复现越线的那次增量 fetch（v0/v2 各一次），并把压缩体与明文体当作同一个请求来比对
+——后者证明的不只是「不再 500」，而是 git 读到的就是客户端本意的那个 packet stream。长时间的 fetch 不在传输中途重新授权；
+写入在 pre-receive 中重新授权。
