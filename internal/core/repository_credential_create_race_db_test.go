@@ -56,8 +56,10 @@ func (s *handoffRaceSecrets) Write(_ context.Context, credentialID, token string
 	return ref, nil
 }
 
-func (s *handoffRaceSecrets) Rotate(context.Context, string, string) error { return nil }
-func (s *handoffRaceSecrets) Revoke(context.Context, string) error         { return nil }
+// Rotate and Revoke are not part of the scene: the race is on the create handoff, and a double that
+// answered a rotation would have to model the store's version counter to be believed.
+func (s *handoffRaceSecrets) Rotate(context.Context, string, string) (int64, error) { return 0, nil }
+func (s *handoffRaceSecrets) Revoke(context.Context, string) error                  { return nil }
 
 func (s *handoffRaceSecrets) handoffIDs() []string {
 	s.mu.Lock()

@@ -18,7 +18,7 @@ import (
 // grants the ingress-writer, and there is deliberately no resolve method to add here.
 var _ interface {
 	Write(ctx context.Context, credentialID, token string) (string, error)
-	Rotate(ctx context.Context, credentialID, token string) error
+	Rotate(ctx context.Context, credentialID, token string) (int64, error)
 	Revoke(ctx context.Context, credentialID string) error
 } = (*Client)(nil)
 
@@ -77,12 +77,19 @@ func TestClientRoundTripsTheCredentialLifecycleOverMutualTLS(t *testing.T) {
 		t.Fatalf("a replayed Write returned %q (%v), want the original %q", repeated, err, first)
 	}
 
-	if err := client.Rotate(ctx, id, "ghp_second"); err != nil {
+	// The version the client answers with is the store's own, which is what Cloud records: an
+	// authorization names a material version and the store refuses one it cannot serve, so a caller that
+	// counted rotations instead would record a version the material was never written under.
+	rotateVersion, err := client.Rotate(ctx, id, "ghp_second")
+	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
 	rotated := readRecord(t, fixture.store, id)
 	if rotated.Version != 2 || openTokenOn(t, fixture.store, id, &rotated.Current) != "ghp_second" {
 		t.Fatalf("Rotate left version %d holding the wrong material", rotated.Version)
+	}
+	if rotateVersion != rotated.Version {
+		t.Fatalf("Rotate reported version %d but the store holds %d", rotateVersion, rotated.Version)
 	}
 	if rotated.SecretRef != first {
 		t.Fatal("rotation changed the reference Cloud persists")
@@ -93,14 +100,18 @@ func TestClientRoundTripsTheCredentialLifecycleOverMutualTLS(t *testing.T) {
 		t.Fatal("the superseded version was not retained for the grace period")
 	}
 	// Re-sending the token already in place is a no-op: treating it as a rotation would advance a
-	// version nothing depends on while burning the window above.
-	if err := client.Rotate(ctx, id, "ghp_second"); err != nil {
+	// version nothing depends on while burning the window above. The version it answers is therefore the
+	// one already current, which is the answer Cloud must record rather than an increment.
+	repeatedVersion, err := client.Rotate(ctx, id, "ghp_second")
+	if err != nil {
 		t.Fatalf("Rotate of the current token: %v", err)
 	}
 	if version := readRecord(t, fixture.store, id).Version; version != 2 {
 		t.Fatalf("a repeated Rotate advanced the version to %d", version)
 	}
-
+	if repeatedVersion != 2 {
+		t.Fatalf("a repeated Rotate answered version %d, want the current 2", repeatedVersion)
+	}
 	if err := client.Revoke(ctx, id); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -140,8 +151,8 @@ func TestClientRefusalsAreStableCodesWithoutStoreText(t *testing.T) {
 		code   string
 		status int
 	}{
-		{"a credential the store never held", func() error { return client.Rotate(ctx, testCredentialID(97), "ghp_next") }, ReasonCodeNotFound, 404},
-		{"a token the boundary refuses", func() error { return client.Rotate(ctx, id, "") }, ReasonCodeInvalidRequest, 400},
+		{"a credential the store never held", func() error { _, err := client.Rotate(ctx, testCredentialID(97), "ghp_next"); return err }, ReasonCodeNotFound, 404},
+		{"a token the boundary refuses", func() error { _, err := client.Rotate(ctx, id, ""); return err }, ReasonCodeInvalidRequest, 400},
 		{"material that disagrees with the record", func() error {
 			_, err := client.Write(ctx, id, "ghp_a_different_secret")
 			return err
@@ -175,7 +186,7 @@ func TestClientHoldingTheWrongIdentityIsRefused(t *testing.T) {
 	server, pki := newTestServer(t, fixture.store, nil)
 	resolver := newIngressClient(t, server, pki, testResolverIdentity, 42)
 
-	err := resolver.Rotate(context.Background(), testCredentialID(42), "ghp_next")
+	_, err := resolver.Rotate(context.Background(), testCredentialID(42), "ghp_next")
 	var failure *Failure
 	if !errors.As(err, &failure) || failure.Code != "capability_denied" || failure.Status != 403 {
 		t.Fatalf("the resolver identity reached a write: %v", err)

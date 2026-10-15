@@ -121,10 +121,29 @@ func (c *Client) Write(ctx context.Context, credentialID, token string) (string,
 	return out.SecretRef, nil
 }
 
-// Rotate replaces the material of an existing credential. D4 requires this to happen before Cloud
-// advances its metadata pointer, so the previous version stays readable for a bounded grace period.
-func (c *Client) Rotate(ctx context.Context, credentialID, token string) error {
-	return c.call(ctx, http.MethodPost, "/v1/credentials/"+credentialID+"/rotate", map[string]string{"token": token}, nil)
+// Rotate replaces the material of an existing credential and returns the version the Store wrote.
+//
+// D4 requires the handoff to happen before Cloud records anything, so the previous version stays
+// readable for a bounded grace period. The returned version is what Cloud must record: the Store
+// resolves an authorization by looking up the version it names among the generations it can still
+// serve, so a caller that counted rotations itself would record a version the Store never issued and
+// every later authorization would be refused. The Store answers a repeated rotation of the same
+// material with the version already current, which is why the answer has to be read rather than
+// inferred.
+func (c *Client) Rotate(ctx context.Context, credentialID, token string) (int64, error) {
+	var out struct {
+		Version int64 `json:"version"`
+	}
+	err := c.call(ctx, http.MethodPost, "/v1/credentials/"+credentialID+"/rotate", map[string]string{"token": token}, &out)
+	if err != nil {
+		return 0, err
+	}
+	if out.Version < 1 {
+		// A version the Store did not state is not one Cloud may record: writing a guess here is
+		// exactly the drift that makes a credential unusable, so an unreadable answer fails closed.
+		return 0, errors.New("credential service returned no material version")
+	}
+	return out.Version, nil
 }
 
 // Revoke destroys the material of a credential Cloud has already marked unusable.

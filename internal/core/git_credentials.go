@@ -242,8 +242,18 @@ type CredentialSecretWriter interface {
 	// Write stores a token for one credential id and returns the Store-generated reference. Repeating
 	// it with the same id and the same material returns the original reference (D4).
 	Write(ctx context.Context, credentialID, token string) (string, error)
-	// Rotate replaces the material of an existing credential.
-	Rotate(ctx context.Context, credentialID, token string) error
+	// Rotate replaces the material of an existing credential and returns the Store's material version
+	// afterwards.
+	//
+	// The version is returned because it, and not a counter Cloud keeps, is what a later authorization
+	// names: the Store resolves an authorization by looking the version up among the generations it can
+	// still serve, and refuses one naming a version it does not have. A caller that advanced its own
+	// counter instead would record a version the material was never written under, and every
+	// authorization built from it would be refused — permanently, since nothing repairs a version the
+	// Store never issued. Re-rotating with the current material is a no-op that returns the version
+	// already current, which is why the returned value rather than an increment is the only answer that
+	// stays correct on a retry.
+	Rotate(ctx context.Context, credentialID, token string) (int64, error)
 	// Revoke destroys the material of a credential Cloud has already marked unusable. It is idempotent:
 	// "already gone" is success, because the caller's desired end state is "no material".
 	Revoke(ctx context.Context, credentialID string) error
@@ -447,7 +457,8 @@ func (s *Store) createGitCredential(ctx context.Context, r *PublicRequest, token
 	return GitCredentialResult{Resource: out, Status: 201}, nil
 }
 
-// rotateGitCredential replaces the material of a credential and then advances its metadata version.
+// rotateGitCredential replaces the material of a credential and then records the Store's material
+// version for it.
 func (s *Store) rotateGitCredential(ctx context.Context, r *PublicRequest, token string) (GitCredentialResult, error) {
 	if !validGitCredentialToken(token) {
 		return GitCredentialResult{}, &Fault{Code: "invalid_credential_token", Status: 400, Params: Object{}}
@@ -467,21 +478,34 @@ func (s *Store) rotateGitCredential(ctx context.Context, r *PublicRequest, token
 	if err != nil {
 		return GitCredentialResult{}, err
 	}
-	if err := s.Secrets.Rotate(ctx, r.CredentialID, token); err != nil {
+	// The handoff happens outside any transaction: a rotation is an HTTP call to another service, and
+	// the execution contract forbids holding Cloud's lock across it. The Store's absence is already
+	// refused by the ingress entry point, before any transaction runs.
+	stored, err := s.Secrets.Rotate(ctx, r.CredentialID, token)
+	if err != nil {
 		return GitCredentialResult{}, credentialStoreFault(err)
 	}
-	// Second transaction: advance the pointer. The store has already written the new version, so a
-	// failure here leaves material newer than the metadata — the credential keeps working, its version
-	// is simply one behind, and the client's conflict response tells it to re-read. That is the ordering
-	// D4 asks for; the reverse order could leave a reference pointing at material that was never
-	// written. Nothing here reads the store's own version: the metadata version is a concurrency token
-	// for Cloud's row, and persisting a second counter would be state neither ADR asks for.
+	// Second transaction: record the version the Store just wrote. D4 orders the handoff first, so a
+	// failure here leaves material newer than the metadata. The row then lags whatever the Store holds —
+	// by this rotation, or by more if a concurrent rotation won the row's own version check and this one
+	// was reported to its caller as a conflict — and authorizations naming the lagging version are
+	// refused until it is closed. `version < $2` is what closes it: the Store's counter only moves
+	// forward, so the next rotation of this credential writes the Store's current version whatever token
+	// it carries, and the row catches up. That ordering is what D4 asks for; the reverse order could
+	// leave a reference pointing at material that was never written.
+	//
+	// `version` is the Store's own counter, not Cloud's, because it is the value an authorization
+	// carries: `requireRepositoryAccess` stamps this column into every plan, and the Store refuses a
+	// plan naming a version it cannot serve. So the row tracks the Store monotonically and never leads
+	// it. The predicate is what makes that true under a retry: an identical re-rotation returns the
+	// version already current, and advancing the column past it would leave every later authorization
+	// naming a generation the Store never wrote, which is a credential that can never be used again.
 	var out Object
 	_, err = s.transact(ctx, func(t *transaction) Object {
 		uid := identityWithAlias(t, r.Identity).S("id")
 		membership(t, r.TenantID, uid, false)
 		c := rotatableGitCredential(t, r, uid)
-		t.exec("UPDATE credential_refs SET version=version+1 WHERE id=$1", c.S("id"))
+		t.exec("UPDATE credential_refs SET version=$2 WHERE id=$1 AND version < $2", c.S("id"), stored)
 		out = t.one("SELECT "+gitCredentialColumns+" FROM credential_refs WHERE id=$1", c.S("id"))
 		return out
 	})

@@ -220,14 +220,17 @@ func (s *pointerRaceSecrets) Write(context.Context, string, string) (string, err
 	return "", nil
 }
 
-func (s *pointerRaceSecrets) Rotate(_ context.Context, credentialID, token string) error {
+func (s *pointerRaceSecrets) Rotate(_ context.Context, credentialID, token string) (int64, error) {
 	s.mu.Lock()
 	s.did, s.token = true, token
 	s.mu.Unlock()
 	// The material is now the new token. Before the metadata pointer can advance, a concurrent writer
 	// changes the row: this is the failure the second transaction's own precondition must catch.
 	_, err := s.store.Pool.Exec(`UPDATE credential_refs SET version=version+1,name='concurrent-writer' WHERE id=$1`, credentialID)
-	return err
+	// The version answered is the store's third generation, deliberately distinct from the concurrent
+	// writer's bump to 2. The distinction is what makes the row's version a witness: had the second
+	// transaction recorded the store's version despite the conflict, the row would read 3.
+	return 3, err
 }
 
 func (s *pointerRaceSecrets) Revoke(context.Context, string) error { return nil }
@@ -246,10 +249,11 @@ func (s *pointerRaceSecrets) rotated() (bool, string) {
 // The failure is staged on the seam between the two transactions (`Secrets.Rotate`), where any real
 // concurrent writer would act: a second writer advances the row's version while the rotate is in
 // flight, so the second transaction's `version` precondition fails and the whole rotate is reported as
-// a conflict. The version column is the witness: had the second transaction's own `version=version+1`
-// run, the row would be at 3; the observed 2 is only the concurrent writer's bump, so the pointer
-// advance provably did not apply. The concurrent writer's `name` also survives, proving the failed
-// second transaction did not write the row at all.
+// a conflict. The version column is the witness: the store answered a version the concurrent writer's
+// bump does not produce, so had the second transaction recorded it the row would read 3; the observed
+// 2 is only the concurrent writer's bump, and the pointer advance provably did not apply. The
+// concurrent writer's `name` also survives, proving the failed second transaction did not write the
+// row at all.
 func TestARotateWhoseMetadataAdvanceFailsLeavesTheStoreRotatedAndThePointerBehind(t *testing.T) {
 	store := dispatcherDB(t)
 	secrets := &pointerRaceSecrets{store: store}

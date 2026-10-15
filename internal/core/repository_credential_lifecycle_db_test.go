@@ -46,6 +46,7 @@ type lifecycleSecrets struct {
 	mu       sync.Mutex
 	refs     map[string]string
 	material map[string]string
+	versions map[string]int64
 	writeIDs []string
 	rotates  int
 	revokes  int
@@ -70,18 +71,31 @@ func (s *lifecycleSecrets) Write(_ context.Context, credentialID, token string) 
 	return ref, nil
 }
 
-func (s *lifecycleSecrets) Rotate(_ context.Context, credentialID, token string) error {
+// Rotate replaces the material and answers with the store's own version counter, which starts at the
+// generation a credential's material begins at and moves only when the material actually changes —
+// the real Store's `Rotate`. Answering a constant here would hide the version Cloud records, which is
+// the value every later authorization names, from the tests that exercise rotation.
+func (s *lifecycleSecrets) Rotate(_ context.Context, credentialID, token string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fail != nil {
-		return s.fail
+		return 0, s.fail
 	}
 	s.rotates++
 	if s.material == nil {
-		s.material = map[string]string{}
+		s.material, s.versions = map[string]string{}, map[string]int64{}
 	}
-	s.material[credentialID] = token
-	return nil
+	current := s.versions[credentialID]
+	if current == 0 {
+		// A credential staged directly in the database has no store history; its material is the first
+		// generation, which is the version its row already carries.
+		current = 1
+	}
+	if s.material[credentialID] != token {
+		current++
+	}
+	s.material[credentialID], s.versions[credentialID] = token, current
+	return current, nil
 }
 
 func (s *lifecycleSecrets) Revoke(_ context.Context, credentialID string) error {

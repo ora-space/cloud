@@ -37,6 +37,7 @@ type recordingSecrets struct {
 	mu       sync.Mutex
 	refs     map[string]string
 	material map[string]string
+	versions map[string]int64
 	writes   int
 	rotates  int
 	revokes  int
@@ -67,18 +68,31 @@ func (s *recordingSecrets) Write(_ context.Context, credentialID, token string) 
 	return ref, nil
 }
 
-func (s *recordingSecrets) Rotate(_ context.Context, credentialID, token string) error {
+// Rotate replaces the material and answers with the store's own version counter, which moves only when
+// the material actually changes — the real Store's `Rotate`. Cloud records that version, so a double
+// answering a constant would hide the value every later authorization names.
+func (s *recordingSecrets) Rotate(_ context.Context, credentialID, token string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fail != nil {
-		return s.fail
+		return 0, s.fail
 	}
 	if _, ok := s.refs[credentialID]; !ok {
-		return refusal{code: "credential_not_found"}
+		return 0, refusal{code: "credential_not_found"}
 	}
-	s.material[credentialID] = token
+	if s.versions == nil {
+		s.versions = map[string]int64{}
+	}
+	current := s.versions[credentialID]
+	if current == 0 {
+		current = 1
+	}
+	if s.material[credentialID] != token {
+		current++
+	}
+	s.material[credentialID], s.versions[credentialID] = token, current
 	s.rotates++
-	return nil
+	return current, nil
 }
 
 func (s *recordingSecrets) Revoke(_ context.Context, credentialID string) error {
