@@ -150,6 +150,12 @@ type PushOutcome struct {
 	// no observation. It is recorded as evidence and is never a second chance to call the write a
 	// success.
 	ObservedCommit string
+	// CleanupFailure is the executor's own reason code for credential material it could not prove
+	// destroyed after the attempt, and it is empty unless that happened. It is carried beside the verdict
+	// because it is a fact about the executor rather than about the remote: the verdict still says what
+	// the write did, and this says that the executor's copy of the credential may outlive it. See
+	// `pushSettlement` for what Cloud records when both are present.
+	CleanupFailure string
 }
 
 // PushExecutor performs one approved remote write.

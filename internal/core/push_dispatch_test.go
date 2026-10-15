@@ -318,6 +318,80 @@ func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 	})
 }
 
+// TestACleanupFailureIsRecordedBesideTheVerdictAndNotInPlaceOfIt is the other direction a write must
+// never be settled in, and it is measured from the executor's answer to the row's two columns.
+//
+// An executor that confirmed the write and then could not prove its own copy of the credential destroyed
+// is reporting two facts at once, and the settlement has to keep both. `succeeded` is Cloud's statement
+// that the external effect completed; the only thing an executor's own disk can take away from that is
+// Cloud's certainty about it, so a confirmed write becomes `uncertain` under the executor's own code —
+// never `failed`, which would record a write that landed as one that did not, and the verdict it would
+// contradict is what the audit exists to keep. A verdict that was already anything else is left exactly
+// as the executor stated it, because turning a stated refusal into an uncertain one would be Cloud
+// discarding an answer it was given.
+//
+// The observation is recorded in every case. It is the evidence the verdict was drawn from, and a
+// cleanup failure is a fact about the executor rather than about the remote, so it may not suppress what
+// the executor saw on the remote.
+func TestACleanupFailureIsRecordedBesideTheVerdictAndNotInPlaceOfIt(t *testing.T) {
+	cases := []struct {
+		name      string
+		state     cloneexec.PushState
+		want      PushVerdict
+		observed  string
+		wantState string
+		wantCode  string
+	}{
+		{
+			// The defect this case exists for: this row used to be `failed/credential_executor_cleanup_failed`
+			// for a write the upstream had already applied.
+			name:  "a confirmed write becomes uncertain and is never a refusal",
+			state: cloneexec.PushConfirmed, want: PushConfirmed, observed: pushNewCommit,
+			wantState: pushUncertain, wantCode: cloneexec.ReasonCodeCleanupFailed,
+		},
+		{
+			name:  "a write that reached the target without this attempt keeps its own code",
+			state: cloneexec.PushTargetSatisfied, want: PushTargetSatisfied, observed: pushNewCommit,
+			wantState: pushUncertain, wantCode: pushAttributionUnknown,
+		},
+		{
+			name:  "a write the upstream refused is still a concluded failure",
+			state: cloneexec.PushNotApplied, want: PushNotApplied, observed: pushOldCommit,
+			wantState: pushFailed, wantCode: pushNotApplied,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			scene := newPushTestScene(t)
+			scene.client.result = cloneexec.PushResult{
+				State:          testCase.state,
+				RemoteCommit:   testCase.observed,
+				CleanupFailure: cloneexec.ReasonCodeCleanupFailed,
+			}
+
+			outcome, err := scene.dispatcher.Execute(context.Background(), scene.execution)
+			if err != nil {
+				t.Fatalf("a cleanup failure was reported as a dispatch error: %v", err)
+			}
+			// The executor's answer reaches this package whole, which is what lets the settlement decide
+			// what to do with each half instead of being handed one of them already discarded.
+			if outcome.Verdict != testCase.want {
+				t.Fatalf("verdict = %q, want %q", outcome.Verdict, testCase.want)
+			}
+			if outcome.CleanupFailure != cloneexec.ReasonCodeCleanupFailed {
+				t.Fatalf("cleanup failure = %q, want the executor's own code", outcome.CleanupFailure)
+			}
+			state, code, observed := pushSettlement(outcome, nil)
+			if state != testCase.wantState || code != testCase.wantCode {
+				t.Fatalf("settled as %s/%s, want %s/%s", state, code, testCase.wantState, testCase.wantCode)
+			}
+			if observed != testCase.observed {
+				t.Fatalf("observed commit = %q, want %q", observed, testCase.observed)
+			}
+		})
+	}
+}
+
 // TestTheDispatcherRefusesToSignFromAnIncompleteDeployment is the configuration boundary. Each case
 // removes one thing the dispatcher cannot work without, and none of them may reach the network: a
 // deployment that cannot sign must refuse before a write is anywhere near, and a partial configuration

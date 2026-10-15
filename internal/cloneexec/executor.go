@@ -179,9 +179,11 @@ const (
 	ReasonCodeRedemptionFailed = "credential_executor_redemption_failed"
 	// ReasonCodeCloneFailed reports that Git could not complete the clone.
 	ReasonCodeCloneFailed = "credential_executor_clone_failed"
-	// ReasonCodeCleanupFailed reports that the credential material could not be proven destroyed. It
-	// is reported even when the clone succeeded, because a clone whose credential may still be on disk
-	// is not a successful clone.
+	// ReasonCodeCleanupFailed reports that the credential material could not be proven destroyed. On the
+	// clone and mirror paths it is a refusal, because a checkout or a published mirror whose credential
+	// may still be on disk is not work Cloud may act on as done. The push path reports it in
+	// `PushResult.CleanupFailure` instead, beside the verdict rather than in place of it: see the
+	// deferred destroy in `PushExecutor.Push` for why a write's conclusion may not be replaced by it.
 	ReasonCodeCleanupFailed = "credential_executor_cleanup_failed"
 )
 

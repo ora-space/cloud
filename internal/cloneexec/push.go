@@ -121,6 +121,17 @@ type PushResult struct {
 	RemoteCommit string `json:"remoteCommit,omitempty"`
 	// CredentialVersion is the material version the write actually used.
 	CredentialVersion int64 `json:"credentialVersion,omitempty"`
+	// CleanupFailure is this executor's reason code for credential material it could not prove destroyed
+	// after the attempt finished, and it is empty when the material was destroyed.
+	//
+	// It is carried beside the state rather than in place of it, because the two are facts about
+	// different things. The state is what this attempt established about the *remote* — the answer
+	// Cloud's audit exists to keep and the only thing an approval is about — while this is a fact about
+	// this executor's own disk. Reporting the second as a refusal replaces a true statement about the
+	// remote with a false one: a write that landed is recorded as a write that did not, which is the
+	// one direction a write must never be settled in, and it is what the caller then acts on. The cause
+	// behind the code goes to this executor's own log with the attempt's identifiers.
+	CleanupFailure string `json:"cleanupFailure,omitempty"`
 }
 
 // Reason codes this executor reports for a push. They are the executor's own vocabulary, as the clone
@@ -378,12 +389,29 @@ func (p *PushExecutor) Push(ctx context.Context, job PushJob) (result PushResult
 		return PushResult{}, p.refuse(ReasonCodeUnavailable, err)
 	}
 	// From this line the material exists, so its destruction is registered immediately and its outcome is
-	// folded into the result rather than logged and forgotten. A push whose credential may still be on
-	// disk is not a completed push, whatever the remote did.
+	// reported beside the result rather than in place of it.
+	//
+	// Nothing here may turn the attempt into a refusal. A refusal is Cloud's signal that this attempt
+	// concluded "the write did not happen", and that is a claim about the remote which a failure to
+	// remove a local directory cannot support: the write may have landed, and the verdict below says
+	// whether it did. Folding the two together is also what loses the verdict entirely — the previous
+	// shape cleared the result and refused, so a confirmed write was recorded as a concluded failure and
+	// the answer Cloud's audit exists to keep was thrown away.
+	//
+	// The failure is therefore reported in `CleanupFailure`, which the caller settles as the caveat on
+	// the verdict rather than as a verdict of its own, and in this executor's log, because a caller that
+	// reads only the state would otherwise never learn that a token may still be on disk. The material is
+	// under this identity's own root, which the deployment keeps untraversable by the workload, and the
+	// startup sweep removes whatever survives a process — so the incident is contained and bounded, and
+	// what it needs is an operator who can see it.
 	defer func() {
 		if destroyErr := credentialmaterial.Destroy(p.config.MaterialRoot, identity); destroyErr != nil {
-			result = PushResult{}
-			err = p.refuse(ReasonCodeCleanupFailed, destroyErr)
+			p.log.Error("credential material could not be proven destroyed after a push",
+				zap.String("operationId", job.OperationID),
+				zap.String("projectId", job.ProjectID),
+				zap.Error(destroyErr),
+			)
+			result.CleanupFailure = ReasonCodeCleanupFailed
 		}
 	}()
 	scratch, err := os.MkdirTemp(p.config.ScratchRoot, job.OperationID+".")

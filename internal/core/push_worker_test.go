@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/wanglongan587/cloud/internal/cloneexec"
 )
 
 // This file covers the dispatch pass: the loop that carries out an approved write on the process's own
@@ -91,6 +93,66 @@ func TestAnApprovedWriteIsCarriedOutByThePassAndNotByTheRequest(t *testing.T) {
 	// reading as one still being dispatched.
 	if row["dispatchLeaseExpiresAt"] != nil {
 		t.Fatalf("a settled approval kept the lease %v", row["dispatchLeaseExpiresAt"])
+	}
+}
+
+// TestACleanupFailureIsRecordedAsUncertainAndNeverAsAConcludedFailure is the durable half of the
+// cleanup-failure rule, and it is the defect the earlier shape produced: an executor that confirmed the
+// write and then could not prove its own copy of the credential destroyed reported a refusal, so the
+// approval read `failed` for a write the upstream had already applied and the commit the executor had
+// observed never reached the audit.
+//
+// What the row must say instead is both facts. The external effect is not something Cloud will call
+// completed — `uncertain`, under the executor's own code, because "the material may outlive the attempt"
+// is a caveat about Cloud's certainty rather than evidence that the remote is unchanged — while the
+// observation is kept, so a reader can still see what the remote held. `failed` is the one answer this
+// case rejects in both columns: it is a claim about the remote, and the remote moved.
+//
+// It runs through the real pass, the real claim and the real settlement, so what is asserted is the row a
+// deployment produces rather than the mapping in isolation.
+func TestACleanupFailureIsRecordedAsUncertainAndNeverAsAConcludedFailure(t *testing.T) {
+	store := dispatcherDB(t)
+	executor := &recordingPushExecutor{outcome: PushOutcome{
+		Verdict:        PushConfirmed,
+		ObservedCommit: pushNewCommit,
+		CleanupFailure: cloneexec.ReasonCodeCleanupFailed,
+	}}
+	store.SetPushExecutor(executor)
+	scene := seedPushScene(t, store, `["push"]`)
+	id := approveForDispatch(t, store, scene, "req-cleanup")
+
+	dispatchPushes(t, store)
+
+	if len(executor.calls) != 1 {
+		t.Fatalf("the pass dispatched the write %d times, want exactly 1", len(executor.calls))
+	}
+	want := pushUncertain + "/" + cloneexec.ReasonCodeCleanupFailed
+	if got := pushState(t, store, id); got != want {
+		t.Fatalf("a confirmed write whose executor could not clean up settled as %q, want %q", got, want)
+	}
+	row := pushRow(t, store, id)
+	if row.S("state") != pushUncertain {
+		t.Fatalf("the write settled in state %q, want %q: a write that landed is never recorded as a refusal", row.S("state"), pushUncertain)
+	}
+	// The observation survives the caveat. It is what the verdict was drawn from, and the cleanup failure
+	// is a fact about the executor's disk rather than about the remote, so it may not suppress it.
+	if got := pushObserved(t, store, id); got != pushNewCommit {
+		t.Fatalf("observed commit = %q, want the commit the executor read back %q", got, pushNewCommit)
+	}
+	// And it is a settlement rather than a row left behind: an unsettled approval would read `dispatching`,
+	// which is a claim that an attempt is still in flight.
+	if row["settledAt"] == nil {
+		t.Fatal("an uncertain settlement left the approval looking dispatched")
+	}
+
+	// Terminal: the authorization behind the attempt is spent, so an uncertain write is never re-attempted
+	// and the caveat is not a reason to try again.
+	dispatchPushes(t, store)
+	if len(executor.calls) != 1 {
+		t.Fatalf("an uncertain approval was dispatched %d times, want exactly 1", len(executor.calls))
+	}
+	if got := pushState(t, store, id); got != want {
+		t.Fatalf("a later pass revised the settlement to %q", got)
 	}
 }
 

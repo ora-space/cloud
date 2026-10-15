@@ -178,7 +178,17 @@ func (d *PushDispatcher) Execute(ctx context.Context, push PushExecution) (PushO
 		// reason code say which component is at fault.
 		return PushOutcome{}, fmt.Errorf("the push executor reported an unknown state %q", result.State)
 	}
-	return PushOutcome{Verdict: verdict, ObservedCommit: strings.TrimSpace(result.RemoteCommit)}, nil
+	// The cleanup failure rides beside the verdict rather than replacing it, because the two are answers to
+	// different questions: the verdict is what this attempt established about the remote, and the cleanup
+	// failure is whether the executor could prove its own copy of the credential gone. An executor that
+	// found the write refused *and* could not remove its material reports both, and the refusal is the one
+	// that reaches this line as an error — the executor's own log carries the cleanup failure with the
+	// attempt's identifiers, which is the only place it can appear once the attempt is a refusal.
+	return PushOutcome{
+		Verdict:        verdict,
+		ObservedCommit: strings.TrimSpace(result.RemoteCommit),
+		CleanupFailure: strings.TrimSpace(result.CleanupFailure),
+	}, nil
 }
 
 // pushVerdictOf translates the executor's wire state into this package's verdict.

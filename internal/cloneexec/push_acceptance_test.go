@@ -51,6 +51,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/cloneauth"
 	"github.com/wanglongan587/cloud/internal/cloneexec"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/credentialmaterial"
 )
 
 // The identifiers one push in these tests is about. They are canonical lowercase UUIDs because the
@@ -199,6 +200,41 @@ func (r *pushRepository) installHook(t *testing.T, refuse bool) {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("install the pre-receive hook: %v", err)
 	}
+}
+
+// breakMaterialCleanup installs the logging hook with one more thing appended: it takes the write
+// permission off every directory under the executor's materialization root, so the push it is running
+// for leaves credential material behind that the executor cannot remove.
+//
+// The fault is placed on the server side, in the hook the repository already runs, because that is the
+// only position from which it is a boundary case rather than a simulated one. The hook runs inside a push
+// that then succeeds, so the write lands for real and the cleanup that follows it meets a directory it
+// may read but not unlink out of — which is the condition `credentialmaterial.Destroy` is written
+// against, where the operating system refuses the unlink rather than a test telling the executor to
+// fail. Nothing about the hook is visible to the executor, so the only thing it changes is the cleanup
+// the executor reports.
+//
+// The whole material root is chmodded rather than one named identity directory because the identity is
+// derived from the authorization, which is the executor's own name for the attempt; the root holds that
+// one directory while a push runs, and a hook that no longer found it would be a hook that silently
+// stopped injecting the fault.
+func (r *pushRepository) breakMaterialCleanup(t *testing.T, materialRoot string) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"# Written by the push acceptance test: record what this push delivered, let it through, and take\n" +
+		"# the write permission off the executor's credential material on the way.\n" +
+		"cat >> " + shellQuote(r.hookLog) + "\n" +
+		"find " + shellQuote(materialRoot) + " -mindepth 1 -maxdepth 1 -type d -exec chmod 0500 {} +\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(r.Bare, "hooks", "pre-receive"), []byte(script), 0o755); err != nil {
+		t.Fatalf("install the pre-receive hook: %v", err)
+	}
+}
+
+// shellQuote single-quotes one path for a hook script. The paths here are temporary directories this
+// test created, so the quoting is for correctness rather than for safety.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // hookUpdates returns the updates the upstream was actually asked to apply, one per line, in Git's own
@@ -1152,6 +1188,106 @@ func TestAPushThatCannotReachTheUpstreamIsReapedAndLeavesNoSecretBehind(t *testi
 	if got := repository.ref(t, pushRef); got != repository.New {
 		t.Fatalf("the upstream's %s = %q, want %q", pushRef, got, repository.New)
 	}
+	deployment.assertNothingWasLeftBehind(t)
+}
+
+// TestAPushThatLandedIsNotReportedAsARefusalWhenItsCleanupFails is the real-boundary half of the rule
+// that a failure to remove a local directory may not replace what a write concluded.
+//
+// The scene is the one the obligation is stated for: the write reaches the upstream and moves the ref,
+// and the executor cannot prove the token gone afterwards. Both facts have to survive into the answer
+// Cloud receives, because the shape this replaces reported the cleanup failure *as* the outcome — which
+// is a refusal, and a refusal tells Cloud the write did not happen when the upstream has already been
+// changed. The verdict is therefore the confirmed write with the commit the executor read back, and the
+// cleanup failure rides beside them as the caveat on Cloud's certainty rather than as the conclusion.
+//
+// The leftover is asserted rather than assumed, because the incident is real: the token is still on disk
+// under the materialization root when the call returns, which is what makes the report a fact instead of
+// a banner. It is also bounded, and the case ends by proving the repair: the material lives in one
+// identity directory this deployment keeps untraversable by the workload, and the sweep a deployment runs
+// before it accepts any job removes what a failed cleanup could not.
+func TestAPushThatLandedIsNotReportedAsARefusalWhenItsCleanupFails(t *testing.T) {
+	deployment := newPushDeployment(t, 0)
+	repository := deployment.repository
+	version := deployment.storeCredential(t, repository.Token)
+	repository.forgetHookUpdates(t)
+	// Whatever the case asserts, the test's own cleanup has to be able to remove the root again.
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(deployment.material, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+	repository.breakMaterialCleanup(t, deployment.material)
+
+	outcome, err := deployment.dispatcher.Execute(context.Background(), deployment.write(version, repository.Old, repository.New).execution())
+	if err != nil {
+		t.Fatalf("a push whose cleanup failed was reported as a dispatch error: %v", err)
+	}
+
+	// The write is real, and it is the only thing the verdict may be about: the upstream applied exactly
+	// the authorized update, so a caller told "nothing happened" would be told the opposite of what the
+	// repository holds.
+	if got := repository.ref(t, pushRef); got != repository.New {
+		t.Fatalf("the upstream's %s = %q, want the authorized commit %q", pushRef, got, repository.New)
+	}
+	updates := repository.hookUpdates(t)
+	want := repository.Old + " " + repository.New + " " + pushRef
+	if len(updates) != 1 || updates[0] != want {
+		t.Fatalf("the upstream was asked to apply %v, want exactly one update %q", updates, want)
+	}
+	if outcome.Verdict != core.PushConfirmed {
+		t.Fatalf("verdict = %q, want %q: a landed write is never reported as a refusal", outcome.Verdict, core.PushConfirmed)
+	}
+	if outcome.ObservedCommit != repository.New {
+		t.Fatalf("observed commit = %q, want the commit the ref holds %q", outcome.ObservedCommit, repository.New)
+	}
+	if outcome.CleanupFailure != cloneexec.ReasonCodeCleanupFailed {
+		t.Fatalf("cleanup failure = %q, want %q", outcome.CleanupFailure, cloneexec.ReasonCodeCleanupFailed)
+	}
+
+	// The credential is still readable, which is why the caveat was reported at all: a cleanup failure
+	// nothing survives would be a claim about the executor's disk that the filesystem does not support.
+	// It is what makes the difference between this outcome and a success real rather than nominal.
+	entries, err := os.ReadDir(deployment.material)
+	if err != nil {
+		t.Fatalf("read the materialization root: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the materialization root holds %d entries, want the one identity the failed cleanup left", len(entries))
+	}
+	identity := filepath.Join(deployment.material, entries[0].Name())
+	raw, err := os.ReadFile(filepath.Join(identity, credentialmaterial.TokenFile))
+	if err != nil {
+		t.Fatalf("read the material the cleanup could not remove: %v", err)
+	}
+	if string(raw) != repository.Token {
+		t.Fatalf("the surviving material is not the redeemed token (%d bytes)", len(raw))
+	}
+	// And it is an incident an operator can see: the executor's own log names the attempt, while neither
+	// the token nor the authorization reaches it.
+	log := deployment.logs.String()
+	if !strings.Contains(log, "could not be proven destroyed") {
+		t.Fatalf("the cleanup failure is invisible to an operator")
+	}
+	deployment.assertNoSecretInLog(t, outcome.ObservedCommit)
+
+	// The repair, in the order a deployment performs it: the volume's own mode is restored, and the sweep
+	// a deployment runs before it accepts any job removes what a cleanup that failed could not. That
+	// bound is what makes a leftover token a reported incident rather than an unbounded one.
+	if err := os.Chmod(identity, 0o700); err != nil {
+		t.Fatalf("restore the material directory's mode: %v", err)
+	}
+	removed, err := credentialmaterial.Sweep(deployment.material)
+	if err != nil {
+		t.Fatalf("sweep the materialization root: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the startup sweep removed %d identity directories, want the one the failed cleanup left", removed)
+	}
+	assertNoTokenUnder(t, deployment.material, repository.Token)
 	deployment.assertNothingWasLeftBehind(t)
 }
 

@@ -243,9 +243,21 @@ func (s *Store) settlePushDispatch(ctx context.Context, d PushDispatch, outcome 
 // the executor stated — is either a fact about the remote or an admission that there is none. An uncoded
 // error is never a failure, because the write may have landed and recording it as refused is the one
 // direction a write must not be settled in.
+//
+// A verdict reported together with a cleanup failure settles `uncertain` rather than `succeeded`, and never
+// `failed`. The direction matters more than the value: the executor's material is on the executor's disk,
+// which Cloud cannot inspect and cannot clean, so what Cloud can say about it is only that it was not
+// proven gone — and `succeeded` is Cloud's statement that the external effect completed, which is not a
+// claim Cloud may make about an attempt whose credential may outlive it. `failed` is the same
+// misstatement in the dangerous direction, and the verdict it would contradict is kept: the state is
+// uncertain, the code names the executor's own failure, and the observation is recorded, so the row still
+// says what the remote holds.
 func pushSettlement(outcome PushOutcome, cause error) (state, code, observed string) {
 	if cause == nil {
 		settlePushFor(outcome.Verdict, &state, &code)
+		if outcome.CleanupFailure != "" && state == pushSucceeded {
+			state, code = pushUncertain, outcome.CleanupFailure
+		}
 		return state, code, outcome.ObservedCommit
 	}
 	if refusal, coded := pushRefusalCode(cause); coded {
