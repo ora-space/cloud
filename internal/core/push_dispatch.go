@@ -91,7 +91,7 @@ type PushDispatcher struct {
 // error with **no** code, which is what makes the caller settle the approval `uncertain` rather than
 // `failed`: the write may have landed, so recording a refusal would be Cloud asserting an outcome it was
 // not told. The distinction is carried by the code rather than by a verdict type for exactly this reason
-// — `dispatchPush` classifies by code, and an error that has one is a concluded failure to it.
+// — `pushSettlement` classifies by code, and an error that has one is a concluded failure to it.
 //
 // It is an error rather than the `PushUnknown` verdict on purpose, and the two are different facts even
 // though both settle uncertain: `PushUnknown` is a verdict Cloud reached about the *remote*, while this
@@ -212,10 +212,10 @@ func pushVerdictOf(state cloneexec.PushState) (PushVerdict, bool) {
 // reply, or an answer that could not be read carries no code and is handed back **as it is**.
 //
 // The second half is deliberately given no code of its own, and the reason is the caller's rule rather
-// than a shortage of names. A code is what `dispatchPush` settles a *concluded* failure with, and an
+// than a shortage of names. A code is what `pushSettlement` settles a *concluded* failure with, and an
 // executor that could not be reached may still have written: inventing a code here would record a
 // possible write as a refusal, which is the one direction a write must never be settled in. Left
-// uncoded, the error reaches `dispatchPush` as the unknown case it is and settles `uncertain` under
+// uncoded, the error reaches `pushSettlement` as the unknown case it is and settles `uncertain` under
 // `push_result_unknown`. This is not a hypothetical path: it is what an interrupted dispatch — the
 // executor killed after it accepted the write — actually produces, and the container-level run measures
 // the settlement it must end in.

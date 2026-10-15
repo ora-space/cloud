@@ -121,10 +121,10 @@ func run() (runErr error) {
 	}
 	// The push capability is installed the same way and is the one that must not be installed by accident.
 	// Until this runs, every push request is refused with `push_executor_unavailable`: the approval path
-	// records no approval it cannot dispatch, and `dispatchPush` settles the deployment-level refusal
-	// rather than leaving a row looking dispatched. Enabling it is the deployment declaring it has
-	// established the whole write boundary — a push-capable reference, an executor with a push root, and a
-	// Store that verifies the authorization — because each of those refuses independently.
+	// records the approval and settles the deployment-level refusal in the same transaction rather than
+	// leaving a row looking dispatched. Enabling it is the deployment declaring it has established the
+	// whole write boundary — a push-capable reference, an executor with a push root, and a Store that
+	// verifies the authorization — because each of those refuses independently.
 	if dispatch.Push != nil {
 		store.SetPushExecutor(&core.PushDispatcher{
 			Client:           dispatch.Client,
@@ -235,6 +235,30 @@ func run() (runErr error) {
 		go func() {
 			defer syncGroup.Done()
 			pluginmarket.RunSyncLoop(ctx, store.PrepareMirrorsOnce, mirrorPreparationInterval, pluginmarket.ContextSleep, log)
+		}()
+	}
+	// Push dispatch: the loop that carries out an approved push. It is gated on the same `dispatch.Push`
+	// the executor install above uses, so a deployment that cannot push has no loop and no claim — and
+	// the accepting path settles each approval it records with `push_executor_unavailable` instead of
+	// leaving a row nothing will ever read.
+	//
+	// The write runs here rather than in the request that approved it, and that is the whole point: an
+	// approval is durable before this pass sees it (D8), so the caller's answer is the approval and the
+	// attempt is owed on this process's context. A dispatch started in the request's lifetime died with
+	// the request — a client that hung up, or a process that was killed mid-write, left the approval
+	// `dispatching` with nothing anywhere reading that state.
+	//
+	// The interval is shorter than the mirror's because this pass is what makes the accepting response
+	// true: `202` says the write is owed, and an idle queue should wait about a second for it, not ten.
+	// Passes dispatch serially for the mirror loop's reason — the claim is what starts that attempt's
+	// lease, so claiming each row immediately before dispatching it keeps a lease from running while its
+	// attempt waits behind other work.
+	if dispatch.Push != nil {
+		const pushDispatchInterval = 2 * time.Second
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, store.DispatchPushesOnce, pushDispatchInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
 	// Thread-ending loops: B-owned recovery for the two ending triggers reachable without a new

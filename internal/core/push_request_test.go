@@ -289,6 +289,13 @@ func TestACloneOnlyReferenceIsNeverSubstitutedForAWriteReference(t *testing.T) {
 	if _, _, err := scene.pushRequest(store, "key-both", "req-both", pushRef, pushOldCommit, pushNewCommit); err != nil {
 		t.Fatalf("a reference that declares push must be admitted, got %v", err)
 	}
+	// Admitted means the write is owed. The approval is carried out by the dispatch pass rather than
+	// inside the request, so asserting it reached the executor is what distinguishes an admitted write
+	// from a row left `dispatching` with nothing to run it.
+	dispatchPushes(t, store)
+	if len(executor.calls) != 1 {
+		t.Fatalf("an admitted write reached the executor %d times, want 1", len(executor.calls))
+	}
 }
 
 // TestTheCredentialGuardsRunBeforeAnyApprovalIsRecorded drives each credential refusal through the
@@ -502,6 +509,10 @@ func TestOneRequestProducesOneApprovalAndOneAuthorization(t *testing.T) {
 // row carrying the whole plan. A write dispatched from a plan still in memory would fail here, and so
 // would one whose record was written after the fact — which is exactly the failure the ordering exists
 // to prevent, because a lost reply would then leave nothing to reconcile against.
+//
+// The dispatch is driven by its own pass rather than by the accepting call, so the observation point is
+// the pass's: the row the executor is handed was committed by a transaction that ended before this pass
+// ever looked at it, which is a stronger statement than "committed before the executor was called".
 func TestTheApprovalIsPersistedBeforeAnythingIsDispatched(t *testing.T) {
 	store := dispatcherDB(t)
 	executor := &recordingPushExecutor{outcome: PushOutcome{Verdict: PushConfirmed}}
@@ -515,6 +526,7 @@ func TestTheApprovalIsPersistedBeforeAnythingIsDispatched(t *testing.T) {
 	if _, _, err := scene.pushRequest(store, "key-order", "req-order", pushRef, pushOldCommit, pushNewCommit); err != nil {
 		t.Fatalf("approve a push: %v", err)
 	}
+	dispatchPushes(t, store)
 	if len(executor.calls) != 1 {
 		t.Fatalf("the executor was called %d times, want 1", len(executor.calls))
 	}
@@ -663,11 +675,13 @@ func TestTheTerminalStatesAreTheFactsAboutTheRemoteAndNothingElse(t *testing.T) 
 			if err != nil {
 				t.Fatalf("approve a push: %v", err)
 			}
-			// The accept reports the plan at acceptance — still dispatching — because the write runs
-			// after the transaction commits. The outcome is the audit's, and it is read back from there.
+			// The accept reports the plan at acceptance — still dispatching — because the write is not run
+			// in the request's lifetime. The outcome is the audit's, reached by the dispatch pass and read
+			// back from the record.
 			if out.S("state") != pushDispatching || out["settledAt"] != nil {
 				t.Fatalf("accepting a push must report it as dispatching, got %v/%v", out["state"], out["resultCode"])
 			}
+			dispatchPushes(t, store)
 			want := testCase.wantState + "/" + testCase.wantCode
 			if got := pushState(t, store, out.S("id")); got != want {
 				t.Fatalf("the audit kept %q, want %q", got, want)
@@ -713,7 +727,7 @@ func TestASettledApprovalIsNeverRewritten(t *testing.T) {
 		t.Fatalf("approve a push: %v", err)
 	}
 	if _, err := store.transact(context.Background(), func(t *transaction) Object {
-		settlePushRequest(t, out.S("id"), pushSucceeded, pushApplied)
+		settlePushRequest(t, out.S("id"), pushNoAttempt, pushSucceeded, pushApplied)
 		return Object{}
 	}); err != nil {
 		t.Fatalf("settling an already settled approval must be a no-op, got %v", err)
@@ -725,7 +739,7 @@ func TestASettledApprovalIsNeverRewritten(t *testing.T) {
 	// preference order: a settled approval cannot be put back into dispatching either. The refusal is a
 	// programming error rather than a caller's, so it surfaces as a fault and leaves the row alone.
 	if _, err := store.transact(context.Background(), func(t *transaction) Object {
-		settlePushRequest(t, out.S("id"), pushDispatching, pushResultUnknown)
+		settlePushRequest(t, out.S("id"), pushNoAttempt, pushDispatching, pushResultUnknown)
 		return Object{}
 	}); err == nil {
 		t.Fatal("settling an approval back into dispatching must be refused")
@@ -791,7 +805,11 @@ func TestTheAuditCarriesTheDecisionAndNoSecret(t *testing.T) {
 	if err := store.Pool.QueryRow(`SELECT string_agg(column_name::text, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='push_requests'`).Scan(&columns); err != nil {
 		t.Fatalf("read the push approval's columns: %v", err)
 	}
-	if columns != "actor_user_id,authorization_id,created_at,credential_ref_id,credential_ref_version,id,new_commit,observed_commit,old_commit,pinned_ref,project_id,repository_url,request_id,result_code,settled_at,state,tenant_id,updated_at,workspace_id" {
+	// The list is asserted whole rather than filtered, so it has to be extended with every column the
+	// record gains. The two dispatch columns are Cloud's own bookkeeping about its attempts — a count and
+	// a deadline, both scalars about when this process may try — and neither holds anything read from the
+	// remote, handed to the executor, or derived from credential material.
+	if columns != "actor_user_id,authorization_id,created_at,credential_ref_id,credential_ref_version,dispatch_generation,dispatch_lease_expires_at,id,new_commit,observed_commit,old_commit,pinned_ref,project_id,repository_url,request_id,result_code,settled_at,state,tenant_id,updated_at,workspace_id" {
 		t.Fatalf("the durable record's columns are\n%s", columns)
 	}
 }

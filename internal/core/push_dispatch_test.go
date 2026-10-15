@@ -33,7 +33,7 @@ type pushTestScene struct {
 	now        time.Time
 }
 
-// newPushTestScene builds the scene. The execution is shaped like the one `pushExecution` reads back —
+// newPushTestScene builds the scene. The execution is shaped like the one `claimPushDispatch` builds —
 // including the canonical upstream and the single permitted capability — so a failure names the
 // dispatcher rather than a fixture that disagreed with the real caller.
 func newPushTestScene(t *testing.T) pushTestScene {
@@ -252,6 +252,9 @@ func TestTheDispatcherReportsEveryVerdictTheExecutorCanState(t *testing.T) {
 // an error with one is recorded as a concluded failure, and an executor that could not be reached may
 // still have written. These cases assert the *shape* the caller reads, which is why the two halves are
 // asserted as "coded" and "not coded" rather than as two codes that happen to differ.
+//
+// The reading happens through `pushSettlement`, the function the dispatch pass settles with, so the
+// shape these cases assert is the one the settlement actually branches on.
 func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 	t.Run("a coded refusal keeps its code", func(t *testing.T) {
 		scene := newPushTestScene(t)
@@ -266,12 +269,17 @@ func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 		if !errors.As(err, &fault) || fault.Status != 409 {
 			t.Fatalf("a refusal must reach the caller as a 409 fault, got %v", err)
 		}
+		// What the settlement records from it: the executor's own code, so the audit says why this attempt
+		// wrote nothing rather than that nobody knows.
+		if state, settled, observed := pushSettlement(PushOutcome{}, err); state != pushFailed || settled != cloneexec.ReasonCodePushNotApplicable || observed != "" {
+			t.Fatalf("a coded refusal settled as %s/%s (observed %q)", state, settled, observed)
+		}
 	})
 
 	t.Run("an unreachable executor is not a refusal", func(t *testing.T) {
 		// The executor dying mid-flight is the case this shape exists for: it may have written before it
 		// died, so the approval has to settle uncertain. A code here — the unavailable one included —
-		// would be read by `dispatchPush` as a concluded failure and would record a possible write as a
+		// would be read by the settlement as a concluded failure and would record a possible write as a
 		// refusal.
 		scene := newPushTestScene(t)
 		scene.client.err = errors.New("clone executor is unreachable: dial tcp: connection refused")
@@ -287,6 +295,9 @@ func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 		if !strings.Contains(err.Error(), "unreachable") {
 			t.Fatalf("the transport failure lost its own description: %v", err)
 		}
+		if state, code, observed := pushSettlement(PushOutcome{}, err); state != pushUncertain || code != pushResultUnknown || observed != "" {
+			t.Fatalf("an unreachable executor settled as %s/%s (observed %q)", state, code, observed)
+		}
 	})
 
 	t.Run("a refusal with no code is not a refusal either", func(t *testing.T) {
@@ -300,6 +311,9 @@ func TestTheDispatcherSeparatesARefusalFromAnUnreachableExecutor(t *testing.T) {
 		_, err := scene.dispatcher.Execute(context.Background(), scene.execution)
 		if code, coded := pushRefusalCode(err); coded {
 			t.Fatalf("a codeless refusal read back as the concluded refusal %q", code)
+		}
+		if state, code, observed := pushSettlement(PushOutcome{}, err); state != pushUncertain || code != pushResultUnknown || observed != "" {
+			t.Fatalf("a codeless refusal settled as %s/%s (observed %q)", state, code, observed)
 		}
 	})
 }
@@ -343,12 +357,15 @@ func TestTheDispatcherRefusesToSignFromAnIncompleteDeployment(t *testing.T) {
 // remote, so both must leave the approval `uncertain` under `push_result_unknown` — never `failed`,
 // which would record a possible write as a refusal, and never `succeeded`.
 //
-// It is deliberately driven through the real accepting route, the real `dispatchPush` and the real
+// It is deliberately driven through the real accepting route, the real dispatch pass and the real
 // settlement, with the **production** dispatcher installed, and with errors spelled the way the shipped
 // `*cloneexec.Client` spells them. A case that answered at the `PushExecutor` boundary instead would
-// hand `dispatchPush` a plain error directly — which is exactly the shape the dispatcher used to destroy
+// hand the settlement a plain error directly — which is exactly the shape the dispatcher used to destroy
 // on the way — and would pass against the defect. That is the gap the container-level run found, and
 // this is its smallest reproduction.
+//
+// The accept no longer runs the dispatch, so the case drives the pass itself: what the caller is
+// answered and what the pass then records are two separate facts, and both are asserted.
 func TestAnInterruptedWriteIsNotSettledAsAConcludedFailure(t *testing.T) {
 	cases := []struct {
 		name string
@@ -366,10 +383,14 @@ func TestAnInterruptedWriteIsNotSettledAsAConcludedFailure(t *testing.T) {
 			dispatch.client.err = testCase.err
 			store.SetPushExecutor(dispatch.dispatcher)
 
-			out, _, err := scene.pushRequest(store, "key-interrupted", "req-interrupted", pushRef, pushOldCommit, pushNewCommit)
+			out, status, err := scene.pushRequest(store, "key-interrupted", "req-interrupted", pushRef, pushOldCommit, pushNewCommit)
 			if err != nil {
 				t.Fatalf("approve a push: %v", err)
 			}
+			if status != 202 || out.S("state") != pushDispatching {
+				t.Fatalf("accepting a push must answer 202 with a dispatching plan, got %d %v/%v", status, out["state"], out["resultCode"])
+			}
+			dispatchPushes(t, store)
 
 			want := pushUncertain + "/" + pushResultUnknown
 			if got := pushState(t, store, out.S("id")); got != want {
@@ -398,8 +419,9 @@ func TestAnInterruptedWriteIsNotSettledAsAConcludedFailure(t *testing.T) {
 			// An unknown outcome is never retried, and the rule is enforced by the settlement rather than
 			// by the caller's restraint: the authorization is single-use, so a second dispatch would
 			// either be refused at redemption having burned an audit trail, or — worse — would be a
-			// second write to the same ref.
-			store.dispatchPush(context.Background(), out.S("id"))
+			// second write to the same ref. A settled approval is not a candidate for the next pass at
+			// all, and the claim would refuse it even if it were.
+			dispatchPushes(t, store)
 			if len(dispatch.client.jobs) != 1 {
 				t.Fatalf("an uncertain approval was dispatched %d times, want exactly 1", len(dispatch.client.jobs))
 			}
@@ -407,7 +429,16 @@ func TestAnInterruptedWriteIsNotSettledAsAConcludedFailure(t *testing.T) {
 			// And a report that arrives after the settlement cannot revise it. This is the shape the
 			// interruption leaves behind: a write that did land, reported by a component that finally
 			// answers. The first record is the fact, and a later one may not turn it into a success.
-			store.settlePushObserved(context.Background(), out.S("id"), pushSucceeded, pushApplied, pushNewCommit)
+			//
+			// The generation is the attempt's own, read back rather than assumed, so the case cannot pass
+			// because the fence was handed a value the row never held.
+			attempt := pushRow(t, store, out.S("id")).N("dispatchGeneration")
+			if _, err := store.transact(context.Background(), func(tx *transaction) Object {
+				settlePushObservedRequest(tx, out.S("id"), attempt, pushSucceeded, pushApplied, pushNewCommit)
+				return Object{}
+			}); err != nil {
+				t.Fatalf("record the late report: %v", err)
+			}
 			if got := pushState(t, store, out.S("id")); got != want {
 				t.Fatalf("a late report rewrote an interrupted write to %q", got)
 			}

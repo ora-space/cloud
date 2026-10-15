@@ -10,9 +10,14 @@ import (
 // The stable codes one push approval can end with.
 //
 // They are the vocabulary the audit's `resultCode` is drawn from, and each names one answer the write
-// can have. None of them is produced by a check that could be satisfied differently: the deployment's
-// capability is installed once at startup, and the other three are the executor's report about the
-// remote.
+// can have. The list is deliberately not closed: an attempt refused before anything is sent ends under
+// the guard's own code (`repository_credential_frozen`, `repository_credential_binding_conflict`,
+// `push_credential_required`, `repository_credential_unavailable`, and the guard's other answers),
+// because an operator acts on those directly and collapsing them into one "refused" would hide which
+// repair is needed. What the codes below have in common is that none is produced by a check that could
+// have been satisfied a different way: the deployment's capability is installed once at startup, and
+// every other one is either what the executor established about the remote or the honest statement that
+// it established nothing.
 const (
 	// pushExecutorUnavailable is the deployment-level answer: this Cloud has no push executor, so the
 	// approval Cloud just recorded cannot be carried out. It is the same answer the credentialed-clone
@@ -48,18 +53,6 @@ const (
 	// write landed and was then superseded — one observation cannot tell those apart, which is why the
 	// outcome is recorded as a conflict rather than as a success or a failure.
 	pushTargetConflict = "push_target_conflict"
-	// pushAuthorizationUnverifiable is the pre-write re-check failing to run at all: the approval's
-	// authority could not be re-established against live state, so nothing was dispatched.
-	//
-	// It is a failure rather than an uncertain outcome because the failure is on this side of the write:
-	// the executor was never asked, so nothing can have been written. It is a distinct code from the
-	// deployment-level `push_executor_unavailable` because the two say different things to an operator —
-	// one is a deployment that cannot push, the other is a Cloud that could not read its own state.
-	pushAuthorizationUnverifiable = "push_authorization_unverifiable"
-	// pushRequestRevoked is the approval no longer being in force by the time the dispatch reached the
-	// executor: the row has settled, or was never `dispatching`. Nothing was sent, so nothing was
-	// written, and the approval keeps whichever outcome settled it first.
-	pushRequestRevoked = "push_request_revoked"
 )
 
 // The states one push approval moves through. The first is Cloud's own: an approval whose dispatch has
@@ -81,9 +74,12 @@ const (
 // deployment fact: C runs on no Node, so there is no Node identity, no runtime generation and no
 // control epoch to bind — the fields the execution authority had to withdraw for pushes.
 type PushExecution struct {
-	// AuthorizationID is the identifier the Credential Service records consumption under. Cloud mints
-	// it once, when it records the approval, and never re-mints it: a retry is a new approval with a
-	// new identifier, which is what makes "one request, one authorization" checkable.
+	// AuthorizationID is the identifier the Credential Service records consumption under. It is minted
+	// once per *attempt*: the first attempt carries the identifier the approval was recorded under, and a
+	// re-attempt — the reconciliation of a dispatch that never came back — is issued a fresh one for the
+	// same binding, because a spent authorization must never be replayed (D7). One identifier therefore
+	// still names exactly one write attempt, which is what makes "one authorization, one write" checkable
+	// across a retry.
 	AuthorizationID string
 	TenantID        string
 	// OwnerUserID is the owner of the credential the approval binds, not the person who approved it.
@@ -210,7 +206,11 @@ func pushApproval(t *transaction, r *PublicRequest, uid string) (w, p Object) {
 // because a push approval that is refused leaves no record of the person who asked for it, and the
 // record is the whole audit (D9). A deployment without an executor records the approval and settles it
 // with `push_executor_unavailable`, which mints no authorization and produces no write; see
-// `pushRequestPublic` and `dispatchPush`.
+// `pushRequestPublic`.
+//
+// The guard is total, and that is what lets the dispatch worker treat its refusal as a decision rather
+// than as an error: every answer is either a usable credential or a stable code, so a refusal that
+// reaches `claimPushDispatch` is one Cloud made and can record.
 func requirePushAccess(t *transaction, p Object) (credentialID string, version int64, upstream string) {
 	// The two binding columns must agree about which credential this Project uses, including agreeing
 	// that there is none. The push guard is the same total guard the clone path uses, so it reads the
@@ -256,8 +256,7 @@ func requirePushAccess(t *transaction, p Object) (credentialID string, version i
 	return id, c.N("version"), upstream
 }
 
-// pushRequestPublic serves the accepting route: it records one person's approval of one exact write,
-// and reports whether the dispatch must follow the commit.
+// pushRequestPublic serves the accepting route: it records one person's approval of one exact write.
 //
 // The order is the one the push decision's D8 fixes: the plan — tenant, Project, Workspace, the
 // credential and its version, the upstream, the ref and both commits — and the idempotency identity
@@ -269,7 +268,12 @@ func requirePushAccess(t *transaction, p Object) (credentialID string, version i
 // `dispatching`, and its outcome is read back from the audit rather than returned by the accept. A
 // deployment with no executor settles the approval in this same transaction, so there the response is
 // already final — the difference is whether anything was left to run, not a difference in the record.
-func pushRequestPublic(t *transaction, r *PublicRequest, uid string) (out Object, dispatch string) {
+//
+// Nothing is dispatched from here, and that is the correction this function carries: the write is
+// carried out by `Store.DispatchPushesOnce` on the process's own context. A dispatch started in this
+// transaction's caller would run in the request's lifetime, so a client that hung up — or a settlement
+// whose transaction failed — would leave the approval `dispatching` with nothing left to read it.
+func pushRequestPublic(t *transaction, r *PublicRequest, uid string) Object {
 	w, p := pushApproval(t, r, uid)
 	requestID := r.Body.S("requestId")
 	require(requestID != "" && len(requestID) <= 200, 400, "invalid_push_request")
@@ -292,8 +296,9 @@ func pushRequestPublic(t *transaction, r *PublicRequest, uid string) (out Object
 	// The scope is (Workspace, approver, request id): one person's repeat of their own request is a
 	// replay, and no other person can reach this row.
 	//
-	// A replay returns the recorded approval and never dispatches — `dispatch` is empty — which is what
-	// makes "one request must not produce a second write authorization" hold across a retry.
+	// A replay returns the recorded approval, which is what makes "one request must not produce a second
+	// write authorization" hold across a retry: the dispatcher claims rows by state and lease, not by
+	// this response, so a replay is not a second dispatch either.
 	if existing := t.one("SELECT * FROM push_requests WHERE workspace_id=$1 AND actor_user_id=$2 AND request_id=$3", w.S("id"), uid, requestID); existing != nil {
 		// The recorded plan holds the canonical upstream rather than the Project's own spelling of its
 		// URL (`https://host/path` without the `.git` suffix the creator may have written), so the
@@ -302,13 +307,14 @@ func pushRequestPublic(t *transaction, r *PublicRequest, uid string) (out Object
 		submitted, err := cloneauth.CanonicalRepository(p.S("repositoryUrl"))
 		require(err == nil && existing.S("repositoryUrl") == submitted && existing.S("pinnedRef") == ref &&
 			existing.S("oldCommit") == oldCommit && existing.S("newCommit") == newCommit, 409, "idempotency_conflict")
-		return pushView(existing), ""
+		return pushView(existing)
 	}
 	credentialID, credentialVersion, upstream := requirePushAccess(t, p)
 	// The authorization identifier is minted exactly once, here, and written with the approval. A
 	// deployment with no executor never signs a bearer for it, so the identifier names an
 	// authorization that was never issued — which is the accurate record of a write that was approved
-	// and could not be carried out.
+	// and could not be carried out. A dispatch that runs later writes the authorization *it* minted
+	// over it, which is the identifier the Store records consumption under for that attempt.
 	id, authorizationID := newID(), newID()
 	t.exec("INSERT INTO push_requests(id,tenant_id,project_id,workspace_id,actor_user_id,request_id,repository_url,pinned_ref,old_commit,new_commit,credential_ref_id,credential_ref_version,authorization_id,state)"+
 		" VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
@@ -318,12 +324,11 @@ func pushRequestPublic(t *transaction, r *PublicRequest, uid string) (out Object
 		// no executor must never have a `dispatching` row, because such a row would claim a dispatch
 		// that does not exist. `push_executor_unavailable` is settled here rather than answered as a
 		// refusal for the reason the code's own comment gives — the approval record is the audit, and a
-		// refusal would leave none.
-		settlePushRequest(t, id, pushFailed, pushExecutorUnavailable)
-	} else {
-		dispatch = id
+		// refusal would leave none. No attempt has claimed the row, so the settlement is fenced at
+		// `pushNoAttempt` rather than at a generation nothing ever wrote.
+		settlePushRequest(t, id, pushNoAttempt, pushFailed, pushExecutorUnavailable)
 	}
-	return pushView(t.one("SELECT * FROM push_requests WHERE id=$1", id)), dispatch
+	return pushView(t.one("SELECT * FROM push_requests WHERE id=$1", id))
 }
 
 // pushRead serves the read routes: one approval, or the Workspace's approvals in the ascending-by-id
@@ -378,14 +383,25 @@ func pushView(row Object) Object {
 
 // settlePushRequest records one approval's outcome inside the caller's transaction.
 //
-// The WHERE clause is the whole safety argument: only an approval that is still `dispatching` settles,
-// and it settles once. A second settlement — a retried dispatch, a repeated report — matches no row
-// and writes nothing, so the first recorded outcome stands. That is what keeps `succeeded` from being
-// overwritten by a later failure and a failure from being talked into a success.
-func settlePushRequest(t *transaction, id, state, code string) {
+// Two predicates fence the write, and they answer different questions. `state='dispatching'` is the
+// approval's: only an approval whose outcome is not yet known settles, and it settles once, so a first
+// recorded outcome stands — a later failure cannot talk a success into failing, and a repeated report
+// writes nothing. `dispatch_generation` is the *attempt's*: the settlement belongs to the attempt that
+// was claimed under that generation, so an answer that arrives after the attempt was replaced — a slow
+// executor whose lease lapsed, a reply replayed from a lost connection — writes nothing at all. Without
+// the second predicate the first would accept that answer as the current attempt's and record an
+// outcome nobody established.
+//
+// The lease is released by the same statement, because a settled approval has no attempt left to wait
+// for; the table's CHECK states the pair as an invariant, so a settlement that forgot would fail here
+// rather than leave a settled row reading as one still being dispatched.
+//
+// It reports whether it wrote, which is the fence's answer: false means this attempt's answer was not
+// the current one, so the caller has recorded nothing rather than an outcome that arrived too late.
+func settlePushRequest(t *transaction, id string, generation int64, state, code string) bool {
 	require(code != "" && state != pushDispatching, 500, "invalid_settlement")
-	t.execRows("UPDATE push_requests SET state=$2,result_code=$3,settled_at=now(),updated_at=now()"+
-		" WHERE id=$1 AND state='"+pushDispatching+"'", id, state, code)
+	return t.execRows("UPDATE push_requests SET state=$2,result_code=$3,settled_at=now(),dispatch_lease_expires_at=NULL,updated_at=now()"+
+		" WHERE id=$1 AND state='"+pushDispatching+"' AND dispatch_generation=$4", id, state, code, generation) > 0
 }
 
 // settlePushObservedRequest records one approval's outcome together with the commit the reconciliation
@@ -402,39 +418,14 @@ func settlePushRequest(t *transaction, id, state, code string) {
 // is where its observation becomes durable. The value is unset for outcomes where nothing was observed
 // (a refusal before any write, or a reconciliation that could not read), and the migration's CHECK
 // accepts NULL for exactly that reason.
-func settlePushObservedRequest(t *transaction, id, state, code, observed string) {
+//
+// The fences are `settlePushRequest`'s, including the generation one: this is the settlement a late
+// attempt's answer arrives at, so it is the one the fence has to hold for. It reports whether it wrote,
+// for the same reason.
+func settlePushObservedRequest(t *transaction, id string, generation int64, state, code, observed string) bool {
 	require(code != "" && state != pushDispatching, 500, "invalid_settlement")
-	t.execRows("UPDATE push_requests SET state=$2,result_code=$3,observed_commit=$4,settled_at=now(),updated_at=now()"+
-		" WHERE id=$1 AND state='"+pushDispatching+"'", id, state, code, nullable(observed))
-}
-
-// settlePush records an outcome in its own transaction, after the dispatch has run.
-//
-// The error is deliberately dropped rather than returned: the approval already committed, so the
-// caller has its answer, and there is no caller left to fail. A settlement that could not be written
-// leaves the approval `dispatching`, which is the truthful record — an approval whose outcome Cloud
-// does not know — and a reader sees exactly that rather than a success nobody established. A later
-// reconciliation is the executor's, against the remote.
-func (s *Store) settlePush(ctx context.Context, id, state, code string) {
-	_, _ = s.transact(ctx, func(t *transaction) Object {
-		settlePushRequest(t, id, state, code)
-		return nil
-	})
-}
-
-// settlePushObserved records an outcome together with the commit the executor saw, in its own
-// transaction, after the dispatch has run.
-//
-// It exists beside `settlePush` rather than replacing it because only the executor's report carries an
-// observation: a refusal that never reached the remote, and the deployment-level settlement, have none
-// to record. The dropped error carries the same meaning as `settlePush`'s — the approval is already
-// answered, so an unwritable settlement leaves the row `dispatching`, which is what Cloud actually
-// knows.
-func (s *Store) settlePushObserved(ctx context.Context, id, state, code, observed string) {
-	_, _ = s.transact(ctx, func(t *transaction) Object {
-		settlePushObservedRequest(t, id, state, code, observed)
-		return nil
-	})
+	return t.execRows("UPDATE push_requests SET state=$2,result_code=$3,observed_commit=$4,settled_at=now(),dispatch_lease_expires_at=NULL,updated_at=now()"+
+		" WHERE id=$1 AND state='"+pushDispatching+"' AND dispatch_generation=$5", id, state, code, nullable(observed), generation) > 0
 }
 
 // settlePushFor turns one verdict into the state and code the audit records.
@@ -463,62 +454,6 @@ func settlePushFor(verdict PushVerdict, state, code *string) {
 	}
 }
 
-// dispatchPush carries out one approved push, after the acceptance transaction committed.
-//
-// Every branch ends in a settlement, and none of them returns an error to anyone: the approval is
-// already durable and already answered. What the branches differ in is only which fact gets recorded,
-// and the fact is never invented — a re-check that cannot run leaves nothing dispatched rather than
-// something hoped for, an unreachable executor leaves the outcome unknown rather than failed, and an
-// unattributable ref leaves it uncertain rather than successful.
-//
-// The order is the execution authority's D6: the authority the approval rests on is re-established
-// against live state immediately before the executor is asked to write, and only then is the dispatch
-// made. See `recheckPushAuthority` for exactly what that re-check does and does not close.
-func (s *Store) dispatchPush(ctx context.Context, id string) {
-	executor := s.pushExecutor
-	if executor == nil {
-		// Only reachable if the boundary was removed between the accepting transaction and here, which
-		// a deployment can do only by restarting into a different configuration. The settlement is the
-		// deployment-level one rather than nothing at all, so the row cannot be left looking dispatched.
-		s.settlePush(ctx, id, pushFailed, pushExecutorUnavailable)
-		return
-	}
-	if err := s.recheckPushAuthority(ctx, id); err != nil {
-		// Nothing was dispatched, so whatever the reason this is a failure and never an uncertain
-		// outcome: the executor was never asked, so there is no write that could have happened. The code
-		// is the guard's own when it carried one — which is what lets an operator tell a revoked
-		// credential from a rotated one — and the checkpoint's code when the check itself could not run.
-		code, coded := pushRefusalCode(err)
-		if !coded {
-			code = pushAuthorizationUnverifiable
-		}
-		s.settlePush(ctx, id, pushFailed, code)
-		return
-	}
-	execution, ok := s.pushExecution(ctx, id)
-	if !ok {
-		// The approval is not readable, which no code path can produce: it was committed a moment ago
-		// under this same advisory lock, and the re-check above just read it. Leaving it unsettled is the
-		// honest outcome — Cloud does not know what happened — and inventing a code here would be a claim
-		// about a row it cannot read.
-		return
-	}
-	outcome, err := executor.Execute(ctx, execution)
-	if err != nil {
-		if code, coded := pushRefusalCode(err); coded {
-			s.settlePush(ctx, id, pushFailed, code)
-			return
-		}
-		// The executor could not be reached, or answered something Cloud cannot read. Either way the
-		// write may have happened, so the outcome is unknown rather than failed.
-		s.settlePush(ctx, id, pushUncertain, pushResultUnknown)
-		return
-	}
-	var state, code string
-	settlePushFor(outcome.Verdict, &state, &code)
-	s.settlePushObserved(ctx, id, state, code, outcome.ObservedCommit)
-}
-
 // pushRefusalCode reads the stable reason code an error carries, and reports whether it carried one.
 //
 // Two shapes reach here and both are refusals: a `*Fault`, which is what every guard in this package
@@ -528,9 +463,13 @@ func (s *Store) dispatchPush(ctx context.Context, id string) {
 // uncoded, and the distinction a reason code exists to draw would be lost at exactly the point the audit
 // needs it.
 //
-// An error carrying an empty code is reported as uncoded. That direction is the safe one: the settlement
-// requires a non-empty code, so passing an empty one through would fail the write and leave the row
-// `dispatching` rather than recording anything at all.
+// An error carrying an empty code is reported as uncoded. That direction is the safe one: a settlement
+// requires a non-empty code, so passing an empty one through would record nothing at all where an
+// uncoded failure deliberately leaves the approval `dispatching` for the next pass to reconcile.
+//
+// The two callers ask the same question of it — may this error be recorded as a concluded failure — and
+// both answer no without a code, because a code is the only thing that proves the executor decided the
+// write did not land rather than failed to say.
 func pushRefusalCode(err error) (string, bool) {
 	var fault *Fault
 	if errors.As(err, &fault) {
@@ -541,95 +480,4 @@ func pushRefusalCode(err error) (string, bool) {
 		return refusal.ReasonCode(), refusal.ReasonCode() != ""
 	}
 	return "", false
-}
-
-// recheckPushAuthority re-establishes the approval's authority against live state, immediately before
-// the write is dispatched.
-//
-// It is the second of D6's two revocation checkpoints, and it exists because the first one — the
-// decision made when the approval was accepted — is only true as of that moment. Between accepting and
-// dispatching, the credential can be revoked, rotated, frozen, or rebound to another Project; the owner
-// can leave the tenant; the Project can be pointed at a different repository. Every one of those makes
-// the approval no longer describe something Cloud may do, and every one of them is Cloud's own state,
-// readable here and nowhere else — the Store has no copy of it and never queries Cloud.
-//
-// It calls the same guard admission called (`requirePushAccess`) rather than a second, weaker copy of
-// its rules, so a check added to admission is a check the re-check makes. What it adds to the guard is
-// the comparison against the approval: the credential the Project currently binds has to be the one the
-// approval was made against, at the version it was made against, for the same repository. A rotation
-// between the two would otherwise let one approval be spent on material it was not approved for, which
-// is the "silently widening" the version pin exists to prevent.
-//
-// # What this cannot close, stated plainly
-//
-// The window between this re-check and the executor's redemption of the credential is irreducible. The
-// Store decides on its own, at redemption, that the token is genuine, unspent, unexpired, of a version
-// it can still read and not revoked — but it cannot see whether this approval is still in force or
-// whether the Project still binds that credential. A revocation that lands inside the window therefore
-// takes effect at the next checkpoint or at the authorization's expiry, whichever comes first; it is not
-// instantaneous, and nothing here should be described as making it so. The authorization's lifetime is
-// bounded (`PushDispatchLifetime`) precisely to bound that window.
-//
-// The failure is returned as a coded refusal when the guard refuses, so the settlement carries the
-// guard's own stable code; an error that is not a refusal means the check could not be performed at all,
-// which is a different fact and is settled under its own code.
-func (s *Store) recheckPushAuthority(ctx context.Context, id string) error {
-	_, err := s.transact(ctx, func(t *transaction) Object {
-		row := t.one("SELECT * FROM push_requests WHERE id=$1", id)
-		// A row that is gone was never committed, and a row that is no longer `dispatching` has already
-		// settled — by another dispatch, or by the deployment-level settlement. Either way there is
-		// nothing left to carry out, and sending the write anyway would be a second write under a spent
-		// approval.
-		require(row != nil && row.S("state") == pushDispatching, 409, pushRequestRevoked)
-		// The Project is read with the same visibility the accepting path used (`projectInSpace` filters
-		// a soft-deleted row the same way), so that a Project removed between the two checkpoints is
-		// refused rather than re-authorized from a row that is no longer part of the live graph.
-		//
-		// A Project that cannot be read is not a Project whose credential may be used. The guard's own
-		// codes are specific about why a credential is unusable; a missing Project gets the guard's
-		// "no reference to use" code, because from the write's point of view that is what it amounts to.
-		p := t.one("SELECT * FROM projects WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", row.S("projectId"), row.S("tenantId"))
-		require(p != nil, 409, "repository_credential_unavailable")
-		credentialID, version, upstream := requirePushAccess(t, p)
-		require(credentialID == row.S("credentialRefId") && version == row.N("credentialRefVersion") &&
-			upstream == row.S("repositoryUrl"), 409, "repository_credential_binding_conflict")
-		return nil
-	})
-	return err
-}
-
-// pushExecution reads back one approval as the executor's input.
-//
-// It reads the credential's owner through the join rather than storing it on the approval row: the
-// binding's owner is the credential's, and a second copy is a value that can disagree with the one the
-// Store checks at redemption. The row is read after the approval committed, so it is complete.
-func (s *Store) pushExecution(ctx context.Context, id string) (PushExecution, bool) {
-	var execution PushExecution
-	found := false
-	_, err := s.transact(ctx, func(t *transaction) Object {
-		row := t.one("SELECT r.*, c.owner_user_id FROM push_requests r JOIN credential_refs c ON c.id=r.credential_ref_id WHERE r.id=$1", id)
-		if row == nil {
-			return nil
-		}
-		found = true
-		execution = PushExecution{
-			AuthorizationID:   row.S("authorizationId"),
-			TenantID:          row.S("tenantId"),
-			OwnerUserID:       row.S("ownerUserId"),
-			ProjectID:         row.S("projectId"),
-			WorkspaceID:       row.S("workspaceId"),
-			OperationID:       row.S("id"),
-			CredentialID:      row.S("credentialRefId"),
-			CredentialVersion: row.N("credentialRefVersion"),
-			Repository:        row.S("repositoryUrl"),
-			Ref:               row.S("pinnedRef"),
-			OldCommit:         row.S("oldCommit"),
-			NewCommit:         row.S("newCommit"),
-			// The requirement, not the reference's whole declared set: an authorization carries exactly
-			// what its operation permits, and `cloneauth.Issue` refuses any other set.
-			Capabilities: []string{string(cloneauth.CapabilityPush)},
-		}
-		return nil
-	})
-	return execution, err == nil && found
 }

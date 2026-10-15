@@ -18,19 +18,28 @@ import (
 // The second assertion is the one that makes the first mean anything. A re-check that refused *after*
 // handing the write to the executor would leave the same audit row while having already spent the
 // authorization, so "no call" is what distinguishes a checkpoint from a report.
-
-// approveWithoutDispatching records one approval through the real accepting function and returns the
-// identifier the dispatch would have used, without dispatching.
 //
-// It calls `pushRequestPublic` inside a transaction — the exact call `Public`'s accepting arm makes —
-// and simply does not make the call that follows it. That is what opens the window these cases are
-// about: the approval is committed and `dispatching`, exactly as it would be at the instant before
-// `dispatchPush` runs, and nothing has been sent anywhere.
+// The checkpoint itself lives in `claimPushDispatch`, in the transaction that claims the attempt — the
+// last moment before the dispatch at which Cloud holds the row. These cases drive that claim through the
+// real dispatch pass rather than calling it, so what they exercise is the path a deployment takes.
+
+// approveWithoutDispatching records one approval through the real accepting function and returns its
+// identifier, without running a dispatch pass.
+//
+// It calls `pushRequestPublic` inside a transaction — the exact call `Public`'s accepting arm makes — and
+// simply does not run the pass that follows it. That is what opens the window these cases are about: the
+// approval is committed and `dispatching`, exactly as it would be at the instant before the dispatch
+// loop claims it, and nothing has been sent anywhere.
+//
+// The `dispatching` assertion is the guard on the helper itself. Since the accepting path no longer
+// reports whether a dispatch is owed, a change that made it settle the approval in this transaction
+// would leave every case below testing a settled row — and passing, because a settled approval is not
+// dispatched either. The assertion is what turns that into a failure here.
 func approveWithoutDispatching(t *testing.T, store *Store, scene pushScene, requestID string) string {
 	t.Helper()
-	var pending string
+	var approved Object
 	if _, err := store.transact(context.Background(), func(tx *transaction) Object {
-		_, pending = pushRequestPublic(tx, &PublicRequest{
+		approved = pushRequestPublic(tx, &PublicRequest{
 			Method: "POST", Path: "/api/v1/tenants/" + scene.tenant + "/workspaces/" + scene.workspace + "/pushes",
 			TenantID: scene.tenant, WorkspaceID: scene.workspace,
 			Body: Object{"requestId": requestID, "ref": pushRef, "oldCommit": pushOldCommit, "newCommit": pushNewCommit},
@@ -39,10 +48,21 @@ func approveWithoutDispatching(t *testing.T, store *Store, scene pushScene, requ
 	}); err != nil {
 		t.Fatalf("record the approval: %v", err)
 	}
-	if pending == "" {
-		t.Fatal("the accepting function returned no dispatch, so the window cannot be opened")
+	id := approved.S("id")
+	if got := pushState(t, store, id); got != pushDispatching+"/" {
+		t.Fatalf("the approval must be dispatching to open the window, got %q", got)
 	}
-	return pending
+	return id
+}
+
+// dispatchPushes runs one dispatch pass and fails the case if the pass itself failed. A pass error is a
+// pass that stopped, not an outcome, and a case that ignored it could assert a state the pass never
+// reached.
+func dispatchPushes(t *testing.T, store *Store) {
+	t.Helper()
+	if err := store.DispatchPushesOnce(context.Background()); err != nil {
+		t.Fatalf("dispatch the due pushes: %v", err)
+	}
 }
 
 // TestAPushIsNotDispatchedWhenItsAuthorityIsGoneByTheTimeTheWriteWouldRun is the negative matrix of the
@@ -121,7 +141,7 @@ func TestAPushIsNotDispatchedWhenItsAuthorityIsGoneByTheTimeTheWriteWouldRun(t *
 			}
 
 			testCase.change(t, store, scene)
-			store.dispatchPush(context.Background(), id)
+			dispatchPushes(t, store)
 
 			want := pushFailed + "/" + testCase.wantCode
 			if got := pushState(t, store, id); got != want {
@@ -147,7 +167,7 @@ func TestAPushIsStillDispatchedWhenNothingAboutItsAuthorityChanged(t *testing.T)
 	scene := seedPushScene(t, store, `["push"]`)
 
 	id := approveWithoutDispatching(t, store, scene, "req-unchanged")
-	store.dispatchPush(context.Background(), id)
+	dispatchPushes(t, store)
 
 	if got := pushState(t, store, id); got != pushSucceeded+"/"+pushApplied {
 		t.Fatalf("an unchanged approval settled as %q, want a success", got)
@@ -164,11 +184,12 @@ func TestAPushIsStillDispatchedWhenNothingAboutItsAuthorityChanged(t *testing.T)
 // longer `dispatching` is not carried out, whatever a later caller asks for.
 //
 // This is the case a retried or duplicated dispatch meets. The row has already settled — here by the
-// deployment-level answer — and the re-check is what stops the write from happening anyway, which
-// matters because the authorization identifier in the row is single-use: a second dispatch would either
-// be refused by the Credential Service, having burned an audit trail, or, in a deployment where the
-// first settlement happened *before* a signature was ever minted, would find a spendable grant behind a
-// row that already reads as concluded.
+// deployment-level answer — and the claim's state check is what stops the write from happening anyway,
+// which matters because the authorization identifier in the row is single-use: a second dispatch would
+// either be refused by the Credential Service, having burned an audit trail, or, in a deployment where
+// the first settlement happened *before* a signature was ever minted, would find a spendable grant behind
+// a row that already reads as concluded. The claim is also where a settled row is *not* a candidate at
+// all, so this asserts the outcome of a path that never reaches the executor either way.
 func TestASettledPushIsNeverDispatchedAgain(t *testing.T) {
 	store := dispatcherDB(t)
 	executor := &recordingPushExecutor{outcome: PushOutcome{Verdict: PushConfirmed, ObservedCommit: pushNewCommit}}
@@ -178,13 +199,13 @@ func TestASettledPushIsNeverDispatchedAgain(t *testing.T) {
 	id := approveWithoutDispatching(t, store, scene, "req-settled")
 	// Settle it the way a concurrent or earlier dispatch would have, without dispatching.
 	if _, err := store.transact(context.Background(), func(tx *transaction) Object {
-		settlePushRequest(tx, id, pushFailed, pushNotApplied)
+		settlePushRequest(tx, id, pushNoAttempt, pushFailed, pushNotApplied)
 		return Object{}
 	}); err != nil {
 		t.Fatalf("settle the approval: %v", err)
 	}
 
-	store.dispatchPush(context.Background(), id)
+	dispatchPushes(t, store)
 
 	if got := pushState(t, store, id); got != pushFailed+"/"+pushNotApplied {
 		t.Fatalf("a redispatch of a settled approval rewrote it to %q", got)

@@ -43,7 +43,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 	var dispatches []dispatchTarget
 	var events []SpaceEvent
 	var accepted []string
-	var pushes []string
 	result, e := s.transact(ctx, func(t *transaction) Object {
 		u := identityWithAlias(t, r.Identity)
 		uid := u.S("id")
@@ -162,14 +161,11 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		case r.WorkspaceID != "" && strings.HasSuffix(r.Path, "/pushes"):
 			// A push approval is accepted work outside the operation model, like a clone request: it
 			// creates no operation and the Controller never sees it. The dispatch it may carry out is
-			// Cloud's own and runs after this transaction commits, so the approval is durable before
-			// anything is sent anywhere (D8).
-			var pending string
-			out, pending = pushRequestPublic(t, r, uid)
+			// Cloud's own and is picked up by the dispatch loop after this transaction commits, so the
+			// approval is durable before anything is sent anywhere (D8) and the write never runs in a
+			// request's lifetime — a caller that hangs up cannot take the write it asked for with it.
+			out = pushRequestPublic(t, r, uid)
 			status = 202
-			if pending != "" {
-				pushes = append(pushes, pending)
-			}
 		case r.WorkspaceID != "":
 			out = workspaceAction(t, r, uid, hash, isAdmin)
 			status = 202
@@ -381,14 +377,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		}
 		for _, id := range accepted {
 			s.signalWork(id)
-		}
-		for _, id := range pushes {
-			// The approval committed, so the write it authorizes may now be attempted. This runs here
-			// rather than inside the transaction because a push is external work and the execution
-			// contract forbids holding the control plane's lock across it. Every outcome — including
-			// the deployment's "there is no executor" — is written back by dispatchPush; the response
-			// the caller already has is the approval itself, not the write's result.
-			s.dispatchPush(ctx, id)
 		}
 	}
 	return result, status, e
