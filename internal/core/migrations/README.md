@@ -95,7 +95,43 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 
 0033 在 0032 之后支持新运行续接同一 Issue 的最近一次 Revision（issue-run 续接决策）：`revisions` 增加 `prior_revision_id`（续接自哪个 Revision）、`bundle_revision_id`（续接后没有新提交时不存 bundle，指向实际持有 bundle 的那一行，永远一跳）、`resume_refused_at` 与 `resume_refused_reason`（恢复时发现基础提交已从远端消失，只允许 `prior_revision_base_unavailable`）；`issue_runs` 增加 `resume_revision_id`（会话启动时固定的前序 Revision）。原匿名约束 `revisions_check` 换成具名的 `revisions_bundle_shape`：既有行仍满足原来的两种形状，新增的第三种形状只允许“沿用 bundle 且有前序”。纯前向、可重复执行，既有行的新列均为 NULL。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0033RevisionResumeAppliesFreshAndUpgrades`，约束对真实行的拒绝见 `integration/agent_run_resume_test.go`。
 
-两个 `0033` 文件保留各自完整文件名与原始 SQL；迁移身份由完整文件名和校验和确定，数字前缀不是唯一键。新库执行两项追加迁移，已应用个人模型迁移的验收库只追加尚未应用的 Revision 迁移，不改写旧账本或模型绑定。
+三个 `0033` 文件保留各自完整文件名与原始 SQL；迁移身份由完整文件名和校验和确定，数字前缀不是唯一键。新库按文件名顺序执行三项追加迁移，已应用其中某一项的验收库只追加尚未应用的那些，不改写旧账本或模型绑定。
+
+## 0033：用户 Git 凭据
+
+0033 在 0032 之后给 `credential_refs` 增加 `name`（1–120 字符的显示名，默认空串）与 `revoked_at`（属主撤回凭据的审计时刻）两列，承载用户自助管理的个人 HTTPS Git 凭据（identity-access 20261010 D1/D2/D5）。凭据权威仍是 `credential_refs` 的 `tenant_id` + `owner_user_id` + `repository_scope` + `capabilities`，`name` 只用于显示、不授予任何权限；撤销本身由 `availability='invalid'` 表达，`revoked_at` 是它旁边的时间戳而不是第二个事实来源（`deleted_at` 的删除语义尚未定义，D10）。两列都可加、可空或有默认值，纯前向、可重复执行，不回填，既有行语义不变。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0033UserGitCredentialsAddsTheOwnerFacingColumns`。
+
+## 0034：镜像准备
+
+0034 新增 `mirror_preparations`，在既有 `node` → `clone` 迁移里记录一次内部 Git Server 的预取（workspace-content-transport D6/D7）。准备做成既有 operation 内的一个步骤而不是新的 operation 种类：`one_project_operation`（0001）每个 Project 只允许一个活动 operation，另开一种会与需要它的 `create_workspace` 互相串行、永远无法重叠。每行以 `operation_id` 为主键（一个 operation 一行），`repository_url` 与 `pinned_ref` 在准入时快照而不在结算时联表读取（Project 可能已改 `repository_url`），`runtime_generation`/`control_epoch` 是迟到结果的栅栏，`generation` 每次尝试自增，`state` 为 `admitting`/`dispatched`/`ready`/`failed`/`superseded`，`ready` 必须同时带 `commit_id` 与 `mirror_generation`。同时按 0015/0016/0020 的先例重建 `operations_step_check` 加入 `mirror`。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0034MirrorPreparationAppliesFreshAndUpgrades`，该迁移随后被 0035 撤回。
+
+## 0035：镜像不是 operation 步骤
+
+0035 立刻撤回 0034 加进 `operations_step_check` 的 `mirror`：步骤名会跨 protobuf 传到桌面 Controller，而那个 Controller 不由本仓库修改。`internal/controlgrpc/operations.go` 用裸的 map 查询转换步骤名，未知名字得到零值而不是错误，于是 Cloud 发出 `OPERATION_STEP_UNSPECIFIED`，`apps/ora-controller` 对该值返回 `Error::Conflict` 并每轮重新认领，operation 永远离不开该步骤。当时没有任何部署，也就没有行写过 `mirror`，名字直接删除而不是留成陷阱（对照 0016 保留的退役名字：那些行仍然拼写它们）。准备本身不变，仍记在 `mirror_preparations`，仍在既有 `node` → `clone` 迁移里跑。新库/升级/重复执行见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0035WithdrawsTheMirrorStep`。
+
+## 0036：镜像准备认领协议
+
+0036 给 `mirror_preparations` 补上认领协议的另一半：0034 定了行身份、状态与 `generation` 栅栏，但没有让多个 Cloud 进程（或重启后的同一个进程）就“现在谁在准备”和“何时重试”达成一致的列，缺了它要么重复派发、要么丢失的尝试永不重试。新增 `lease_expires_at` 与 `retry_at`：认领在同一事务里写入本次尝试的绑定、自增 `generation`、设置租约；派发在任何事务之外签名授权并调用 C（这段耗时以分钟计，所以绝不放在认领里）；结算只在 `generation` 仍是该栅栏、租约仍属本次尝试时接受结果。用租约而不是锁，因为进程死掉不会留下可回滚的事务——租约自然过期，下一轮即可认领；租约必须用数据库时钟写入，否则快钟的 worker 会从仍在干活的慢钟 worker 手里抢走尝试。两个 CHECK 分别要求 `dispatched` 必带租约、已结算状态不带租约与退避；部分索引 `mirror_preparations_claimable` 覆盖“未认领或尝试已过期”的扫描。约束对真实行的拒绝与放行见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0036AddsTheMirrorPreparationClaim`。
+
+## 0037：Push 请求
+
+0037 新增 `push_requests`，一条一次受控远端写入的 Cloud 侧批准记录（push-capability-vocabulary D2/D3/D8/D9、push-execution-authority D3/D7/D8）。单独成表而不挂在 `operations` 上：push 由人提出而不是控制面发现的工作，它携带的授权不指向任何 operation、执行或 Node，挂上去还会落进 `one_project_operation`，于是一条待批的 push 会挡住 Project 的开通、而开通中的 Project 又让 push 无法批准。行里存的是“某个已识别的人批准了某一次确切的写入”，不存已签名的授权本身（存下来的 bearer 就是可重放的 bearer），只存授权标识——它既是凭据服务记录消费的名字，也是审计唯一需要的值。`state` 为执行权限 D7 的三态加 Cloud 内部的 `dispatching`：停在那里的行是结果未知的 push，这是诚实的读法而不是成功。`pinned_ref` 强制 `refs/heads/` 限定拼写且长度 12–200，两个 commit 必须是不同的完整小写对象名且不为空对象名（删除与凭空创建都在 D3 被整体拒绝），`credential_ref_version` 在批准时钉住而不是派发时解析。`authorization_id` 唯一，一个请求产出第二份写授权正是幂等规则要防的事。约束对真实行的拒绝见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0037PushRequestsAppliesFreshAndUpgrades`。
+
+## 0038：Push 观测到的 commit
+
+0038 给 `push_requests` 加 `observed_commit`：0037 记录 Cloud *得出了什么*（`state`、`result_code`），没有记录*看到了什么*，而三种终态里有两种只在它们所依据的值旁边才有意义——`uncertain`/`push_attribution_unknown` 表示 ref 本来就已持有请求的 commit，离开观测值读者无法把它与“失败且 ref 未动”区分开；`uncertain`/`push_target_conflict` 表示 ref 持有无人授权的内容，这个内容本身就是结论的全部，只写“conflict”会把人打发去手工查、而那时 ref 可能又变了。因此该列作为证据与结论并排存放而不是折进结论：Cloud 由它推导结论，保留原值才能让后来的读者重新推导而不是信任标签。非空时必须是完整 commit id；不与 `state` 绑定（`succeeded` 可以带、`uncertain` 可以带也可以不带、`failed` 同样）。不绑定的两种组合被真实行验证：见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0038PushRequestObservedCommitAppliesFreshAndUpgrades`。
+
+## 0039：Push 派发租约
+
+0039 给 `push_requests` 加 `dispatch_generation` 与 `dispatch_lease_expires_at`，因为一次批准可以被尝试多次，而持有它的那次尝试必须可识别、可界定（push-execution-authority D6/D7/D8）。派发原本跑在调用方的请求生命周期里：请求被取消、进程被杀、或在结算事务失败，行就永远停在 `dispatching`，而且没有任何列记录曾有过一次尝试——既分不清“还在派发”和“派发已死”，也无法限制一条写入被重试多少次。`dispatch_generation` 数的是*被认领*的尝试并栅栏它们的结果（认领前为 0，之后 1、2……，结算只在行仍持有该 generation 时写入），计数与栅栏共用一个列是故意的：它们按构造一起移动，第二个计数器会是一个可能与本列不一致的值。`dispatch_lease_expires_at` 用数据库时钟写入，过期后才可重新认领，因此仍在飞的尝试不会被替换；它是调和时钟而不是写入栅栏——阻止两次尝试同时写的是执行器对授权 commit 对的 CAS，决定哪次尝试的答案算数的是上面的 generation。此外 `authorization_id`（0037）从此指*当前*尝试的授权：重试是同一绑定的新授权，唯一性含义不变（两份批准永不共享一个授权）。两个 CHECK 要求 generation 非负、只有 `dispatching` 的行才带租约；部分索引 `push_requests_dispatch_pending` 覆盖调解轮次扫描的 `dispatching` 且租约已过期的过滤与 `updated_at` 排序。新库/升级/重复执行见同文件的 `TestMigration0039PushDispatchLeaseAppliesFreshAndUpgrades`。
+
+## 0040：镜像准备的尝试预算
+
+0040 给 `mirror_preparations` 加 `attempts`，把“尝试预算”与栅栏分开：0034/0036 让 `generation` 兼任迟到结果的栅栏和已花费尝试的计数，两者在每次尝试都有答复时一致，有一次没答复就分叉——进程在认领与结果之间被杀不会写下任何东西，行停在 `dispatched` 的 generation N 直到租约过期，而候选查询的 `generation < 上界` 从此永远拒绝它：Operation 停在 `node`、Workspace 卡在门后、镜像无人处理，正是尝试上界本想避免的卡死从另一侧到达。`attempts` 数的是*已得出结论*的尝试（发表了镜像或给出失败），因为预算能诚实界定的只有这个：丢失的尝试什么都没确立，约束它的是租约；`generation` 保持原样，仍是栅栏。回填读取既有行唯一携带的证据：已结算的行在 generation N 就是得出了 N 次结论，`dispatched` 的在 generation N 得出了 N−1 次，第 N 次正是它所在或被困在的那次；`ready` 从 0 开始，因为发表镜像结束预算所数的连续失败，代码在每次成功时也会清零。回填结果与既有行的对应关系见同文件的 `TestMigration0040MirrorPreparationAttemptsAppliesFreshAndUpgrades`。
+
+## 0041：Push 请求人与租户成员关系
+
+0041 给 `push_requests` 补上 `(tenant_id, actor_user_id)` 到 `tenant_memberships(tenant_id, user_id)` 的外键：0037 把 `actor_user_id` 内联声明后没有加外键，而本 schema 里其他每一个 actor 列都有，且都是这个复合引用（0001 的 `operations`/`execution_tickets`、0014 的 `clone_requests`、0019 的 `runtime_control_sessions`、0020 的 `force_stop_intents`）。复合比裸引用 `users(id)` 更强，也正是本表需要的：审计回答的是“本租户里的哪个人批准了这次写入”，因此一个不属于该租户的用户并不能描述一个更弱的批准，而是根本无法描述一个批准，裸键恰恰会放过这样的行。该列不是装饰——它是幂等键 `(workspace_id, actor_user_id, request_id)` 的一部分，而 `pushApproval` 与 `requirePushAccess` 都是从有效的租户成员关系推导写这一行的权限，这条约束把授权路径在代码里已经执行的事写成了库里的状态。成员关系行从不被删除（成员靠 `status` 离开，产品里没有删除 `tenant_memberships` 的路径），所以引用不会被事后作废、这条键也不会让既有批准变得不可读。前向迁移，加外键时会校验既有行，而产品写下的每一行都已满足；拒绝的两种情形（非本租户用户、属于另一租户的成员）与放行的情形见同文件的 `TestMigration0041PushRequestActorMembershipAppliesFreshAndUpgrades`。
 
 ## 0034：Agent 启动窗口与残留责任
 
