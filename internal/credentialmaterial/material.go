@@ -206,9 +206,17 @@ func TokenPath(root, executionID string) (string, error) {
 // same reduction the helper applies to Git's request; a caller cannot widen a token's reach by staging
 // a scope the helper would read differently than it writes.
 //
+// A staging that fails removes the directory it created before it returns, so this function leaves
+// either complete material or none. Its callers register their destruction once it returns, because
+// until then there is supposed to be nothing to destroy: a failure between the token and the scope
+// would otherwise leave a plaintext secret on disk that nothing in this process is holding a cleanup
+// for, and the only thing left that would remove it is the next start's `Sweep`. A removal that itself
+// fails is joined into the returned error rather than dropped, because it means the secret is still
+// there — a worse fact than the failure being reported, and one the caller has to be able to see.
+//
 // The caller is responsible for the root's ownership; this function only refuses to create the
 // material outside it or with weaker modes than the constants above.
-func Stage(root, executionID, token, host, path string) error {
+func Stage(root, executionID, token, host, path string) (err error) {
 	if strings.TrimSpace(token) == "" {
 		return errors.New("refusing to stage an empty credential")
 	}
@@ -223,6 +231,18 @@ func Stage(root, executionID, token, host, path string) error {
 	if err := os.Mkdir(directory, DirectoryMode); err != nil {
 		return fmt.Errorf("create credential material directory: %w", err)
 	}
+	// From here the directory is this call's, so every failure below removes it. The registration is
+	// after `Mkdir` and not before it on purpose: an existing directory is not this call's to touch, and
+	// `Mkdir` refusing to merge into one is what says so. Nothing before this line can leave anything
+	// behind, and nothing after it may.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if removeErr := os.RemoveAll(directory); removeErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove partially staged credential material: %w", removeErr))
+		}
+	}()
 	// Mkdir applies the process umask. The isolation argument needs the mode to be exactly
 	// DirectoryMode, so it is set again rather than assumed.
 	if err := os.Chmod(directory, DirectoryMode); err != nil {
