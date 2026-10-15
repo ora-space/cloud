@@ -62,10 +62,13 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 // Recording it is a separate write because the refusal unwound its own transaction. See
 // `settleRefusedCredentialedClone`: for every other error the settlement is a no-op.
 //
-// Both places a credentialed clone can be refused go through here. With an executor installed the
-// guard is reached from `admitCredentialedClone`, before the ordinary dispatch runs; without one it is
-// reached from `s.control`. A refusal that settled in only one of the two would leave the wedge the
-// settlement exists to remove, on whichever path the deployment happens to take.
+// Every path a credentialed clone can be refused on goes through here, and this is the only place that
+// can settle one. With an executor installed the guard is reached from `admitCredentialedClone`,
+// before the ordinary dispatch runs; without one it is reached from `s.control`, either from the
+// dispatch itself or from a later step of the same Operation that reaches the same guard. The
+// settlement keys on the Operation the refusal names rather than on the action, so a refusal that
+// settled on only one of these paths would leave the wedge the settlement exists to remove on
+// whichever path the deployment happens to take.
 func (s *Store) refusalOutcome(ctx context.Context, r *ControlRequest, refusal error) error {
 	if settleErr := s.settleRefusedCredentialedClone(ctx, r, refusal); settleErr != nil {
 		return settleErr

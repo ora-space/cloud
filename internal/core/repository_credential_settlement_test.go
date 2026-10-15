@@ -24,6 +24,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -138,14 +139,30 @@ func TestRefusedCredentialedCloneSettlesTheOperationTerminally(t *testing.T) {
 	if n := scalarOf(t, store, "SELECT count(*) FROM clone_executions WHERE operation_id=$1", scene.operation); n != 0 {
 		t.Fatalf("a settled refusal registered %d clone executions", n)
 	}
-	// No bypass: the settlement records a refusal. It does not touch the binding it refused, the
-	// Project's lifecycle, or the Workspace's admission — the user still has to act, and the credential
-	// is still exactly the one the Project named.
+	// No bypass: the settlement records a refusal. It does not touch the binding it refused or the
+	// Project's lifecycle — the user still has to act, and the credential is still exactly the one the
+	// Project named.
 	if n := scalarOf(t, store, "SELECT count(*) FROM projects WHERE id=$1 AND credential_ref_id=$2 AND lifecycle='active'", scene.project, scene.credential); n != 1 {
 		t.Fatal("the settlement rewrote the credential binding or the Project's lifecycle")
 	}
-	if n := scalarOf(t, store, "SELECT count(*) FROM workspaces WHERE id=$1 AND admission_open=false AND observed_state='ready'", scene.workspace); n != 1 {
-		t.Fatal("the settlement opened admission on a Workspace whose code was never cloned")
+	assertWorkspaceSettled(t, store, scene.workspace)
+}
+
+// assertWorkspaceSettled pins the three things that end with a Workspace Operation, read straight from
+// PostgreSQL. Failing the Operation alone is not a settlement: the row that ends and the rows that were
+// held by it are one obligation, and the failure mode of leaving them behind is not cosmetic — a
+// Workspace that keeps advertising itself as available is offered for work whose code never arrived,
+// and a Workspace whose runtime reservation is never released can never be handed to another Operation.
+func assertWorkspaceSettled(t *testing.T, store *Store, workspace string) {
+	t.Helper()
+	if n := scalarOf(t, store, "SELECT count(*) FROM workspaces WHERE id=$1 AND observed_state='unavailable' AND admission_open=false", workspace); n != 1 {
+		t.Fatal("a failed Workspace Operation must leave its Workspace unavailable with admission closed")
+	}
+	// The reservation is released through the ordinary closure path rather than by clearing the row:
+	// the intent to close is what this write records, and the Node's own confirmation of its durable
+	// responsibilities is what lets the row reach `idle`.
+	if n := scalarOf(t, store, "SELECT count(*) FROM runtime_controls WHERE workspace_id=$1 AND state='draining'", workspace); n != 1 {
+		t.Fatal("a failed Workspace Operation must release the runtime reservation it was holding")
 	}
 }
 
@@ -320,27 +337,207 @@ func TestARevokedReferenceSettlesTheOperationToo(t *testing.T) {
 	}
 }
 
-// TestSettlementIgnoresActionsThatAreNotACloneDispatch pins the other half of the boundary. The
-// settlement keys on the action as well as on the code, because the code is a property of the
-// deployment and could be reported on a path that is not this Operation's clone admission.
-func TestSettlementIgnoresActionsThatAreNotACloneDispatch(t *testing.T) {
+// TestARefusalAtTheNodeStepSettlesTheOperationEndToEnd is the case the earlier settlement could not
+// see, driven through the boundary a real Controller reaches rather than through the settlement.
+//
+// `requireRepositoryAccess` is the single admission guard for every path that leads to remote Git work,
+// and the path a default deployment actually takes reaches it one step *earlier* than the dispatch
+// this file's other tests use: the credentialed transition from `node` into `clone` is admitted by
+// `advance`, so the Operation is still standing at `node` when the refusal is raised. Keying the
+// settlement on the action (`clone_dispatch`) or on the step (`clone`) made that refusal write nothing
+// at all, and the Operation stayed `running` for good — the Project's single live-Operation slot
+// occupied, the Project stuck in `provisioning`, and nothing the user could do about it.
+//
+// Nothing here writes `step='clone'` by hand, which is exactly the shortcut that hid the defect: the
+// scene is seeded at `node`, the Controller's `advance` is the real request, and the assertions are the
+// whole outcome — the Operation failed with the guard's own code, and the three things it was holding
+// released with it.
+func TestARefusalAtTheNodeStepSettlesTheOperationEndToEnd(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private")
+	// The Operation is where a provisioning chain really is when it asks to clone: a connected Node is
+	// up, no code has been fetched, and the next transition is the one that needs the credential.
+	stagedExec(t, store, `UPDATE operations SET step='node',version=version+1 WHERE id=$1`, scene.operation)
+	before := readTerminalFact(t, store, scene.operation)
+
+	_, err := store.Control(context.Background(), &ControlRequest{
+		Action:      "advance",
+		OperationID: scene.operation,
+		Body:        Object{"epoch": 1, "version": before.version},
+		Service:     controllerClaims(),
+	})
+	if got := faultCode(t, err); got != repositoryCredentialExecutorUnavailable {
+		t.Fatalf("refusal code = %q, want %q", got, repositoryCredentialExecutorUnavailable)
+	}
+
+	fact := readTerminalFact(t, store, scene.operation)
+	if fact.state != "failed" || fact.errorCode != repositoryCredentialExecutorUnavailable {
+		t.Fatalf("a refusal at the node step must settle the Operation as failed with its own code, got %s/%q", fact.state, fact.errorCode)
+	}
+	if fact.retryAt != nil {
+		t.Fatalf("a terminal Operation must carry no retry deadline, got %v", fact.retryAt)
+	}
+	assertWorkspaceSettled(t, store, scene.workspace)
+	// The Project's slot is free again: `one_project_operation` counts a `running` Operation, so the
+	// Project that was stuck in `provisioning` can be acted on.
+	if _, err := store.Pool.Exec(`INSERT INTO operations(id,tenant_id,actor_user_id,project_id,kind,state,step,request,idempotency_key,request_hash)
+		VALUES($1,$2,$3,$4,'delete_project','queued','cleanup','{}','after-node-refusal','after-node-refusal')`,
+		newID(), scene.tenant, scene.user, scene.project); err != nil {
+		t.Fatalf("the settled Operation still occupies the Project's operation slot: %v", err)
+	}
+}
+
+// TestSettlementLeavesRefusalsThatNameAnotherOperationAlone pins the other half of the resolution: the
+// settlement follows the Operation the request names, and a request whose action names none must not
+// terminate one.
+//
+// The code is a property of the deployment, so it can be reported on a path that is not this
+// Operation's admission; the identifier it is reported with is what makes the difference, and it is
+// only trusted from the carrier the action itself resolves.
+func TestSettlementLeavesRefusalsThatNameAnotherOperationAlone(t *testing.T) {
 	store := dispatcherDB(t)
 	scene := seedRefusedCredentialedWedge(t, store)
-	// Put the scene back to the state the refusal left it in, so the only thing under test is whether a
-	// non-dispatch action carrying the same code settles it.
-	if _, err := store.Pool.Exec(`UPDATE operations SET state='running',error_code=NULL,version=1 WHERE id=$1`, scene.operation); err != nil {
-		t.Fatalf("restore the scene: %v", err)
-	}
+	// Put the scene back to the state the refusal left it in, so the only thing under test is whether
+	// this request's action resolves an Operation at all.
+	stagedExec(t, store, `UPDATE operations SET state='running',error_code=NULL,version=1 WHERE id=$1`, scene.operation)
+
 	request := settlementRequest(scene, 1)
 	request.Action = "effect_permit"
-
 	if err := store.settleRefusedCredentialedClone(context.Background(), request, refusal()); err != nil {
 		t.Fatalf("a settlement that does not apply must be a silent no-op: %v", err)
 	}
-	fact := readTerminalFact(t, store, scene.operation)
-	if fact.state != "running" || fact.errorCode != "" {
-		t.Fatalf("a refusal outside clone admission must not settle the Operation, got %s/%q", fact.state, fact.errorCode)
+	if fact := readTerminalFact(t, store, scene.operation); fact.state != "running" || fact.errorCode != "" {
+		t.Fatalf("a refusal reported on a path that names no Operation must not settle one, got %s/%q", fact.state, fact.errorCode)
 	}
+}
+
+// TestARuntimePermitRefusalSettlesTheOperationHoldingTheWorkspace covers the third way the guard is
+// reached: a `runtime_permit` carries no operation id at all, because it is about one execution of a
+// Workspace rather than about a step. The Operation it belongs to is the one holding that Workspace's
+// runtime reservation, and reading it from there is what keeps this refusal as terminal as the others
+// — otherwise a credential revoked between dispatch and permit would leave an Operation `running`
+// forever with nothing left able to drive it.
+func TestARuntimePermitRefusalSettlesTheOperationHoldingTheWorkspace(t *testing.T) {
+	store := dispatcherDB(t)
+	// Seeded directly rather than through a refused dispatch: the scene's own state *is* what a refusal
+	// leaves behind — the refusal unwinds its transaction and records nothing — and a real dispatch
+	// would settle the Operation immediately instead of leaving one for this request to settle.
+	scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private")
+
+	request := &ControlRequest{
+		Action: "runtime_permit",
+		Body: Object{
+			"epoch": 1, "workspaceId": scene.workspace, "nodeInstanceId": scene.node,
+			"controlEpoch": 1, "executionId": "exec-settlement",
+		},
+		Service: controllerClaims(),
+	}
+	if err := store.settleRefusedCredentialedClone(context.Background(), request, refusal()); err != nil {
+		t.Fatalf("a refusal reached from a runtime permit must settle: %v", err)
+	}
+	fact := readTerminalFact(t, store, scene.operation)
+	if fact.state != "failed" || fact.errorCode != repositoryCredentialExecutorUnavailable {
+		t.Fatalf("the Operation holding the Workspace must settle, got %s/%q", fact.state, fact.errorCode)
+	}
+	assertWorkspaceSettled(t, store, scene.workspace)
+}
+
+// TestARefusedRunWorkspaceSettlesItsIssueRun is the third effect of the settlement, the one no
+// assertion above can reach: a Workspace that exists for an IssueRun.
+//
+// A run Workspace carries the run in `workspaces.issue_run_id`, and an Operation that fails while
+// holding it has to tell that run, because nothing else will: the run is waiting on a Workspace that
+// will never become available, and a run that is never settled is the state that starves every later
+// Operation of the Project. The hook is the same one a successful `create_workspace` uses to move the
+// run into `starting`, so recording it here asserts the settlement reached the run's own lifecycle
+// rather than only the row beside it.
+func TestARefusedRunWorkspaceSettlesItsIssueRun(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := seedCredentialedCloneScene(t, store, "https://git.example.invalid/group/private.git", "https://git.example.invalid/group/private")
+	run, operation, workspace := seedRunWorkspaceOnProject(t, store, scene)
+
+	var settled []string
+	store.OnRunWorkspaceSettled = func(_ context.Context, _ *sql.Tx, runID, status string) error {
+		settled = append(settled, runID+"/"+status)
+		return nil
+	}
+
+	before := readTerminalFact(t, store, operation)
+	if _, err := store.Control(context.Background(), &ControlRequest{
+		Action:      "advance",
+		OperationID: operation,
+		Body:        Object{"epoch": 1, "version": before.version},
+		Service:     controllerClaims(),
+	}); err == nil {
+		t.Fatal("this deployment installs no executor, so the run Workspace's clone must be refused")
+	}
+
+	fact := readTerminalFact(t, store, operation)
+	if fact.state != "failed" || fact.errorCode != repositoryCredentialExecutorUnavailable {
+		t.Fatalf("a refused run Workspace must settle its Operation, got %s/%q", fact.state, fact.errorCode)
+	}
+	assertWorkspaceSettled(t, store, workspace)
+	if len(settled) != 1 || settled[0] != run+"/failed" {
+		t.Fatalf("a refused run Workspace must settle its IssueRun as failed, got %v", settled)
+	}
+	// The run's own rows are the business core's to move; this settlement reports the outcome through
+	// the hook and does not reach past it into them.
+	var phase string
+	if err := store.Pool.QueryRow(`SELECT phase FROM issue_runs WHERE id=$1`, run).Scan(&phase); err != nil {
+		t.Fatalf("read run phase: %v", err)
+	}
+	if phase != "provisioning" {
+		t.Fatalf("the settlement reached past its hook into the run's own lifecycle, phase=%q", phase)
+	}
+}
+
+// seedRunWorkspaceOnProject stages one IssueRun and the isolated Workspace that run owns, together
+// with the `create_workspace` Operation that is provisioning it, and returns the run, that Operation
+// and the run Workspace.
+//
+// The run lives on a Project of its own rather than the scene's: `one_project_operation` admits one
+// live Operation per Project, and the scene's Project is already provisioning its main Workspace. That
+// is also the shape a run is created in — a Project whose main Workspace is already there and idle
+// while the run's own Workspace is being provisioned — so the run's Operation is the only live one on
+// the Project it names. The Project it belongs to shares the tenant, the space and the credential, so
+// the credentialed node step it reaches is the same one the scene's Project reaches.
+//
+// The main Workspace is not decoration: a live Project must carry exactly one main Workspace, so a run
+// Workspace is always an additional one and both are seeded in one transaction, because the schema's
+// integrity triggers are deferred.
+func seedRunWorkspaceOnProject(t *testing.T, store *Store, s credentialedScene) (run, operation, workspace string) {
+	t.Helper()
+	issue, project, main, run, operation, workspace := newID(), newID(), newID(), newID(), newID(), newID()
+	if _, err := store.transact(context.Background(), func(t *transaction) Object {
+		t.exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,credential_ref_id,lifecycle)
+			VALUES($1,$2,$3,$4,'run',$5,$6,$7,'active')`,
+			project, s.tenant, s.user, s.space, s.repository, s.ref, s.credential)
+		t.exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,requested_ref)
+			VALUES($1,$2,$3,$3,'verified_request',$4,'main','running','ready',$5)`,
+			main, s.tenant, s.user, project, s.ref)
+		t.exec(`INSERT INTO issues(id,tenant_id,creator_user_id,title,number) VALUES($1,$2,$3,'run',1)`, issue, s.tenant, s.user)
+		t.exec(`INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,status,phase)
+			VALUES($1,$2,$3,'agent',$4,'queued','provisioning')`, run, s.tenant, issue, s.user)
+		// A run Workspace is isolated and private to its run: that pairing is what the schema's own
+		// creator rule describes (`w.kind='isolated' AND o.kind='create_workspace'`), and the same rule
+		// requires a live isolated Workspace to carry exactly one task identity.
+		t.exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,requested_ref,issue_run_id)
+			VALUES($1,$2,$3,$3,'verified_request',$4,'isolated','running','provisioning',$5,$6)`,
+			workspace, s.tenant, s.user, project, s.ref, run)
+		t.exec(`INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'run')`, newID(), workspace)
+		t.exec(`INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash,controller_epoch)
+			VALUES($1,$2,$3,$4,$5,'create_workspace','running','node','{}',$6,$6,1)`,
+			operation, s.tenant, s.user, project, workspace, "run-workspace-"+operation)
+		t.exec(`INSERT INTO runtime_controls(workspace_id,state,control_epoch,maintenance_operation_id)
+			VALUES($1,'maintenance',1,$2)`, workspace, operation)
+		return Object{}
+	}); err != nil {
+		t.Fatalf("seed run Workspace scene: %v", err)
+	}
+	// A connected Node on the run Workspace, because the `node` step is where the credentialed
+	// transition is admitted and where a missing executor is refused.
+	bindConnectedNode(t, store, workspace)
+	return run, operation, workspace
 }
 
 // TestSettlementIsIdempotent pins that the settlement states a fact rather than applying a change:

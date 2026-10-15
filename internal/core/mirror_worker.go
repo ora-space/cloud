@@ -52,8 +52,10 @@ type MirrorPreparation struct {
 	// Generation is the monotonic attempt fence. A result is accepted only if this still equals the
 	// row's generation, so an answer to a superseded attempt is refused rather than applied.
 	Generation int64
-	// ControlEpoch fences the Operation itself. A settlement that names an epoch the Operation has
-	// moved past must not land.
+	// ControlEpoch is the Controller epoch the attempt was admitted under, carried to the executor as
+	// part of the binding the authorization is issued against. It is not a settlement fence: what ends
+	// an Operation because its preparation failed is the attempt budget, which belongs to the
+	// preparation and not to any one Controller.
 	ControlEpoch int64
 
 	TenantID    string
@@ -256,11 +258,22 @@ func (s *Store) settleMirrorPreparation(ctx context.Context, p MirrorPreparation
 			p.OperationID, code, p.Generation)
 		// A preparation that has ended must settle its Operation. Leaving it `running` at `node` would
 		// make the Controller retry the gate forever with nothing left working on the mirror — the
-		// silent retry this worker exists to prevent. The settlement is epoch-fenced like every other
-		// control-plane write, so it cannot land on an Operation that has moved on.
-		t.exec(`UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()
-			WHERE id=$1 AND state='running' AND step='node' AND controller_epoch=$3`,
-			p.OperationID, mirrorPreparationFailureCode(code), p.ControlEpoch)
+		// silent retry this worker exists to prevent.
+		//
+		// The settlement is fenced on the Operation still being the one this pass worked on
+		// (`state='running'`, still at `node`) and on nothing else. It is deliberately *not* fenced on
+		// the epoch the attempt was claimed under: what ends here is this preparation, and the fact that
+		// its attempts are spent does not belong to any one Controller. A Controller that restarted and
+		// re-claimed the Operation at a new epoch is refused by this same gate for the same reason, and
+		// fencing on the old epoch would refuse the write for every Controller alike — leaving the
+		// Operation `running` at `node` for good, which is the wedge this settlement exists to remove.
+		if t.execRows(`UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()
+			WHERE id=$1 AND state='running' AND step='node' AND workspace_id IS NOT NULL`,
+			p.OperationID, mirrorPreparationFailureCode(code)) == 1 {
+			// The same obligation every other end of a Workspace-driving Operation carries: the
+			// Workspace, the runtime reservation and the IssueRun are settled with it.
+			failWorkspaceOperation(t, p.OperationID)
+		}
 		return Object{}
 	})
 	return applied, err
@@ -324,11 +337,15 @@ func (s *Store) settleRefusedMirrorPreparation(ctx context.Context, operation st
 	if !terminalCredentialRefusals[code] {
 		return nil
 	}
-	// No attempt was claimed, so there is no epoch to carry; the write re-reads the Operation's own and
-	// stays fenced on the step it was admitted at.
+	// No attempt was claimed, so there is no generation to carry. The write stays fenced on the
+	// Operation being the one that was refused — still `running`, still at the step the gate is reached
+	// from, still a Workspace Operation — and, like the other settlements, settles what that Operation
+	// was holding once it has recorded the failure.
 	_, err := s.transact(ctx, func(t *transaction) Object {
-		t.exec(`UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()
-			WHERE id=$1 AND state='running' AND step='node'`, operation, code)
+		if t.execRows(`UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()
+			WHERE id=$1 AND state='running' AND step='node' AND workspace_id IS NOT NULL`, operation, code) == 1 {
+			failWorkspaceOperation(t, operation)
+		}
 		return Object{}
 	})
 	return err

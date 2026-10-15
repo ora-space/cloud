@@ -57,10 +57,8 @@ func cloneRetryBackoff(attempts int64) time.Duration {
 // an outcome the Node could not tell is the separate `clone_result_unknown` park, and counting it here
 // would spend one of the three attempts on a clone that may still be running in the sandbox.
 //
-// Ending the step also settles what the step was holding. Without the last three statements a Workspace
-// whose repository stays unreachable would keep a never-settled IssueRun and this Operation's runtime
-// reservation — the exact state that starves every later Operation — even though the Operation itself had
-// already failed.
+// Ending the step also settles what the step was holding: `failWorkspaceOperation` is what does that,
+// and it is shared with every other path that ends a Workspace-driving Operation.
 //
 // Admission is left closed on both paths: only a successful clone opens it (D2), so the Workspace
 // cannot be used while its clone step is failing or after the step has ended.
@@ -78,12 +76,48 @@ func deferCloneFailure(t *transaction, o Object) Object {
 	// longer means anything and would be read back as a pending retry. The error code stays the one this
 	// failure was reported with, so the public contract keeps showing the failure the Node reported.
 	t.exec("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), "clone_failed")
-	t.exec("UPDATE workspaces SET observed_state='unavailable',admission_open=false,version=version+1 WHERE id=$1", o.S("workspaceId"))
-	finishRuntimeMaintenance(t, o.S("id"))
-	if w := t.one("SELECT issue_run_id FROM workspaces WHERE id=$1", o.S("workspaceId")); w.S("issueRunId") != "" {
+	failWorkspaceOperation(t, o.S("id"))
+	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+}
+
+// failWorkspaceOperation settles everything a Workspace-driving Operation was holding, once the
+// Operation row itself has already been recorded `failed`.
+//
+// It is deliberately separate from the write that fails the Operation and deliberately shared, because
+// the two halves are the same obligation on every path that ends such an Operation: an Operation that
+// stops being driven stops *being* the thing that holds the Workspace, the runtime reservation and the
+// IssueRun. Leaving them behind is not a cosmetic omission — a Workspace whose Operation ended but
+// whose `runtime_controls` row still says `maintenance` can never be handed to another Operation, and
+// an IssueRun whose Workspace will never become ready never settles, which is the state that starves
+// every later Operation of the Project.
+//
+// The three writes are the whole set, and each answers for one of the three things the Operation held:
+//
+//   - the Workspace is no longer available and admission stays closed. Only a successful clone and
+//     plugin step opens admission (D2), so nothing here may open it, and a Workspace whose code was
+//     never delivered must not keep advertising itself as ready.
+//   - the runtime reservation is released through the ordinary closure path rather than by clearing the
+//     row: `finishRuntimeMaintenance` requests closure and lets the Node confirm its durable
+//     responsibilities, which is the same handover every other end of a lifecycle intent uses.
+//   - the IssueRun the Workspace exists for is settled as `failed` when it has one. A Workspace created
+//     for a run whose code can never arrive is a run that cannot proceed, and the run has to learn that
+//     rather than wait forever.
+//
+// The Operation row is read here rather than passed in so that callers cannot hand over a stale copy:
+// the Workspace is reached through the Operation's own `workspace_id`, and a caller that has just failed
+// an Operation by id has nothing else it could name it by.
+func failWorkspaceOperation(t *transaction, operation string) {
+	w := t.one("SELECT w.* FROM workspaces w JOIN operations o ON o.workspace_id=w.id WHERE o.id=$1", operation)
+	if w == nil {
+		// Not an Operation that drives a Workspace: a Project-level or effect-level Operation holds no
+		// Workspace and has nothing of this to settle.
+		return
+	}
+	t.exec("UPDATE workspaces SET observed_state='unavailable',admission_open=false,version=version+1 WHERE id=$1", w.S("id"))
+	finishRuntimeMaintenance(t, operation)
+	if w.S("issueRunId") != "" {
 		runWorkspaceSettled(t, w.S("issueRunId"), "failed")
 	}
-	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 }
 
 // workspaceCloneDispatch registers the clone of a Workspace operation in its clone step. Replaying

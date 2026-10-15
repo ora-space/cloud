@@ -212,8 +212,8 @@ type admittedCredential struct {
 	Capabilities []string
 }
 
-// settleRefusedCredentialedClone records the terminal fact of a clone admission this deployment
-// refused for one of the reasons that can never change.
+// settleRefusedCredentialedClone records the terminal fact of the Operation a credentialed clone was
+// refused for, when the refusal is one of the reasons that can never change.
 //
 // A refused dispatch is not by itself the end of an Operation. The Controller reads the 409 as a
 // retryable conflict and leaves the Operation `running`, so it dispatches again — and is refused
@@ -229,6 +229,21 @@ type admittedCredential struct {
 // them rather than the deployment-level one alone: each is a fact about durable state, so each would
 // otherwise wedge the Project exactly the same way.
 //
+// The settlement follows the refusal rather than the action that carried it, and it fences on the step
+// the refusal happened at rather than on one fixed step. `requireRepositoryAccess` is the single
+// admission guard for every path that leads to remote Git work, and the paths reach it at different
+// points of the same Operation: a `clone_dispatch` is refused in the `clone` step, while an `advance`
+// — the very command that would move the Operation *into* `clone` — is refused in the `node` step it
+// is still standing in. Keying on the action, or on one step, settles one of the two and leaves the
+// other wedged, which is exactly the state the fail-closed decision forbids.
+//
+// Neither half is written here from scratch: the Operation is failed under a compare-and-set fence,
+// and the three things it was holding are released through `failWorkspaceOperation`, the same
+// settlement every other end of a Workspace-driving Operation uses. A settlement that only failed the
+// Operation would leave the Workspace `ready` for work that can never happen, the runtime reservation
+// held so no later Operation can be handed the Workspace, and the IssueRun waiting for a Workspace
+// that will never become available.
+//
 // It runs in its own transaction because the refusal has already unwound the dispatch's transaction:
 // `reject` panics and `transact` rolls back, so a write made on the way to the refusal would not
 // survive it. Nothing here can weaken the refusal — the caller's error is returned unchanged, and
@@ -242,28 +257,27 @@ func (s *Store) settleRefusedCredentialedClone(ctx context.Context, r *ControlRe
 	if !terminalCredentialRefusals[code] {
 		return nil
 	}
-	// Only a clone dispatch can be refused this way, and only for a Workspace Operation: on the
-	// dispatch path the guard this code comes from is reached from `workspaceCloneDispatch` alone.
-	// The checks below repeat that, because the settlement must be exactly as narrow as the refusal
-	// and a later change to the dispatch path must not silently widen it.
-	if r.Action != "clone_dispatch" {
-		return nil
-	}
-	operation := r.Body.S("operationId")
-	if !validID(operation) {
-		return nil
-	}
 	_, err := s.transact(ctx, func(t *transaction) Object {
+		operation := refusedOperation(t, r)
+		if operation == "" {
+			return nil
+		}
 		// The WHERE clause is the whole safety argument, so every condition in it is load-bearing.
 		//
-		//   state='running' AND step='clone' — the dispatch that was refused, still where it was. A
-		//     terminal Operation no longer matches, which is what makes a repeated settlement a no-op
-		//     rather than a second, conflicting fact.
-		//   controller_epoch — the Controller whose dispatch was refused still owns the Operation.
-		//     `workspaceCloneDispatch` checked this epoch before it reached the guard, and it would
-		//     refuse under any other epoch too, so a moved epoch means a newer Controller is already
-		//     driving the Operation: that one is refused and settles in its own turn, and this stale
-		//     one must not write over the newer state.
+		//   state='running' — the Operation that was refused, still where it was. A terminal Operation
+		//     no longer matches, which is what makes a repeated settlement a no-op rather than a second,
+		//     conflicting fact.
+		//   step IN ('node','clone','plugin') — the steps of a Workspace-driving Operation that can
+		//     reach the guard. `node` is where the credentialed transition to `clone` is admitted,
+		//     `clone` and `plugin` where the remote work itself is dispatched and permitted. A step
+		//     outside the set means the Operation has moved somewhere this refusal cannot apply to.
+		//   workspace_id IS NOT NULL — only a Workspace Operation holds the three things this settlement
+		//     releases, and the cleanup below resolves the Workspace through this Operation.
+		//   controller_epoch — the Controller whose request was refused still owns the Operation. Each
+		//     action checked this epoch before it reached the guard, and the guard would refuse under any
+		//     other epoch too, so a moved epoch means a newer Controller is already driving the
+		//     Operation: that one is refused and settles in its own turn, and this stale one must not
+		//     write over the newer state.
 		//   credential_ref_id IS NOT NULL — the refusal is about this Project's credential binding
 		//     (D7's authoritative column). Without it, a Project that names no credential could be
 		//     settled by a code that cannot apply to it.
@@ -271,13 +285,58 @@ func (s *Store) settleRefusedCredentialedClone(ctx context.Context, r *ControlRe
 		// `retry_at` is cleared rather than left as it was: `claim` moves a due retry to `running`
 		// without clearing the deadline it fired on, so a settled Operation could otherwise carry a
 		// retry time that no longer means anything and would be read back as a pending retry.
-		t.exec("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()"+
-			" WHERE id=$1 AND workspace_id IS NOT NULL AND state='running' AND step='clone' AND controller_epoch=$3"+
+		//
+		// The cleanup runs only when this write actually landed. On a no-op the Operation is either
+		// already settled by someone else or no longer this Controller's, and releasing its Workspace
+		// from here would settle a Workspace on the strength of a refusal that no longer describes it.
+		if t.execRows("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now()"+
+			" WHERE id=$1 AND workspace_id IS NOT NULL AND state='running' AND step IN ('node','clone','plugin') AND controller_epoch=$3"+
 			" AND EXISTS (SELECT 1 FROM projects p WHERE p.id=operations.project_id AND p.credential_ref_id IS NOT NULL)",
-			operation, code, r.Body.N("epoch"))
+			operation, code, r.Body.N("epoch")) == 1 {
+			failWorkspaceOperation(t, operation)
+		}
 		return nil
 	})
 	return err
+}
+
+// refusedOperation names the Operation a refusal was about, or "" when the refusal names none that
+// this settlement may end.
+//
+// The three control actions that reach `requireRepositoryAccess` carry the Operation differently, and
+// each carrier is the one that action has already validated before the guard is reached. That is why
+// the action is part of the resolution rather than only the code: the code is a property of the
+// deployment, and reading an identifier out of a request whose action does not resolve one would let a
+// refusal reported on some other path terminate an Operation it was never about.
+//
+//   - `advance` names it in the request's own `operationId`, which `operation` resolved, fenced on the
+//     Controller's epoch and checked against the request's version before the guard ran.
+//   - `clone_dispatch` leaves that field empty and names it in the body, which `workspaceCloneDispatch`
+//     resolves and fences the same way.
+//   - `runtime_permit` names neither. It is about one execution of a Workspace, so the Operation it
+//     belongs to is the one holding that Workspace's runtime reservation.
+//
+// A `runtime_permit` asked for by an IssueRun's own session or delivery is deliberately not an
+// Operation: there the reservation names a run, and no Operation row answers for it. This settlement
+// leaves it alone rather than failing an Operation that was never refused — the run's own settlement
+// paths are what end that work.
+func refusedOperation(t *transaction, r *ControlRequest) string {
+	switch r.Action {
+	case "advance":
+		if validID(r.OperationID) {
+			return r.OperationID
+		}
+	case "clone_dispatch":
+		if operation := r.Body.S("operationId"); validID(operation) {
+			return operation
+		}
+	case "runtime_permit":
+		c := t.one("SELECT maintenance_run_id,maintenance_operation_id FROM runtime_controls WHERE workspace_id=$1", r.Body.S("workspaceId"))
+		if c != nil && c.S("maintenanceRunId") == "" {
+			return c.S("maintenanceOperationId")
+		}
+	}
+	return ""
 }
 
 // freezeInactiveRepositoryCredentials also catches deployment-side state changes before admission.
