@@ -532,9 +532,10 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			}
 		}
 	} else {
-		// The mirror gate hangs on the transition itself rather than on the steps that reach it, so every
-		// way into `clone` — create, start and restart alike — passes through it. A gate placed on one of
-		// those branches would be one more thing to remember when a branch is added.
+		// The mirror gate hangs on the transition itself rather than on the branch that asks for it, so a
+		// second way into `clone` could not skip it. There is none today — only the create kinds set `next`
+		// to `clone`; `start` and `restart` go through the plugin gate and never clone — and the mirror
+		// worker reads the same fact, claiming preparations only for the kinds that reach here.
 		if next == "clone" {
 			t.store.requireMirrorPrepared(t, o, wid)
 		}

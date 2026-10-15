@@ -27,6 +27,7 @@ type preparationRow struct {
 	errorCode        string
 	commit           string
 	generation       int64
+	attempts         int64
 	mirrorGeneration int64
 	leased           bool
 }
@@ -35,7 +36,7 @@ type preparationRow struct {
 func mirrorPreparationOf(t *testing.T, store *Store, operation string) *preparationRow {
 	t.Helper()
 	rows, err := store.Pool.Query(
-		`SELECT state,COALESCE(error_code,''),COALESCE(commit_id,''),generation,
+		`SELECT state,COALESCE(error_code,''),COALESCE(commit_id,''),generation,attempts,
 			COALESCE(mirror_generation,0),lease_expires_at
 		 FROM mirror_preparations WHERE operation_id=$1`, operation,
 	)
@@ -48,7 +49,7 @@ func mirrorPreparationOf(t *testing.T, store *Store, operation string) *preparat
 	}
 	var row preparationRow
 	var lease *time.Time
-	if err := rows.Scan(&row.state, &row.errorCode, &row.commit, &row.generation, &row.mirrorGeneration, &lease); err != nil {
+	if err := rows.Scan(&row.state, &row.errorCode, &row.commit, &row.generation, &row.attempts, &row.mirrorGeneration, &lease); err != nil {
 		t.Fatalf("scan the preparation for %s: %v", operation, err)
 	}
 	row.leased = lease != nil
@@ -92,8 +93,8 @@ func scalarText(t *testing.T, store *Store, q string, args ...any) string {
 }
 
 // TestTheMirrorWorkerClaimsOnlyOperationsThatNeedPreparing pins the policy of "who needs preparing".
-// Each case is a state the claim must decline to work on, so a passing case names the condition that
-// held rather than the accident that nothing was claimed.
+// Each case is a state the claim must work on or decline to work on, so a passing case names the
+// condition that held rather than the accident that nothing was claimed.
 func TestTheMirrorWorkerClaimsOnlyOperationsThatNeedPreparing(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -120,10 +121,48 @@ func TestTheMirrorWorkerClaimsOnlyOperationsThatNeedPreparing(t *testing.T) {
 			},
 		},
 		{
-			// A published mirror is the finished state. Re-claiming it would fetch the same ref again.
+			// The one kind of Operation that stands at `node` without ever reaching `clone`: a restart's
+			// Workspace already holds its content, so nothing on that path reads the mirror. Preparing one
+			// would spend an upstream fetch on content nobody clones, and a credential that has since been
+			// revoked would end a restart that does not need it.
+			name: "a restart waiting at node",
+			apply: func(t *testing.T, store *Store, s credentialedScene) {
+				execTest(t, store, `UPDATE operations SET kind='restart' WHERE id=$1`, s.operation)
+			},
+		},
+		{
+			// A published mirror that still describes what the Workspace asks for. Re-claiming it would
+			// fetch the same ref again, so this is the case the drift branch must not swallow.
 			name: "a preparation that is already ready",
 			apply: func(t *testing.T, store *Store, s credentialedScene) {
 				readyMirror(t, store, s)
+			},
+		},
+		{
+			// The drift branch, in the shape a user produces: rotating the token advances the reference's
+			// version, so the mirror was built from a fetch authorized by a credential that no longer
+			// applies. The gate refuses the transition for that reason, and only the worker can fix it.
+			//
+			// Rotation is the drift a user can produce today. The branch compares the whole list the gate
+			// re-checks — upstream, ref, runtime generation and credential identity as well as version —
+			// because a state the gate refuses and the worker does not re-prepare is the same wedge, and
+			// the two lists drifting apart is how this case came about.
+			name: "a ready preparation the credential has moved past",
+			apply: func(t *testing.T, store *Store, s credentialedScene) {
+				readyMirror(t, store, s)
+				execTest(t, store, `UPDATE credential_refs SET version=version+1 WHERE id=$1`, s.credential)
+			},
+			wantCalled: 1,
+		},
+		{
+			// And the guard on that branch. A frozen reference is a refusal the gate reports in its own
+			// words, and the owner can unfreeze it without the mirror changing: re-preparing would spend a
+			// fetch to rebuild a mirror that is still the right one, and a batch of such rows would keep
+			// the batch busy while nothing could be prepared.
+			name: "a ready preparation whose reference is frozen",
+			apply: func(t *testing.T, store *Store, s credentialedScene) {
+				readyMirror(t, store, s)
+				execTest(t, store, `UPDATE credential_refs SET availability='frozen' WHERE id=$1`, s.credential)
 			},
 		},
 		{
@@ -152,8 +191,8 @@ func TestTheMirrorWorkerClaimsOnlyOperationsThatNeedPreparing(t *testing.T) {
 			name: "a preparation that has used every attempt",
 			apply: func(t *testing.T, store *Store, s credentialedScene) {
 				execTest(t, store, `INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,
-					repository_url,pinned_ref,runtime_generation,control_epoch,state,generation)
-					VALUES($1,$2,$3,$4,$5,$6,1,1,'failed',3)`,
+					repository_url,pinned_ref,runtime_generation,control_epoch,state,generation,attempts)
+					VALUES($1,$2,$3,$4,$5,$6,1,1,'failed',3,3)`,
 					s.operation, s.tenant, s.project, s.workspace, s.repository, "refs/heads/"+s.ref)
 			},
 		},
@@ -175,6 +214,178 @@ func TestTheMirrorWorkerClaimsOnlyOperationsThatNeedPreparing(t *testing.T) {
 				t.Fatalf("the pass dispatched %d attempts, want %d", len(preparer.calls), c.wantCalled)
 			}
 		})
+	}
+}
+
+// TestTheCandidateQueryOffersOnlyPreparationsItCouldCarryOut pins the half of the candidate policy the
+// claim cannot show.
+//
+// The claim refuses a reference the Project may no longer use, so a frozen or invalid preparation
+// dispatches nothing whether or not the query hands it over. What the query decides is which rows the
+// pass spends its bounded, oldest-first batch on, and a row every pass returns while no pass can claim
+// it would hold a slot in every batch — the drift branch's own comparison list would then be working
+// against the Operations waiting behind it, until the owner acts on the reference.
+//
+// The two halves are the same row with one field moved, so the case cannot pass by the drift branch
+// declining both: the available one must be offered, and the frozen one must not.
+func TestTheCandidateQueryOffersOnlyPreparationsItCouldCarryOut(t *testing.T) {
+	store := dispatcherDB(t)
+	scene := nodeScene(t, store)
+	readyMirror(t, store, scene)
+
+	// Drifted, the way a user produces it: the reference has moved past the mirror the gate re-checks.
+	execTest(t, store, `UPDATE workspaces SET runtime_generation=runtime_generation+1 WHERE id=$1`, scene.workspace)
+
+	execTest(t, store, `UPDATE credential_refs SET availability='frozen' WHERE id=$1`, scene.credential)
+	if ids := candidateIDs(t, store); len(ids) != 0 {
+		t.Fatalf("a preparation that cannot be prepared was offered to the batch: %v", ids)
+	}
+
+	execTest(t, store, `UPDATE credential_refs SET availability='available' WHERE id=$1`, scene.credential)
+	if ids := candidateIDs(t, store); len(ids) != 1 || ids[0] != scene.operation {
+		t.Fatalf("an available preparation the gate refuses was not offered: %v", ids)
+	}
+}
+
+// candidateIDs is the batch the pass would work on, in the order it would work on it.
+func candidateIDs(t *testing.T, store *Store) []string {
+	t.Helper()
+	ids, err := store.mirrorPreparationCandidates(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("read the candidate batch: %v", err)
+	}
+	return ids
+}
+
+// TestALostAttemptDoesNotSpendTheAttemptBudget is the wedge in the other direction, and the case the
+// attempt budget was confused with the generation fence over.
+//
+// Three attempts are claimed and none of them answers — the shape of a process that dies between the
+// claim and the result, which leaves the row `dispatched` at the bound with its lease lapsed. Nothing
+// concluded, so nothing may be counted against the budget: the next pass has to claim the row again.
+// A worker that read the budget off the generation number would refuse it here and the Operation would
+// sit at `node` behind the gate with nothing working on the mirror — the silent wedge the bound exists
+// to prevent, reached through the bound itself.
+func TestALostAttemptDoesNotSpendTheAttemptBudget(t *testing.T) {
+	store := dispatcherDB(t)
+	store.SetCredentialedCloner(&recordingCloner{})
+	preparer := &recordingPreparer{outcome: MirrorPreparationOutcome{Commit: commitHex(), MirrorGeneration: 1}}
+	store.SetMirrorPreparer(preparer)
+	scene := nodeScene(t, store)
+	ctx := context.Background()
+
+	for i := 0; i < mirrorPreparationAttempts; i++ {
+		if i > 0 {
+			makePreparationDue(t, store, scene.operation)
+		}
+		claimed, err := store.claimMirrorPreparation(ctx, scene.operation)
+		if err != nil || claimed == nil {
+			t.Fatalf("attempt %d must be claimed, got %v (err %v)", i+1, claimed, err)
+		}
+	}
+	// The state the loss leaves: the fence at the bound, the budget untouched, and the row still claimed.
+	row := mirrorPreparationOf(t, store, scene.operation)
+	if row.generation != mirrorPreparationAttempts || row.attempts != 0 {
+		t.Fatalf("three lost attempts left generation=%d attempts=%d, want %d and 0",
+			row.generation, row.attempts, mirrorPreparationAttempts)
+	}
+
+	makePreparationDue(t, store, scene.operation)
+	if err := store.PrepareMirrorsOnce(ctx); err != nil {
+		t.Fatalf("a pass must work on an Operation whose attempts were lost: %v", err)
+	}
+	if len(preparer.calls) != 1 {
+		t.Fatalf("the pass dispatched %d attempts, want 1 after three lost ones", len(preparer.calls))
+	}
+	if got := scalarText(t, store, `SELECT state FROM operations WHERE id=$1`, scene.operation); got != "running" {
+		t.Fatalf("the Operation must still be running at node, state=%q", got)
+	}
+	row = mirrorPreparationOf(t, store, scene.operation)
+	if row.generation != mirrorPreparationAttempts+1 || row.state != "ready" {
+		t.Fatalf("the reclaim is generation=%d state=%q, want %d and the mirror the reclaim published",
+			row.generation, row.state, mirrorPreparationAttempts+1)
+	}
+	if row.attempts != 0 {
+		t.Fatalf("the reclaim published a mirror, so it must clear the budget, attempts=%d", row.attempts)
+	}
+}
+
+// TestAPublishedMirrorClearsTheAttemptBudget walks the whole requirement-change story, because the
+// budget is only per requirement if a success clears it.
+//
+// One attempt fails, the next one publishes a mirror, and then the owner rotates the token. The
+// rotation is a new thing to prepare — the mirror was fetched with a credential version that no longer
+// applies — so it must be prepared again, and it must be prepared with a whole budget rather than with
+// whatever the previous requirement left over. A count that survived the success would make the third
+// rotation of a working repository the one that ends a user's Operation.
+func TestAPublishedMirrorClearsTheAttemptBudget(t *testing.T) {
+	store := dispatcherDB(t)
+	store.SetCredentialedCloner(&recordingCloner{})
+	preparer := &recordingPreparer{err: &Fault{Code: "mirror_upstream_unreachable", Status: 409}}
+	store.SetMirrorPreparer(preparer)
+	scene := nodeScene(t, store)
+	ctx := context.Background()
+
+	if err := store.PrepareMirrorsOnce(ctx); err != nil {
+		t.Fatalf("a retryable failure must not fail the pass: %v", err)
+	}
+	preparer.err = nil
+	preparer.outcome = MirrorPreparationOutcome{Commit: commitHex(), MirrorGeneration: 1}
+	makePreparationDue(t, store, scene.operation)
+	if err := store.PrepareMirrorsOnce(ctx); err != nil {
+		t.Fatalf("the retry must prepare the mirror: %v", err)
+	}
+	row := mirrorPreparationOf(t, store, scene.operation)
+	if row.state != "ready" || row.attempts != 0 {
+		t.Fatalf("a published mirror left state=%q attempts=%d, want ready and a cleared budget", row.state, row.attempts)
+	}
+
+	// The rotation: the reference advances, so the ready mirror is no longer the mirror the gate will
+	// accept, and the next pass has to prepare it again.
+	execTest(t, store, `UPDATE credential_refs SET version=version+1 WHERE id=$1`, scene.credential)
+	if err := store.PrepareMirrorsOnce(ctx); err != nil {
+		t.Fatalf("a rotation must be prepared again: %v", err)
+	}
+	if len(preparer.calls) != 3 {
+		t.Fatalf("the pass dispatched %d attempts, want a third one for the rotated credential", len(preparer.calls))
+	}
+	if got := preparer.calls[2].CredentialVersion; got != 2 {
+		t.Fatalf("the re-preparation was admitted for credential version %d, want the rotated version 2", got)
+	}
+	if got := scalarOf(t, store, `SELECT credential_ref_version FROM mirror_preparations WHERE operation_id=$1`, scene.operation); got != 2 {
+		t.Fatalf("the row records credential version %d, want 2 — the gate compares exactly this", got)
+	}
+}
+
+// TestARestartIsNotSettledByACredentialItDoesNotUse is the second half of the kind filter.
+//
+// A restart stands at `node` like a create does, but its Workspace holds its content already, so the
+// restart path reads no mirror and no credential. A reference the owner has since revoked is a fact
+// about remote Git work the restart never asks for, and letting the worker reach it would settle a
+// local restart as a failure — with the maintenance reservation the restart holds left unreleased.
+func TestARestartIsNotSettledByACredentialItDoesNotUse(t *testing.T) {
+	store := dispatcherDB(t)
+	store.SetCredentialedCloner(&recordingCloner{})
+	preparer := &recordingPreparer{outcome: MirrorPreparationOutcome{Commit: commitHex(), MirrorGeneration: 1}}
+	store.SetMirrorPreparer(preparer)
+	scene := nodeScene(t, store)
+	execTest(t, store, `UPDATE operations SET kind='restart' WHERE id=$1`, scene.operation)
+	execTest(t, store, `UPDATE credential_refs SET availability='invalid' WHERE id=$1`, scene.credential)
+
+	if err := store.PrepareMirrorsOnce(context.Background()); err != nil {
+		t.Fatalf("a pass must not fail on an Operation it does not prepare for: %v", err)
+	}
+	if len(preparer.calls) != 0 {
+		t.Fatal("a restart must not be given a mirror preparation: it clones nothing")
+	}
+	if row := mirrorPreparationOf(t, store, scene.operation); row != nil {
+		t.Fatalf("a restart must be left with no preparation, got state=%q", row.state)
+	}
+	if got := scalarText(t, store, `SELECT state FROM operations WHERE id=$1`, scene.operation); got != "running" {
+		t.Fatalf("the restart must be left running, state=%q", got)
+	}
+	if code := scalarText(t, store, `SELECT COALESCE(error_code,'') FROM operations WHERE id=$1`, scene.operation); code != "" {
+		t.Fatalf("the restart was settled with error_code=%q for a credential it never uses", code)
 	}
 }
 
@@ -312,6 +523,12 @@ func TestARetryablePreparationFailureReleasesTheAttemptWithoutEndingTheOperation
 	if row.generation != 1 {
 		t.Fatalf("releasing an attempt must not spend the next one, generation=%d", row.generation)
 	}
+	// The released attempt *is* spent: the budget counts the attempts that concluded, and this one
+	// concluded with a failure. A row that released the lease without spending anything would retry an
+	// upstream that fails on every attempt forever.
+	if row.attempts != 1 {
+		t.Fatalf("a concluded attempt must be counted, attempts=%d", row.attempts)
+	}
 	if got := scalarText(t, store, `SELECT state FROM operations WHERE id=$1`, scene.operation); got != "running" {
 		t.Fatalf("the Operation must keep running so a later pass can prepare it, state=%q", got)
 	}
@@ -345,6 +562,9 @@ func TestThePreparationEndsItsOperationWhenItCannotBePrepared(t *testing.T) {
 	row := mirrorPreparationOf(t, store, scene.operation)
 	if row.state != "failed" || row.errorCode != "mirror_upstream_unreachable" {
 		t.Fatalf("an exhausted preparation must be terminal and say why: %+v", row)
+	}
+	if row.attempts != mirrorPreparationAttempts {
+		t.Fatalf("the preparation spent %d attempts of its budget %d", row.attempts, mirrorPreparationAttempts)
 	}
 	// A settled preparation carries no lease: one left behind would look claimable to the next pass.
 	if row.leased {

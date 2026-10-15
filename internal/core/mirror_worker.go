@@ -14,6 +14,21 @@ import (
 // a reason instead of retrying silently until someone notices. The backoff keeps an upstream that is
 // briefly unreachable from spending every attempt in one burst.
 //
+// The count and the lease are two different questions and are held in two different columns. `attempts`
+// counts the attempts that concluded without publishing a mirror; `generation` is the fence a late
+// result is refused against. Reading the budget off `generation` conflates them — an attempt that was
+// claimed and then lost concludes nothing, so a generation number that has reached the bound describes
+// a preparation that is still owed attempts, and refusing it leaves the row claimed with nothing
+// watching it (`0040`).
+//
+// A lost attempt is deliberately not counted, and what bounds it is the lease instead: it lapses, the
+// next pass claims the row again and the fetch is dispatched again — work that is happening, which is
+// not the silent retry the budget exists to prevent. The two categories do not overlap much either: a
+// fetch that fails, or one whose executor never answers within the dispatch timeout, is *answered* by
+// the dispatcher and counted, so what is left to the lease is this process dying between the claim and
+// the result. Letting that spend the budget would make a Controller restart the thing that ends a
+// user's Operation — for a mirror that may well have been published.
+//
 // The lease is written with the database's clock rather than this process's. A lease timed by a
 // worker's own clock would let a worker whose clock runs fast steal an attempt from a slower one that
 // is still working, which is the failure the lease exists to prevent.
@@ -112,7 +127,30 @@ func (s *Store) SetMirrorPreparer(p MirrorPreparer) { s.mirrorPreparer = p }
 //
 // The filter is the whole policy of "who needs preparing", and it is deliberately narrow: an Operation
 // that has not reached `node` is not cloning yet, an anonymous Project has no mirror at all, and a
-// preparation that is already claimed, already settled, or waiting out its backoff is not due.
+// preparation that is already working, already settled, or waiting out its backoff is not due.
+//
+// Three branches pick an Operation out. The first is an Operation with no preparation at all. The
+// second is an attempt that is due again: a row whose lease has lapsed, which is what a lost attempt
+// leaves behind, or one being held back by the backoff after a retryable failure. That branch is
+// bounded by the counted attempts and not by the generation number, for the reason the bounds above
+// give. The third is a preparation that is `ready` and no longer describes what the Operation needs —
+// the credential version, or the upstream, ref, runtime generation or credential identity the gate
+// re-checks. A ready mirror is not evidence that the current requirement is prepared, so a drifted row
+// would otherwise be refused by the gate forever with nothing working on it.
+//
+// The drift branch compares the whole list the gate compares rather than the one entry a user can move
+// today (rotating a token advances the reference's version; the rest are written by operations the
+// Project's single active operation keeps from overlapping). Two lists that must agree are one list:
+// they came apart once already, which is why a rotated mirror had no path back to being prepared.
+//
+// Only the Operations that reach `clone` are candidates. A `start` or `restart` Operation stands at
+// `node` too, but its Workspace already holds its content, so nothing on that path reads the mirror:
+// preparing one for it would spend an upstream fetch on content nobody clones, and would let a
+// credential that has since been revoked end a restart that does not need it.
+//
+// The drift branch requires the reference to be available, because a frozen or invalid reference is a
+// refusal for the gate to report in its own words — while comparing versions against it would make the
+// row look claimable, and a handful of such rows would fill every batch in `ORDER BY updated_at` order.
 func (s *Store) mirrorPreparationCandidates(ctx context.Context, limit int) ([]string, error) {
 	var ids []string
 	_, err := s.transact(ctx, func(t *transaction) Object {
@@ -120,14 +158,22 @@ func (s *Store) mirrorPreparationCandidates(ctx context.Context, limit int) ([]s
 			JOIN projects p ON p.id=o.project_id
 			JOIN workspaces w ON w.id=o.workspace_id
 			LEFT JOIN mirror_preparations m ON m.operation_id=o.id
+			LEFT JOIN credential_refs c ON c.id=p.credential_ref_id
 			WHERE o.step='node' AND o.state='running' AND o.workspace_id IS NOT NULL
+			  AND o.kind IN ('create_project','create_workspace')
 			  AND p.credential_ref_id IS NOT NULL
 			  AND w.requested_ref IS NOT NULL AND w.requested_ref <> ''
 			  AND (m.operation_id IS NULL
 			       OR (m.state IN ('admitting','dispatched')
 			           AND (m.retry_at IS NULL OR m.retry_at <= now())
 			           AND (m.lease_expires_at IS NULL OR m.lease_expires_at <= now())
-			           AND m.generation < $1))
+			           AND m.attempts < $1)
+			       OR (m.state='ready' AND c.availability='available'
+			           AND (m.repository_url IS DISTINCT FROM p.repository_url
+			                OR m.pinned_ref IS DISTINCT FROM 'refs/heads/'||w.requested_ref
+			                OR m.runtime_generation IS DISTINCT FROM w.runtime_generation
+			                OR m.credential_ref_id IS DISTINCT FROM p.credential_ref_id
+			                OR m.credential_ref_version IS DISTINCT FROM c.version)))
 			ORDER BY o.updated_at LIMIT $2`, mirrorPreparationAttempts, limit)
 		for _, row := range rows {
 			ids = append(ids, row.S("id"))
@@ -176,7 +222,9 @@ func (s *Store) claimMirrorPreparation(ctx context.Context, operation string) (*
 		}
 		// A reclaim moves the same row forward rather than inserting a second one: the row is keyed by the
 		// Operation, and a retry that left the previous attempt's evidence behind would let a reader see a
-		// ready mirror next to the attempt that superseded it.
+		// ready mirror next to the attempt that superseded it. `attempts` is deliberately not in the update
+		// list: it is the budget the preparation as a whole is spending, and a claim that cleared it would
+		// let an upstream that fails on every attempt retry forever.
 		t.exec(`INSERT INTO mirror_preparations(operation_id,tenant_id,project_id,workspace_id,repository_url,
 				pinned_ref,runtime_generation,control_epoch,state,credential_ref_id,credential_ref_version,
 				authorization_id,generation,lease_expires_at,retry_at)
@@ -222,40 +270,50 @@ func (s *Store) claimMirrorPreparation(ctx context.Context, operation string) (*
 // overwrite the result of the attempt that replaced it — so it is refused and reported, not written.
 // The caller learns which of the two happened from the returned bool.
 //
+// It is also where the attempt budget is spent: every attempt that concludes without publishing a
+// mirror is counted, and that count — not the generation fence — is what says whether another attempt
+// follows. A published mirror clears the count, because the budget bounds one requirement and a
+// rotation is a new one: a mirror that was prepared is not a mirror that has been failing.
+//
 //nolint:gocritic // The claim is passed by value on purpose: the generation this settles is the one the attempt was claimed under, so it must not be reachable for writing from here.
 func (s *Store) settleMirrorPreparation(ctx context.Context, p MirrorPreparation, outcome MirrorPreparationOutcome, cause error) (bool, error) {
 	applied := false
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		if cause == nil {
 			applied = t.execRows(`UPDATE mirror_preparations SET state='ready',commit_id=$3,mirror_generation=$4,
-					error_code=NULL,lease_expires_at=NULL,retry_at=NULL,updated_at=now()
+					error_code=NULL,attempts=0,lease_expires_at=NULL,retry_at=NULL,updated_at=now()
 				WHERE operation_id=$1 AND generation=$2 AND state='dispatched'`,
 				p.OperationID, p.Generation, outcome.Commit, outcome.MirrorGeneration) > 0
 			return Object{}
 		}
 
 		// A failure either ends the preparation or releases the attempt for another one. Which of the two
-		// is decided here rather than by the caller, because it depends on the attempt count this
-		// transaction is holding, and reading that outside would race the claim that increments it.
+		// is decided here rather than by the caller, because it depends on the counted attempts this
+		// transaction is holding, and reading that outside would race the claim that spends them.
+		//
+		// The row is locked because the count is read and then written: two settlements of one attempt
+		// would otherwise each spend the budget once, and the lock also makes a settlement that lost a race
+		// with a success see the `ready` state rather than counting an attempt the mirror answered.
 		code := ErrorCode(cause).Code
 		terminal := terminalCredentialRefusals[code]
-		m := t.one("SELECT * FROM mirror_preparations WHERE operation_id=$1", p.OperationID)
+		m := t.one("SELECT * FROM mirror_preparations WHERE operation_id=$1 FOR UPDATE", p.OperationID)
 		if m == nil || m.N("generation") != p.Generation || m.S("state") != "dispatched" {
 			return Object{} // Already superseded: the failure belongs to an attempt that is over.
 		}
 		applied = true
-		if !terminal && m.N("generation") < mirrorPreparationAttempts {
+		attempts := m.N("attempts") + 1
+		if !terminal && attempts < mirrorPreparationAttempts {
 			// Release the lease and hold the attempt back. The row stays `dispatched` with a lapsed lease,
 			// which is what makes the next pass see it as due again.
-			t.exec(`UPDATE mirror_preparations SET error_code=$2,lease_expires_at=now(),
-					retry_at=now()+make_interval(secs => $3),updated_at=now()
-				WHERE operation_id=$1 AND generation=$4`,
-				p.OperationID, code, mirrorPreparationBackoff.Seconds(), p.Generation)
+			t.exec(`UPDATE mirror_preparations SET attempts=$2,error_code=$3,lease_expires_at=now(),
+					retry_at=now()+make_interval(secs => $4),updated_at=now()
+				WHERE operation_id=$1 AND generation=$5`,
+				p.OperationID, attempts, code, mirrorPreparationBackoff.Seconds(), p.Generation)
 			return Object{}
 		}
-		t.exec(`UPDATE mirror_preparations SET state='failed',error_code=$2,lease_expires_at=NULL,retry_at=NULL,
-				updated_at=now() WHERE operation_id=$1 AND generation=$3`,
-			p.OperationID, code, p.Generation)
+		t.exec(`UPDATE mirror_preparations SET state='failed',attempts=$2,error_code=$3,lease_expires_at=NULL,retry_at=NULL,
+				updated_at=now() WHERE operation_id=$1 AND generation=$4`,
+			p.OperationID, attempts, code, p.Generation)
 		// A preparation that has ended must settle its Operation. Leaving it `running` at `node` would
 		// make the Controller retry the gate forever with nothing left working on the mirror — the
 		// silent retry this worker exists to prevent.
