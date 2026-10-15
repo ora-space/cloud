@@ -18,7 +18,7 @@
 | `ratelimit.go` | 按客户端地址的令牌桶，键表有界；start/callback 在写入任何 attempt 前限流。 |
 | `cleanup.go` | `RunCleanup`：生命周期拥有的有界批量清理循环。 |
 | `web.go` | `Web`/`OpenWeb`：可选地从 `web.dist_dir` 提供前端构建产物。启动时要求 `index.html` 存在；只处理无路由命中的 `GET`/`HEAD`，文件经 `os.Root` 打开（`..` 与符号链接无法逃出目录），未命中的客户端路由返回 `index.html`（`Cache-Control: no-cache`）；`/api/`、`/auth/`、`/internal/` 与 `/healthz` 仍是 JSON 404。 |
-| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`：默认值与所有安全边界的启动期校验，包括至少配置一个 provider，以及 `login.development_provider` 只能与 `public.development` 同时开启。 |
+| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`：默认值与所有安全边界的启动期校验，包括至少配置一个 provider，以及 `login.development_provider` 只能在 `public.development` 开启且公开 origin 为 loopback HTTP 时通过配置校验。 |
 
 ## 不变量
 
@@ -35,5 +35,9 @@
 ## 测试
 
 单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界、限流与前端静态文件（文件、SPA 回退、越界与保留路径）；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障、数据库约束，以及前端与 `/auth`、`/api` 同源提供。
+
+`TestDevelopmentProviderRequiresExplicitLoopbackHTTPOrigin` 验证配置阶段拒绝公开 HTTPS、loopback HTTPS 和缺少开发开关的 dev provider。`integration/gateway_authorization_test.go` 通过同一真实 Gateway/Cloud/PostgreSQL 链路验证创建者成为管理员、外部登录不授予成员关系、普通成员不能提升权限、停用成员后所有副本立即拒绝租户访问且保留有效身份；重新外部登录不会恢复停用的成员关系。假 provider 只用于自动化协议测试，不能作为真实提供方浏览器验收证据。
+
+`integration/gateway_callback_test.go` 验证 browser Cookie 与 provider code 仍有效时，数据库中已过期的 attempt 在兑换 code 前即被拒绝，不创建 session，并清除 attempt Cookie。
 
 参见 [内部子系统总览](../README.md)、[华为 IDaaS 适配器](idaas/README.md)、[GitHub 适配器](github/README.md)、[本地开发 provider](devlogin/README.md) 与 [Gateway 文档](../../docs/gateway.md)。

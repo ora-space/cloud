@@ -39,7 +39,7 @@ PKCE verifier 不落库：由 attempt secret 和 `login.pkce_key_file` 通过带
 - `login.attempt_ttl` 在 1 分钟到 1 小时之间；`tokens.lifetime` 不超过 5 分钟（Cloud 验证器上限）。
 - `tokens.service_private_key_file` 与 `tokens.user_private_key_file` 是两把不同的 PKCS#8 Ed25519 私钥，分别对应 Cloud `auth.keys` 中 `kind: service, role: gateway` 与 `kind: user` 的公钥条目；一把私钥不能同时承担两个用途。
 - `login.provider` 是本部署的外部 provider，只能是 `huawei-idaas` 或 `github`；只校验和读取所选 provider 的 secret，它也是 `POST /auth/login` 省略 `provider` 时的默认值。`huawei-idaas` 未显式配置 `session.ttl` 时默认为 12 小时，GitHub 缺省仍为 30 天；所有 session TTL 为绝对期限、不会滑动，且不超过 90 天。
-- `login.development_provider: true` 额外注册 `dev` provider（见下文），只在 `public.development: true` 时通过校验，生产配置不得设置。开启它时 `login.provider` 可以留空，此时 Gateway 只提供本地开发登录。
+- `login.development_provider: true` 额外注册 `dev` provider（见下文），只在 `public.development: true` 且 `public.base_url` 是 `localhost`/`127.0.0.1`/`::1` 的 HTTP origin 时通过配置校验；公开 HTTPS 与 loopback HTTPS 均被拒绝，生产配置不得设置。开启它时 `login.provider` 可以留空，此时 Gateway 只提供本地开发登录。
 - `login.pkce_key_file` 至少 32 字节随机数据，所有 provider 都必须配置：编排层始终派生 verifier。GitHub 会把它发给 provider，`dev` 在进程内校验，IDaaS 不发送。`idaas.client_secret_file` 或 `github.client_secret_file` 只在对应 provider 被选择时读取；这些文件只进入进程内存，从不写日志或数据库。
 
 生成密钥示例：

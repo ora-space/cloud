@@ -15,6 +15,8 @@
 - **`workspace_operations_grpc_test.go`**: the Controller driving a Workspace through `WorkspaceOperationService` / `NodeReportService`, Node incarnation replacement, and `OperationAvailable` delivery.
 - **`endpoints_test.go`**: Comprehensive route and parameter matrix testing for all public and internal control endpoints.
 - **`contract_test.go`**: End-to-end OpenAPI contract validation against live HTTP responses.
+- **`gateway_authorization_test.go`**: Tenant authorization through the real Gateway and Cloud path: external identities gain no automatic membership, creators become administrators, invitations grant ordinary membership, and disabling membership immediately denies access on both replicas. Another login cannot restore access. The provider is a protocol double, not browser evidence for real external login.
+- **`gateway_callback_test.go`**: When the browser cookie remains valid but the database attempt has expired, callback rejection precedes provider code exchange, creates no session, and clears the attempt cookie.
 - **`security_test.go`**: Authentication, authorization, and isolation tests:
   - Tenant boundary isolation and cross-tenant data leak prevention.
   - Role-based access control (admin vs member permissions).

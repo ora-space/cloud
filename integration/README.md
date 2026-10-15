@@ -15,6 +15,8 @@
 - **`workspace_operations_grpc_test.go`**：Controller 通过 `WorkspaceOperationService`／`NodeReportService` 驱动 Workspace、Node incarnation 替换以及 `OperationAvailable` 投递。
 - **`endpoints_test.go`**：针对所有公开端点和内部控制端点进行全面的路由与参数矩阵测试。
 - **`contract_test.go`**：对照实际 HTTP 响应数据结构，进行端到端 OpenAPI 契约验证。
+- **`gateway_authorization_test.go`**：真实 Gateway 与 Cloud 链路上的租户授权：外部身份不自动获得成员关系，创建者为管理员，邀请只授予普通成员，停用后两个副本立即拒绝访问，重新登录不恢复成员权限。提供方为协议替身，不构成真实外部登录的浏览器证据。
+- **`gateway_callback_test.go`**：Cookie 仍有效而数据库 attempt 已过期时，在兑换 provider code 前拒绝 callback，不创建 session，并清除 attempt Cookie。
 - **`security_test.go`**：认证、授权与隔离测试：
   - 租户边界隔离与防跨租户数据泄漏校验。
   - 基于角色的访问控制（管理员 admin 与普通成员 member 权限区分）。

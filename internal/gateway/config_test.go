@@ -112,6 +112,37 @@ func TestConfigDefaultsAndSessionLifetimeBounds(t *testing.T) {
 	}
 }
 
+func TestDevelopmentProviderRequiresExplicitLoopbackHTTPOrigin(t *testing.T) {
+	cases := []struct {
+		name, origin string
+		development  bool
+		wantValid    bool
+	}{
+		{"localhost", "http://localhost:5173", true, true},
+		{"IPv4 loopback", "http://127.0.0.1:8081", true, true},
+		{"IPv6 loopback", "http://[::1]:8081", true, true},
+		{"loopback HTTPS", "https://localhost:5173", true, false},
+		{"public HTTPS with development flag", "https://app.example.com", true, false},
+		{"public HTTPS without development flag", "https://app.example.com", false, false},
+		{"public HTTP with development flag", "http://app.example.com", true, false},
+		{"loopback HTTP without development flag", "http://localhost:5173", false, false},
+		{"loopback lookalike", "http://localhost.example.com:5173", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			if err := cfg.applyDefaults(); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Public = PublicConfig{BaseURL: tc.origin, Development: tc.development}
+			cfg.Login.DevelopmentProvider = true
+			if err := cfg.Validate(); (err == nil) != tc.wantValid {
+				t.Fatalf("development provider at %q with public.development=%v: got %v, want valid=%v", tc.origin, tc.development, err, tc.wantValid)
+			}
+		})
+	}
+}
+
 func TestIDaaSConfigIsSelectedIndependentlyAndDefaultsToTwelveHours(t *testing.T) {
 	cfg := validConfig()
 	cfg.Login.Provider = ProviderHuaweiIDaaS
