@@ -50,6 +50,13 @@ function graphOf(options: {
   })
 }
 
+/**
+ * One declared Start variable, so a bounds case reads as the rule it exercises rather than its shape.
+ */
+function variable(name: string, extra: Partial<WorkflowInputVariable> = {}): WorkflowInputVariable {
+  return { name, fieldType: 'text-input', valueType: 'string', ...extra }
+}
+
 describe('workflow run form projection', () => {
   it('asks the version kickoff prompt first, prefilled from the Start node', () => {
     const fields = workflowRunFields(graphOf({ prompt: '  Summarize the release notes  ' }))
@@ -248,6 +255,121 @@ describe('workflow run form projection', () => {
         options: [],
       },
     ])
+  })
+})
+
+describe('workflow run form bounds', () => {
+  it('stops the author fields where the server stops projecting them', () => {
+    const variables = Array.from({ length: 101 }, (_, i) => variable(`v${i}`))
+
+    const fields = workflowRunFields(graphOf({ variables, prompt: 'go' }))
+
+    // The hundredth variable is projected and the hundred-and-first is not, which is where the
+    // server's own list ends: asking past it would be a question the run is never validated on.
+    expect(fields).toHaveLength(100)
+    expect(fields[0]?.key).toBe('v0')
+    expect(fields[99]?.key).toBe('v99')
+  })
+
+  it('gives up the kickoff prompt rather than exceed the descriptor bound', () => {
+    const variables = Array.from({ length: 100 }, (_, i) => variable(`v${i}`))
+
+    const fields = workflowRunFields(graphOf({ variables, prompt: 'go' }))
+
+    // The prompt is the platform's own field and the last one added, so it is the one the server
+    // drops when the author's fields already fill the descriptor.
+    expect(fields.map((field) => field.key)).toEqual(variables.map((entry) => entry.name))
+  })
+
+  it('shares the descriptor bound with the dotted globals', () => {
+    const variables = Array.from({ length: 100 }, (_, i) => variable(`v${i}`))
+
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables,
+        globals: [{ name: 'config.region', valueType: 'string', value: 'eu' }],
+      }),
+    )
+
+    // The globals fill whatever room the author's own questions left, rather than getting a bound
+    // of their own, because the server appends them to the same list.
+    expect(fields).toHaveLength(100)
+    expect(fields.some((field) => field.key === 'config.region')).toBe(false)
+  })
+
+  it('drops a variable whose name is not a field key', () => {
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [
+          variable('topic name'),
+          variable('topic/name'),
+          variable(' topic '),
+          variable('深'),
+          variable('topic'),
+          variable('topic-1'),
+          variable('a@b:c'),
+        ],
+      }),
+    )
+
+    // The server drops a name outside the grammar instead of rewriting it, because the values reach
+    // the workflow keyed by name — so the form may neither offer one nor trim one into acceptance.
+    expect(fields.map((field) => field.key)).toEqual(['topic', 'topic-1', 'a@b:c'])
+  })
+
+  it('drops a global whose name is not a field key', () => {
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        globals: [
+          { name: 'config.region', valueType: 'string', value: 'eu' },
+          { name: 'config.region zone', valueType: 'string', value: 'utc' },
+        ],
+      }),
+    )
+
+    expect(fields.map((field) => field.key)).toEqual(['config.region'])
+  })
+
+  it('drops a variable whose label is over the server bound, counting bytes', () => {
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [
+          variable('asciiOver', { displayName: 'x'.repeat(201) }),
+          variable('asciiAtLimit', { displayName: 'x'.repeat(200) }),
+          variable('chineseOver', { displayName: '深'.repeat(67) }),
+          variable('chineseAtLimit', { displayName: '深'.repeat(66) }),
+        ],
+      }),
+    )
+
+    // The bound counts UTF-8 bytes, so sixty-seven Chinese characters are over it where two hundred
+    // ASCII ones are not.
+    expect(fields.map((field) => field.key)).toEqual(['asciiAtLimit', 'chineseAtLimit'])
+  })
+
+  it('leaves out a default the server would refuse for its length', () => {
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [
+          variable('asciiOver', { fieldType: 'paragraph', value: 'x'.repeat(4001) }),
+          variable('asciiAtLimit', { fieldType: 'paragraph', value: 'x'.repeat(4000) }),
+          variable('chineseOver', { fieldType: 'paragraph', value: '深'.repeat(1334) }),
+          variable('chineseAtLimit', { fieldType: 'paragraph', value: '深'.repeat(1333) }),
+        ],
+      }),
+    )
+
+    // Opening on a value the gate refuses would be worse than opening empty, and the bound counts
+    // bytes: 1334 Chinese characters are 4002 of them, and 1333 are 3999.
+    expect(initialWorkflowRunValues(fields)).toEqual({
+      asciiAtLimit: 'x'.repeat(4000),
+      chineseAtLimit: '深'.repeat(1333),
+    })
   })
 })
 
