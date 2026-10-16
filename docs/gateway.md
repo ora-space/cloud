@@ -1,5 +1,15 @@
 # 认证 Gateway
 
+部署可通过 `GATEWAY_IDAAS_AUTHORIZE_URL`、`GATEWAY_IDAAS_TOKEN_URL`、
+`GATEWAY_IDAAS_USERINFO_URL` 分别覆盖华为 IDaaS 完整端点。省略时沿用 `GATEWAY_IDAAS_BASE_URL`
+与原有 `/saaslogin1/oauth2/v1/` 路径。覆盖值只接受 HTTPS，不接受 userinfo、query 或 fragment；
+这些是运维配置，不从浏览器请求读取。协议、scope、`huawei-corp` 身份来源及 UUID 映射保持不变。
+更换地址或 Client ID 后重建容器即可，不需要重建镜像。Client Secret 继续通过
+`GATEWAY_IDAAS_CLIENT_SECRET_FILE` 指定的只读挂载文件提供；原子替换文件后须重新创建容器以刷新挂载。
+生产配置必须关闭 `GATEWAY_PUBLIC_DEVELOPMENT` 和 `GATEWAY_LOGIN_DEVELOPMENT_PROVIDER`，
+使用 HTTPS public origin，并在认证平台登记 `<public origin>/auth/callback/huawei-idaas`。
+改变认证地址不会迁移身份、撤销已有会话或授予租户权限；新 provider 必须维持相同的企业身份权威。
+
 Gateway（`cmd/gateway`）是浏览器可访问的公开认证与反向代理边界，实现 `specs/decisions/cloud/identity-access/0-gateway-mediated-external-identity.md`。它完成外部登录、在 PostgreSQL 中保存浏览器会话、为每个已认证请求签发短期内部 service/user JWT，并只把 `/api/v1/*` 转发到固定配置的 Cloud upstream。Cloud 继续拥有用户、identity 映射、JIT 创建、membership 和资源授权；Gateway 不读写任何 Cloud 业务表，也不在启动时执行 DDL。
 
 ## 路由
