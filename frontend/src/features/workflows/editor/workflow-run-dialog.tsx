@@ -1,0 +1,244 @@
+import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Play } from 'lucide-react'
+import type { WorkflowRun, WorkflowSnapshot } from '@/api/generated.schemas'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { DynamicFormRenderer } from '@/features/issues/components/dynamic-form-renderer'
+import type { FormDescriptor } from '@/features/issues/types'
+import { useCreateWorkflowRun, useWorkflowSnapshots } from '@/features/workflows/api'
+import { workflowErrorKey } from '@/features/workflows/error-messages'
+import { parseWorkflowGraphValue } from '@/features/workflows/runtime/graph-codec'
+import {
+  initialWorkflowRunValues,
+  missingWorkflowRunFields,
+  workflowRunFields,
+  workflowRunInput,
+} from '@/features/workflows/runtime/run-input'
+import type { WorkflowRunField, WorkflowRunValues } from '@/features/workflows/runtime/run-input'
+
+/**
+ * Starts one run against a published version, collecting what that version asks for first.
+ *
+ * The form belongs to the version, not to the workflow: the fields, their defaults and their
+ * required marks are all read from the frozen graph of whichever version is selected, so an edit
+ * saved to the draft since cannot change what this run is started with. Switching versions
+ * remounts the form, which is what discards the previous version's answers rather than carrying
+ * them onto fields that may no longer exist.
+ *
+ * @param props.tenantId - Tenant the workflow belongs to; scopes the API calls only.
+ * @param props.workflowId - Workflow to start a run of.
+ * @param props.open - Whether the dialog is showing.
+ * @param props.onOpenChange - Receives the next open state.
+ * @param props.onStarted - Receives the run the server created, once it exists.
+ */
+export function WorkflowRunDialog({
+  tenantId,
+  workflowId,
+  open,
+  onOpenChange,
+  onStarted,
+}: {
+  tenantId: string
+  workflowId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onStarted: (run: WorkflowRun) => void
+}) {
+  const { t } = useTranslation()
+  const snapshots = useWorkflowSnapshots(tenantId, workflowId)
+  const [chosenId, setChosenId] = useState<string | null>(null)
+  const versions = snapshots.data ?? []
+  // The newest version is the default, resolved on every render rather than copied into state: a
+  // refetch that adds a version must not leave the dialog pinned to a choice that predates it.
+  const selected = versions.find((version) => version.id === chosenId) ?? versions[0]
+
+  /** Closing forgets the chosen version, so the next visit opens on the newest one again. */
+  function handleOpenChange(next: boolean): void {
+    if (!next) setChosenId(null)
+    onOpenChange(next)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('workflows.run.startTitle')}</DialogTitle>
+          <DialogDescription>{t('workflows.run.startDescription')}</DialogDescription>
+        </DialogHeader>
+        {selected === undefined ? (
+          <p className="text-xs text-muted-foreground">{t('workflows.run.noPublishedSnapshot')}</p>
+        ) : (
+          <>
+            <VersionPicker versions={versions} selectedId={selected.id} onSelect={setChosenId} />
+            <WorkflowRunForm
+              key={selected.id}
+              tenantId={tenantId}
+              workflowId={workflowId}
+              snapshot={selected}
+              onCancel={() => handleOpenChange(false)}
+              onStarted={onStarted}
+            />
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** The published versions the run may execute, newest first, labelled the way the `@` form does. */
+function VersionPicker({
+  versions,
+  selectedId,
+  onSelect,
+}: {
+  versions: readonly WorkflowSnapshot[]
+  selectedId: string
+  onSelect: (snapshotId: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="workflow-run-version">{t('workflows.run.version')}</Label>
+      <Select value={selectedId} onValueChange={(next) => onSelect(next ?? '')}>
+        <SelectTrigger id="workflow-run-version" className="w-full">
+          <SelectValue>
+            {(current: unknown) =>
+              versionLabel(versions, typeof current === 'string' ? current : '')
+            }
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {versions.map((version) => (
+            <SelectItem key={version.id} value={version.id}>
+              {versionLabel(versions, version.id)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+/** The version number is what a member recognises, so it leads; the name says which release it was. */
+function versionLabel(versions: readonly WorkflowSnapshot[], snapshotId: string): string {
+  const version = versions.find((candidate) => candidate.id === snapshotId)
+  if (version === undefined) return snapshotId
+  return `v${version.version} · ${version.name}`
+}
+
+/**
+ * The selected version's own form, its submit, and whatever the server said about the last attempt.
+ *
+ * The request object is built once per set of answers and reused for every attempt, which is what
+ * makes a retry — a second click, or React Query replaying the mutation — carry the same
+ * idempotency key and reach the run the first attempt created instead of starting another one.
+ */
+function WorkflowRunForm({
+  tenantId,
+  workflowId,
+  snapshot,
+  onCancel,
+  onStarted,
+}: {
+  tenantId: string
+  workflowId: string
+  snapshot: WorkflowSnapshot
+  onCancel: () => void
+  onStarted: (run: WorkflowRun) => void
+}) {
+  const { t } = useTranslation()
+  const createRun = useCreateWorkflowRun(tenantId)
+  const fields = useMemo(
+    () => workflowRunFields(parseWorkflowGraphValue(snapshot.graph)),
+    [snapshot.graph],
+  )
+  const descriptor = useMemo(() => runFormDescriptor(fields), [fields])
+  const [values, setValues] = useState<WorkflowRunValues>(() => initialWorkflowRunValues(fields))
+  const missing = missingWorkflowRunFields(fields, values)
+  const request = useMemo(
+    () => ({ workflowId, snapshotId: snapshot.id, input: workflowRunInput(fields, values) }),
+    [workflowId, snapshot.id, fields, values],
+  )
+
+  /** Starts the run, and hands the created run to the caller; a fault stays on this form. */
+  async function submit(): Promise<void> {
+    try {
+      onStarted(await createRun.mutateAsync(request))
+    } catch {
+      // the fault line above the footer already reports it
+    }
+  }
+
+  return (
+    <>
+      {fields.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{t('workflows.run.noInput')}</p>
+      ) : (
+        <DynamicFormRenderer
+          descriptor={descriptor}
+          values={values}
+          onChange={(key, next) => setValues((current) => ({ ...current, [key]: next }))}
+        />
+      )}
+      {missing.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t('workflows.run.missingRequired', {
+            fields: missing.map((field) => field.label).join('、'),
+          })}
+        </p>
+      )}
+      {createRun.error && (
+        <p className="text-xs text-destructive">
+          {t(workflowErrorKey(createRun.error.response?.data?.code))}
+        </p>
+      )}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>
+          {t('workflows.list.cancel')}
+        </Button>
+        <Button disabled={createRun.isPending || missing.length > 0} onClick={() => void submit()}>
+          <Play className="size-3.5" fill="currentColor" />
+          {t('workflows.run.start')}
+        </Button>
+      </DialogFooter>
+    </>
+  )
+}
+
+/**
+ * Recasts the version's fields as the descriptor the shared Issues form renderer draws.
+ *
+ * The manual entry and the `@` form ask the same questions of the same graph, so they draw them with
+ * the same controls; keeping one renderer is what stops the two surfaces from drifting into asking
+ * the same thing two different ways. The form reference is this surface's own name, since the
+ * descriptor is rendered here and never fetched by it.
+ */
+function runFormDescriptor(fields: readonly WorkflowRunField[]): FormDescriptor {
+  return {
+    formRef: 'workflow-run',
+    fields: fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.control,
+      required: field.required,
+      options: field.options.map((option) => ({ value: option, label: option })),
+      ...(field.defaultValue === undefined ? {} : { defaultValue: field.defaultValue }),
+    })),
+  }
+}
