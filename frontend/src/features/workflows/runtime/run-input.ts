@@ -22,6 +22,15 @@ export interface WorkflowRunField {
   key: string
   /** What the member reads above the control. */
   label: string
+  /**
+   * The translation key for {@link WorkflowRunField.label}, when the platform owns that wording.
+   *
+   * A variable the graph declares is labelled by its author, so its label is the text to show; the
+   * platform's own field is named by the platform, and the surface renders it in the reader's
+   * language. The label above stays the fallback for a surface that has no translator, and the key
+   * stays an ordinary string here for the same reason the node catalog keeps its own keys that way.
+   */
+  labelKey?: string
   /** Whether a run may start without an answer. */
   required: boolean
   control: WorkflowRunControl
@@ -216,6 +225,7 @@ function promptFields(
   const field: WorkflowRunField = {
     key: PROMPT_FIELD_KEY,
     label: PROMPT_FIELD_KEY,
+    labelKey: 'workflows.launchFields.prompt',
     required: launchFieldRequired(graph.launchFields, PROMPT_FIELD_KEY),
     control: 'textarea',
     options: [],

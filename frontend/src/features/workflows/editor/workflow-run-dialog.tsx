@@ -22,8 +22,10 @@ import {
 import { DynamicFormRenderer } from '@/features/issues/components/dynamic-form-renderer'
 import type { FormDescriptor } from '@/features/issues/types'
 import { useCreateWorkflowRun, useWorkflowSnapshots } from '@/features/workflows/api'
+import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
 import { workflowErrorKey } from '@/features/workflows/error-messages'
 import { parseWorkflowGraphValue } from '@/features/workflows/runtime/graph-codec'
+import type { WorkflowNodeTranslator } from '@/features/workflows/runtime/node-factory'
 import {
   initialWorkflowRunValues,
   missingWorkflowRunFields,
@@ -163,12 +165,13 @@ function WorkflowRunForm({
   onStarted: (run: WorkflowRun) => void
 }) {
   const { t } = useTranslation()
+  const translate = useWorkflowTranslator()
   const createRun = useCreateWorkflowRun(tenantId)
   const fields = useMemo(
     () => workflowRunFields(parseWorkflowGraphValue(snapshot.graph)),
     [snapshot.graph],
   )
-  const descriptor = useMemo(() => runFormDescriptor(fields), [fields])
+  const descriptor = useMemo(() => runFormDescriptor(fields, translate), [fields, translate])
   const [values, setValues] = useState<WorkflowRunValues>(() => initialWorkflowRunValues(fields))
   const missing = missingWorkflowRunFields(fields, values)
   const request = useMemo(
@@ -199,7 +202,7 @@ function WorkflowRunForm({
       {missing.length > 0 && (
         <p className="text-xs text-muted-foreground">
           {t('workflows.run.missingRequired', {
-            fields: missing.map((field) => field.label).join('、'),
+            fields: missing.map((field) => fieldLabel(field, translate)).join('、'),
           })}
         </p>
       )}
@@ -222,6 +225,19 @@ function WorkflowRunForm({
 }
 
 /**
+ * The text above one field's control.
+ *
+ * The platform's own field arrives named by its translation key, because the runtime layer knows
+ * which wording is the platform's but not what language the member reads; a variable the graph
+ * declares carries its author's label as text. Resolving both through one function is what keeps the
+ * label above a control and the "still missing" line below the form saying the same thing about the
+ * same field.
+ */
+function fieldLabel(field: WorkflowRunField, translate: WorkflowNodeTranslator): string {
+  return field.labelKey === undefined ? field.label : translate(field.labelKey)
+}
+
+/**
  * Recasts the version's fields as the descriptor the shared Issues form renderer draws.
  *
  * The manual entry and the `@` form ask the same questions of the same graph, so they draw them with
@@ -229,12 +245,15 @@ function WorkflowRunForm({
  * the same thing two different ways. The form reference is this surface's own name, since the
  * descriptor is rendered here and never fetched by it.
  */
-function runFormDescriptor(fields: readonly WorkflowRunField[]): FormDescriptor {
+function runFormDescriptor(
+  fields: readonly WorkflowRunField[],
+  translate: WorkflowNodeTranslator,
+): FormDescriptor {
   return {
     formRef: 'workflow-run',
     fields: fields.map((field) => ({
       key: field.key,
-      label: field.label,
+      label: fieldLabel(field, translate),
       type: field.control,
       required: field.required,
       options: field.options.map((option) => ({ value: option, label: option })),

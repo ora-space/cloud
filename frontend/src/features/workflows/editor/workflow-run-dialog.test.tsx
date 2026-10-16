@@ -168,6 +168,17 @@ describe('WorkflowRunDialog', () => {
     expect(screen.getByDisplayValue('release')).toBeInTheDocument()
   })
 
+  it('labels the platform’s own field in the reader’s language', async () => {
+    installDialogHandlers([snapshotOf({ id: 'snap-2', version: 2, prompt: '总结这次发布' })])
+    renderDialog()
+
+    // The projection names the prompt field by its translation key, because the platform owns that
+    // wording and the runtime layer does not know what language the member reads. The surface is
+    // what turns the key into text — the same key the editor's launch-field table shows.
+    expect(await screen.findByLabelText(/^提示词/)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^prompt/)).not.toBeInTheDocument()
+  })
+
   it('sends the selected version and the answers read from it', async () => {
     const versions = [
       snapshotOf({

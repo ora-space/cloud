@@ -65,6 +65,7 @@ describe('workflow run form projection', () => {
       {
         key: 'prompt',
         label: 'prompt',
+        labelKey: 'workflows.launchFields.prompt',
         required: false,
         control: 'textarea',
         options: [],
@@ -81,8 +82,30 @@ describe('workflow run form projection', () => {
     const fields = workflowRunFields(graphOf({ prompt: '   ' }))
 
     expect(fields).toEqual([
-      { key: 'prompt', label: 'prompt', required: false, control: 'textarea', options: [] },
+      {
+        key: 'prompt',
+        label: 'prompt',
+        labelKey: 'workflows.launchFields.prompt',
+        required: false,
+        control: 'textarea',
+        options: [],
+      },
     ])
+  })
+
+  it('names the platform field by its key rather than by its label', () => {
+    const prompt = workflowRunFields(graphOf({ prompt: 'go' }))[0]
+    const declared = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [variable('topic', { displayName: '主题' })],
+      }),
+    )[0]
+
+    // The platform owns the prompt's wording, so the surface renders it in the reader's language; an
+    // author's own label is text and travels as one.
+    expect(prompt?.labelKey).toBe('workflows.launchFields.prompt')
+    expect(declared?.labelKey).toBeUndefined()
   })
 
   it('insists on the prompt only when the declaration does', () => {
