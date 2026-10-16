@@ -40,15 +40,16 @@ const PROMPT_FIELD_KEY = 'prompt'
 /**
  * The bounds the server puts on one projected form, mirrored so the two projections agree.
  *
- * The server owns these numbers — `maxFormFields`, `maxFieldValueLength` and the 200-byte bound it
- * puts on a field key and on a field label alike in `internal/core/form_descriptor.go` and
- * `workflow_collaboration.go` — and it validates the submitted input against the same document this
- * form is projected from. A bound only one side applies is either a question the run cannot answer or
- * a refusal of an answer the form accepted, so the form reads the server's limits rather than leaving
- * them to drift. They count UTF-8 bytes, which is what Go's `len` counts, so a Chinese label is
- * bounded at a third of the characters an ASCII one is.
+ * The server owns these numbers — `maxFormFields`, `maxFormOptions`, `maxFieldValueLength` and the
+ * 200-byte bound it puts on a field key, a field label and a select choice alike in
+ * `internal/core/form_descriptor.go` and `workflow_collaboration.go` — and it validates the submitted
+ * input against the same document this form is projected from. A bound only one side applies is
+ * either a question the run cannot answer or a refusal of an answer the form accepted, so the form
+ * reads the server's limits rather than leaving them to drift. They count UTF-8 bytes, which is what
+ * Go's `len` counts, so a Chinese label is bounded at a third of the characters an ASCII one is.
  */
 const MAX_FORM_FIELDS = 100
+const MAX_FORM_OPTIONS = 100
 const MAX_FIELD_LABEL = 200
 const MAX_FIELD_VALUE = 4000
 
@@ -270,6 +271,29 @@ function isFieldKey(name: string): boolean {
 }
 
 /**
+ * The choices a declared select offers, filtered exactly the way the server filters them.
+ *
+ * The server drops a choice that is not a string, is empty, is over the same 200-byte bound a field
+ * key and a label carry, repeats one already offered, or falls past the descriptor's option bound. A
+ * choice the server dropped is not a value the gate accepts, so offering it would be a question whose
+ * only answer comes back `invalid_field_value` — and a declared default among the dropped ones would
+ * open the form on an answer it refuses. The graph is untrusted JSON and the codec validates its
+ * shapes rather than every choice, so the string test the server makes is made here too.
+ */
+function selectOptions(variable: WorkflowInputVariable): string[] {
+  const options: string[] = []
+  const seen = new Set<string>()
+  for (const option of variable.options ?? []) {
+    if (typeof option !== 'string' || option === '') continue
+    if (utf8Length(option) > MAX_FIELD_LABEL || seen.has(option)) continue
+    if (options.length === MAX_FORM_OPTIONS) continue
+    seen.add(option)
+    options.push(option)
+  }
+  return options
+}
+
+/**
  * Accepts a declared value as a default only when the control can render it.
  *
  * A default the control cannot show would seed the form with an answer the member never gave and
@@ -308,8 +332,7 @@ function startVariableField(
   const declaredLabel = variable.displayName ?? ''
   if (utf8Length(declaredLabel || key) > MAX_FIELD_LABEL) return undefined
   const fieldType = resolveWorkflowInputFieldType(variable)
-  const options =
-    fieldType === 'select' ? (variable.options ?? []).filter((option) => option !== '') : []
+  const options = fieldType === 'select' ? selectOptions(variable) : []
   // A select with nothing to choose from cannot be answered at all, so it becomes a text field —
   // the same degradation the server applies, which keeps the form usable instead of unanswerable.
   const control =

@@ -351,6 +351,50 @@ describe('workflow run form bounds', () => {
     expect(fields.map((field) => field.key)).toEqual(['asciiAtLimit', 'chineseAtLimit'])
   })
 
+  it('offers only the select choices the server keeps', () => {
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [
+          variable('tone', {
+            fieldType: 'select',
+            options: [
+              'brief',
+              'brief',
+              '',
+              'deep',
+              'x'.repeat(200),
+              'y'.repeat(201),
+              '深'.repeat(66),
+              '深'.repeat(67),
+            ],
+          }),
+        ],
+      }),
+    )
+
+    // A repeated, empty or over-long choice is dropped by the server rather than offered, and the
+    // bound counts bytes: two hundred ASCII characters are a legal choice where sixty-seven Chinese
+    // ones are not. Offering one the gate does not know is a question whose only answer is a refusal.
+    expect(fields[0]?.options).toEqual(['brief', 'deep', 'x'.repeat(200), '深'.repeat(66)])
+  })
+
+  it('stops the select choices where the server stops them', () => {
+    const choices = Array.from({ length: 101 }, (_, index) => `c${index}`)
+
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [variable('tone', { fieldType: 'select', options: choices })],
+      }),
+    )
+
+    // The hundredth choice is offered and the hundred-and-first is not, which is where the server's
+    // own list ends: past it the gate has no value to match an answer against.
+    expect(fields[0]?.options).toHaveLength(100)
+    expect(fields[0]?.options[99]).toBe('c99')
+  })
+
   it('leaves out a default the server would refuse for its length', () => {
     const fields = workflowRunFields(
       graphOf({
@@ -393,6 +437,24 @@ describe('workflow run form defaults', () => {
     )
 
     expect(initialWorkflowRunValues(fields)).toEqual({ topic: 'release' })
+  })
+
+  it('leaves out a select default that is not a choice the server kept', () => {
+    const overLong = 'y'.repeat(201)
+
+    const fields = workflowRunFields(
+      graphOf({
+        launchFields: NO_PROMPT,
+        variables: [
+          variable('tone', { fieldType: 'select', options: ['brief', overLong], value: overLong }),
+        ],
+      }),
+    )
+
+    // The choice is dropped from the field, so it cannot be the answer the form opens on either: the
+    // gate matches a select's value against the choices it kept, and this one is not among them.
+    expect(fields[0]?.options).toEqual(['brief'])
+    expect(initialWorkflowRunValues(fields)).toEqual({})
   })
 
   it('keeps a select default that is one of its choices', () => {
