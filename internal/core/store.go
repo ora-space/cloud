@@ -131,6 +131,11 @@ type Store struct {
 	AgentRestoreTimeout time.Duration
 	// AgentEndConfirmTimeout is frozen at the first unresolved startup ending request.
 	AgentEndConfirmTimeout time.Duration
+	// AgentWorkspaceBlockedTimeout is frozen when a run Workspace's creation first persists
+	// `blocked` (ADR D5): expiry abandons the business run, fails the creation operation, releases
+	// the Project operation slot and retains an independent residual ledger. Zero-value stores
+	// select the approved default when the deadline is first frozen.
+	AgentWorkspaceBlockedTimeout time.Duration
 
 	// DeliveryGiveUpAfter and DeliveryUnreachableAfter are IssueRun D5's two first-version give-up
 	// limits for a Revision delivery: how long delivery may fail continuously before Cloud abandons

@@ -2,7 +2,7 @@
 
 [English](agent-startup-settlement.en.md) | 中文
 
-本实现遵守已批准的 bounded-agent-startup ADR D1–D4。工作项/首条 prompt 是 Cloud 意图，登记意味着 Node 可能已执行；无回复不能证明没有外部副作用。D5 创建 blocked 放弃单独交付，不在本期启用。
+本实现遵守已批准的 bounded-agent-startup ADR。第一期 D1–D4 见上文；第二期 D5（创建 blocked 的有界放弃）已在本仓库交付，见下文《创建 blocked 的有界放弃》。工作项/首条 prompt 是 Cloud 意图，登记意味着 Node 可能已执行；无回复不能证明没有外部副作用。
 
 ## 持久窗口
 
@@ -31,3 +31,11 @@ Node 重连可以恢复连接与 ready 事实，但未清除的残留账本继�
 账本的 tenant/project/workspace/generation 与既有 operation/effect/clone/Node execution 身份一起保留。隐藏 Workspace 的公开入口继续不可用；只有后续回收 ADR 定义授权、真实终止/late ensure fencing 和删除顺序后才能开放自动回收。业务 done 不等于物理资源已释放。
 
 直接回归覆盖固定窗口、配置拒绝、两 Store 配置变化、延后 work、重复扫描、账本失败回滚、迁移和真实 HTTP/gRPC 迟到事实。完整真实 Controller 暂时失败调度与永久失联演练仍须和领取调度、部署验收对齐。
+
+## 创建 blocked 的有界放弃（D5）
+
+运行 Workspace 对公开 API 不可见，人工 retry 无法解铺，blocked 还占着 one_project_operation；Cloud 的持久扫描是唯一出路。首次持久写入 `blocked` 的同事务冻结绝对截止：`issue_runs.workspace_blocked_at/workspace_deadline_at/workspace_blocked_source`，窗口为可配置默认 30m（`agent_workspace_blocked_timeout`，省略选默认，显式非正/非法拒绝启动）。defer、人工 retry、重新领取、重启与配置调整不续期；临时改回 running/retry_wait 不抹除；queued 未得 Project 槽不触发。存量 blocked 无不可变首次证据：不回填，首次策略扫描以 `first_observed` 给一次默认窗口，不追认原窗口已生效。
+
+到期仍无真实创建终态时，同事务原子完成：`agent_run_residuals`（reason=`workspace_unavailable`，含未回报的 effect 计划与 clone/plugin 执行身份）、Workspace admission 关闭并递增 epoch、模型绑定/授权撤销、queued 用户轮次丢弃、Run `failed/done`（`failure_reason=workspace_unavailable`、`deliveryState=skipped`、结果记 Cloud 放弃来源）、原创建 operation `failed/provisioning_result_unknown`——operation 离开未完成态即释放 one_project_operation，同 Project 另一 Workspace 可继续。账本或保护写入失败整体回滚，槽不先释放。不排 delete；残留 Workspace 的删除与涉及它的 Project 删除由既有 residual 检查拒绝。取消不重置窗口：创建先真实结算沿原取消/释放链路，截止先到且结果仍未知则按 failed/done 收尾。
+
+业务终态后的事实接管：Controller 以当前服务身份/租约经 `RecordProvisioningFact` 提交迟到事实（effect 的真实 Substrate 结果、clone/plugin 执行的真实结局、创建本身的真实结果），按原 operation/effect/execution 身份校验后，经活路径自己的校验器幂等补入原记录与账本再 ACK。账本按稳定身份记账：相同事实重放为空操作；非终态观测（running/absent/pending）可被后来的真实事实接管，被接管的观测保留为先前证据；终态一经记录只接受重放，矛盾事实即拒绝。submission 幂等指纹绑定 operation/effect 目标身份，同名 submission 换目标重放返回冲突。不重开 admission、不回 starting、不再次结算、不新建执行。operation 自身动作（claim/defer/advance/plan/effect_result）对已放弃创建保持关闭。物理终止、late ensure fencing、授权回收与删除顺序仍归后续回收 ADR。

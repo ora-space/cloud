@@ -101,3 +101,7 @@ Both `0033` files retain their complete filenames and original SQL. The complete
 ## 0034: Agent startup windows and residual ownership
 
 Adds startup_ready_at, startup_deadline_at, startup_resume, startup_ending_deadline_at and agent_run_residuals without rewriting historical outcomes. The serialized policy scan freezes legacy active windows once. Residual ownership commits with failed/done; late true terminal facts add evidence without granting cleanup authority. Fresh/upgrade/repeat coverage: TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade.
+
+## 0035: Bounded abandonment of a blocked run Workspace creation
+
+Adds issue_runs.workspace_blocked_at, workspace_deadline_at, workspace_blocked_source (blocked_write / first_observed) with a provisioning-phase partial index, and widens agent_run_residuals' reason constraint to agent_start_failed / workspace_unavailable. The first transaction persisting `blocked` anchors the absolute deadline; legacy blocked creations have no immutable first-blocked evidence, are not backfilled, and receive one default window from the first policy scan as first_observed. Defer, manual retry, re-claiming, restarts and configuration changes never renew; only the creation's real terminal ends the window. Purely forward and retry-safe, without rewriting historical outcomes. Fresh/upgrade/repeat coverage: TestMigration0035WorkspaceBlockedDeadlineAppliesFreshAndUpgrades.

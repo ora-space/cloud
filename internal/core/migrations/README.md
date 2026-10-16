@@ -100,3 +100,7 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0034：Agent 启动窗口与残留责任
 
 新增 startup_ready_at、startup_deadline_at、startup_resume、startup_ending_deadline_at 及 agent_run_residuals。迁移不改历史结果；活动存量由串行策略扫描一次固定窗口。残留账本与 failed/done 同事务提交，迟到真实终态仅补证据，不代替清理授权。新库/升级/重复执行见 TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade。
+
+## 0035：运行 Workspace 创建 blocked 的有界放弃
+
+新增 issue_runs.workspace_blocked_at、workspace_deadline_at、workspace_blocked_source（blocked_write / first_observed）与 provisioning 期部分索引，并把 agent_run_residuals 的 reason 约束扩为 agent_start_failed / workspace_unavailable。首次持久写入 blocked 的同事务锚定绝对截止；存量 blocked 无不可变首次证据，不回填，由首次策略扫描以 first_observed 给一次默认窗口。defer、人工 retry、重新领取、重启与配置调整不续期；只有原创建真实终态结束窗口。纯前向、可重复执行，不改历史执行结果。新库/升级/重复执行见 TestMigration0035WorkspaceBlockedDeadlineAppliesFreshAndUpgrades。

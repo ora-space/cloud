@@ -61,6 +61,14 @@ issue_runs:
   agent_start_timeout: 2m
   agent_restore_timeout: 6m
   agent_end_confirm_timeout: 5m
+  # The bounded-agent-startup ADR's D5 window: how long a run Workspace's create_workspace
+  # operation may stay in `blocked` (first persistent unknown result) before Cloud abandons the
+  # business run, fails the operation, releases the Project operation slot and retains an
+  # independent residual ledger. A deployment duration frozen per run on database time when the
+  # creation first blocks; defer, retry, re-claiming, restarts and this value never renew a frozen
+  # deadline. The approved default is 30m; only omission selects it, an explicit nonpositive or
+  # invalid duration rejects startup. Override: CLOUD_ISSUE_RUNS_AGENT_WORKSPACE_BLOCKED_TIMEOUT.
+  agent_workspace_blocked_timeout: 30m
   # IssueRun D5's two give-up limits for a Revision delivery, both deployment durations judged on
   # database time and both not per-run columns. `delivery_give_up_after` is the continuous-failure
   # window: once a run has been failing to deliver for longer than this, Cloud abandons the delivery

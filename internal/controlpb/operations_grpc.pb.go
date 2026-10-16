@@ -19,12 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkspaceOperationService_ClaimOperation_FullMethodName     = "/ora.cloud.internal.v1.WorkspaceOperationService/ClaimOperation"
-	WorkspaceOperationService_PlanEffect_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/PlanEffect"
-	WorkspaceOperationService_RecordEffectResult_FullMethodName = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordEffectResult"
-	WorkspaceOperationService_AdvanceOperation_FullMethodName   = "/ora.cloud.internal.v1.WorkspaceOperationService/AdvanceOperation"
-	WorkspaceOperationService_DeferOperation_FullMethodName     = "/ora.cloud.internal.v1.WorkspaceOperationService/DeferOperation"
-	WorkspaceOperationService_ListLiveSandboxes_FullMethodName  = "/ora.cloud.internal.v1.WorkspaceOperationService/ListLiveSandboxes"
+	WorkspaceOperationService_ClaimOperation_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/ClaimOperation"
+	WorkspaceOperationService_PlanEffect_FullMethodName             = "/ora.cloud.internal.v1.WorkspaceOperationService/PlanEffect"
+	WorkspaceOperationService_RecordEffectResult_FullMethodName     = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordEffectResult"
+	WorkspaceOperationService_AdvanceOperation_FullMethodName       = "/ora.cloud.internal.v1.WorkspaceOperationService/AdvanceOperation"
+	WorkspaceOperationService_DeferOperation_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/DeferOperation"
+	WorkspaceOperationService_RecordProvisioningFact_FullMethodName = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordProvisioningFact"
+	WorkspaceOperationService_ListLiveSandboxes_FullMethodName      = "/ora.cloud.internal.v1.WorkspaceOperationService/ListLiveSandboxes"
 )
 
 // WorkspaceOperationServiceClient is the client API for WorkspaceOperationService service.
@@ -52,6 +53,15 @@ type WorkspaceOperationServiceClient interface {
 	AdvanceOperation(ctx context.Context, in *AdvanceOperationRequest, opts ...grpc.CallOption) (*AdvanceOperationResponse, error)
 	// Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
 	DeferOperation(ctx context.Context, in *DeferOperationRequest, opts ...grpc.CallOption) (*DeferOperationResponse, error)
+	// Records one late fact about a run-Workspace creation Cloud abandoned after its blocked
+	// deadline (bounded-agent-startup D5): an effect's real Substrate result, the clone or plugin
+	// execution the creation dispatched, or the creation's own real outcome. The caller submits
+	// with its current lease instead of re-claiming the failed operation. Cloud validates the fact
+	// against the original operation, effect and execution identities, stores it through the same
+	// appliers the live paths use and receipts it onto the residual ledger before acknowledging.
+	// Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
+	// the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
+	RecordProvisioningFact(ctx context.Context, in *RecordProvisioningFactRequest, opts ...grpc.CallOption) (*RecordProvisioningFactResponse, error)
 	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
 	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
 	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -118,6 +128,16 @@ func (c *workspaceOperationServiceClient) DeferOperation(ctx context.Context, in
 	return out, nil
 }
 
+func (c *workspaceOperationServiceClient) RecordProvisioningFact(ctx context.Context, in *RecordProvisioningFactRequest, opts ...grpc.CallOption) (*RecordProvisioningFactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordProvisioningFactResponse)
+	err := c.cc.Invoke(ctx, WorkspaceOperationService_RecordProvisioningFact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workspaceOperationServiceClient) ListLiveSandboxes(ctx context.Context, in *ListLiveSandboxesRequest, opts ...grpc.CallOption) (*ListLiveSandboxesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListLiveSandboxesResponse)
@@ -153,6 +173,15 @@ type WorkspaceOperationServiceServer interface {
 	AdvanceOperation(context.Context, *AdvanceOperationRequest) (*AdvanceOperationResponse, error)
 	// Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
 	DeferOperation(context.Context, *DeferOperationRequest) (*DeferOperationResponse, error)
+	// Records one late fact about a run-Workspace creation Cloud abandoned after its blocked
+	// deadline (bounded-agent-startup D5): an effect's real Substrate result, the clone or plugin
+	// execution the creation dispatched, or the creation's own real outcome. The caller submits
+	// with its current lease instead of re-claiming the failed operation. Cloud validates the fact
+	// against the original operation, effect and execution identities, stores it through the same
+	// appliers the live paths use and receipts it onto the residual ledger before acknowledging.
+	// Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
+	// the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
+	RecordProvisioningFact(context.Context, *RecordProvisioningFactRequest) (*RecordProvisioningFactResponse, error)
 	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
 	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
 	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -183,6 +212,9 @@ func (UnimplementedWorkspaceOperationServiceServer) AdvanceOperation(context.Con
 }
 func (UnimplementedWorkspaceOperationServiceServer) DeferOperation(context.Context, *DeferOperationRequest) (*DeferOperationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeferOperation not implemented")
+}
+func (UnimplementedWorkspaceOperationServiceServer) RecordProvisioningFact(context.Context, *RecordProvisioningFactRequest) (*RecordProvisioningFactResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordProvisioningFact not implemented")
 }
 func (UnimplementedWorkspaceOperationServiceServer) ListLiveSandboxes(context.Context, *ListLiveSandboxesRequest) (*ListLiveSandboxesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListLiveSandboxes not implemented")
@@ -299,6 +331,24 @@ func _WorkspaceOperationService_DeferOperation_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkspaceOperationService_RecordProvisioningFact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordProvisioningFactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkspaceOperationServiceServer).RecordProvisioningFact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkspaceOperationService_RecordProvisioningFact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkspaceOperationServiceServer).RecordProvisioningFact(ctx, req.(*RecordProvisioningFactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkspaceOperationService_ListLiveSandboxes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListLiveSandboxesRequest)
 	if err := dec(in); err != nil {
@@ -343,6 +393,10 @@ var WorkspaceOperationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeferOperation",
 			Handler:    _WorkspaceOperationService_DeferOperation_Handler,
+		},
+		{
+			MethodName: "RecordProvisioningFact",
+			Handler:    _WorkspaceOperationService_RecordProvisioningFact_Handler,
 		},
 		{
 			MethodName: "ListLiveSandboxes",

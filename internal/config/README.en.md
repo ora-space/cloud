@@ -28,4 +28,4 @@ The optional `object_store` section configures S3 delivery. When enabled, the se
 
 See [config.yaml](../../configs/config.yaml), [cmd/server](../../cmd/server/README.en.md), and [Authentication](../../docs/authentication.md).
 
-Agent startup, restore and end confirmation default to 2m/6m/5m (agent_start_timeout, agent_restore_timeout, agent_end_confirm_timeout). Only omission selects defaults; explicit nonpositive or invalid durations fail. Changes affect new durable windows only, never renew active ones.
+Agent startup, restore and end confirmation default to 2m/6m/5m (agent_start_timeout, agent_restore_timeout, agent_end_confirm_timeout); the bounded abandonment window for a run Workspace creation that first blocked defaults to 30m (agent_workspace_blocked_timeout). Only omission selects defaults; explicit nonpositive or invalid durations fail. Changes affect new durable windows only, never renew active ones.

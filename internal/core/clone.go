@@ -165,11 +165,23 @@ func cloneFailureReason(stored string) string {
 // checked and recorded inside the caller's transaction, so a recorded response and its effects
 // commit together: a retry after a lost reply replays the response, never the effect.
 func submitted(t *transaction, r *ControlRequest, apply func() Object) Object {
+	return recordedSubmission(t, r, requestHash(r.Action, r.Service.Subject, r.Body), apply)
+}
+
+// submittedTarget is submitted for requests whose target identity (operation, effect) travels in
+// ControlRequest fields instead of the body. The fingerprint binds that target, so replaying a
+// submission against a different operation or effect is a conflict instead of a replay of the
+// response recorded for the original target.
+func submittedTarget(t *transaction, r *ControlRequest, apply func() Object) Object {
+	return recordedSubmission(t, r, requestHash(r.Action+"\n"+r.OperationID+"\n"+r.EffectID, r.Service.Subject, r.Body), apply)
+}
+
+// recordedSubmission checks and records one submission identity inside the caller's transaction.
+func recordedSubmission(t *transaction, r *ControlRequest, hash string, apply func() Object) Object {
 	require(len(r.SubmissionID) <= 200, 400, "invalid_submission")
 	if r.SubmissionID == "" {
 		return apply()
 	}
-	hash := requestHash(r.Action, r.Service.Subject, r.Body)
 	if old := t.one("SELECT * FROM control_submissions WHERE submission_id=$1", r.SubmissionID); old != nil {
 		require(old.S("requestHash") == hash, 409, "submission_conflict")
 		return old.O("response")

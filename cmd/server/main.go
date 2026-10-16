@@ -155,6 +155,23 @@ func run() (runErr error) {
 			pluginmarket.RunSyncLoop(ctx, store.StartQueuedAgentSessionsOnce, agentSessionStartInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
+	// Blocked-creation loop (ADR D5): a run Workspace creation parked in `blocked` has no public
+	// retry (the Workspace is invisible), so Cloud's own scan is the only way its wait ends. The
+	// first pass anchors an absolute, never-renewed deadline (30m default); a later pass abandons
+	// the business run, fails the creation operation, releases the Project operation slot and
+	// retains an independent residual ledger — all in one transaction per run, so a repeated tick
+	// confirms the same settlement instead of rebuilding anything. The residual Workspace stays
+	// protected: no delete is queued, admission stays closed, and late Controller facts are
+	// receipted through the provisioning-fact entry without resurrecting the run.
+	{
+		const agentWorkspaceBlockedInterval = 10 * time.Second
+		store.AgentWorkspaceBlockedTimeout = cfg.IssueRuns.AgentWorkspaceBlockedTimeout
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, store.GiveUpBlockedWorkspaceCreationsOnce, agentWorkspaceBlockedInterval, pluginmarket.ContextSleep, log)
+		}()
+	}
 	// Thread-ending loops: B-owned recovery for the two ending triggers reachable without a new
 	// public API. The idle scan ends a Thread whose idle window has expired (thread_state='idle' with
 	// idle_since older than cfg.IssueRuns.ThreadIdleTimeout), and the cancel pass reacts to a

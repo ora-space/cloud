@@ -28,4 +28,4 @@
 
 参见 [config.yaml](../../configs/config.yaml)、[cmd/server](../../cmd/server/README.md) 与 [认证配置与凭据](../../docs/authentication.md)。
 
-Agent 启动、恢复和结束确认默认分别为 2m/6m/5m（agent_start_timeout、agent_restore_timeout、agent_end_confirm_timeout）；省略才选默认，显式非正/非法时长拒绝。配置只影响新进入的持久窗口，已开始的窗口不续期。
+Agent 启动、恢复和结束确认默认分别为 2m/6m/5m（agent_start_timeout、agent_restore_timeout、agent_end_confirm_timeout）；运行 Workspace 创建首次 blocked 后的有界放弃窗口默认 30m（agent_workspace_blocked_timeout）。省略才选默认，显式非正/非法时长拒绝。配置只影响新进入的持久窗口，已开始的窗口不续期。
