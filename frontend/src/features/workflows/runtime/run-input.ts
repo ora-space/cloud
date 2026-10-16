@@ -200,7 +200,8 @@ function declaredFields(start: WorkflowNodeData | undefined): WorkflowRunField[]
  * The platform's kickoff-prompt field, when it is the platform's to offer.
  *
  * The prompt is not a declared variable but the platform's own field, so its default is the Start
- * node's initial prompt: an author who wrote one gets it prefilled and can edit it for this run.
+ * node's initial prompt: an author who wrote one gets it prefilled and can edit it for this run,
+ * unless that prompt is over the bound a default may carry, in which case the field opens empty.
  * The field is dropped when the workflow's declaration turned it off, and — like every other
  * platform field — when the author declared that key in their own Start node, because a key the
  * author declared is not the platform's to withdraw.
@@ -219,8 +220,13 @@ function promptFields(
     control: 'textarea',
     options: [],
   }
+  // The server clips a kickoff prompt past the bound, but half an instruction is not a default this
+  // form may open on: the member would be editing a sentence the author never finished writing.
+  // Opening empty instead leaves the run to fall back to the version's own prompt, which is all of
+  // it, and holds the platform's default to the same bound a declared one is held to. An absent
+  // prompt is no default at all rather than an empty one.
   const initial = start?.input?.trim() ?? ''
-  if (initial !== '') field.defaultValue = initial
+  if (initial !== '' && acceptsValue(field.control, [], initial)) field.defaultValue = initial
   return [field]
 }
 

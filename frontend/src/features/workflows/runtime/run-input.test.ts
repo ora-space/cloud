@@ -415,6 +415,20 @@ describe('workflow run form bounds', () => {
       chineseAtLimit: '深'.repeat(1333),
     })
   })
+
+  it('opens the kickoff prompt empty rather than on a prompt the bound cuts', () => {
+    const atLimit = workflowRunFields(graphOf({ prompt: 'x'.repeat(4000) }))[0]
+    const asciiOver = workflowRunFields(graphOf({ prompt: 'x'.repeat(4001) }))[0]
+    const chineseOver = workflowRunFields(graphOf({ prompt: '深'.repeat(1334) }))[0]
+
+    // The server clips a kickoff prompt this long, but a cut-off instruction is not a default this
+    // form may open on: the member would be editing a sentence the author never finished. An empty
+    // field leaves the run to fall back to the version's own prompt, which is all of it. The bound
+    // counts bytes, so 1334 Chinese characters are 4002 of them.
+    expect(atLimit?.defaultValue).toBe('x'.repeat(4000))
+    expect(asciiOver?.defaultValue).toBeUndefined()
+    expect(chineseOver?.defaultValue).toBeUndefined()
+  })
 })
 
 describe('workflow run form defaults', () => {
