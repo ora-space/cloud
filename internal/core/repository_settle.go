@@ -23,7 +23,7 @@ type SyncResult struct {
 }
 
 // SettleRepositorySync records a running sync's verdict.
-func (s *Store) SettleRepositorySync(ctx context.Context, id string, gen int64, r SyncResult) error {
+func (s *Store) SettleRepositorySync(ctx context.Context, id string, gen int64, r *SyncResult) error {
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		o := leasedOperation(t, id, gen, "running")
 		require(o.S("type") == RepositorySync, 409, "operation_type_mismatch")
@@ -90,7 +90,7 @@ func publishErrorCode(code string) string {
 }
 
 // SettleRepositoryPublish records a running publish's classification (publish ADR D3 table).
-func (s *Store) SettleRepositoryPublish(ctx context.Context, id string, gen int64, r PublishResult) error {
+func (s *Store) SettleRepositoryPublish(ctx context.Context, id string, gen int64, r *PublishResult) error {
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		o := leasedOperation(t, id, gen, "running")
 		require(o.S("type") == RepositoryPublish, 409, "operation_type_mismatch")

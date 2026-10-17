@@ -153,7 +153,7 @@ func TestRepositorySyncLeaseFencingReplayAndResyncAreAtomic(t *testing.T) {
 	if f.scalar("SELECT count(*) FROM repository_operations WHERE binding_id=$1 AND state='pending' AND source_operation_id=$2 AND replay_count=1", task.BindingID, task.OperationID) != 1 || f.bindingOf(pid).B("resyncRequested") {
 		t.Fatal("replay did not absorb resync in settling transaction")
 	}
-	err = f.store.SettleRepositorySync(ctx, task.OperationID, task.LeaseGeneration, core.SyncResult{State: "succeeded", CommitOID: strings.Repeat("a", 40)})
+	err = f.store.SettleRepositorySync(ctx, task.OperationID, task.LeaseGeneration, &core.SyncResult{State: "succeeded", CommitOID: strings.Repeat("a", 40)})
 	if !core.IsLeaseLost(err) {
 		t.Fatalf("late result = %v", err)
 	}
@@ -167,7 +167,7 @@ func TestRepositorySyncLeaseFencingReplayAndResyncAreAtomic(t *testing.T) {
 		task = tasks[0]
 		_, err = f.store.StartRepositoryOperation(ctx, task.OperationID, task.LeaseGeneration, strings.Repeat("0", 40), time.Minute, time.Minute)
 		must(t, err)
-		must(t, f.store.SettleRepositorySync(ctx, task.OperationID, task.LeaseGeneration, core.SyncResult{State: "failed", ErrorCode: "executor_unreachable"}))
+		must(t, f.store.SettleRepositorySync(ctx, task.OperationID, task.LeaseGeneration, &core.SyncResult{State: "failed", ErrorCode: "executor_unreachable"}))
 	}
 	if f.scalar("SELECT count(*) FROM repository_operations WHERE state IN ('pending','leased','running')") != 0 {
 		t.Fatal("replay limit did not end chain")

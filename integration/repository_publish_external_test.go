@@ -151,12 +151,12 @@ func TestRepositoryPublishSuccessSchedulesExactlyOneSyncAfterRunningSync(t *test
 	for range 2 {
 		op := f.gitCall("POST", path, f.publishBody(credential), "", 201).O("resource")
 		task := f.startPublish(pid, op.S("id"))
-		must(t, f.store.SettleRepositoryPublish(context.Background(), task.OperationID, task.LeaseGeneration, core.PublishResult{Classification: "applied"}))
+		must(t, f.store.SettleRepositoryPublish(context.Background(), task.OperationID, task.LeaseGeneration, &core.PublishResult{Classification: "applied"}))
 	}
 	if !f.bindingOf(pid).B("resyncRequested") {
 		t.Fatal("running sync did not request a successor")
 	}
-	must(t, f.store.SettleRepositorySync(context.Background(), st.OperationID, st.LeaseGeneration, core.SyncResult{State: "succeeded", CommitOID: strings.Repeat("c", 40)}))
+	must(t, f.store.SettleRepositorySync(context.Background(), st.OperationID, st.LeaseGeneration, &core.SyncResult{State: "succeeded", CommitOID: strings.Repeat("c", 40)}))
 	if f.scalar("SELECT count(*) FROM repository_operations WHERE project_id=$1 AND type='repository_sync' AND state='pending' AND trigger='after_publish'", pid) != 1 || f.bindingOf(pid).B("resyncRequested") {
 		t.Fatal("multiple publishes did not coalesce into one successor")
 	}

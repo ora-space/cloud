@@ -79,7 +79,7 @@ func NewWithHTTP(base string, client *http.Client) (*Client, error) {
 
 // ResolveGitRef returns the commit ref names, or found=false when the ref (or the repository)
 // does not exist.
-func (c *Client) ResolveGitRef(ctx context.Context, tenantID, projectID, ref string) (string, bool, error) {
+func (c *Client) ResolveGitRef(ctx context.Context, tenantID, projectID, ref string) (commit string, found bool, err error) {
 	var out struct {
 		Commit string `json:"commit"`
 	}

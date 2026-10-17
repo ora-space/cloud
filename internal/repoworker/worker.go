@@ -30,8 +30,8 @@ type Store interface {
 	StartRepositoryOperation(ctx context.Context, id string, gen int64, expectedTracking string, lease, timeout time.Duration) (core.RepositoryStart, error)
 	ReleaseRepositoryLease(ctx context.Context, id string, gen int64) error
 	RenewRepositoryLease(ctx context.Context, id string, gen int64, lease time.Duration) error
-	SettleRepositorySync(ctx context.Context, id string, gen int64, r core.SyncResult) error
-	SettleRepositoryPublish(ctx context.Context, id string, gen int64, r core.PublishResult) error
+	SettleRepositorySync(ctx context.Context, id string, gen int64, r *core.SyncResult) error
+	SettleRepositoryPublish(ctx context.Context, id string, gen int64, r *core.PublishResult) error
 	SweepRepositoryLeasesOnce(ctx context.Context) error
 	ExpirePublishApprovalsOnce(ctx context.Context) error
 	BeginRepositoryChecks(ctx context.Context, limit int) ([]core.RepositoryCheck, error)
@@ -125,22 +125,25 @@ func (w *Worker) Pass(ctx context.Context) {
 	if free := w.free(); free > 0 {
 		tasks, err := w.cfg.Store.LeaseRepositoryOperations(ctx, w.cfg.Owner, free, w.cfg.Lease)
 		w.logErr(ctx, "lease", err)
-		for _, task := range tasks {
+		for i := range tasks {
+			task := &tasks[i]
 			w.spawn(ctx, func(ctx context.Context) { w.runOperation(ctx, task) })
 		}
 	}
 	if free := w.free(); free > 0 {
 		checks, err := w.cfg.Store.BeginRepositoryChecks(ctx, free)
 		w.logErr(ctx, "checks", err)
-		for _, check := range checks {
-			w.spawn(ctx, func(ctx context.Context) { w.runCheck(ctx, &check) })
+		for i := range checks {
+			check := &checks[i]
+			w.spawn(ctx, func(ctx context.Context) { w.runCheck(ctx, check) })
 		}
 	}
 	if free := w.free(); free > 0 {
 		checks, err := w.cfg.Store.StartCredentialVerifications(ctx, free, w.cfg.ProbeTimeout+w.cfg.Lease)
 		w.logErr(ctx, "verifications", err)
-		for _, check := range checks {
-			w.spawn(ctx, func(ctx context.Context) { w.runVerification(ctx, &check) })
+		for i := range checks {
+			check := &checks[i]
+			w.spawn(ctx, func(ctx context.Context) { w.runVerification(ctx, check) })
 		}
 	}
 }

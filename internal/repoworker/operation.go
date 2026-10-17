@@ -14,7 +14,7 @@ import (
 )
 
 // runOperation takes one leased Operation from leased through running to its settlement.
-func (w *Worker) runOperation(ctx context.Context, task core.RepositoryTask) {
+func (w *Worker) runOperation(ctx context.Context, task *core.RepositoryTask) {
 	log := w.cfg.Log.With(zap.String("operationId", task.OperationID), zap.String("type", task.Type))
 	expected := cloneauth.ZeroOID40
 	timeout := w.cfg.PublishTimeout
@@ -52,7 +52,7 @@ func (w *Worker) runOperation(ctx context.Context, task core.RepositoryTask) {
 	result, err := w.cfg.Executor.Run(runCtx, request)
 	if task.Type == core.RepositorySync && err == nil && result.Classification == repoexec.Applied {
 		// Keep renewing while the refs are verified: verification is part of running.
-		w.settleSync(runCtx, &task, &result, log)
+		w.settleSync(runCtx, task, &result, log)
 		cancel()
 		<-renewed
 		return
@@ -133,16 +133,16 @@ func (w *Worker) renew(ctx context.Context, cancel context.CancelFunc, id string
 // D6): both the snapshot ref and the tracking ref must name the reported commit. Query failures
 // are retried while the lease holds; when it lapses the sweep replays the sync.
 func (w *Worker) settleSync(ctx context.Context, task *core.RepositoryTask, r *repoexec.Result, log *zap.Logger) {
-	verdict := core.SyncResult{State: "succeeded", CommitOID: r.CommitOID, Forced: r.Forced, Detail: r.Detail}
+	verdict := &core.SyncResult{State: "succeeded", CommitOID: r.CommitOID, Forced: r.Forced, Detail: r.Detail}
 	snapshot, tracking := core.GitSnapshotRef(task.BindingID, r.CommitOID), core.GitUpstreamHeadPrefix(task.BindingID)+task.Branch
 	if !core.GitObjectID(r.CommitOID) || r.SnapshotRef != "" && r.SnapshotRef != snapshot || r.TrackingRef != "" && r.TrackingRef != tracking {
-		verdict = core.SyncResult{State: "failed", ErrorCode: "verification_mismatch", Detail: r.Detail}
+		verdict = &core.SyncResult{State: "failed", ErrorCode: "verification_mismatch", Detail: r.Detail}
 	} else {
 		for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
 			ok, err := w.verifyRefs(ctx, task, snapshot, tracking, r.CommitOID)
 			if err == nil {
 				if !ok {
-					verdict = core.SyncResult{State: "failed", ErrorCode: "verification_mismatch", Detail: r.Detail}
+					verdict = &core.SyncResult{State: "failed", ErrorCode: "verification_mismatch", Detail: r.Detail}
 				}
 				break
 			}
@@ -175,7 +175,7 @@ func (w *Worker) verifyRefs(ctx context.Context, task *core.RepositoryTask, snap
 // settleCallFailure records a task whose executor call itself failed. A task that never reached
 // the executor, or that the executor refused, certainly did not run. A lost connection may have
 // let it run: a sync is replayed (its writes are idempotent), a publish becomes uncertain.
-func (w *Worker) settleCallFailure(task core.RepositoryTask, err error, log *zap.Logger) {
+func (w *Worker) settleCallFailure(task *core.RepositoryTask, err error, log *zap.Logger) {
 	var notDelivered *repoexec.NotDeliveredError
 	var refused *repoexec.RefusedError
 	switch {
@@ -195,14 +195,14 @@ func (w *Worker) settleCallFailure(task core.RepositoryTask, err error, log *zap
 
 // settleLost records an Operation whose task did not report. lost=true means the task may have
 // acted.
-func (w *Worker) settleLost(task core.RepositoryTask, gen int64, code string, lost bool) {
+func (w *Worker) settleLost(task *core.RepositoryTask, gen int64, code string, lost bool) {
 	ctx, cancel := settleContext()
 	defer cancel()
 	var err error
 	if task.Type == core.RepositorySync {
-		err = w.cfg.Store.SettleRepositorySync(ctx, task.OperationID, gen, core.SyncResult{State: "failed", ErrorCode: code})
+		err = w.cfg.Store.SettleRepositorySync(ctx, task.OperationID, gen, &core.SyncResult{State: "failed", ErrorCode: code})
 	} else {
-		r := core.PublishResult{Classification: string(repoexec.Failed), ErrorCode: code}
+		r := &core.PublishResult{Classification: string(repoexec.Failed), ErrorCode: code}
 		if lost {
 			r.Classification = string(repoexec.Uncertain)
 		}
@@ -213,19 +213,19 @@ func (w *Worker) settleLost(task core.RepositoryTask, gen int64, code string, lo
 	}
 }
 
-func syncVerdict(r *repoexec.Result) core.SyncResult {
+func syncVerdict(r *repoexec.Result) *core.SyncResult {
 	switch r.Classification {
 	case repoexec.Superseded:
-		return core.SyncResult{State: "superseded", Observed: r.ObservedOID, Detail: r.Detail}
+		return &core.SyncResult{State: "superseded", Observed: r.ObservedOID, Detail: r.Detail}
 	case repoexec.Failed:
-		return core.SyncResult{State: "failed", ErrorCode: r.ErrorCode, Detail: r.Detail}
+		return &core.SyncResult{State: "failed", ErrorCode: r.ErrorCode, Detail: r.Detail}
 	}
 	// Any other class is not a sync outcome; recording it as a failure keeps the snapshot intact.
-	return core.SyncResult{State: "failed", ErrorCode: "sync_failed", Detail: r.Detail}
+	return &core.SyncResult{State: "failed", ErrorCode: "sync_failed", Detail: r.Detail}
 }
 
-func publishVerdict(r *repoexec.Result) core.PublishResult {
-	return core.PublishResult{Classification: string(r.Classification), ErrorCode: r.ErrorCode, Detail: r.Detail, PreObserved: r.PreObservedOID, PostObserved: r.PostObservedOID, Confirmed: r.ConfirmedByVerification}
+func publishVerdict(r *repoexec.Result) *core.PublishResult {
+	return &core.PublishResult{Classification: string(r.Classification), ErrorCode: r.ErrorCode, Detail: r.Detail, PreObserved: r.PreObservedOID, PostObserved: r.PostObservedOID, Confirmed: r.ConfirmedByVerification}
 }
 
 // runCheck reads an uncertain publish's target once with a probe authorization (publish ADR D5).

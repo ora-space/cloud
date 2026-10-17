@@ -29,7 +29,7 @@ func repositorySchemas(s obj) {
 		"lastVerification":   nullableRepositorySchema(s, "GitCredentialVerification"),
 		"version":            number(), "createdAt": timestamp(), "revokedAt": optional(timestamp()),
 	}, "id", "tenantId", "name", "attribution", "ownerUserId", "repositoryScope", "secretState", "availability", "storeVersion", "capabilities", "requestedCapabilities", "capabilityEvidence", "version", "createdAt")
-	nullable := func(s obj) obj { return optional(s) }
+	nullable := optional
 	s["RepositoryOperation"] = object(obj{
 		"id": uuid(), "type": enumeration("repository_sync", "repository_publish"), "tenantId": uuid(), "projectId": uuid(), "bindingId": uuid(),
 		"state":   enumeration("awaiting_approval", "pending", "leased", "running", "uncertain", "succeeded", "failed", "superseded", "cancelled", "conflict", "rejected"),
@@ -59,7 +59,7 @@ func repositoryList(r router.Route) bool {
 
 func resourceOf(name string) obj { return object(obj{"resource": ref(name)}, "resource") }
 
-func repositoryResponse(r router.Route) (obj, string) {
+func repositoryResponse(r router.Route) (schema obj, status string) {
 	switch {
 	case r.Path == router.WorkspaceBranchesPath:
 		return object(obj{"items": array(ref("WorkspaceBranch"))}, "items"), "200"
@@ -155,10 +155,10 @@ func repositoryDescription(r router.Route) string {
 // OpenAPI 3.0 ignores siblings of $ref, including nullable. Copy the schema at
 // nullable association sites so validators and generated clients agree on null.
 func nullableRepositorySchema(s obj, name string) obj {
-	source := s[name].(obj)
-	copy := obj{}
+	source := asObject(s[name])
+	clone := obj{}
 	for k, v := range source {
-		copy[k] = v
+		clone[k] = v
 	}
-	return optional(copy)
+	return optional(clone)
 }

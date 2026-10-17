@@ -98,8 +98,12 @@ func (s *Store) SettleAbandonedGitSubmissionsOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	items, ok := due["items"].([]Object)
+	if !ok {
+		return errors.New("abandoned submission scan returned an unexpected shape")
+	}
 	var errs []error
-	for _, item := range due["items"].([]Object) {
+	for _, item := range items {
 		stored, err := s.GitCredentialStore.CredentialVersion(ctx, item.S("id"))
 		if err != nil {
 			errs = append(errs, err)
@@ -132,8 +136,12 @@ func (s *Store) RevokeGitCredentialsInStoreOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	items, ok := due["items"].([]Object)
+	if !ok {
+		return errors.New("store revocation scan returned an unexpected shape")
+	}
 	var errs []error
-	for _, item := range due["items"].([]Object) {
+	for _, item := range items {
 		if err := s.GitCredentialStore.RevokeCredential(ctx, item.S("id")); err != nil {
 			errs = append(errs, err)
 			continue

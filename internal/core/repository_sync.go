@@ -32,7 +32,7 @@ func SyncErrorCode(code string) string {
 // repositoryPublic serves the Project's repository routes that only touch PostgreSQL: the
 // Binding view, manual and candidate-credential syncs, the Operation list and the publish
 // approval actions. Publishing itself needs a ref query first and is served by CreatePublish.
-func repositoryPublic(t *transaction, r *PublicRequest, uid string) (Object, int) {
+func repositoryPublic(t *transaction, r *PublicRequest, uid string) (resource Object, status int) {
 	p, _ := projectInSpace(t, r.TenantID, uid, r.ProjectID)
 	if r.Method == "GET" {
 		switch {
@@ -99,9 +99,10 @@ func pageRepositoryOperations(t *transaction, p Object, r *PublicRequest) Object
 		q += " AND (o.created_at,o.id) < ((SELECT a.created_at FROM repository_operations a WHERE a.id=$2::uuid),$2::uuid)"
 	}
 	out := window(t, q+" ORDER BY o.created_at DESC, o.id DESC", args, r)
-	items := []Object{}
-	for _, o := range out["items"].([]Object) {
-		items = append(items, repositoryOperationView(o))
+	items, ok := out["items"].([]Object)
+	require(ok, 500, "internal_error")
+	for i, o := range items {
+		items[i] = repositoryOperationView(o)
 	}
 	out["items"] = items
 	return out
@@ -109,7 +110,7 @@ func pageRepositoryOperations(t *transaction, p Object, r *PublicRequest) Object
 
 // triggerManualSync starts a sync a member asked for. An unfinished sync answers the request:
 // two triggers never race into two Operations (sync ADR D2).
-func triggerManualSync(t *transaction, p Object, uid string) (Object, int) {
+func triggerManualSync(t *transaction, p Object, uid string) (resource Object, status int) {
 	require(p.S("lifecycle") == "active", 409, "resource_unavailable")
 	b := bindingOf(t, p.S("id"))
 	if o := unfinishedSync(t, b.S("id")); o != nil {

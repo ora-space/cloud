@@ -92,15 +92,16 @@ func requireCredentialManager(t *transaction, c Object, uid string) {
 	}
 }
 
-func gitCredentialsPublic(t *transaction, r *PublicRequest, uid string) (Object, int) {
+func gitCredentialsPublic(t *transaction, r *PublicRequest, uid string) (resource Object, status int) {
 	if r.Method == "GET" {
 		if r.GitCredentialID != "" {
 			return gitCredentialView(loadGitCredential(t, r.TenantID, r.GitCredentialID)), 200
 		}
 		page := window(t, gitCredentialSelect+" WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND c.name IS NOT NULL ORDER BY c.created_at DESC, c.id", []any{r.TenantID}, r)
-		items := []Object{}
-		for _, c := range page["items"].([]Object) {
-			items = append(items, gitCredentialView(c))
+		items, ok := page["items"].([]Object)
+		require(ok, 500, "internal_error")
+		for i, c := range items {
+			items[i] = gitCredentialView(c)
 		}
 		page["items"] = items
 		return page, 200
