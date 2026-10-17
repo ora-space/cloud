@@ -284,6 +284,14 @@ func (s *Store) settleRunWorkspaceDeleted(t *transaction, runID string) error {
 	}
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
+		// D8: a run Workspace may belong to a WorkflowRun. A delete_workspace terminal firing
+		// under a WorkflowRun reaches this hook with the WorkflowRun's id; the scheduler owns the
+		// run-level facts, so settlement writes nothing — but it must ACCEPT the fact, or the
+		// terminal transaction aborts and a workflow run's delete can never settle. An id that is
+		// neither a live issue run nor a live workflow run is still an invariant violation.
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return nil
+		}
 		return fmt.Errorf("runWorkspaceDeleted: issue_run %s not found", runID)
 	}
 	if o.S("executorType") != "agent" {

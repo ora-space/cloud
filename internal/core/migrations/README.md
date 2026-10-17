@@ -109,3 +109,15 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0036：工作流插件资产导入
 
 `0036_workflow_asset_imports.sql` 记录 `kind='workflow'` 插件的资产导入：`workflow_asset_imports` 每个（空间，插件）一行，保存管理员每次安装/重装递增的 `requested_revision`、导入进度与租约；`workflow_asset_documents` 每个文档路径一行，只有 `outcome='imported'` 的行永久占用（空间，命名空间，标识，文档路径），失败的文档下次触发重试。导入出的工作流和已发布快照是普通用户数据，这两张表只记录来源、幂等和逐文档结果。纯前向新增，不改动既有表。
+
+## 0038：WorkflowRun 运行身份
+
+`0038_workflow_run_identity.sql` 把运行身份与工作项所有权交给控制面。`workflow_runs` 新增
+`created_by` 与 `project_id` 两列（均可空：本迁移之前的行没有可恢复的发起人，而 `project_id` 由知道
+Project 的调用路径写入），新运行在创建时冻结二者；`workspaces` 新增互斥的 `workflow_run_id`，使运行
+Workspace 可以属于 WorkflowRun；`execution_work` 同样变为「恰有一个所有者」的判别形状，原单列唯一索引
+拆为每种所有者各一条部分索引，因此两类所有者各自最多保留一个未注册工作项且互不冲突；
+`runtime_controls` 的预留改为多态运行引用，`maintenance_run_id` 的外键被删除而非改写——多态引用无法做
+外键，存活校验移到授予它的代码里。只新增列、约束与索引，不回填。
+
+`TestMigration0038WorkflowRunIdentityAppliesFreshAndUpgrades` 验证空库、从 0037 升级及重复迁移。

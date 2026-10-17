@@ -16,7 +16,9 @@ func (s *Store) EnqueueExecutionWork(ctx context.Context, runID, kind string, in
 func enqueueExecutionWork(t *transaction, runID, kind string, input, target Object, availableAt time.Time) Object {
 	require(validID(runID), 400, "invalid_dispatch")
 	run := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
-	require(run != nil, 404, "not_found")
+	if run == nil {
+		return enqueueWorkflowExecutionWork(t, runID, kind, input, target, availableAt)
+	}
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
 	if kind == "deliver_revision" {
 		if t.one("SELECT run_id FROM revision_delivery_skips WHERE run_id=$1", runID) != nil {
@@ -54,6 +56,29 @@ func enqueueExecutionWork(t *transaction, runID, kind string, input, target Obje
 	return t.one("SELECT * FROM execution_work WHERE id=$1", id)
 }
 
+// enqueueWorkflowExecutionWork releases one workflow run's session work for Controllers to claim.
+// D8: the item registers against workflow_runs — exactly one unregistered item per run (the
+// workflow partial index), kind fixed to agent_session, and no delivery variant (D7 defers
+// 成果交付). Repeating the same unregistered input returns the original item; a different input conflicts.
+func enqueueWorkflowExecutionWork(t *transaction, runID, kind string, input, target Object, availableAt time.Time) Object {
+	require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil, 404, "not_found")
+	require(kind == "agent_session", 400, "invalid_dispatch")
+	require(input.S("kind") == kind, 400, "invalid_dispatch")
+	require(target.S("workspaceId") != "" && target.S("sandboxInstanceId") != "" && target.S("nodeId") != "", 400, "invalid_dispatch")
+	if existing := t.one("SELECT * FROM execution_work WHERE workflow_run_id=$1 AND execution_id IS NULL", runID); existing != nil {
+		require(existing.S("kind") == kind && jsonText(existing.O("input")) == jsonText(input) && jsonText(existing.O("target")) == jsonText(target), 409, "dispatch_conflict")
+		return existing
+	}
+	id := newID()
+	if availableAt.IsZero() {
+		t.exec("INSERT INTO execution_work(id,workflow_run_id,kind,input,target) VALUES($1,$2,$3,$4,$5)", id, runID, kind, jsonText(input), jsonText(target))
+	} else {
+		t.exec("INSERT INTO execution_work(id,workflow_run_id,kind,input,target,available_at) VALUES($1,$2,$3,$4,$5,$6)", id, runID, kind, jsonText(input), jsonText(target), availableAt)
+	}
+	t.workSignals = append(t.workSignals, runID)
+	return t.one("SELECT * FROM execution_work WHERE id=$1", id)
+}
+
 // deliveryWorkInput fixes server-owned locations before an execution identity exists.
 // Copying the caller's map keeps retries from accidentally retaining an earlier attempt's keys.
 func deliveryWorkInput(t *transaction, run Object, workID string, input Object) Object {
@@ -80,7 +105,21 @@ func claimWorkItem(t *transaction) Object {
 	} else if t.one("SELECT id FROM clone_requests WHERE state='queued'") != nil {
 		reject(410, "runtime_scope_required")
 	}
-	work := t.one("SELECT * FROM execution_work ew WHERE execution_id IS NULL AND available_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id) ORDER BY created_at,id LIMIT 1")
+	// A work item names the run it belongs to in one of two columns: agent work carries run_id (an
+	// issue_runs id), workflow work carries workflow_run_id (a workflow_runs id) and leaves run_id
+	// NULL by the mutual-exclusion CHECK 0038 added. The Controller is handed the run id as the
+	// operation id and echoes it back on dispatch, which resolves either column — so the claim has to
+	// project one value. Reading the agent-only column instead hands back the empty string a workflow
+	// row produces, and every dispatch of that item is then refused as a conflict it cannot resolve.
+	//
+	// The alias is deliberate rather than coalescing over run_id: the row is serialized with
+	// row_to_json, which keeps both copies of a repeated column name, and which one the decoder ends
+	// up with is not something this query should depend on.
+	work := t.one(`SELECT ew.*, coalesce(ew.run_id, ew.workflow_run_id) AS claimed_run_id
+		FROM execution_work ew
+		WHERE execution_id IS NULL AND available_at<=clock_timestamp()
+		  AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id)
+		ORDER BY created_at,id LIMIT 1`)
 	if work != nil && (request == nil || work.S("createdAt") < request.S("createdAt")) {
 		return Object{"work": work}
 	}

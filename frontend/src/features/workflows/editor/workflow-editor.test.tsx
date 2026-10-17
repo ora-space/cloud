@@ -1021,7 +1021,7 @@ describe('WorkflowEditor run tools', () => {
     expect(screen.getByText('还没有运行记录。')).toBeInTheDocument()
   })
 
-  it('creates a run from the toolbar once a snapshot is published', async () => {
+  it('starts no run from the toolbar, which cannot state the Project a run freezes', async () => {
     const published: WorkflowSnapshot = {
       id: 'snap-1',
       tenantId: TEST_TENANT_ID,
@@ -1047,6 +1047,9 @@ describe('WorkflowEditor run tools', () => {
     )
     fireEvent.click(runButton)
 
-    await waitFor(() => expect(bodies).toEqual([{}]))
+    // The run form that picks the Project is not built yet, so the mutation refuses the run before
+    // the request is sent and this capture stays empty.
+    await waitFor(() => expect(runButton).toBeEnabled())
+    expect(bodies).toEqual([])
   })
 })

@@ -20,7 +20,7 @@ func runtimeOverview(w Object, usable bool) Object {
 
 // runtimeListing keeps shared safe summaries while exposing clone/task content only to its users.
 func runtimeListing(t *transaction, r *PublicRequest, uid, pid string) Object {
-	out := page(t, "SELECT w.*,wt.branch_name,task.title FROM workspaces w LEFT JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL", []any{pid, r.TenantID}, "w.id", r)
+	out := page(t, "SELECT w.*,wt.branch_name,task.title FROM workspaces w LEFT JOIN workspace_worktrees wt ON wt.workspace_id=w.id LEFT JOIN tasks task ON task.workspace_id=w.id WHERE w.project_id=$1 AND w.tenant_id=$2 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL", []any{pid, r.TenantID}, "w.id", r)
 	items, _ := out["items"].([]Object)
 	for i, w := range items {
 		usable := runtimeUsable(t, w, uid)

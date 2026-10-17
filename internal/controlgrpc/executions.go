@@ -28,7 +28,10 @@ func (s *executionService) ClaimWork(ctx context.Context, req *controlpb.ClaimWo
 	if work := out.O("work"); work.S("id") != "" {
 		target := work.O("target")
 		return &controlpb.ClaimWorkResponse{Item: &controlpb.WorkItem{
-			OperationId: work.S("runId"),
+			// claimedRunId is the claim's own projection of "the run this work belongs to" — run_id
+			// for agent work, workflow_run_id for workflow work (claimWorkItem explains why one
+			// column cannot answer for both).
+			OperationId: work.S("claimedRunId"),
 			Input:       input(work.O("input")),
 			Target:      &controlpb.WorkTarget{WorkspaceId: target.S("workspaceId"), SandboxInstanceId: target.S("sandboxInstanceId"), NodeId: target.S("nodeId")},
 		}}, nil

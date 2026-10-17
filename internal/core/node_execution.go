@@ -43,7 +43,9 @@ func dispatchPluginExecution(t *transaction, r *ControlRequest, operation, execu
 
 func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, node string, input Object) Object {
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
-	work := t.one("SELECT * FROM execution_work WHERE run_id=$1 AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
+	// The work item names its owner — IssueRun or WorkflowRun (D8); operation_id is that run's id
+	// either way, so the ownership check re-reads whichever column the row carries.
+	work := t.one("SELECT * FROM execution_work WHERE (run_id=$1 OR workflow_run_id=$1) AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
 	require(work != nil, 409, "dispatch_conflict")
 	require(jsonText(work.O("input")) == jsonText(input), 409, "dispatch_conflict")
 	target := work.O("target")
@@ -51,7 +53,7 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 	wid := target.S("workspaceId")
 	requireNoForceStop(t, wid)
 	w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
-	require(w.S("issueRunId") == runID && w.S("observedState") == "ready" && w.B("admissionOpen"), 409, "dispatch_conflict")
+	require((w.S("issueRunId") == runID || w.S("workflowRunId") == runID) && w.S("observedState") == "ready" && w.B("admissionOpen"), 409, "dispatch_conflict")
 	c := runtimeControl(t, wid)
 	require(c.S("state") == "maintenance" && c.S("maintenanceRunId") == runID, 409, "runtime_control_required")
 	current := currentNode(t, wid)

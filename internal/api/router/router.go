@@ -116,7 +116,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/form", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/restore", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", nil},
-		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input"}},
+		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input", "projectId"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid", "", nil},
 		{"GET", "/api/v1/tenants/:tid/issue-views", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issue-views", "", []string{"name", "filter"}},

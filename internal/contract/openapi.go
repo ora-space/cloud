@@ -958,6 +958,8 @@ func inputSchema(name string, r router.Route) obj {
 		return enumeration("unstarted", "started", "done", "closed")
 	case "labelId", "userId", "assigneeId", "executorId", "refId", "parentId", "projectRef", "targetId":
 		return uuid()
+	case "projectId":
+		return obj{"type": "string", "format": "uuid", "description": "The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404."}
 	case "ids":
 		return array(uuid())
 	case "filter", "properties", "input", "values", "graph":

@@ -3247,6 +3247,8 @@ export type PostApiV1TenantsTidWorkflowsWfidRunsBodyInput = { [key: string]: unk
 export type PostApiV1TenantsTidWorkflowsWfidRunsBody = {
   input?: PostApiV1TenantsTidWorkflowsWfidRunsBodyInput;
   name?: string;
+  /** The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404. */
+  projectId: string;
   snapshotId?: string;
 };
 

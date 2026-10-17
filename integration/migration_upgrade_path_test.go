@@ -1018,7 +1018,7 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 	constraints := func(pool *sql.DB) string {
 		t.Helper()
 		var names string
-		must(t, pool.QueryRow(`SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(conname, ',' ORDER BY conname),'') FROM pg_constraint
 			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused')`).Scan(&names))
 		return names
 	}
@@ -1045,5 +1045,63 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 	migratedTwice(t, newStoreOnSchema(t, pool))
 	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_bundle_shape,revisions_resume_refused" {
 		t.Fatalf("after 0033: columns %d constraints %q", got, names)
+	}
+}
+
+// 0038 turns the WorkflowRun into an execution aggregate the control plane accepts as a work owner:
+// the frozen run identity, the workspace binding, the exactly-one-owner discriminator on work and
+// the polymorphic runtime reservation. Fresh databases get all of it, an upgrade from 0037 gets it
+// without a backfill, and a rerun changes nothing.
+func TestMigration0038WorkflowRunIdentityAppliesFreshAndUpgrades(t *testing.T) {
+	columns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND
+			((table_name='workflow_runs' AND column_name IN ('created_by','project_id'))
+			 OR (table_name='workspaces' AND column_name='workflow_run_id')
+			 OR (table_name='execution_work' AND column_name='workflow_run_id'))`).Scan(&n))
+		return n
+	}
+	constraints := func(pool *sql.DB) string {
+		t.Helper()
+		var names string
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(conname, ',' ORDER BY conname),'') FROM pg_constraint
+			WHERE conrelid IN ('workspaces'::regclass,'execution_work'::regclass) AND contype='c'
+			  AND conname IN ('workspace_run_binding_exclusive','execution_work_owner_exclusive')`).Scan(&names))
+		return names
+	}
+	indexes := func(pool *sql.DB) string {
+		t.Helper()
+		var names string
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(indexname, ',' ORDER BY indexname),'') FROM pg_indexes
+			WHERE schemaname=current_schema() AND tablename='execution_work'
+			  AND indexname IN ('one_unregistered_execution_work','one_unregistered_workflow_execution_work')`).Scan(&names))
+		return names
+	}
+	// A polymorphic run reference cannot be a foreign key, so 0038 drops the IssueRun FK instead of
+	// reworking it. The column stays; only the constraint goes. Resolved through the search path
+	// rather than by name alone, which would count another schema's constraint of the same name.
+	reservationFK := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint
+			WHERE conrelid='runtime_controls'::regclass AND conname='runtime_controls_maintenance_run_id_fkey'`).Scan(&n))
+		return n
+	}
+
+	freshPool, _ := testSchema(t, "test_wfi38f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got, names, idx, fk := columns(freshPool), constraints(freshPool), indexes(freshPool), reservationFK(freshPool); got != 4 || names != "execution_work_owner_exclusive,workspace_run_binding_exclusive" || idx != "one_unregistered_execution_work,one_unregistered_workflow_execution_work" || fk != 0 {
+		t.Fatalf("fresh: columns %d constraints %q indexes %q reservation fk %d", got, names, idx, fk)
+	}
+
+	pool, _ := testSchema(t, "test_wfi38_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0038_workflow_run_identity.sql"))
+	if got, names, fk := columns(pool), constraints(pool), reservationFK(pool); got != 0 || names != "" || fk != 1 {
+		t.Fatalf("before 0038: columns %d constraints %q reservation fk %d", got, names, fk)
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if got, names, idx, fk := columns(pool), constraints(pool), indexes(pool), reservationFK(pool); got != 4 || names != "execution_work_owner_exclusive,workspace_run_binding_exclusive" || idx != "one_unregistered_execution_work,one_unregistered_workflow_execution_work" || fk != 0 {
+		t.Fatalf("after 0038: columns %d constraints %q indexes %q reservation fk %d", got, names, idx, fk)
 	}
 }

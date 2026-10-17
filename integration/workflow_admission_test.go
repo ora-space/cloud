@@ -227,7 +227,7 @@ func TestWorkflowRunSnapshotIsScopedToItsWorkflow(t *testing.T) {
 	publishWorkflow(t, f, second.S("id"), "adm-scope-pub-b")
 
 	// The workflow's own snapshot runs.
-	run := f.call("POST", f.path("/workflows/"+first.S("id")+"/runs"), core.Object{"snapshotId": mine.S("id")}, "adm-scope-1", 200).O("resource")
+	run := f.call("POST", f.path("/workflows/"+first.S("id")+"/runs"), core.Object{"snapshotId": mine.S("id"), "projectId": runProject(t, f, "adm-scope-project")}, "adm-scope-1", 200).O("resource")
 	if run.S("snapshotId") != mine.S("id") {
 		t.Fatalf("the run did not execute the version it named: %v", run)
 	}
@@ -246,6 +246,7 @@ func TestWorkflowRunSnapshotIsScopedToItsWorkflow(t *testing.T) {
 // and the newest published version is what an unqualified run gets.
 func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 	f := setup(t)
+	pid := runProject(t, f, "adm-hist-project")
 	graph := func(names ...string) core.Object {
 		variables := []any{}
 		for _, name := range names {
@@ -268,7 +269,7 @@ func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 
 	// The older version does not demand a variable that did not exist when it was frozen...
 	f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
-		"snapshotId": older.S("id"), "input": core.Object{"topic": "auth"},
+		"snapshotId": older.S("id"), "input": core.Object{"topic": "auth"}, "projectId": pid,
 	}, "adm-hist-1", 200)
 	// ...and still enforces its own required variable.
 	f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
@@ -282,7 +283,7 @@ func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 		t.Fatalf("the newest version was not the one applied: %v", missing)
 	}
 	newest := f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
-		"snapshotId": newer.S("id"), "input": core.Object{"topic": "auth", "added-later": "x"},
+		"snapshotId": newer.S("id"), "input": core.Object{"topic": "auth", "added-later": "x"}, "projectId": pid,
 	}, "adm-hist-4", 200).O("resource")
 
 	// The version a run executed is recorded on the run row, not left to be re-derived later.
@@ -388,6 +389,7 @@ func TestManualWorkflowRunCannotNameAForeignWorkflow(t *testing.T) {
 // as itself, and no run is created while it is unresolved.
 func TestWorkflowRunDefaultSlotGate(t *testing.T) {
 	f := setup(t)
+	pid := runProject(t, f, "adm-gate-project")
 	wf := f.call("POST", f.path("/workflows"), core.Object{
 		"name": "Gated flow", "graph": agentRunGraph("", false, nil),
 	}, "adm-gate-wf", 200).O("resource")
@@ -422,7 +424,7 @@ func TestWorkflowRunDefaultSlotGate(t *testing.T) {
 	_, err := f.store.PutModelCredential(context.Background(), &f.user, connection.S("id"), connection.N("version"),
 		"adm-gate-credential", uuid.NewString(), make([]byte, 32), "fixture-key")
 	must(t, err)
-	run := f.call("POST", runPath, core.Object{}, "adm-gate-3", 200).O("resource")
+	run := f.call("POST", runPath, core.Object{"projectId": pid}, "adm-gate-3", 200).O("resource")
 	if run.S("status") != "succeeded" {
 		t.Fatalf("the admitted run did not execute: %v", run)
 	}

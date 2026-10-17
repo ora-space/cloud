@@ -47,7 +47,12 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 			require(e != nil && (e.S("kind") == "agent_session" || e.S("kind") == "deliver_revision") && e.S("operationId") == c.S("maintenanceRunId") && e.S("nodeId") == n.S("nodeId") && e["result"] == nil && e["terminatedByForceStopId"] == nil, 409, "stale_execution")
 			work := t.one("SELECT target FROM execution_work WHERE id=$1", e.S("workId"))
 			require(work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 409, "stale_node")
+			// The maintenance holder is a live run of either kind (D8): the IssueRun join first, the
+			// WorkflowRun row when the Workspace belongs to a workflow invocation.
 			run := t.one("SELECT r.id FROM issue_runs r JOIN issues i ON i.id=r.issue_id WHERE r.id=$1 AND r.deleted_at IS NULL AND i.deleted_at IS NULL", c.S("maintenanceRunId"))
+			if run == nil {
+				run = t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", c.S("maintenanceRunId"))
+			}
 			w := t.one("SELECT * FROM workspaces WHERE id=$1", c.S("workspaceId"))
 			require(run != nil && runtimeUsable(t, w, w.S("creatorUserId")), 403, "runtime_use_forbidden")
 			requireRepositoryAccess(t, w.S("projectId"))
