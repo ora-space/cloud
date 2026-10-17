@@ -1,10 +1,12 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkflowRun } from '@/api/generated.schemas'
+import { WORKFLOW_RUN_POLL_MS } from '@/features/workflows/api'
 import { WorkflowRunDetailPage } from '@/features/workflows/run/run-detail-page'
 import { TEST_TENANT_ID, installCloudSpaceHandlers } from '@/test/cloud-handlers'
 import { server } from '@/test/msw-server'
+import { settleUntil } from '@/test/polling'
 import { RUN_SNAPSHOT as SNAPSHOT } from '@/test/run-snapshot'
 import { stubViewportGeometry } from '@/test/viewport'
 import { renderAtRoute } from '@/test/render'
@@ -62,6 +64,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -104,5 +107,45 @@ describe('WorkflowRunDetailPage', () => {
     const inspector = screen.getByRole('complementary', { name: '节点检视' })
     expect(within(inspector).getByRole('region', { name: '输出' })).toBeInTheDocument()
     expect(within(inspector).queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('follows a running run to its terminal status without a reload', async () => {
+    // Only the query's interval is faked, so the retries below flush real timers.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let reads = 0
+    renderRun(async () => {
+      reads += 1
+      return HttpResponse.json(
+        reads === 1
+          ? runFixture({
+              status: 'running',
+              finishedAt: null,
+              updatedAt: '2026-09-20T02:00:05.000Z',
+              nodeStates: { 'agent-1': { status: 'running' } },
+            })
+          : runFixture({
+              nodeStates: { 'agent-1': { status: 'succeeded', output: '审查通过' } },
+            }),
+      )
+    })
+
+    await settleUntil(() =>
+      expect(runCard('agent-1')).toHaveAttribute('aria-label', 'Agent 1: 运行中'),
+    )
+    expect(screen.getAllByText('运行中').length).toBeGreaterThan(0)
+
+    await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS))
+
+    await settleUntil(() =>
+      expect(runCard('agent-1')).toHaveAttribute('aria-label', 'Agent 1: 成功'),
+    )
+    // The node the run never reached still reads as unrun: the statuses are
+    // overlaid on the frozen snapshot, not on a re-read definition.
+    expect(runCard('start-1')).toHaveAttribute('aria-label', '开始: 未执行')
+
+    // The output the poll delivered is the node's evidence, one click away.
+    fireEvent.click(runCard('agent-1'))
+    const inspector = screen.getByRole('complementary', { name: '节点检视' })
+    expect(within(inspector).getByRole('region', { name: '输出' })).toHaveTextContent('审查通过')
   })
 })
