@@ -109,3 +109,20 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0036：工作流插件资产导入
 
 `0036_workflow_asset_imports.sql` 记录 `kind='workflow'` 插件的资产导入：`workflow_asset_imports` 每个（空间，插件）一行，保存管理员每次安装/重装递增的 `requested_revision`、导入进度与租约；`workflow_asset_documents` 每个文档路径一行，只有 `outcome='imported'` 的行永久占用（空间，命名空间，标识，文档路径），失败的文档下次触发重试。导入出的工作流和已发布快照是普通用户数据，这两张表只记录来源、幂等和逐文档结果。纯前向新增，不改动既有表。
+
+## 0037：仓库 Binding 与 Operation
+
+把 Project 的外部仓库从 Project 列搬进它自己的 Binding：`repository_bindings`（每 Project 恰一行，`repository_url`/`branch`/凭据引用、`resync_requested`）、`repository_operations`（同步与发布的完整状态机，状态取值就是契约的 D5 item 3，后续线路只加列、不加状态）与 `repository_snapshots`（Binding 当前快照，允许落后于跟踪 ref、绝不领先）。既有 Project 的仓库在这一步原样迁成它的 Binding，然后才删掉 `projects` 上的四个仓库列。不变量：同一 Binding 至多一个未完成同步（部分唯一索引）、快照 ref 必须由 Binding 与提交拼出。
+
+## 0038：外部 Git 线
+
+外部 Git 线（执行器根 ADR、identity-access Credential Store、同步与发布 ADR）落地的迁移，也是契约允许的那一次**破坏性切换**：没有过渡开关、没有数据迁移。
+
+- 凭据引用改为指向独立 Credential Store：`secret_ref` 允许为空，新增 `name`、`secret_state`、`store_version`、`requested_capabilities`、`capability_evidence`、待确认提交（`pending_submission_id`/`pending_store_version`/`pending_submission_expires_at`）、`store_revocation_pending` 与 `revoked_at`。切换前的行永远无法再兑换，因此**撤销**而不是删除：保留审计轨迹，`capabilities` 清空。撤销分两步（先 Cloud 后 Store），能力词表限定为 `read`/`publish`，已存凭据必有 `store_version`，待确认提交永远是下一个版本，未撤销的引用必须有仓库范围。
+- 新增 `credential_verifications`（推送能力核验，与 Operation 一样一次执行，携带的探测授权至多用一次）与 `repository_operation_events`（发布与同步结算的 append-only 审计，触发器拒绝 UPDATE/DELETE）。
+- Binding 的连续性列 `repository_credential_ref_id` 折叠进唯一保留的 `credential_ref_id`（取连续性列优先），并新增 `version` 围栏候选凭据切换。
+- 同步与发布的 Operation 补齐租约、凭据、结果与发布列（含 `lease_generation`/`lease_owner`/`authorization_id`、`expected_tracking_oid`、发布审批三元组、`check_attempts`/`next_check_at`），并约束「进入 running 即有一次授权」「发布形状完整或完全为空」「同一分支至多一个在途发布」。
+
+新库与 0037 升级（带真实 Project、凭据引用与连续性列的库）证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0038ExternalGitLineAppliesFreshAndUpgrades`，其中也对真实行验证了上述约束与 append-only 触发器。
+
+**编号说明（0038）**：本线的 `0038_external_git_line.sql` 接在底座的 `0037_repository_bindings_and_operations.sql`（cloud#75）之后。内部线 #183 也计划占用 `0038`/`0039`，按既定约定：迁移身份是完整文件名加校验和，数字前缀不是唯一键，两条线各自保留原名与原始 SQL，谁后合并谁再顺延；重命名已应用的迁移会改变它的身份并让既有库的 `CheckSchema` 失败，所以顺延只在合并前进行。本线只依赖 `0037` 及更早的表，不依赖任何同号文件。
