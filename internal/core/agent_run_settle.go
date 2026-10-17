@@ -35,6 +35,15 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 	}
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
+		// D8: a run Workspace may belong to a WorkflowRun. A create_workspace terminal firing
+		// under a WorkflowRun reaches this hook with the WorkflowRun's id; the evidence-driven
+		// scheduler reads terminal operation facts directly, so settlement writes nothing — but
+		// it must ACCEPT the fact, or the terminal transaction aborts and a workflow run's
+		// Workspace can never settle. An id that is neither a live issue run nor a live
+		// workflow run is still an invariant violation, not a replay.
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return nil
+		}
 		// A create_workspace terminal firing for a run that does not exist is an invariant
 		// violation, not a replay: returning an error aborts the whole transaction.
 		return fmt.Errorf("runWorkspaceSettled: issue_run %s not found", runID)

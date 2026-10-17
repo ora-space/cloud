@@ -1,5 +1,16 @@
 package core
 
+// nodeExecutionColumns is the Controller-facing projection of node_executions: every column of the
+// table except workflow_node_id. That column is Cloud-internal routing — which graph node a session
+// ran for — and no Controller contract has a field for it: the proto ExecutionRecord declares none,
+// and the JSON binding's NodeExecution schema is closed, so a `SELECT *` that carried the column
+// failed the response contract the moment migration 0040 added it.
+//
+// So a row that reaches a response body is projected explicitly, the way workflowRunSummary projects
+// a run row, rather than read whole. A column added to the table therefore does not reach the wire by
+// itself; putting one there is a deliberate edit to this list and to the schema it must satisfy.
+const nodeExecutionColumns = `execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,result,dispatched_epoch,last_event_sequence,terminated_by_force_stop_id,created_at,updated_at`
+
 // nodeDispatch registers a plugin, session or delivery execution before any Node sees it.
 // The same execution and input is idempotent. A different input or Node conflicts.
 func nodeDispatch(t *transaction, r *ControlRequest) Object {
@@ -10,7 +21,7 @@ func nodeDispatch(t *transaction, r *ControlRequest) Object {
 	}
 	require(execution != "" && node != "" && len(input) > 0, 400, "invalid_dispatch")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE execution_id=$1", execution) == nil, 409, "dispatch_conflict")
-	if existing := t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution); existing != nil {
+	if existing := t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution); existing != nil {
 		require(existing.S("operationId") == operation && existing.S("nodeId") == node && jsonText(existing.O("input")) == jsonText(input), 409, "dispatch_conflict")
 		return existing
 	}
@@ -38,12 +49,14 @@ func dispatchPluginExecution(t *transaction, r *ControlRequest, operation, execu
 	require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind IN ('install_plugins','remove_plugins') AND terminated_by_force_stop_id IS NULL AND (result IS NULL OR result->>'outcome'='plugins_result')", operation) == nil, 409, "dispatch_conflict")
 	t.exec("INSERT INTO node_executions(execution_id,kind,operation_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch) VALUES($1,$2,$3,$4,$5,$1,$6,$7)",
 		execution, input.S("kind"), operation, wid, node, jsonText(input), r.Body.N("epoch"))
-	return t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution)
+	return t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution)
 }
 
 func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, node string, input Object) Object {
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
-	work := t.one("SELECT * FROM execution_work WHERE run_id=$1 AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
+	// The work item names its owner — IssueRun or WorkflowRun (D8); operation_id is that run's id
+	// either way, so the ownership check re-reads whichever column the row carries.
+	work := t.one("SELECT * FROM execution_work WHERE (run_id=$1 OR workflow_run_id=$1) AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
 	require(work != nil, 409, "dispatch_conflict")
 	require(jsonText(work.O("input")) == jsonText(input), 409, "dispatch_conflict")
 	target := work.O("target")
@@ -51,7 +64,7 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 	wid := target.S("workspaceId")
 	requireNoForceStop(t, wid)
 	w := t.one("SELECT * FROM workspaces WHERE id=$1", wid)
-	require(w.S("issueRunId") == runID && w.S("observedState") == "ready" && w.B("admissionOpen"), 409, "dispatch_conflict")
+	require((w.S("issueRunId") == runID || w.S("workflowRunId") == runID) && w.S("observedState") == "ready" && w.B("admissionOpen"), 409, "dispatch_conflict")
 	c := runtimeControl(t, wid)
 	require(c.S("state") == "maintenance" && c.S("maintenanceRunId") == runID, 409, "runtime_control_required")
 	current := currentNode(t, wid)
@@ -60,16 +73,24 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 		if input.S("modelBindingId") != "" {
 			require(current.B("modelProxy"), 409, "model_proxy_required")
 		}
-		require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind='agent_session'", runID) == nil, 409, "dispatch_conflict")
+		// An IssueRun runs exactly one agent session in its life. A WorkflowRun runs one per agent
+		// node (D4 executes them serially through one Workspace), so its sessions are bounded by the
+		// work item this dispatch consumes — the unregistered item is gone once dispatched (below),
+		// and the in-flight check that follows admits only one at a time. The per-run lifetime
+		// uniqueness would refuse every node after the first.
+		if w.S("issueRunId") == runID {
+			require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind='agent_session'", runID) == nil, 409, "dispatch_conflict")
+		}
 	}
 	if input.S("kind") == "deliver_revision" {
 		require(t.one("SELECT execution_id FROM node_executions WHERE execution_id=$1 AND operation_id=$2 AND workspace_id=$3 AND kind='agent_session' AND result->>'outcome'='agent_session_ended'", input.S("sessionExecutionId"), runID, wid) != nil, 409, "dispatch_conflict")
 	}
 	require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind IN ('agent_session','deliver_revision') AND result IS NULL AND terminated_by_force_stop_id IS NULL", runID) == nil, 409, "dispatch_conflict")
-	t.exec("INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch) VALUES($1,$2,$3,$4,$5,$6,$1,$7,$8)",
-		execution, input.S("kind"), runID, work.S("id"), wid, node, jsonText(input), r.Body.N("epoch"))
+	t.exec(`INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch,workflow_node_id)
+		VALUES($1,$2,$3,$4,$5,$6,$1,$7,$8,NULLIF($9,''))`,
+		execution, input.S("kind"), runID, work.S("id"), wid, node, jsonText(input), r.Body.N("epoch"), work.S("workflowNodeId"))
 	t.exec("UPDATE execution_work SET execution_id=$2 WHERE id=$1", work.S("id"), execution)
-	return t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution)
+	return t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution)
 }
 
 func executionResult(t *transaction, r *ControlRequest, withReceipt bool) Object {
@@ -120,7 +141,7 @@ func nodeExecutionResult(t *transaction, r *ControlRequest, withReceipt bool) Ob
 	if fresh && e.S("kind") == "deliver_revision" && revisionSuccess(result) {
 		settleVerifiedRevision(t, r, e)
 	}
-	return t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution)
+	return t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution)
 }
 
 func validateNodeResult(e, result Object) {
@@ -170,7 +191,7 @@ func recordNodeReceipt(t *transaction, execution string, sequence int64, event s
 func lookupExecution(t *transaction, execution string) Object {
 	e := t.one("SELECT * FROM clone_executions WHERE execution_id=$1", execution)
 	if e == nil {
-		e = t.one("SELECT * FROM node_executions WHERE execution_id=$1", execution)
+		e = t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution)
 	}
 	require(e != nil, 404, "not_found")
 	return e
@@ -180,10 +201,10 @@ func pendingExecutions(t *transaction, node string) Object {
 	var clones, nodes []Object
 	if node == "" {
 		clones = t.list("SELECT * FROM clone_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL ORDER BY created_at,execution_id")
-		nodes = t.list("SELECT * FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL ORDER BY created_at,execution_id")
+		nodes = t.list("SELECT " + nodeExecutionColumns + " FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL ORDER BY created_at,execution_id")
 	} else {
 		clones = t.list("SELECT * FROM clone_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
-		nodes = t.list("SELECT * FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
+		nodes = t.list("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
 	}
 	return Object{"executions": append(clones, nodes...)}
 }

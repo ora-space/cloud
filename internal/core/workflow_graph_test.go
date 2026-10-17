@@ -247,6 +247,55 @@ func TestValidateWorkflowGraph(t *testing.T) {
 			want:  []any{Object{"code": "edge_endpoint_unknown", "nodeId": "gone"}},
 		},
 		{
+			// A DAG that reconverges: two paths lead into `c`, which is a join and not a cycle. It is
+			// the shape a cycle test most easily refuses by accident, so it is here as the legal half
+			// of that pair.
+			name: "a diamond",
+			graph: workflowGraph(
+				[]any{graphStart("s"), graphAgent("a", "", false), graphAgent("b", "", false), graphAgent("c", "", false)},
+				[]any{graphEdge("s", "a"), graphEdge("s", "b"), graphEdge("a", "c"), graphEdge("b", "c")},
+				nil,
+			),
+		},
+		{
+			// The shortest cycle there is, and one the editor can produce by dragging an edge back onto
+			// its own source.
+			name:  "a self-loop",
+			graph: workflowGraph([]any{graphStart("s"), graphAgent("a", "", false)}, []any{graphEdge("s", "a"), graphEdge("a", "a")}, nil),
+			want:  []any{Object{"code": "graph_cycle", "nodeId": "a"}},
+		},
+		{
+			// The back edge is `b→a`, so `b` is the node reported: it is on the cycle by construction,
+			// and it is the one whose outgoing edge the author has to delete.
+			name:  "a cycle behind the start node",
+			graph: workflowGraph([]any{graphStart("s"), graphAgent("a", "", false), graphAgent("b", "", false)}, []any{graphEdge("s", "a"), graphEdge("a", "b"), graphEdge("b", "a")}, nil),
+			want:  []any{Object{"code": "graph_cycle", "nodeId": "b"}},
+		},
+		{
+			// Nodes downstream of a cycle are not reported: they are casualties, not faults, and the
+			// author would have nothing to fix at them.
+			name: "a cycle with nodes downstream of it",
+			graph: workflowGraph(
+				[]any{graphStart("s"), graphAgent("a", "", false), graphAgent("b", "", false), graphAgent("c", "", false), graphAgent("o", "", false)},
+				[]any{graphEdge("s", "a"), graphEdge("a", "b"), graphEdge("b", "a"), graphEdge("b", "c"), graphEdge("c", "o")},
+				nil,
+			),
+			want: []any{Object{"code": "graph_cycle", "nodeId": "b"}},
+		},
+		{
+			// `v` sits between two cycles without being on either. A detector that peels nodes with no
+			// incoming or no outgoing edge leaves `v` in the remainder — nothing ever drains it — so a
+			// report built that way cannot tell the node the author must fix from one they must not
+			// touch. The walk names a back edge's source instead, which is on a cycle by construction.
+			name: "a node between two cycles",
+			graph: workflowGraph(
+				[]any{graphStart("s"), graphAgent("a", "", false), graphAgent("u", "", false), graphAgent("v", "", false), graphAgent("w", "", false), graphAgent("x", "", false)},
+				[]any{graphEdge("s", "a"), graphEdge("a", "u"), graphEdge("u", "a"), graphEdge("u", "v"), graphEdge("v", "w"), graphEdge("w", "x"), graphEdge("x", "w")},
+				nil,
+			),
+			want: []any{Object{"code": "graph_cycle", "nodeId": "u"}},
+		},
+		{
 			// The nameless slot's description is fine and is not also reported: a problem list the user
 			// has to read is worth keeping to the violations that are actually there.
 			name:  "a slot with no name",

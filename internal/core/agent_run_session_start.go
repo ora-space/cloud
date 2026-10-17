@@ -92,7 +92,7 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 	if err != nil {
 		return err
 	}
-	enqueueExecutionWork(t, runID, "agent_session", spec, sessionStartTarget(t, wid), time.Time{})
+	enqueueExecutionWork(t, runID, "agent_session", spec, sessionStartTarget(t, wid), "", time.Time{})
 	return nil
 }
 

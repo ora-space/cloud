@@ -11,3 +11,13 @@ internal/core/migrations/0028_workflow_snapshots.sql text eol=lf
 internal/core/migrations/0029_workflow_runs.sql text eol=lf
 internal/core/migrations/0033_personal_model_connections.sql text eol=lf
 internal/core/migrations/0033_revision_resume.sql text eol=lf
+# 0034 is the one migration since the allowlist lapsed that is already on main, so its checksum is
+# recorded in databases this branch cannot reach; pinning it now would fail every one of them with
+# migration_checksum_mismatch. It stays as it is. (0035_model_attempt_statistics.sql is in the same
+# position for a different reason — it belongs to another PR, which has to make this call for it.)
+# Everything introduced since main is pinned here instead, while no released database has recorded
+# it yet; after merge that would no longer be true.
+internal/core/migrations/0038_workflow_run_identity.sql text eol=lf
+internal/core/migrations/0039_executor_slot_bindings.sql text eol=lf
+internal/core/migrations/0040_workflow_execution_node.sql text eol=lf
+internal/core/migrations/0041_workflow_run_plugin_version.sql text eol=lf

@@ -109,3 +109,39 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0036：工作流插件资产导入
 
 `0036_workflow_asset_imports.sql` 记录 `kind='workflow'` 插件的资产导入：`workflow_asset_imports` 每个（空间，插件）一行，保存管理员每次安装/重装递增的 `requested_revision`、导入进度与租约；`workflow_asset_documents` 每个文档路径一行，只有 `outcome='imported'` 的行永久占用（空间，命名空间，标识，文档路径），失败的文档下次触发重试。导入出的工作流和已发布快照是普通用户数据，这两张表只记录来源、幂等和逐文档结果。纯前向新增，不改动既有表。
+
+## 0038：WorkflowRun 运行身份
+
+`0038_workflow_run_identity.sql` 把运行身份与工作项所有权交给控制面。`workflow_runs` 新增
+`created_by` 与 `project_id` 两列（均可空：本迁移之前的行没有可恢复的发起人，而 `project_id` 由知道
+Project 的调用路径写入），新运行在创建时冻结二者；`workspaces` 新增互斥的 `workflow_run_id`，使运行
+Workspace 可以属于 WorkflowRun；`execution_work` 同样变为「恰有一个所有者」的判别形状，原单列唯一索引
+拆为每种所有者各一条部分索引，因此两类所有者各自最多保留一个未注册工作项且互不冲突；
+`runtime_controls` 的预留改为多态运行引用，`maintenance_run_id` 的外键被删除而非改写——多态引用无法做
+外键，存活校验移到授予它的代码里。只新增列、约束与索引，不回填。
+
+`TestMigration0038WorkflowRunIdentityAppliesFreshAndUpgrades` 验证空库、从 0037 升级及重复迁移。
+
+## 0039：执行器槽位绑定
+
+`0039_executor_slot_bindings.sql` 让执行器槽位抵达运行时。`run_model_bindings` 的所有者变为判别对
+（`run_id` 与 `workflow_run_id` 恰有其一），原先整表的 UNIQUE(run_id) 拆分为每种所有者各一条
+(run, slot) 唯一索引，于是一次运行可同时持有多条绑定；WorkflowRun 为图上引用的每个槽位冻结一行，
+IssueRun 继续在保留槽位 `default` 下持有其唯一绑定。新增 `executor_slot_mappings`（槽位名 → 执行器）
+作为调用者私有的解析表，`default` 被显式排除——它就是个人默认模型本身，不是一条可存储的映射。
+只新增列、约束与表，不改写既有绑定行。
+
+## 0040：工作流执行节点
+
+`0040_workflow_execution_node.sql` 给 `execution_work` 与 `node_executions` 各加一列
+`workflow_node_id`，并加约束保证工作项所属节点确实属于该工作项所在的运行图。它是 Cloud 内部的路由
+字段：`node_executions` 面向 Controller 的投影（nodeExecutionColumns）刻意不含该列，因为它不是任何
+Controller 契约的字段。只新增，不回填。
+
+## 0041：运行级插件版本
+
+`0041_workflow_run_plugin_version.sql` 给 `workflow_runs` 加可空列 `plugin_version`，把插件版本并入
+创建事务冻结的运行身份（快照、输入、发起人、Project、运行 Workspace 绑定、逐槽位模型绑定、插件版本）。
+会话启动读冻结值，升级不再改变已创建运行的执行内容。可空且刻意不回填：本迁移之前的行从未冻结过，
+把空间当前版本写进去会记录一个从未成立的事实；这类运行在首个 agent 节点以 `agent_plugin_version_unfrozen`
+失败而不是猜测。这些行应回填、拒绝还是按其他规则执行，仍是 owner 待决事项，本迁移不记录答案。

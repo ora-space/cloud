@@ -187,6 +187,6 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 		JOIN execution_work w ON w.id = e.work_id
 		WHERE w.run_id=$1 AND w.kind='deliver_revision'`, runID).N("n")
 	availableAt := time.Now().UTC().Add(deliveryRetryBackoff(int(attempts)))
-	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), availableAt)
+	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), "", availableAt)
 	return nil
 }

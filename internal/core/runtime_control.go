@@ -126,10 +126,15 @@ func reserveRuntimeMaintenance(t *transaction, wid, oid string) {
 // finishRuntimeMaintenance requests closure after the fixed intent finishes; it cannot grant
 // another session on a still-running Node before that Node confirms its durable responsibilities.
 func finishRuntimeMaintenance(t *transaction, oid string) {
-	if run := t.one("SELECT w.id,w.issue_run_id FROM workspaces w JOIN operations o ON o.workspace_id=w.id WHERE o.id=$1 AND o.kind='create_workspace' AND o.state='succeeded' AND w.issue_run_id IS NOT NULL", oid); run != nil {
+	if run := t.one("SELECT w.id,w.issue_run_id,w.workflow_run_id FROM workspaces w JOIN operations o ON o.workspace_id=w.id WHERE o.id=$1 AND o.kind='create_workspace' AND o.state='succeeded' AND (w.issue_run_id IS NOT NULL OR w.workflow_run_id IS NOT NULL)", oid); run != nil {
 		// Initialization handed back terminal evidence for clone/plugins. The next control epoch
-		// belongs to this run; Node must acknowledge it before any session or delivery is permitted.
-		t.exec("UPDATE runtime_controls SET state='maintenance',maintenance_operation_id=NULL,maintenance_run_id=$2,control_epoch=control_epoch+1,binding_confirmed=false,input_closed=false,version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1", run.S("id"), run.S("issueRunId"))
+		// belongs to this run — IssueRun or WorkflowRun, whichever owns the Workspace (D8); Node
+		// must acknowledge it before any session or delivery is permitted.
+		owner := run.S("issueRunId")
+		if owner == "" {
+			owner = run.S("workflowRunId")
+		}
+		t.exec("UPDATE runtime_controls SET state='maintenance',maintenance_operation_id=NULL,maintenance_run_id=$2,control_epoch=control_epoch+1,binding_confirmed=false,input_closed=false,version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1", run.S("id"), owner)
 		auditRuntimeControl(t, runtimeControl(t, run.S("id")), "run_reserved", "")
 		return
 	}

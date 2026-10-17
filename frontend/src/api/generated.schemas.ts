@@ -1509,6 +1509,20 @@ export interface SessionModelStatistics {
   usage: SessionModelStatisticsUsage;
 }
 
+export interface SlotMapping {
+  agentCli: string;
+  available: boolean;
+  connectionId: string;
+  connectionName: string;
+  createdAt: string;
+  modelId: string;
+  modelName: string;
+  slotName: string;
+  unavailableReason: string;
+  updatedAt: string;
+  version: number;
+}
+
 export type SnapshotPluginInput = { [key: string]: unknown };
 
 export interface Snapshot {
@@ -1852,7 +1866,7 @@ export type WorkflowRunDefinitionSnapshot = { [key: string]: unknown } | null;
 export type WorkflowRunInput = { [key: string]: unknown };
 
 /**
- * Per-node execution state keyed by node id: status, output, error, timestamps.
+ * Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed.
  */
 export type WorkflowRunNodeStates = { [key: string]: unknown };
 
@@ -1870,6 +1884,14 @@ export const WorkflowRunStatus = {
   cancelled: 'cancelled',
 } as const;
 
+export interface WorkflowRunModelBinding {
+  connectionName: string;
+  modelId: string;
+  modelName: string;
+  revoked: boolean;
+  slot: string;
+}
+
 export interface WorkflowRun {
   createdAt: string;
   /**
@@ -1883,8 +1905,13 @@ export interface WorkflowRun {
   id: string;
   /** The kickoff input passed to the run's start node. */
   input: WorkflowRunInput;
+  /**
+     * The frozen per-slot model bindings this run executes against, ordered by slot name. Present on a detail read. Each binding is frozen at run creation and used for the run's whole lifetime; only `revoked` can turn true (the owning connection's grant was revoked).
+     * @nullable
+     */
+  modelBindings?: WorkflowRunModelBinding[] | null;
   name: string;
-  /** Per-node execution state keyed by node id: status, output, error, timestamps. */
+  /** Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed. */
   nodeStates: WorkflowRunNodeStates;
   rounds: WorkflowRunRoundsItem[];
   snapshotId: string;
@@ -1993,6 +2020,48 @@ export type PostApiV1JoinInvitationsRedeemBody = {
 
 export type PostApiV1JoinRequestsBody = {
   token: string;
+};
+
+export type GetApiV1MeExecutorSlotMappingsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1MeExecutorSlotMappings200 = {
+  items: SlotMapping[];
+  nextCursor: string;
+};
+
+export type DeleteApiV1MeExecutorSlotMappingsSlotBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1MeExecutorSlotMappingsSlot200 = {
+  resource: SlotMapping;
+};
+
+export type PutApiV1MeExecutorSlotMappingsSlotBody = {
+  agentCli: string;
+  connectionId: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  modelId: string;
+  /** @minimum 0 */
+  version?: number;
+};
+
+export type PutApiV1MeExecutorSlotMappingsSlot200 = {
+  resource: SlotMapping;
 };
 
 export type DeleteApiV1MeGitIdentityBody = {
@@ -3247,6 +3316,8 @@ export type PostApiV1TenantsTidWorkflowsWfidRunsBodyInput = { [key: string]: unk
 export type PostApiV1TenantsTidWorkflowsWfidRunsBody = {
   input?: PostApiV1TenantsTidWorkflowsWfidRunsBodyInput;
   name?: string;
+  /** The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404. */
+  projectId: string;
   snapshotId?: string;
 };
 

@@ -28,7 +28,38 @@ type ModelGrant struct {
 
 func liveModelBinding(t *transaction, scope ModelRuntimeScope, bindingID, executionID string) Object {
 	require(validID(bindingID) && validID(scope.TenantID) && validID(scope.WorkspaceID) && scope.Generation > 0, 403, "model_scope_required")
-	b := t.one(`SELECT b.*, e.execution_id,e.node_id,e.work_id,w.id AS workspace_id,w.runtime_generation,
+	// The binding's owner discriminates the branch: an IssueRun binding checks the run's Thread
+	// lifecycle, a WorkflowRun binding checks the run's execution status — both keep every
+	// connection, user, tenant, membership, workspace and runtime gate (mappings decision D4:
+	// the grant's binding must belong to the session execution's run).
+	b := liveIssueRunModelBinding(t, scope, bindingID, executionID)
+	if b == nil {
+		b = liveWorkflowModelBinding(t, scope, bindingID, executionID)
+	}
+	require(b != nil, 403, "model_grant_revoked")
+	if b.S("runId") == "" {
+		b["runId"] = b.S("workflowRunId")
+	}
+	requireNoForceStop(t, scope.WorkspaceID)
+	n := currentNode(t, scope.WorkspaceID)
+	require(n.S("nodeId") == b.S("nodeId") && n.B("modelProxy"), 403, "model_grant_revoked")
+	c := runtimeControl(t, scope.WorkspaceID)
+	require(c.S("state") == "maintenance" && c.S("maintenanceRunId") == b.S("runId") && c.B("bindingConfirmed") && c.S("boundSandboxId") == n.S("sandboxInstanceId"), 403, "model_grant_revoked")
+	work := t.one("SELECT target FROM execution_work WHERE id=$1", b.S("workId"))
+	require(work != nil && work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 403, "model_grant_revoked")
+	// This denial is distinguishable only after the certificate and every current authority gate
+	// above passed. It lets Node reconcile the durable EndSession command without reclassifying
+	// a wrong scope, disabled account or cleared credential as a legitimate shutdown request.
+	if b.S("threadState") == "ending" || b.S("cancelRequestedAt") != "" {
+		reject(403, "model_session_ending")
+	}
+	return b
+}
+
+// liveIssueRunModelBinding resolves a binding against a live Agent IssueRun session execution,
+// with the full Thread lifecycle gates (issue-run-only vocabulary).
+func liveIssueRunModelBinding(t *transaction, scope ModelRuntimeScope, bindingID, executionID string) Object {
+	return t.one(`SELECT b.*, e.execution_id,e.node_id,e.work_id,w.id AS workspace_id,w.runtime_generation,
 	 r.thread_state,r.cancel_requested_at
 	 FROM run_model_bindings b JOIN issue_runs r ON r.id=b.run_id
 	 JOIN issues issue ON issue.id=r.issue_id AND issue.deleted_at IS NULL
@@ -45,21 +76,41 @@ func liveModelBinding(t *transaction, scope ModelRuntimeScope, bindingID, execut
 	 AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
 	 AND c.deleted_at IS NULL AND c.enabled AND c.credential_id IS NOT NULL
 	 AND u.deleted_at IS NULL AND u.status='active' AND tenant.deleted_at IS NULL AND tenant.status='active' AND member.status='active'`, bindingID, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation)
-	require(b != nil, 403, "model_grant_revoked")
-	requireNoForceStop(t, scope.WorkspaceID)
-	n := currentNode(t, scope.WorkspaceID)
-	require(n.S("nodeId") == b.S("nodeId") && n.B("modelProxy"), 403, "model_grant_revoked")
-	c := runtimeControl(t, scope.WorkspaceID)
-	require(c.S("state") == "maintenance" && c.S("maintenanceRunId") == b.S("runId") && c.B("bindingConfirmed") && c.S("boundSandboxId") == n.S("sandboxInstanceId"), 403, "model_grant_revoked")
-	work := t.one("SELECT target FROM execution_work WHERE id=$1", b.S("workId"))
-	require(work != nil && work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 403, "model_grant_revoked")
-	// This denial is distinguishable only after the certificate and every current authority gate
-	// above passed. It lets Node reconcile the durable EndSession command without reclassifying
-	// a wrong scope, disabled account or cleared credential as a legitimate shutdown request.
-	if b.S("threadState") == "ending" || b.S("cancelRequestedAt") != "" {
-		reject(403, "model_session_ending")
-	}
-	return b
+}
+
+// liveWorkflowModelBinding resolves a binding against a live WorkflowRun session execution. A
+// workflow run has no Thread: the run's `running` status and the session execution's open result
+// are the liveness evidence.
+//
+// Belonging to the run is not enough here, which is where this differs from its IssueRun
+// counterpart. An IssueRun owns exactly one binding (0033's `run_id ... UNIQUE`), so "the binding's
+// run is the execution's run" names one row. A WorkflowRun owns one binding per executor slot
+// (0039 drops that uniqueness), so the same test admits every slot's binding at once — and the
+// binding id is the caller's to state, since a model mTLS certificate is bound to a tenant,
+// workspace and runtime generation, never to a slot. Node A holding slot `fast` could therefore
+// present node B's `slow` binding id and be handed B's credential and model.
+//
+// So the binding must be the one this execution was dispatched with. `e.input->>'modelBindingId'`
+// is that value: it is written by Cloud when the work item is enqueued, copied into the execution
+// row at dispatch, and never read from a request body. A session dispatched with no binding leaves
+// it NULL, which matches nothing — correct, since such a session has no binding to redeem.
+func liveWorkflowModelBinding(t *transaction, scope ModelRuntimeScope, bindingID, executionID string) Object {
+	return t.one(`SELECT b.*, e.execution_id,e.node_id,e.work_id,w.id AS workspace_id,w.runtime_generation
+	 FROM run_model_bindings b JOIN workflow_runs r ON r.id=b.workflow_run_id AND r.deleted_at IS NULL
+	 JOIN node_executions e ON e.operation_id=r.id AND e.kind='agent_session'
+	 JOIN workspaces w ON w.id=e.workspace_id AND w.workflow_run_id=r.id
+	 JOIN personal_model_connections c ON c.id=b.connection_id AND c.user_id=b.user_id
+	 JOIN users u ON u.id=b.user_id
+	 JOIN tenants tenant ON tenant.id=r.tenant_id
+	 JOIN tenant_memberships member ON member.tenant_id=r.tenant_id AND member.user_id=b.user_id
+	 WHERE b.id=$1 AND e.execution_id=$2 AND r.tenant_id=$3 AND w.id=$4 AND w.runtime_generation=$5
+	 AND e.input->>'modelBindingId' = b.id::text
+	 AND b.revoked_at IS NULL
+	 AND r.status='running'
+	 AND e.result IS NULL AND e.terminated_by_force_stop_id IS NULL
+	 AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
+	 AND c.deleted_at IS NULL AND c.enabled AND c.credential_id IS NOT NULL
+	 AND u.deleted_at IS NULL AND u.status='active' AND tenant.deleted_at IS NULL AND tenant.status='active' AND member.status='active'`, bindingID, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation)
 }
 
 func modelGrantResult(t *transaction, g, b Object) ModelGrant {

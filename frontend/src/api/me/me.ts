@@ -25,12 +25,16 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  DeleteApiV1MeExecutorSlotMappingsSlot200,
+  DeleteApiV1MeExecutorSlotMappingsSlotBody,
   DeleteApiV1MeGitIdentityBody,
   DeleteApiV1MeModelConnectionsMcid200,
   DeleteApiV1MeModelConnectionsMcidBody,
   DeleteApiV1MeModelConnectionsMcidCredential200,
   DeleteApiV1MeModelConnectionsMcidCredentialBody,
   Error,
+  GetApiV1MeExecutorSlotMappings200,
+  GetApiV1MeExecutorSlotMappingsParams,
   GetApiV1MeJoinRequests200,
   GetApiV1MeJoinRequestsParams,
   GetApiV1MeModelConnections200,
@@ -44,6 +48,8 @@ import type {
   ModelDefault,
   PostApiV1MeModelConnections201,
   PostApiV1MeModelConnectionsBody,
+  PutApiV1MeExecutorSlotMappingsSlot200,
+  PutApiV1MeExecutorSlotMappingsSlotBody,
   PutApiV1MeGitIdentityBody,
   PutApiV1MeModelConnectionsMcid200,
   PutApiV1MeModelConnectionsMcidBody,
@@ -170,6 +176,238 @@ export function useGetApiV1Me<TData = Awaited<ReturnType<typeof getApiV1Me>>, TE
 
 
 /**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary GET /api/v1/me/executor-slot-mappings
+ */
+export const getApiV1MeExecutorSlotMappings = (
+    params?: GetApiV1MeExecutorSlotMappingsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetApiV1MeExecutorSlotMappings200>(
+      {url: `/api/v1/me/executor-slot-mappings`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeExecutorSlotMappingsQueryKey = (params?: GetApiV1MeExecutorSlotMappingsParams,) => {
+    return [
+    `/api/v1/me/executor-slot-mappings`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetApiV1MeExecutorSlotMappingsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeExecutorSlotMappingsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>> = ({ signal }) => getApiV1MeExecutorSlotMappings(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeExecutorSlotMappingsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>>
+export type GetApiV1MeExecutorSlotMappingsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params: undefined |  GetApiV1MeExecutorSlotMappingsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/executor-slot-mappings
+ */
+
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeExecutorSlotMappingsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary DELETE /api/v1/me/executor-slot-mappings/:slot
+ */
+export const deleteApiV1MeExecutorSlotMappingsSlot = (
+    slot: string,
+    deleteApiV1MeExecutorSlotMappingsSlotBody: DeleteApiV1MeExecutorSlotMappingsSlotBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeleteApiV1MeExecutorSlotMappingsSlot200>(
+      {url: `/api/v1/me/executor-slot-mappings/${slot}`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeExecutorSlotMappingsSlotBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeExecutorSlotMappingsSlotMutationKey = () => ['deleteApiV1MeExecutorSlotMappingsSlot'] as const;
+
+export const getDeleteApiV1MeExecutorSlotMappingsSlotMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeExecutorSlotMappingsSlotMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables> = (props) => {
+          const {slot,data} = props ?? {};
+
+          return  deleteApiV1MeExecutorSlotMappingsSlot(slot,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>>
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationBody = DeleteApiV1MeExecutorSlotMappingsSlotBody
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationError = ErrorType<Error>
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables = {slot: string;data: DeleteApiV1MeExecutorSlotMappingsSlotBody}
+
+    /**
+ * @summary DELETE /api/v1/me/executor-slot-mappings/:slot
+ */
+export const useDeleteApiV1MeExecutorSlotMappingsSlot = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>,
+        TError,
+        DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeExecutorSlotMappingsSlotMutationOptions(options), queryClient);
+    }
+    /**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary PUT /api/v1/me/executor-slot-mappings/:slot
+ */
+export const putApiV1MeExecutorSlotMappingsSlot = (
+    slot: string,
+    putApiV1MeExecutorSlotMappingsSlotBody: PutApiV1MeExecutorSlotMappingsSlotBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PutApiV1MeExecutorSlotMappingsSlot200>(
+      {url: `/api/v1/me/executor-slot-mappings/${slot}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeExecutorSlotMappingsSlotBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeExecutorSlotMappingsSlotMutationKey = () => ['putApiV1MeExecutorSlotMappingsSlot'] as const;
+
+export const getPutApiV1MeExecutorSlotMappingsSlotMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeExecutorSlotMappingsSlotMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, PutApiV1MeExecutorSlotMappingsSlotMutationVariables> = (props) => {
+          const {slot,data} = props ?? {};
+
+          return  putApiV1MeExecutorSlotMappingsSlot(slot,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>>
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationBody = PutApiV1MeExecutorSlotMappingsSlotBody
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationError = ErrorType<Error>
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationVariables = {slot: string;data: PutApiV1MeExecutorSlotMappingsSlotBody}
+
+    /**
+ * @summary PUT /api/v1/me/executor-slot-mappings/:slot
+ */
+export const usePutApiV1MeExecutorSlotMappingsSlot = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>,
+        TError,
+        PutApiV1MeExecutorSlotMappingsSlotMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeExecutorSlotMappingsSlotMutationOptions(options), queryClient);
+    }
+    /**
  * Restores the default git commit identity (display name and a per-user noreply address). A stated identity is removed only at its current version, otherwise 409 version_conflict; an identity that is already the default restores as a no-op whatever version is sent, which makes a retry safe without an Idempotency-Key.
  * @summary DELETE /api/v1/me/git-identity
  */

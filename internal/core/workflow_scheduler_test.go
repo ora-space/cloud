@@ -32,6 +32,18 @@ func wfGraph(nodes []Object, edges [][3]string) Object {
 	return Object{"nodes": nodeList, "edges": edgeList}
 }
 
+// wfSlot declares one executor slot for a graph under test.
+func wfSlot(name, description string) Object {
+	return Object{"name": name, "description": description}
+}
+
+// wfAgentNode is an agent node whose agentConfig the test authors directly.
+func wfAgentNode(id string, config Object) Object {
+	node := wfNode(id, "agent", "")
+	node["data"].(Object)["agentConfig"] = config
+	return node
+}
+
 // A start→output graph runs to drained in two waves: start readies, then output, then nothing.
 func TestWorkflowProjectionLinearGraph(t *testing.T) {
 	graph := readWorkflowGraph(wfGraph(

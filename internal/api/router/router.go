@@ -77,6 +77,9 @@ func Routes() []Route {
 		{"DELETE", "/api/v1/me/model-connections/:mcid/credential", "", []string{"version"}},
 		{"GET", "/api/v1/me/model-default", "", nil},
 		{"PUT", "/api/v1/me/model-default", "", []string{"connectionId", "modelId", "version"}},
+		{"GET", "/api/v1/me/executor-slot-mappings", "", nil},
+		{"PUT", "/api/v1/me/executor-slot-mappings/:slot", "", []string{"agentCli", "connectionId", "modelId", "version"}},
+		{"DELETE", "/api/v1/me/executor-slot-mappings/:slot", "", []string{"version"}},
 		{"GET", "/api/v1/me/tenants", "", nil},
 		{"GET", "/api/v1/me/spaces", "", nil},
 		{"GET", "/api/v1/me/join-requests", "", nil},
@@ -116,7 +119,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/form", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/restore", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", nil},
-		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input"}},
+		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input", "projectId"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid", "", nil},
 		{"GET", "/api/v1/tenants/:tid/issue-views", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issue-views", "", []string{"name", "filter"}},
@@ -398,7 +401,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), SlotName: c.Param("slot"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.

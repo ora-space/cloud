@@ -21,10 +21,12 @@ type PublicRequest struct {
 	ModelConnectionID string
 	// Session filters are independent of resource IDs used by public route dispatch.
 	SessionProjectID, SessionStatus, SessionAgent, SessionFrom, SessionTo string
-	Limit                                                                 int
-	Body                                                                  Object
-	Identity                                                              *Claims
-	Person                                                                *DirectoryPerson
+	// SlotName addresses one executor-slot mapping under /api/v1/me/executor-slot-mappings/:slot.
+	SlotName string
+	Limit    int
+	Body     Object
+	Identity *Claims
+	Person   *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
@@ -54,6 +56,11 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") || r.Path == "/api/v1/me/model-default" {
 			var out Object
 			out, status = personalModelsPublic(t, r, uid)
+			return out
+		}
+		if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+			var out Object
+			out, status = personalSlotMappingsPublic(t, r, uid)
 			return out
 		}
 		if r.Path == "/api/v1/me/git-identity" {
@@ -492,7 +499,7 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 	case strings.HasSuffix(r.Path, "/issues"):
 		return issueList(t, r)
 	case strings.HasSuffix(r.Path, "/resource-status"):
-		return page(t, "SELECT w.id,w.project_id,w.owner_user_id,w.kind,w.desired_state,w.observed_state,w.runtime_generation,w.version FROM workspaces w WHERE w.tenant_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL", []any{r.TenantID}, "w.id", r)
+		return page(t, "SELECT w.id,w.project_id,w.owner_user_id,w.kind,w.desired_state,w.observed_state,w.runtime_generation,w.version FROM workspaces w WHERE w.tenant_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL", []any{r.TenantID}, "w.id", r)
 	case strings.Contains(r.Path, "/workflows"):
 		// A snapshot-scoped form read is checked before the bare snapshot read, because both carry a
 		// snapshot id and only the path distinguishes projecting a version from describing it.

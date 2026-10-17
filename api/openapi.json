@@ -3529,6 +3529,62 @@
         ],
         "type": "object"
       },
+      "SlotMapping": {
+        "additionalProperties": false,
+        "properties": {
+          "agentCli": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "connectionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "connectionName": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "slotName": {
+            "type": "string"
+          },
+          "unavailableReason": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slotName",
+          "agentCli",
+          "connectionId",
+          "modelId",
+          "modelName",
+          "connectionName",
+          "available",
+          "unavailableReason",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "Snapshot": {
         "additionalProperties": false,
         "properties": {
@@ -4401,12 +4457,20 @@
             "description": "The kickoff input passed to the run's start node.",
             "type": "object"
           },
+          "modelBindings": {
+            "description": "The frozen per-slot model bindings this run executes against, ordered by slot name. Present on a detail read. Each binding is frozen at run creation and used for the run's whole lifetime; only `revoked` can turn true (the owning connection's grant was revoked).",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowRunModelBinding"
+            },
+            "nullable": true,
+            "type": "array"
+          },
           "name": {
             "type": "string"
           },
           "nodeStates": {
             "additionalProperties": true,
-            "description": "Per-node execution state keyed by node id: status, output, error, timestamps.",
+            "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed.",
             "type": "object"
           },
           "rounds": {
@@ -4468,6 +4532,34 @@
           "createdAt",
           "updatedAt",
           "workflowName"
+        ],
+        "type": "object"
+      },
+      "WorkflowRunModelBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "connectionName": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "slot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "connectionName",
+          "modelId",
+          "modelName",
+          "revoked"
         ],
         "type": "object"
       },
@@ -5189,6 +5281,471 @@
           }
         ],
         "summary": "GET /api/v1/me",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/me/executor-slot-mappings": {
+      "get": {
+        "description": "Personal executor-slot mappings of the verified user: slot name -\u003e executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).",
+        "operationId": "get_api_v1_me_executor-slot-mappings",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/SlotMapping"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "GET /api/v1/me/executor-slot-mappings",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/me/executor-slot-mappings/{slot}": {
+      "delete": {
+        "description": "Personal executor-slot mappings of the verified user: slot name -\u003e executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).",
+        "operationId": "delete_api_v1_me_executor-slot-mappings_slot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scoped to the verified user before tenant membership exists. Same key and canonical method/path/body returns the original response before version validation; changed request is 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "version": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "resource": {
+                      "$ref": "#/components/schemas/SlotMapping"
+                    }
+                  },
+                  "required": [
+                    "resource"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "DELETE /api/v1/me/executor-slot-mappings/:slot",
+        "tags": [
+          "me"
+        ]
+      },
+      "put": {
+        "description": "Personal executor-slot mappings of the verified user: slot name -\u003e executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).",
+        "operationId": "put_api_v1_me_executor-slot-mappings_slot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentCli": {
+                    "type": "string"
+                  },
+                  "connectionId": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "agentCli",
+                  "connectionId",
+                  "modelId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "resource": {
+                      "$ref": "#/components/schemas/SlotMapping"
+                    }
+                  },
+                  "required": [
+                    "resource"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful command or resource response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Resource absent or outside authorized tenant/owner scope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Version precondition required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Internal error; no SQL or secret details are exposed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
+          }
+        },
+        "security": [
+          {
+            "serviceCredential": [],
+            "userCredential": []
+          }
+        ],
+        "summary": "PUT /api/v1/me/executor-slot-mappings/:slot",
         "tags": [
           "me"
         ]
@@ -22305,10 +22862,18 @@
                   "name": {
                     "type": "string"
                   },
+                  "projectId": {
+                    "description": "The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404.",
+                    "format": "uuid",
+                    "type": "string"
+                  },
                   "snapshotId": {
                     "type": "string"
                   }
                 },
+                "required": [
+                  "projectId"
+                ],
                 "type": "object"
               }
             }

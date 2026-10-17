@@ -273,6 +273,9 @@ func (t *transaction) list(q string, args ...any) []Object {
 		if o["issueRunId"] == nil {
 			delete(o, "issueRunId")
 		}
+		if o["workflowRunId"] == nil {
+			delete(o, "workflowRunId")
+		}
 		out = append(out, o)
 	}
 	if e = rows.Err(); e != nil {
@@ -597,7 +600,7 @@ func project(t *transaction, tid, uid, pid string) Object {
 // workspace loads authorized runtime content. Safe summaries use runtimeOverview instead.
 func workspace(t *transaction, tid, uid, wid string, admin bool) Object {
 	require(validID(wid), 404, "not_found")
-	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND issue_run_id IS NULL", wid, tid)
+	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND issue_run_id IS NULL AND workflow_run_id IS NULL", wid, tid)
 	require(w != nil, 404, "not_found")
 	require(runtimeUsable(t, w, uid), 403, "runtime_use_forbidden")
 	if admin {

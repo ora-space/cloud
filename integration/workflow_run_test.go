@@ -66,6 +66,8 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 	// The document's agent node runs on the initiator's personal default model, so the actor needs one
 	// before any start can be admitted.
 	seedPersonalModel(t, f)
+	// Every direct run names the Project it freezes, whether or not its graph provisions a Workspace.
+	pid := runProject(t, f, "run-project")
 	wf := f.call("POST", f.path("/workflows"), core.Object{
 		"name": "Run target", "graph": runGraph(),
 	}, "run-wf", 200).O("resource")
@@ -83,7 +85,7 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 	snap := f.call("POST", f.path("/workflows/"+wfid+"/publish"), core.Object{}, "run-pub", 200).O("resource")
 	snapID := snap.S("id")
 	run := f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{
-		"name": "Trial run", "input": core.Object{"branch": "main"},
+		"name": "Trial run", "input": core.Object{"branch": "main"}, "projectId": pid,
 	}, "run-1", 200).O("resource")
 	if run.S("workflowId") != wfid || run.S("name") != "Trial run" || run.S("status") != "succeeded" {
 		t.Fatalf("create run wrong: %v", run)
@@ -111,12 +113,12 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 
 	// Same idempotency key replays the same run; a fresh key with no name defaults to the workflow name.
 	replay := f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{
-		"name": "Trial run", "input": core.Object{"branch": "main"},
+		"name": "Trial run", "input": core.Object{"branch": "main"}, "projectId": pid,
 	}, "run-1", 200).O("resource")
 	if replay.S("id") != run.S("id") {
 		t.Fatalf("idempotent create made another run: %v", replay)
 	}
-	f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{}, "run-2", 200).O("resource")
+	f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{"projectId": pid}, "run-2", 200).O("resource")
 
 	// Read one run back and list them (newest of the run-2 page is visible by reading ids).
 	one := f.call("GET", f.path("/workflows/"+wfid+"/runs/"+run.S("id")), nil, "", 200)
@@ -135,7 +137,7 @@ func TestWorkflowRunLifecycle(t *testing.T) {
 
 	// A run pinned to a specific, still-owned snapshot works; a foreign snapshot id is read 404.
 	explicit := f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{
-		"snapshotId": snapID,
+		"snapshotId": snapID, "projectId": pid,
 	}, "run-3", 200).O("resource")
 	if explicit.S("snapshotId") != snapID {
 		t.Fatalf("explicit snapshot create wrong: %v", explicit)
@@ -164,7 +166,7 @@ func TestWorkflowRunTenantIsolation(t *testing.T) {
 	}, "iso-run-wf", 200).O("resource")
 	wfid := wf.S("id")
 	snap := f.call("POST", f.path("/workflows/"+wfid+"/publish"), core.Object{}, "iso-run-pub", 200).O("resource")
-	run := f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{}, "iso-run-1", 200).O("resource")
+	run := f.call("POST", f.path("/workflows/"+wfid+"/runs"), core.Object{"projectId": runProject(t, f, "iso-run-project")}, "iso-run-1", 200).O("resource")
 
 	other, e := f.store.Bootstrap(context.Background(), "Other", "corp", "other", "Other")
 	must(t, e)

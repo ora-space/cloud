@@ -1,7 +1,9 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, renderHook, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { WorkflowRun, WorkflowSnapshot } from '@/api/generated.schemas'
+import { useCreateWorkflowRun } from '@/features/workflows/api'
 import { WorkflowRunTools } from '@/features/workflows/editor/workflow-run-tools'
 import { routes } from '@/routes'
 import {
@@ -15,6 +17,8 @@ import { renderRoutes } from '@/test/render'
 import { stubViewportGeometry } from '@/test/viewport'
 
 const WORKFLOW_ID = '44444444-4444-4444-4444-444444444444'
+/** The Project a run freezes; the editor has none to state yet, so only the hook tests name one. */
+const PROJECT_ID = '55555555-5555-5555-5555-555555555555'
 /**
  * The readable workspace slug the browser route carries. It is deliberately not
  * `TEST_TENANT_ID`: the tenant UUID scopes API calls, and using it as the slug is
@@ -117,6 +121,49 @@ beforeEach(() => {
   stubViewportGeometry()
 })
 
+/** A client whose mutations never retry, so one refusal settles once. */
+function wrapper() {
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  }
+}
+
+/**
+ * The create mutation's own gate, pinned at the hook because the editor cannot reach it: a run must
+ * name the Project its Workspace provisions in, and the editor has none to state until the run form
+ * that picks one lands. A caller that states a Project still gets a run, and the Project it stated
+ * is what the request carries.
+ */
+describe('useCreateWorkflowRun', () => {
+  it('refuses a run that names no Project without sending it', async () => {
+    const bodies: unknown[] = []
+    installRunHandlers({ onCreate: (body) => bodies.push(body) })
+    const { result } = renderHook(() => useCreateWorkflowRun(TEST_TENANT_ID), {
+      wrapper: wrapper(),
+    })
+
+    result.current.mutate({ workflowId: WORKFLOW_ID })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(result.current.error?.message).toBe('workflow_run_project_required')
+    expect(bodies).toEqual([])
+  })
+
+  it('sends the stated Project with the run', async () => {
+    const bodies: unknown[] = []
+    installRunHandlers({ onCreate: (body) => bodies.push(body) })
+    const { result } = renderHook(() => useCreateWorkflowRun(TEST_TENANT_ID), {
+      wrapper: wrapper(),
+    })
+
+    result.current.mutate({ workflowId: WORKFLOW_ID, projectId: PROJECT_ID })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(bodies).toEqual([{ projectId: PROJECT_ID }])
+  })
+})
+
 describe('WorkflowRunTools', () => {
   it('disables the run button while no snapshot exists to execute', async () => {
     renderRunTools({ snapshots: [] })
@@ -128,7 +175,7 @@ describe('WorkflowRunTools', () => {
     expect(runButton).toHaveAttribute('title', '请先发布一个版本，才能运行这个工作流')
   })
 
-  it('arms the run button once a snapshot exists, creating the run and navigating to it', async () => {
+  it('arms the run button once a snapshot exists, but starts no run it cannot state a Project for', async () => {
     const bodies: unknown[] = []
     const router = renderRunTools({ runs: [], onCreate: (body) => bodies.push(body) })
     const runButton = await screen.findByRole('button', { name: '运行' })
@@ -136,9 +183,12 @@ describe('WorkflowRunTools', () => {
 
     fireEvent.click(runButton)
 
-    // The browser path carries the workspace slug, never the tenant UUID.
-    await waitFor(() => expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-new`))
-    expect(bodies).toEqual([{}])
+    // A run must name the Project its Workspace provisions in, and the editor has none to state
+    // yet: the refusal happens before the request, so nothing is created and nothing navigates.
+    // The button goes pending and comes back armed, which is where the refusal settles.
+    await waitFor(() => expect(runButton).toBeEnabled())
+    expect(bodies).toEqual([])
+    expect(router.state.location.pathname).toBe(EDITOR_PATH)
   })
 
   it('lists run history and opens a run from a row', async () => {
@@ -182,18 +232,19 @@ describe('workflow run navigation through the app routes', () => {
     return { ...view, bodies }
   }
 
-  it('creates one run and stays on the same workspace route instead of the UUID one', async () => {
+  it('starts no run, and stays on the same workspace route instead of the UUID one', async () => {
     const { router, bodies } = renderAppAt(EDITOR_PATH)
     const runButton = await screen.findByRole('button', { name: '运行' })
     await waitFor(() => expect(runButton).toBeEnabled())
 
     fireEvent.click(runButton)
 
-    // The destination is the real run detail page: a UUID workspace path would have
-    // been redirected to Issues by the Layout before this page ever mounted.
-    expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-new`)
-    expect(bodies).toHaveLength(1)
+    // A UUID workspace path would have been redirected to Issues by the Layout before
+    // this page ever mounted, so the route is what proves the click stayed put.
+    await waitFor(() => expect(runButton).toBeEnabled())
+    expect(bodies).toHaveLength(0)
+    expect(router.state.location.pathname).toBe(EDITOR_PATH)
+    expect(screen.queryByRole('heading', { name: '运行详情' })).not.toBeInTheDocument()
   })
 
   it('opens an existing run from the history with the same slug and creates nothing', async () => {

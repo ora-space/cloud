@@ -93,7 +93,11 @@ func TestRevisionUpgradePreservesPublishedWorkflowSchema(t *testing.T) {
 		must(t, err)
 	}
 	must(t, tx.Commit())
-	const documents = `SELECT jsonb_build_object('workflow',to_jsonb(w),'snapshot',to_jsonb(s),'run',to_jsonb(r))::text FROM workflows w JOIN workflow_snapshots s ON s.workflow_id=w.id JOIN workflow_runs r ON r.snapshot_id=s.id WHERE r.id=$1`
+	// The run document strips the columns later migrations added to the published row: 0038's
+	// identity columns and 0041's frozen plugin version. They land as NULL on published rows,
+	// which is an intended shape change, not a data change — the comparison keeps guarding the
+	// row data the published schema carried.
+	const documents = `SELECT jsonb_build_object('workflow',to_jsonb(w),'snapshot',to_jsonb(s),'run',to_jsonb(r) - ARRAY['created_by','project_id','plugin_version'])::text FROM workflows w JOIN workflow_snapshots s ON s.workflow_id=w.id JOIN workflow_runs r ON r.snapshot_id=s.id WHERE r.id=$1`
 	const ledger = `SELECT jsonb_object_agg(version,checksum)::text FROM schema_migrations WHERE version <> '0027_verified_revisions.sql' AND version < '0030'`
 	var beforeDocuments, beforeLedger string
 	must(t, pool.QueryRow(documents, run).Scan(&beforeDocuments))

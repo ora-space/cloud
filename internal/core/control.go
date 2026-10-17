@@ -183,9 +183,11 @@ func snapshot(t *transaction, o Object) Object {
 		"sandboxes":  t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")),
 		"nodes":      t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")),
 		// Retired plugin effects stay in the table as history and are not part of the live snapshot.
-		"effects":          t.list("SELECT * FROM external_effects WHERE operation_id=$1 AND kind NOT IN ('plugin_ensure','plugin_delete') ORDER BY created_at,id", o.S("id")),
-		"clones":           t.list("SELECT * FROM clone_executions WHERE operation_id=$1 ORDER BY created_at,execution_id", o.S("id")),
-		"pluginExecutions": t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind IN ('install_plugins','remove_plugins') ORDER BY created_at,execution_id", o.S("id")),
+		"effects": t.list("SELECT * FROM external_effects WHERE operation_id=$1 AND kind NOT IN ('plugin_ensure','plugin_delete') ORDER BY created_at,id", o.S("id")),
+		"clones":  t.list("SELECT * FROM clone_executions WHERE operation_id=$1 ORDER BY created_at,execution_id", o.S("id")),
+		// nodeExecutionColumns, not `*`: the table carries Cloud-internal columns the Controller's
+		// closed ExecutionRecord contract has no field for. See its doc comment.
+		"pluginExecutions": t.list("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE operation_id=$1 AND kind IN ('install_plugins','remove_plugins') ORDER BY created_at,execution_id", o.S("id")),
 	}
 	if input := pluginInputOf(o); len(input) > 0 {
 		out["pluginInput"] = input

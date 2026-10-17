@@ -141,7 +141,7 @@ func pluginIdentity(id string) (namespace, identifier string, ok bool) {
 func livePluginWorkspaces(t *transaction, spaceID string) []Object {
 	// Run Workspaces install plugins through their own create_workspace step. They are not fan-out
 	// targets: a user install must not queue an operation against a Workspace the user cannot see.
-	return t.list(`SELECT w.* FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL ORDER BY w.id`, spaceID)
+	return t.list(`SELECT w.* FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL ORDER BY w.id`, spaceID)
 }
 
 // installSpacePlugin records an administrator's pinned selection. Execution waits durably;
@@ -271,7 +271,7 @@ func pluginInstanceWriteback(t *transaction, op Object, pluginID, state, version
 	}
 	// Run Workspace instances are execution facts for that run. They do not change the Space aggregate,
 	// so one disposable install failure cannot retire an Agent the Space still has selected.
-	states := t.list("SELECT observed_state FROM workspace_plugin_instances wi WHERE source_namespace=$1 AND identifier=$2 AND workspace_id IN (SELECT w.id FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$3 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL)", namespace, identifier, row.S("spaceId"))
+	states := t.list("SELECT observed_state FROM workspace_plugin_instances wi WHERE source_namespace=$1 AND identifier=$2 AND workspace_id IN (SELECT w.id FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$3 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL)", namespace, identifier, row.S("spaceId"))
 	aggregate := "installed"
 	if desired := t.one("SELECT desired_state,tenant_id FROM space_plugins WHERE space_id=$1 AND source_namespace=$2 AND identifier=$3", row.S("spaceId"), namespace, identifier); desired != nil {
 		desiredState := desired.S("desiredState")

@@ -52,6 +52,13 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
+		// A WorkflowRun session ends through this same hook and has its own, smaller settlement
+		// (settleWorkflowSessionEnded): the scheduler commits the node's terminal state from this
+		// evidence on its next pass, so the hook's job is to prove the event is this run's own and
+		// ack it.
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return settleWorkflowSessionEnded(t, runID, executionID, ended)
+		}
 		// No authoritative run to accept the terminal event: an invariant violation, not a replay, so
 		// the event must not be acked.
 		return fmt.Errorf("sessionEnded: issue_run %s not found", runID)
@@ -148,7 +155,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	if err != nil {
 		return err
 	}
-	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), time.Time{})
+	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), "", time.Time{})
 
 	// Last, so lastSeq is the high-water mark this transaction is about to commit. `ended` is a
 	// state-only change with a cleared idleSince, and the discards change per-turn status: both

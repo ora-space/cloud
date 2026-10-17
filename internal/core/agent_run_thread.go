@@ -90,8 +90,15 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
-		// No authoritative run to accept the events: an invariant violation, not a replay, so the
-		// batch must not be acked (unknown run).
+		// D8: a session may execute under a WorkflowRun. Phase-1 (D7) defers workflow thread
+		// history — thread_entries is keyed on issue_runs — so the receipts fence (A-side
+		// node_event_receipts, already recorded in the same transaction) is the durable record
+		// and nothing is appended here. Accepting the batch is what lets the terminal result
+		// commit; an id that is neither a live issue run nor a live workflow run is still an
+		// invariant violation, not a replay, so the batch must not be acked (unknown run).
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return nil
+		}
 		return fmt.Errorf("settleThreadEvents: issue_run %s not found", runID)
 	}
 	if o.S("executorType") != "agent" {

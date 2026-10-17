@@ -131,8 +131,33 @@ func validateWorkflowGraph(graph Object) []workflowGraphProblem {
 	}
 	problems = append(problems, validateWorkflowNodes(nodes)...)
 	problems = append(problems, validateWorkflowEdges(graph, nodes)...)
+	problems = append(problems, validateWorkflowAcyclic(graph)...)
 	problems = append(problems, validateWorkflowSlots(graph, nodes)...)
 	return problems
+}
+
+// validateWorkflowAcyclic refuses a graph that contains a cycle. The first phase executes a DAG and
+// nothing else (#67 结论 4, D1 条件④): the projection that decides what runs is a topological read of
+// committed state, so a node on a cycle either waits for an upstream that waits for it or goes round
+// once and drops its back edge, and neither is what its author drew. Publishing would freeze a
+// document whose run cannot mean what it says, which is exactly what this gate exists to prevent.
+// Loops and iterations are not part of the first phase, so a graph that wants one is refused rather
+// than executed as something else.
+//
+// The reported node is the source of the back edge the walk found, which is on a cycle by
+// construction; a node merely downstream of one is not reported, because the author has nothing to
+// fix there. The walk itself is shared with the run's advance pass — see workflowGraphCycle — so a
+// graph Cloud refuses to publish and a graph Cloud refuses to run are the same graph.
+//
+// The graph is read by the same reader the run uses, so a document whose nodes are not a list is
+// simply empty here: validateWorkflowNodes has already said so, and this pass must not pile a second,
+// less useful complaint on top of it.
+func validateWorkflowAcyclic(graph Object) []workflowGraphProblem {
+	source := workflowGraphCycle(readWorkflowGraph(graph))
+	if source == "" {
+		return nil
+	}
+	return []workflowGraphProblem{{Code: "graph_cycle", NodeID: source}}
 }
 
 // validateWorkflowNodes checks node identity, kind, agent configuration and the start-node count. The
@@ -390,11 +415,10 @@ func validateWorkflowSlots(graph Object, nodes []any) []workflowGraphProblem {
 // and `modelId`, when present, are non-empty strings. A hint never resolves an executor, so it is
 // checked only far enough to keep the document well formed for the runner that reads it.
 func validSlotHint(hint any) bool {
-	o, ok := hint.(map[string]any)
+	h, ok := asWorkflowObject(hint)
 	if !ok {
 		return false
 	}
-	h := Object(o)
 	for _, key := range []string{"agentCli", "modelId"} {
 		value, present := h[key]
 		if !present || value == nil {
@@ -415,8 +439,8 @@ func workflowSlotDeclarations(graph Object) []Object {
 	declared, _ := graph["executorSlots"].([]any)
 	out := []Object{}
 	for _, item := range declared {
-		if slot, ok := item.(map[string]any); ok {
-			out = append(out, Object(slot))
+		if slot, ok := asWorkflowObject(item); ok {
+			out = append(out, slot)
 		}
 	}
 	return out
@@ -443,11 +467,10 @@ func workflowReferencedSlots(nodes []any) []workflowSlotReference {
 	index := map[string]int{}
 	out := []workflowSlotReference{}
 	for _, raw := range nodes {
-		node, ok := raw.(map[string]any)
+		o, ok := asWorkflowObject(raw)
 		if !ok {
 			continue
 		}
-		o := Object(node)
 		data := o.O("data")
 		if data.S("kind") != "agent" {
 			continue

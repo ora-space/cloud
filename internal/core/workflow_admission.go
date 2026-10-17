@@ -79,12 +79,10 @@ func requireWorkflowRunInput(graph, input Object) {
 // some slot the frozen graph references.
 //
 // The mapping is personal (model-access decision D1): `default` is the user's personal default model
-// and is not stored twice, and a named slot is looked up in the user's own slot mappings. There is no
-// fallback of any kind — not to `default`, not to the author's `hint`, not to another user's
-// configuration — because a node the author declared as needing a strong model running quietly on a
-// weak one is the failure this gate exists to prevent. A named slot is therefore reported as
-// unconfigured today: personal slot mappings are not implemented yet, and reporting them as
-// configurable-but-missing is honest, whereas resolving them to something would not be.
+// and is not stored twice, and a named slot is looked up in the user's own slot mappings
+// (resolveWorkflowSlotExecutor). There is no fallback of any kind — not to `default`, not to the
+// author's `hint`, not to another user's configuration — because a node the author declared as needing
+// a strong model running quietly on a weak one is the failure this gate exists to prevent.
 //
 // Every gap is collected before refusing, because the point of the refusal is that the user can fix
 // them: the form shows each slot's description and the nodes that depend on it, and fixing them one
@@ -96,12 +94,9 @@ func requireWorkflowExecutorSlots(t *transaction, graph Object, uid string) {
 	}
 	gaps := []any{}
 	for _, reference := range workflowReferencedSlots(workflowNodes(graph)) {
-		reason := slotReasonNotConfigured
-		if reference.Name == workflowDefaultSlot {
-			// defaultExecutorGap is the same policy the OpenCode run binding applies, so "the default
-			// model is usable" cannot mean two different things in two places.
-			reason, _, _ = defaultExecutorGap(t, uid)
-		}
+		// One resolution for both halves of the gate: the same call the freezing step makes, so a
+		// slot cannot be admitted by one policy and frozen by another.
+		reason, _, _ := resolveWorkflowSlotExecutor(t, uid, reference.Name)
 		if reason == "" {
 			continue
 		}

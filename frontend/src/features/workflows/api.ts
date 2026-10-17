@@ -364,6 +364,13 @@ export function useWorkflowRun(
 /** Input for running a workflow once against a published snapshot. */
 export interface CreateWorkflowRunInput {
   workflowId: string
+  /**
+   * The Project the run's Workspace provisions in. The contract requires it — a run that names
+   * none is refused with 409 `workflow_run_project_required` — so the mutation refuses a caller
+   * that has none instead of sending a body the contract does not describe. Optional here only
+   * because the run form that picks a Project is not built yet.
+   */
+  projectId?: string
   /** Optional display name; defaults to the workflow's name. */
   name?: string
   /** The exact snapshot to execute, or omit to pin the latest published one. */
@@ -382,6 +389,10 @@ export interface CreateWorkflowRunInput {
  * idempotency key, so a retried run replays the stored response instead of
  * minting a second execution.
  *
+ * The run's Project is required by the contract — a run that names none is refused with 409
+ * `workflow_run_project_required` — and this editor states none yet: the run form that picks a
+ * Project is not built, so a run started here is refused until that lands.
+ *
  * @param tenantId - Tenant the workflow belongs to.
  * @returns The create mutation; `data` is the stored run.
  */
@@ -391,10 +402,18 @@ export function useCreateWorkflowRun(tenantId: string | undefined) {
   return useMutation<WorkflowRun, ErrorType<ApiError>, CreateWorkflowRunInput>({
     mutationFn: (input: CreateWorkflowRunInput) => {
       if (!tenantId) throw new Error('cloud tenant not resolved')
+      // Refused here rather than sent: a run with no frozen Project is an identity-incomplete
+      // aggregate that can never provision the Workspace its agent nodes need, so the service
+      // answers this same code (409) and there is no value the client could put in the field
+      // instead — the caller either names a Project or names none.
+      if (input.projectId === undefined || input.projectId === '') {
+        throw new Error('workflow_run_project_required')
+      }
       return postApiV1TenantsTidWorkflowsWfidRuns(
         tenantId,
         input.workflowId,
         {
+          projectId: input.projectId,
           ...(input.name === undefined || input.name === '' ? {} : { name: input.name }),
           ...(input.snapshotId === undefined || input.snapshotId === ''
             ? {}

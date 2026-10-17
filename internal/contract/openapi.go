@@ -108,6 +108,7 @@ func Document() map[string]any {
 		"historyAvailable": boolean(), "model": optional(object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")),
 	}, "id", "issueId", "issueNumber", "issueTitle", "projectId", "projectName", "agentPluginId", "status", "threadState", "createdAt", "startedAt", "completedAt", "historyAvailable", "model")
 	s["SessionHistory"] = object(obj{"source": enumeration("archive"), "records": array(obj{"type": "object", "additionalProperties": true}), "sizeBytes": number(), "sha256": str()}, "source", "records", "sizeBytes", "sha256")
+	s["SlotMapping"] = object(obj{"slotName": str(), "agentCli": str(), "connectionId": uuid(), "modelId": str(), "modelName": str(), "connectionName": str(), "available": boolean(), "unavailableReason": str(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "slotName", "agentCli", "connectionId", "modelId", "modelName", "connectionName", "available", "unavailableReason", "version", "createdAt", "updatedAt")
 	s["ThreadModel"] = object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
@@ -132,11 +133,21 @@ func Document() map[string]any {
 	workflowRunProps := properties(s, "WorkflowRun")
 	workflowRunProps["status"] = enumeration("pending", "running", "awaiting_input", "succeeded", "failed", "cancelled")
 	workflowRunProps["input"] = obj{"type": "object", "additionalProperties": true, "description": "The kickoff input passed to the run's start node."}
-	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, output, error, timestamps."}
+	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed."}
 	workflowRunProps["rounds"] = array(obj{"type": "object", "additionalProperties": true})
 	// definitionSnapshot lives only on a detail read (the history list trips without it);
 	// it is optional so one schema serves both list rows and the composed run page.
 	workflowRunProps["definitionSnapshot"] = optional(obj{"type": "object", "additionalProperties": true, "description": "The frozen graph document this run executed against, from the snapshot it captured."})
+	s["WorkflowRunModelBinding"] = object(obj{
+		"slot":           str(),
+		"connectionName": str(),
+		"modelId":        str(),
+		"modelName":      str(),
+		"revoked":        boolean(),
+	}, "slot", "connectionName", "modelId", "modelName", "revoked")
+	modelBindings := optional(array(ref("WorkflowRunModelBinding")))
+	modelBindings["description"] = "The frozen per-slot model bindings this run executes against, ordered by slot name. Present on a detail read. Each binding is frozen at run creation and used for the run's whole lifetime; only `revoked` can turn true (the owning connection's grant was revoked)."
+	workflowRunProps["modelBindings"] = modelBindings
 	s["IssueStatus"] = resource("id tenantId key name description category color icon isSystem position version createdAt updatedAt deletedAt", "deletedAt")
 	statusProps := properties(s, "IssueStatus")
 	statusProps["isSystem"] = boolean()
@@ -394,7 +405,10 @@ func Document() map[string]any {
 		credentialWrite := r.Method == "PUT" && strings.HasPrefix(r.Path, "/api/v1/me/model-connections/") && strings.HasSuffix(r.Path, "/credential")
 		if public && (r.Method == "POST" || r.Method == "DELETE" || credentialWrite) && r.Path != "/api/v1/me/git-identity" {
 			keyScope := "Scoped to tenant and user."
-			if strings.HasPrefix(r.Path, "/api/v1/join/") || strings.HasPrefix(r.Path, "/api/v1/me/model-") {
+			// The personal routes are keyed on the verified user alone: a slot mapping is a
+			// (user_id, slot_name) row and a personal connection is the user's, so neither is scoped
+			// to a tenant and saying it is would describe a boundary the handler never checks.
+			if strings.HasPrefix(r.Path, "/api/v1/join/") || strings.HasPrefix(r.Path, "/api/v1/me/model-") || strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
 				keyScope = "Scoped to the verified user before tenant membership exists."
 			}
 			parameters = append(parameters, obj{"name": "Idempotency-Key", "in": "header", "required": true, "schema": obj{"type": "string", "minLength": 1, "maxLength": 200}, "description": keyScope + " Same key and canonical method/path/body returns the original response before version validation; changed request is 409."})
@@ -524,7 +538,7 @@ func snapshotFormPath(path string) bool {
 }
 
 func isList(r router.Route) bool {
-	if r.Path == "/api/v1/me/model-connections" || r.Path == router.AgentSessionsPath || r.Path == router.SessionModelCallsPath {
+	if r.Path == "/api/v1/me/model-connections" || r.Path == router.AgentSessionsPath || r.Path == router.SessionModelCallsPath || r.Path == "/api/v1/me/executor-slot-mappings" {
 		return r.Method == "GET"
 	}
 	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
@@ -558,6 +572,12 @@ func responseSchema(r router.Route) (schema obj, status string) {
 			status = "201"
 		}
 		return object(obj{"resource": ref("ModelConnection")}, "resource"), status
+	}
+	if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+		if isList(r) {
+			return object(obj{"items": array(ref("SlotMapping")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		}
+		return object(obj{"resource": ref("SlotMapping")}, "resource"), "200"
 	}
 	if r.Path == "/api/v1/me/git-identity" {
 		return ref("GitIdentity"), "200"
@@ -958,6 +978,8 @@ func inputSchema(name string, r router.Route) obj {
 		return enumeration("unstarted", "started", "done", "closed")
 	case "labelId", "userId", "assigneeId", "executorId", "refId", "parentId", "projectRef", "targetId":
 		return uuid()
+	case "projectId":
+		return obj{"type": "string", "format": "uuid", "description": "The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404."}
 	case "ids":
 		return array(uuid())
 	case "filter", "properties", "input", "values", "graph":
@@ -1012,6 +1034,9 @@ func description(r router.Route) string {
 	}
 	if r.Path == "/api/v1/me/model-default" {
 		return "Reads or selects the verified user's default connection and model. An unset default has empty connectionId/modelId and version 0; replacing a selection requires its current version. The connection must be owned, enabled and contain the selected model. OpenCode run creation requires a usable default and credential and rejects atomically with model_default_required, model_credential_required or model_connection_unavailable before the comment/run persists."
+	}
+	if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+		return "Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0)."
 	}
 	switch r.Path {
 	case "/api/v1/me/spaces":
