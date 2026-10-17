@@ -1184,6 +1184,16 @@ export interface PluginLogoCandidate {
   role: PluginLogoCandidateRole;
 }
 
+/**
+ * @nullable
+ */
+export type PluginCatalogEntryAgentConfiguration = {
+  copyPath: string;
+  declaration: string;
+  declarationSha256: string;
+  schemaVersion: number;
+} | null;
+
 export type PluginCatalogEntryLogo = {
   universal: PluginLogoCandidate;
 } | {
@@ -1192,6 +1202,10 @@ export type PluginCatalogEntryLogo = {
 } | null;
 
 export interface PluginCatalogEntry {
+  /** @nullable */
+  agentConfiguration?: PluginCatalogEntryAgentConfiguration;
+  /** @nullable */
+  agentConfigurationIssue?: string | null;
   description: string;
   /** @nullable */
   homepage: string | null;

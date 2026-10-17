@@ -28,6 +28,19 @@ message PluginInstall {
   string version = 2;
   optional PluginDownload universal = 3;
   repeated PluginTargetDownload targets = 4;
+  // The Agent declaration association the catalog entry declared, when it declared one: the
+  // package's in-archive declaration bytes must compile and fingerprint to this digest.
+  optional PluginAgentConfiguration agent_configuration = 5;
+}
+
+// The declaration identity one install plan freezes from Cloud's catalog snapshot. The plugin
+// id, version, target, and package digest all live on the surrounding plan, which is what makes
+// this a binding to an exact release rather than a free-floating schema claim.
+message PluginAgentConfiguration {
+  // Declaration schema version the associated copy declares.
+  uint32 schema_version = 1;
+  // Lowercase hexadecimal SHA-256 of the exact declaration bytes.
+  string declaration_sha256 = 2;
 }
 
 message PluginRemoval {

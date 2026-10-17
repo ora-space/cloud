@@ -1,6 +1,8 @@
 package pluginmarket
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -30,6 +32,28 @@ type Entry struct {
 	Readme             string
 	MarketplaceVisible bool
 	SourceURL          string
+	// AgentConfiguration is the consumable declaration association, set only when the listing
+	// declared one and the static copy validated against it. The Declaration field carries the
+	// exact copy bytes so the persisted snapshot serves configuration reads without the checkout,
+	// the package, or any plugin code.
+	AgentConfiguration *AgentConfigurationMetadata
+	// AgentConfigurationIssue records the bounded reason a declared association could not be
+	// consumed. It is empty for listings that declare nothing and for valid associations: "not
+	// declared" and "declared but invalid" are different facts, and only the latter is recorded.
+	AgentConfigurationIssue string
+}
+
+// AgentConfigurationMetadata is one validated declaration association plus its static copy, as
+// the catalog snapshot persists and serves it.
+type AgentConfigurationMetadata struct {
+	// Declaration schema version the associated copy declares.
+	SchemaVersion uint32 `json:"schemaVersion"`
+	// SHA-256 of the exact declaration bytes, lowercase hexadecimal.
+	DeclarationSha256 string `json:"declarationSha256"`
+	// Registry-entry-relative path the copy was read from.
+	CopyPath string `json:"copyPath"`
+	// The exact static copy bytes; the package's in-archive declaration must match them.
+	Declaration string `json:"declaration"`
 }
 
 // LogoRole and LogoExtension are the desktop plugin-asset closed sets; the
@@ -180,27 +204,106 @@ func Scan(registryRoot, namespace, sourceURL string) ([]Entry, []string, error) 
 		}
 		seen[id] = true
 		dir := filepath.Dir(path)
+		association, issue := resolveAgentConfiguration(dir, manifest)
 		entries = append(entries, Entry{
-			Namespace:          namespace,
-			Identifier:         manifest.Identifier,
-			Title:              manifest.Title,
-			Kind:               manifest.Kind,
-			Version:            manifest.Version,
-			Description:        manifest.Description,
-			Homepage:           manifest.Homepage,
-			License:            manifest.License,
-			Logo:               resolveLogo(dir),
-			URL:                manifest.URL,
-			SHA256:             manifest.SHA256,
-			Targets:            manifest.Targets,
-			PackMembers:        manifest.PackMembers,
-			Readme:             readReadme(dir),
-			MarketplaceVisible: manifest.MarketplaceVisible,
-			SourceURL:          sourceURL,
+			Namespace:               namespace,
+			Identifier:              manifest.Identifier,
+			Title:                   manifest.Title,
+			Kind:                    manifest.Kind,
+			Version:                 manifest.Version,
+			Description:             manifest.Description,
+			Homepage:                manifest.Homepage,
+			License:                 manifest.License,
+			Logo:                    resolveLogo(dir),
+			URL:                     manifest.URL,
+			SHA256:                  manifest.SHA256,
+			Targets:                 manifest.Targets,
+			PackMembers:             manifest.PackMembers,
+			Readme:                  readReadme(dir),
+			MarketplaceVisible:      manifest.MarketplaceVisible,
+			SourceURL:               sourceURL,
+			AgentConfiguration:      association,
+			AgentConfigurationIssue: issue,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Namespace+"/"+entries[i].Identifier < entries[j].Namespace+"/"+entries[j].Identifier
 	})
 	return entries, skipped, nil
+}
+
+// agentConfigurationIssueMaximum bounds the recorded reason so a hostile copy cannot balloon the
+// catalog row or smuggle content through the issue field.
+const agentConfigurationIssueMaximum = 200
+
+// resolveAgentConfiguration reads and validates one listing's static declaration copy inside the
+// synced checkout.
+//
+// Reading the copy is the only filesystem work beyond the manifest and README, and it stays
+// inside the entry directory: the copy path grammar already excludes escapes, the file must be a
+// regular non-symlink file, and the bytes must hash and compile to exactly the associated
+// identity. A listing that declares nothing consumes nothing. A declared association that fails
+// any check leaves the entry visible with a bounded issue and no consumable declaration: the
+// plugin stays installable as a package, it just cannot offer personal configuration until its
+// publisher fixes the release.
+func resolveAgentConfiguration(dir string, manifest *Manifest) (association *AgentConfigurationMetadata, issue string) {
+	declared := manifest.AgentConfiguration
+	if declared == nil {
+		return nil, ""
+	}
+	copyPath := filepath.Join(dir, filepath.FromSlash(declared.CopyPath))
+	// The manifest path grammar is platform-independent and its segments cannot name a parent,
+	// an absolute location, or a separator escape, so Join stays inside dir; the Lstat below also
+	// refuses anything but a regular file, so a link target outside the entry cannot be read.
+	info, e := os.Lstat(copyPath) // #nosec G703 -- the copy path grammar contains the join.
+	if e != nil {
+		return nil, boundIssue("copy unreadable: " + e.Error())
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "copy must be a regular file"
+	}
+	if info.Size() > maxAgentDeclarationBytes {
+		return nil, boundIssue(fmt.Sprintf("copy exceeds %d bytes", maxAgentDeclarationBytes))
+	}
+	source, e := os.ReadFile(copyPath) // #nosec G703 -- the copy path grammar contains the join.
+	if e != nil {
+		return nil, boundIssue("copy unreadable: " + e.Error())
+	}
+	if !utf8.Valid(source) {
+		return nil, "copy is not valid UTF-8"
+	}
+	if len(source) > maxAgentDeclarationBytes {
+		return nil, boundIssue(fmt.Sprintf("copy exceeds %d bytes", maxAgentDeclarationBytes))
+	}
+	digest := sha256.Sum256(source)
+	if hex.EncodeToString(digest[:]) != declared.DeclarationSha256 {
+		return nil, "copy digest does not match the declared declaration_sha256"
+	}
+	compiled, e := CompileAgentConfiguration(source)
+	if e != nil {
+		if agentError, ok := e.(*AgentConfigurationError); ok {
+			return nil, boundIssue("declaration invalid: " + agentError.Code + ": " + agentError.Reason)
+		}
+		return nil, "declaration invalid"
+	}
+	if compiled.SchemaVersion != declared.SchemaVersion {
+		return nil, boundIssue(fmt.Sprintf("copy declares schema version %d but the association declares %d", compiled.SchemaVersion, declared.SchemaVersion))
+	}
+	if compiled.Fingerprint != declared.DeclarationSha256 {
+		return nil, "copy fingerprint disagrees with the associated digest"
+	}
+	return &AgentConfigurationMetadata{
+		SchemaVersion:     declared.SchemaVersion,
+		DeclarationSha256: declared.DeclarationSha256,
+		CopyPath:          declared.CopyPath,
+		Declaration:       string(source),
+	}, ""
+}
+
+// boundIssue truncates one recorded reason so no copy content can grow the catalog row.
+func boundIssue(reason string) string {
+	if len(reason) <= agentConfigurationIssueMaximum {
+		return reason
+	}
+	return reason[:agentConfigurationIssueMaximum]
 }

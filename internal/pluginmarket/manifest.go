@@ -58,19 +58,30 @@ func manifestError(field, reason string) *ManifestError {
 // rawManifest is the TOML shape of a marketplace orax.toml. Unknown keys are
 // ignored so newer desktop fields do not break the cloud sync.
 type rawManifest struct {
-	Resolver           int64              `toml:"resolver"`
-	Identifier         string             `toml:"identifier"`
-	Title              string             `toml:"title"`
-	Kind               string             `toml:"kind"`
-	Version            string             `toml:"version"`
-	Description        string             `toml:"description"`
-	Homepage           string             `toml:"homepage"`
-	License            string             `toml:"license"`
-	URL                string             `toml:"url"`
-	SHA256             string             `toml:"sha256"`
-	Targets            []rawReleaseTarget `toml:"targets"`
-	Pack               *rawPack           `toml:"pack"`
-	MarketplaceVisible *bool              `toml:"marketplace_visible"`
+	Resolver           int64                  `toml:"resolver"`
+	Identifier         string                 `toml:"identifier"`
+	Title              string                 `toml:"title"`
+	Kind               string                 `toml:"kind"`
+	Version            string                 `toml:"version"`
+	Description        string                 `toml:"description"`
+	Homepage           string                 `toml:"homepage"`
+	License            string                 `toml:"license"`
+	URL                string                 `toml:"url"`
+	SHA256             string                 `toml:"sha256"`
+	Targets            []rawReleaseTarget     `toml:"targets"`
+	AgentConfiguration *rawAgentConfiguration `toml:"agent_configuration"`
+	Pack               *rawPack               `toml:"pack"`
+	MarketplaceVisible *bool                  `toml:"marketplace_visible"`
+}
+
+// rawAgentConfiguration is the release-form `[agent_configuration]` publication association.
+// Unknown keys inside the section are rejected (unlike unknown top-level keys) because the
+// association is load-bearing for install verification: a listing carrying fields this parser
+// does not know fails loudly instead of being reinterpreted.
+type rawAgentConfiguration struct {
+	SchemaVersion     uint64 `toml:"schema_version"`
+	DeclarationSha256 string `toml:"declaration_sha256"`
+	Copy              string `toml:"copy"`
 }
 
 type rawReleaseTarget struct {
@@ -103,8 +114,20 @@ type Manifest struct {
 	URL                string
 	SHA256             string
 	Targets            []ReleaseTarget
+	AgentConfiguration *AgentConfigurationAssociation
 	PackMembers        []string
 	MarketplaceVisible bool
+}
+
+// AgentConfigurationAssociation is one listing's declaration publication binding: the
+// declaration schema version, the SHA-256 of the exact declaration bytes every package of the
+// release must carry, and the registry-entry-relative path of the static copy the sync reads.
+// The namespace half of the canonical plugin id never appears here because it belongs to the
+// publishing marketplace source, never the manifest.
+type AgentConfigurationAssociation struct {
+	SchemaVersion     uint32
+	DeclarationSha256 string
+	CopyPath          string
 }
 
 // parseManifest validates the desktop marketplace orax.toml contract. It
@@ -206,6 +229,10 @@ func parseManifest(source []byte) (*Manifest, error) {
 	if raw.MarketplaceVisible != nil {
 		visible = *raw.MarketplaceVisible
 	}
+	association, e := parseAgentConfiguration(source, raw.AgentConfiguration, raw.Kind, hasUniversal, hasTargets)
+	if e != nil {
+		return nil, e
+	}
 	return &Manifest{
 		Identifier:         raw.Identifier,
 		Title:              title,
@@ -217,6 +244,7 @@ func parseManifest(source []byte) (*Manifest, error) {
 		URL:                raw.URL,
 		SHA256:             raw.SHA256,
 		Targets:            targets,
+		AgentConfiguration: association,
 		PackMembers:        packMembers(raw.Pack),
 		MarketplaceVisible: visible,
 	}, nil
@@ -227,6 +255,104 @@ func packMembers(p *rawPack) []string {
 		return nil
 	}
 	return p.Members
+}
+
+// maxCopyPathBytes and maxCopyPathSegmentBytes bound the declared static-copy path, mirroring the
+// desktop manifest crate byte for byte.
+const (
+	maxCopyPathBytes        = 256
+	maxCopyPathSegmentBytes = 128
+)
+
+// parseAgentConfiguration validates the release-form `[agent_configuration]` section, mirroring
+// the desktop manifest crate: agent kind only, release source required, positive schema version,
+// canonical digest, and the closed copy-path grammar that keeps a validated path containable
+// inside the registry entry on every host.
+func parseAgentConfiguration(
+	source []byte,
+	raw *rawAgentConfiguration,
+	kind string,
+	hasUniversal, hasTargets bool,
+) (*AgentConfigurationAssociation, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if kind != "agent" {
+		return nil, manifestError("agent_configuration", fmt.Sprintf("only agent listings may declare it (kind is %q)", kind))
+	}
+	if !hasUniversal && !hasTargets {
+		return nil, manifestError("agent_configuration", "requires the listing to declare a release package")
+	}
+	if e := rejectUnknownAgentConfigurationKeys(source); e != nil {
+		return nil, e
+	}
+	if raw.SchemaVersion == 0 || raw.SchemaVersion > 0xFFFFFFFF {
+		return nil, manifestError("agent_configuration.schema_version", "must be a positive integer")
+	}
+	if !sha256Pattern.MatchString(raw.DeclarationSha256) {
+		return nil, manifestError("agent_configuration.declaration_sha256", "must be exactly 64 hexadecimal characters")
+	}
+	if e := validCopyPath(raw.Copy); e != nil {
+		return nil, manifestError("agent_configuration.copy", e.Error())
+	}
+	return &AgentConfigurationAssociation{
+		SchemaVersion:     uint32(raw.SchemaVersion),
+		DeclarationSha256: strings.ToLower(raw.DeclarationSha256),
+		CopyPath:          raw.Copy,
+	}, nil
+}
+
+// rejectUnknownAgentConfigurationKeys re-reads the manifest as a generic table so keys inside
+// the section fail the listing the way the desktop's strict section deserializer does; the
+// top-level document keeps tolerating unknown keys for forward compatibility.
+func rejectUnknownAgentConfigurationKeys(source []byte) error {
+	var document map[string]any
+	if e := toml.Unmarshal(source, &document); e != nil {
+		return fmt.Errorf("orax.toml: %w", e)
+	}
+	section, ok := document["agent_configuration"].(map[string]any)
+	if !ok {
+		return manifestError("agent_configuration", "must be a table")
+	}
+	for key := range section {
+		switch key {
+		case "schema_version", "declaration_sha256", "copy":
+		default:
+			return manifestError("agent_configuration", "unknown key "+key)
+		}
+	}
+	return nil
+}
+
+// validCopyPath applies the closed path grammar shared with the desktop: '/'-separated segments
+// matching [A-Za-z0-9][A-Za-z0-9._-]*, which excludes separators, escapes, absolute locations,
+// parent segments, Windows drives, whitespace, control characters, and non-ASCII.
+func validCopyPath(value string) error {
+	if value == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	if len(value) > maxCopyPathBytes {
+		return fmt.Errorf("exceeds %d bytes", maxCopyPathBytes)
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || len(segment) > maxCopyPathSegmentBytes {
+			return fmt.Errorf("segments must be between 1 and %d bytes", maxCopyPathSegmentBytes)
+		}
+		for index, char := range []byte(segment) {
+			isLower := char >= 'a' && char <= 'z'
+			isUpper := char >= 'A' && char <= 'Z'
+			isDigit := char >= '0' && char <= '9'
+			isPunct := char == '.' || char == '_' || char == '-'
+			isAlnum := isLower || isUpper || isDigit
+			if index == 0 && !isAlnum || index > 0 && !isAlnum && !isPunct {
+				return fmt.Errorf("segments must match [A-Za-z0-9][A-Za-z0-9._-]*")
+			}
+		}
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("segments must not be relative references")
+		}
+	}
+	return nil
 }
 
 // validIdentifier applies the desktop PluginName grammar: at most two

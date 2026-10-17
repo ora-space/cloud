@@ -249,12 +249,15 @@ func (x *PluginTargetDownload) GetDownload() *PluginDownload {
 type PluginInstall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Canonical Plugin ID, `<namespace>/<identifier>`.
-	PluginId      string                  `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
-	Version       string                  `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	Universal     *PluginDownload         `protobuf:"bytes,3,opt,name=universal,proto3,oneof" json:"universal,omitempty"`
-	Targets       []*PluginTargetDownload `protobuf:"bytes,4,rep,name=targets,proto3" json:"targets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PluginId  string                  `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
+	Version   string                  `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Universal *PluginDownload         `protobuf:"bytes,3,opt,name=universal,proto3,oneof" json:"universal,omitempty"`
+	Targets   []*PluginTargetDownload `protobuf:"bytes,4,rep,name=targets,proto3" json:"targets,omitempty"`
+	// The Agent declaration association the catalog entry declared, when it declared one: the
+	// package's in-archive declaration bytes must compile and fingerprint to this digest.
+	AgentConfiguration *PluginAgentConfiguration `protobuf:"bytes,5,opt,name=agent_configuration,json=agentConfiguration,proto3,oneof" json:"agent_configuration,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PluginInstall) Reset() {
@@ -315,6 +318,70 @@ func (x *PluginInstall) GetTargets() []*PluginTargetDownload {
 	return nil
 }
 
+func (x *PluginInstall) GetAgentConfiguration() *PluginAgentConfiguration {
+	if x != nil {
+		return x.AgentConfiguration
+	}
+	return nil
+}
+
+// The declaration identity one install plan freezes from Cloud's catalog snapshot. The plugin
+// id, version, target, and package digest all live on the surrounding plan, which is what makes
+// this a binding to an exact release rather than a free-floating schema claim.
+type PluginAgentConfiguration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Declaration schema version the associated copy declares.
+	SchemaVersion uint32 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// Lowercase hexadecimal SHA-256 of the exact declaration bytes.
+	DeclarationSha256 string `protobuf:"bytes,2,opt,name=declaration_sha256,json=declarationSha256,proto3" json:"declaration_sha256,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PluginAgentConfiguration) Reset() {
+	*x = PluginAgentConfiguration{}
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginAgentConfiguration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginAgentConfiguration) ProtoMessage() {}
+
+func (x *PluginAgentConfiguration) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginAgentConfiguration.ProtoReflect.Descriptor instead.
+func (*PluginAgentConfiguration) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PluginAgentConfiguration) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *PluginAgentConfiguration) GetDeclarationSha256() string {
+	if x != nil {
+		return x.DeclarationSha256
+	}
+	return ""
+}
+
 type PluginRemoval struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PluginId      string                 `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
@@ -325,7 +392,7 @@ type PluginRemoval struct {
 
 func (x *PluginRemoval) Reset() {
 	*x = PluginRemoval{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -337,7 +404,7 @@ func (x *PluginRemoval) String() string {
 func (*PluginRemoval) ProtoMessage() {}
 
 func (x *PluginRemoval) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -350,7 +417,7 @@ func (x *PluginRemoval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginRemoval.ProtoReflect.Descriptor instead.
 func (*PluginRemoval) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{3}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PluginRemoval) GetPluginId() string {
@@ -377,7 +444,7 @@ type InstallPluginsSpec struct {
 
 func (x *InstallPluginsSpec) Reset() {
 	*x = InstallPluginsSpec{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +456,7 @@ func (x *InstallPluginsSpec) String() string {
 func (*InstallPluginsSpec) ProtoMessage() {}
 
 func (x *InstallPluginsSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +469,7 @@ func (x *InstallPluginsSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallPluginsSpec.ProtoReflect.Descriptor instead.
 func (*InstallPluginsSpec) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{4}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InstallPluginsSpec) GetPlugins() []*PluginInstall {
@@ -421,7 +488,7 @@ type RemovePluginsSpec struct {
 
 func (x *RemovePluginsSpec) Reset() {
 	*x = RemovePluginsSpec{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[5]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -433,7 +500,7 @@ func (x *RemovePluginsSpec) String() string {
 func (*RemovePluginsSpec) ProtoMessage() {}
 
 func (x *RemovePluginsSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[5]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -446,7 +513,7 @@ func (x *RemovePluginsSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePluginsSpec.ProtoReflect.Descriptor instead.
 func (*RemovePluginsSpec) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{5}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RemovePluginsSpec) GetPlugins() []*PluginRemoval {
@@ -466,7 +533,7 @@ type PluginItemInstalled struct {
 
 func (x *PluginItemInstalled) Reset() {
 	*x = PluginItemInstalled{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[6]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -478,7 +545,7 @@ func (x *PluginItemInstalled) String() string {
 func (*PluginItemInstalled) ProtoMessage() {}
 
 func (x *PluginItemInstalled) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[6]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -491,7 +558,7 @@ func (x *PluginItemInstalled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginItemInstalled.ProtoReflect.Descriptor instead.
 func (*PluginItemInstalled) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{6}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PluginItemInstalled) GetVersion() string {
@@ -509,7 +576,7 @@ type PluginItemRemoved struct {
 
 func (x *PluginItemRemoved) Reset() {
 	*x = PluginItemRemoved{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -521,7 +588,7 @@ func (x *PluginItemRemoved) String() string {
 func (*PluginItemRemoved) ProtoMessage() {}
 
 func (x *PluginItemRemoved) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -534,7 +601,7 @@ func (x *PluginItemRemoved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginItemRemoved.ProtoReflect.Descriptor instead.
 func (*PluginItemRemoved) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{7}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{8}
 }
 
 type PluginItemFailed struct {
@@ -546,7 +613,7 @@ type PluginItemFailed struct {
 
 func (x *PluginItemFailed) Reset() {
 	*x = PluginItemFailed{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -558,7 +625,7 @@ func (x *PluginItemFailed) String() string {
 func (*PluginItemFailed) ProtoMessage() {}
 
 func (x *PluginItemFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -571,7 +638,7 @@ func (x *PluginItemFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginItemFailed.ProtoReflect.Descriptor instead.
 func (*PluginItemFailed) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{8}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PluginItemFailed) GetReason() PluginFailureReason {
@@ -596,7 +663,7 @@ type PluginItemResult struct {
 
 func (x *PluginItemResult) Reset() {
 	*x = PluginItemResult{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[9]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +675,7 @@ func (x *PluginItemResult) String() string {
 func (*PluginItemResult) ProtoMessage() {}
 
 func (x *PluginItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[9]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +688,7 @@ func (x *PluginItemResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginItemResult.ProtoReflect.Descriptor instead.
 func (*PluginItemResult) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{9}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PluginItemResult) GetPluginId() string {
@@ -698,7 +765,7 @@ type PluginsResult struct {
 
 func (x *PluginsResult) Reset() {
 	*x = PluginsResult{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[10]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -710,7 +777,7 @@ func (x *PluginsResult) String() string {
 func (*PluginsResult) ProtoMessage() {}
 
 func (x *PluginsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[10]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -723,7 +790,7 @@ func (x *PluginsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginsResult.ProtoReflect.Descriptor instead.
 func (*PluginsResult) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{10}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PluginsResult) GetItems() []*PluginItemResult {
@@ -743,7 +810,7 @@ type PluginsFailed struct {
 
 func (x *PluginsFailed) Reset() {
 	*x = PluginsFailed{}
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[11]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -755,7 +822,7 @@ func (x *PluginsFailed) String() string {
 func (*PluginsFailed) ProtoMessage() {}
 
 func (x *PluginsFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[11]
+	mi := &file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,7 +835,7 @@ func (x *PluginsFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginsFailed.ProtoReflect.Descriptor instead.
 func (*PluginsFailed) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{11}
+	return file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PluginsFailed) GetReason() PluginsFailureReason {
@@ -788,14 +855,19 @@ const file_ora_cloud_internal_v1_plugin_executions_proto_rawDesc = "" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"q\n" +
 	"\x14PluginTargetDownload\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12A\n" +
-	"\bdownload\x18\x02 \x01(\v2%.ora.cloud.internal.v1.PluginDownloadR\bdownload\"\xe5\x01\n" +
+	"\bdownload\x18\x02 \x01(\v2%.ora.cloud.internal.v1.PluginDownloadR\bdownload\"\xe4\x02\n" +
 	"\rPluginInstall\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12H\n" +
 	"\tuniversal\x18\x03 \x01(\v2%.ora.cloud.internal.v1.PluginDownloadH\x00R\tuniversal\x88\x01\x01\x12E\n" +
-	"\atargets\x18\x04 \x03(\v2+.ora.cloud.internal.v1.PluginTargetDownloadR\atargetsB\f\n" +
+	"\atargets\x18\x04 \x03(\v2+.ora.cloud.internal.v1.PluginTargetDownloadR\atargets\x12e\n" +
+	"\x13agent_configuration\x18\x05 \x01(\v2/.ora.cloud.internal.v1.PluginAgentConfigurationH\x01R\x12agentConfiguration\x88\x01\x01B\f\n" +
 	"\n" +
-	"_universal\"F\n" +
+	"_universalB\x16\n" +
+	"\x14_agent_configuration\"p\n" +
+	"\x18PluginAgentConfiguration\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12-\n" +
+	"\x12declaration_sha256\x18\x02 \x01(\tR\x11declarationSha256\"F\n" +
 	"\rPluginRemoval\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\"T\n" +
@@ -845,40 +917,42 @@ func file_ora_cloud_internal_v1_plugin_executions_proto_rawDescGZIP() []byte {
 }
 
 var file_ora_cloud_internal_v1_plugin_executions_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_ora_cloud_internal_v1_plugin_executions_proto_goTypes = []any{
-	(PluginFailureReason)(0),     // 0: ora.cloud.internal.v1.PluginFailureReason
-	(PluginsFailureReason)(0),    // 1: ora.cloud.internal.v1.PluginsFailureReason
-	(*PluginDownload)(nil),       // 2: ora.cloud.internal.v1.PluginDownload
-	(*PluginTargetDownload)(nil), // 3: ora.cloud.internal.v1.PluginTargetDownload
-	(*PluginInstall)(nil),        // 4: ora.cloud.internal.v1.PluginInstall
-	(*PluginRemoval)(nil),        // 5: ora.cloud.internal.v1.PluginRemoval
-	(*InstallPluginsSpec)(nil),   // 6: ora.cloud.internal.v1.InstallPluginsSpec
-	(*RemovePluginsSpec)(nil),    // 7: ora.cloud.internal.v1.RemovePluginsSpec
-	(*PluginItemInstalled)(nil),  // 8: ora.cloud.internal.v1.PluginItemInstalled
-	(*PluginItemRemoved)(nil),    // 9: ora.cloud.internal.v1.PluginItemRemoved
-	(*PluginItemFailed)(nil),     // 10: ora.cloud.internal.v1.PluginItemFailed
-	(*PluginItemResult)(nil),     // 11: ora.cloud.internal.v1.PluginItemResult
-	(*PluginsResult)(nil),        // 12: ora.cloud.internal.v1.PluginsResult
-	(*PluginsFailed)(nil),        // 13: ora.cloud.internal.v1.PluginsFailed
+	(PluginFailureReason)(0),         // 0: ora.cloud.internal.v1.PluginFailureReason
+	(PluginsFailureReason)(0),        // 1: ora.cloud.internal.v1.PluginsFailureReason
+	(*PluginDownload)(nil),           // 2: ora.cloud.internal.v1.PluginDownload
+	(*PluginTargetDownload)(nil),     // 3: ora.cloud.internal.v1.PluginTargetDownload
+	(*PluginInstall)(nil),            // 4: ora.cloud.internal.v1.PluginInstall
+	(*PluginAgentConfiguration)(nil), // 5: ora.cloud.internal.v1.PluginAgentConfiguration
+	(*PluginRemoval)(nil),            // 6: ora.cloud.internal.v1.PluginRemoval
+	(*InstallPluginsSpec)(nil),       // 7: ora.cloud.internal.v1.InstallPluginsSpec
+	(*RemovePluginsSpec)(nil),        // 8: ora.cloud.internal.v1.RemovePluginsSpec
+	(*PluginItemInstalled)(nil),      // 9: ora.cloud.internal.v1.PluginItemInstalled
+	(*PluginItemRemoved)(nil),        // 10: ora.cloud.internal.v1.PluginItemRemoved
+	(*PluginItemFailed)(nil),         // 11: ora.cloud.internal.v1.PluginItemFailed
+	(*PluginItemResult)(nil),         // 12: ora.cloud.internal.v1.PluginItemResult
+	(*PluginsResult)(nil),            // 13: ora.cloud.internal.v1.PluginsResult
+	(*PluginsFailed)(nil),            // 14: ora.cloud.internal.v1.PluginsFailed
 }
 var file_ora_cloud_internal_v1_plugin_executions_proto_depIdxs = []int32{
 	2,  // 0: ora.cloud.internal.v1.PluginTargetDownload.download:type_name -> ora.cloud.internal.v1.PluginDownload
 	2,  // 1: ora.cloud.internal.v1.PluginInstall.universal:type_name -> ora.cloud.internal.v1.PluginDownload
 	3,  // 2: ora.cloud.internal.v1.PluginInstall.targets:type_name -> ora.cloud.internal.v1.PluginTargetDownload
-	4,  // 3: ora.cloud.internal.v1.InstallPluginsSpec.plugins:type_name -> ora.cloud.internal.v1.PluginInstall
-	5,  // 4: ora.cloud.internal.v1.RemovePluginsSpec.plugins:type_name -> ora.cloud.internal.v1.PluginRemoval
-	0,  // 5: ora.cloud.internal.v1.PluginItemFailed.reason:type_name -> ora.cloud.internal.v1.PluginFailureReason
-	8,  // 6: ora.cloud.internal.v1.PluginItemResult.installed:type_name -> ora.cloud.internal.v1.PluginItemInstalled
-	9,  // 7: ora.cloud.internal.v1.PluginItemResult.removed:type_name -> ora.cloud.internal.v1.PluginItemRemoved
-	10, // 8: ora.cloud.internal.v1.PluginItemResult.failed:type_name -> ora.cloud.internal.v1.PluginItemFailed
-	11, // 9: ora.cloud.internal.v1.PluginsResult.items:type_name -> ora.cloud.internal.v1.PluginItemResult
-	1,  // 10: ora.cloud.internal.v1.PluginsFailed.reason:type_name -> ora.cloud.internal.v1.PluginsFailureReason
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	5,  // 3: ora.cloud.internal.v1.PluginInstall.agent_configuration:type_name -> ora.cloud.internal.v1.PluginAgentConfiguration
+	4,  // 4: ora.cloud.internal.v1.InstallPluginsSpec.plugins:type_name -> ora.cloud.internal.v1.PluginInstall
+	6,  // 5: ora.cloud.internal.v1.RemovePluginsSpec.plugins:type_name -> ora.cloud.internal.v1.PluginRemoval
+	0,  // 6: ora.cloud.internal.v1.PluginItemFailed.reason:type_name -> ora.cloud.internal.v1.PluginFailureReason
+	9,  // 7: ora.cloud.internal.v1.PluginItemResult.installed:type_name -> ora.cloud.internal.v1.PluginItemInstalled
+	10, // 8: ora.cloud.internal.v1.PluginItemResult.removed:type_name -> ora.cloud.internal.v1.PluginItemRemoved
+	11, // 9: ora.cloud.internal.v1.PluginItemResult.failed:type_name -> ora.cloud.internal.v1.PluginItemFailed
+	12, // 10: ora.cloud.internal.v1.PluginsResult.items:type_name -> ora.cloud.internal.v1.PluginItemResult
+	1,  // 11: ora.cloud.internal.v1.PluginsFailed.reason:type_name -> ora.cloud.internal.v1.PluginsFailureReason
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_plugin_executions_proto_init() }
@@ -887,7 +961,7 @@ func file_ora_cloud_internal_v1_plugin_executions_proto_init() {
 		return
 	}
 	file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[2].OneofWrappers = []any{}
-	file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[9].OneofWrappers = []any{
+	file_ora_cloud_internal_v1_plugin_executions_proto_msgTypes[10].OneofWrappers = []any{
 		(*PluginItemResult_Installed)(nil),
 		(*PluginItemResult_Removed)(nil),
 		(*PluginItemResult_Failed)(nil),
@@ -898,7 +972,7 @@ func file_ora_cloud_internal_v1_plugin_executions_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_plugin_executions_proto_rawDesc), len(file_ora_cloud_internal_v1_plugin_executions_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
