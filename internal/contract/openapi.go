@@ -235,6 +235,17 @@ func Document() map[string]any {
 	// namespace/identifier pair the install API addresses.
 	s["PluginCatalogEntry"] = resource("id sourceNamespace identifier title kind version description homepage license logo url sha256 targets packMembers readme marketplaceVisible sourceUrl indexedAt", "homepage license logo url sha256 targets packMembers readme")
 	pluginEntryProps := properties(s, "PluginCatalogEntry")
+	// The Agent declaration association and its validated static copy: null when the listing
+	// declares nothing, and distinct from the bounded issue string recorded when a declared
+	// association could not be consumed. The declaration bytes are served from the snapshot so
+	// configuration reads never touch the marketplace checkout or the release package.
+	pluginEntryProps["agentConfiguration"] = optional(object(obj{
+		"schemaVersion":     number(),
+		"declarationSha256": str(),
+		"copyPath":          str(),
+		"declaration":       str(),
+	}, "schemaVersion", "declarationSha256", "copyPath", "declaration"))
+	pluginEntryProps["agentConfigurationIssue"] = optional(str())
 	// Plugin versions are semver strings, not the optimistic integer `version`
 	// of mutable resources; fields() typed it as a number by name.
 	pluginEntryProps["version"] = str()

@@ -67,6 +67,9 @@ func installObjects(plugins []*controlpb.PluginInstall) []core.Object {
 			}
 			item["targets"] = targets
 		}
+		if agent := plugin.GetAgentConfiguration(); agent != nil {
+			item["agentConfiguration"] = core.Object{"schemaVersion": agent.GetSchemaVersion(), "declarationSha256": agent.GetDeclarationSha256()}
+		}
 		out = append(out, item)
 	}
 	return out
@@ -81,6 +84,9 @@ func installMessages(plugins []core.Object) []*controlpb.PluginInstall {
 		}
 		for _, target := range rows(plugin["targets"]) {
 			item.Targets = append(item.Targets, &controlpb.PluginTargetDownload{Target: target.S("target"), Download: &controlpb.PluginDownload{Url: target.S("url"), Sha256: target.S("sha256")}})
+		}
+		if agent := plugin.O("agentConfiguration"); agent != nil {
+			item.AgentConfiguration = &controlpb.PluginAgentConfiguration{SchemaVersion: boundedSchemaVersion(agent.N("schemaVersion")), DeclarationSha256: agent.S("declarationSha256")}
 		}
 		out = append(out, item)
 	}
@@ -349,4 +355,14 @@ func grantMessage(o core.Object) *controlpb.UploadGrant {
 		grant.ExpiresAt = timestamppb.New(exp)
 	}
 	return grant
+}
+
+// boundedSchemaVersion converts the durable plan's schema version without overflowing: a value
+// outside u32 cannot have passed the sync's validation, so mapping it to zero keeps the wire
+// input unequal to the frozen plan and the dispatch is refused rather than truncated.
+func boundedSchemaVersion(value int64) uint32 {
+	if value < 0 || value > math.MaxUint32 {
+		return 0
+	}
+	return uint32(value) // #nosec G115 -- bounded above.
 }

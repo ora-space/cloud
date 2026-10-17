@@ -68,6 +68,15 @@ func pluginPayload(release Object) Object {
 	if targets := objectsOf(release["targets"]); len(targets) > 0 {
 		item["targets"] = targets
 	}
+	// The frozen declaration association travels with the plan so the Node can prove the package's
+	// in-archive declaration bytes against it. Only the identity fields travel: the static copy
+	// and its path are Cloud-side evidence the Node re-derives from the actual package.
+	if association := release.O("agentConfiguration"); association != nil {
+		item["agentConfiguration"] = Object{
+			"schemaVersion":     association.N("schemaVersion"),
+			"declarationSha256": association.S("declarationSha256"),
+		}
+	}
 	return item
 }
 

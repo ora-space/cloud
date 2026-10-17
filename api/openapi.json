@@ -2781,6 +2781,36 @@
       "PluginCatalogEntry": {
         "additionalProperties": false,
         "properties": {
+          "agentConfiguration": {
+            "additionalProperties": false,
+            "nullable": true,
+            "properties": {
+              "copyPath": {
+                "type": "string"
+              },
+              "declaration": {
+                "type": "string"
+              },
+              "declarationSha256": {
+                "type": "string"
+              },
+              "schemaVersion": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "declarationSha256",
+              "copyPath",
+              "declaration"
+            ],
+            "type": "object"
+          },
+          "agentConfigurationIssue": {
+            "nullable": true,
+            "type": "string"
+          },
           "description": {
             "type": "string"
           },
