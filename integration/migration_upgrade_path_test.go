@@ -1047,3 +1047,159 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 		t.Fatalf("after 0033: columns %d constraints %q", got, names)
 	}
 }
+
+// 0036 (external Git line) is the one destructive switch the contract allows: the independent
+// Credential Store becomes the only source of truth for a credential, so a pre-switch reference is
+// revoked rather than migrated, and a Binding's continuity column folds into the single credential
+// reference it keeps. A fresh database and a database that stopped at 0035 must reach the same
+// shape, and rerunning the migration must change nothing.
+func TestMigration0036ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
+	credentialColumns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='credential_refs' AND column_name IN ('name','secret_state','store_version','requested_capabilities',
+			'capability_evidence','pending_submission_id','pending_store_version','pending_submission_expires_at',
+			'store_revocation_pending','revoked_at')`).Scan(&n))
+		return n
+	}
+	operationColumns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_operations' AND column_name IN ('requested_by','source_operation_id','replay_count',
+			'credential_ref_id','credential_version','binding_version','expected_tracking_oid','lease_generation','lease_owner',
+			'lease_expires_at','authorization_id','started_at','task_deadline','result','source_ref','source_commit',
+			'target_branch','expected_old_oid','revision_id','approver_kind','approved_by','approved_at',
+			'approved_store_version','approval_expires_at','check_attempts','next_check_at')`).Scan(&n))
+		return n
+	}
+	bindings := func(pool *sql.DB) (version, continuity bool) {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_bindings' AND column_name='version'`).Scan(&n))
+		version = n == 1
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_bindings' AND column_name='repository_credential_ref_id'`).Scan(&n))
+		continuity = n == 1
+		return version, continuity
+	}
+
+	freshPool, _ := testSchema(t, "test_egl36f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got := credentialColumns(freshPool); got != 10 {
+		t.Fatalf("a fresh database must have the ten Credential Store columns, got %d", got)
+	}
+	if got := operationColumns(freshPool); got != 26 {
+		t.Fatalf("a fresh database must have the 26 lease and publish columns, got %d", got)
+	}
+	if version, continuity := bindings(freshPool); !version || continuity {
+		t.Fatalf("a fresh database: version column %v, continuity column %v", version, continuity)
+	}
+	for _, table := range []string{"credential_verifications", "repository_operation_events"} {
+		if !tableExists(t, freshPool, table) {
+			t.Fatalf("a fresh database must have %s", table)
+		}
+	}
+
+	// The upgrade path: a deployment that stopped at 0035, carrying real rows.
+	pool, _ := testSchema(t, "test_egl36_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0036_external_git_line.sql"))
+	if got := credentialColumns(pool); got != 0 {
+		t.Fatalf("before 0036 the Credential Store columns must be absent, got %d", got)
+	}
+	if version, continuity := bindings(pool); version || !continuity {
+		t.Fatalf("before 0036: version column %v, continuity column %v", version, continuity)
+	}
+	if tableExists(t, pool, "credential_verifications") {
+		t.Fatal("credential_verifications must not exist before 0036")
+	}
+
+	user, tenant, project, space := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	preset, personal, binding := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	// One transaction: the aggregate guards are deferred, so an active tenant is only legal once
+	// its administrator exists, which is exactly how the deployment's rows arrived.
+	tx, e := pool.Begin()
+	must(t, e)
+	defer func() { _ = tx.Rollback() }()
+	_, e = tx.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Upgraded','active')`, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO tenants(id,name,status) VALUES($1,'Upgraded','active')`, tenant)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO collab_workspaces(id,tenant_id,name,slug,description,created_by) VALUES($1,$2,'Upgraded','upgraded-tenant','',$3)`, space, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,repository_scope,capabilities)
+		VALUES($1,$2,$3,'git','deployment-preset:repo','https://git.example.invalid/team/repo.git','["read","publish"]'::jsonb)`, preset, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref)
+		VALUES($1,$2,$3,'git','deployment-preset:other')`, personal, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle)
+		VALUES($1,$2,$3,$4,'Upgraded','active')`, project, tenant, user, space)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch,repository_credential_ref_id)
+		VALUES($1,$2,$3,'https://git.example.invalid/team/repo.git','main',$4)`, binding, tenant, project, personal)
+	must(t, e)
+	// A live project requires exactly one main workspace (the deferred guard in 0001).
+	_, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref)
+		VALUES($1,$2,$3,$4,'main','running','ready','main')`, uuid.NewString(), tenant, user, project)
+	must(t, e)
+	must(t, tx.Commit())
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+
+	if got := credentialColumns(pool); got != 10 {
+		t.Fatalf("after 0036 the Credential Store columns must all be present, got %d", got)
+	}
+	if version, continuity := bindings(pool); !version || continuity {
+		t.Fatalf("after 0036: version column %v, continuity column %v", version, continuity)
+	}
+
+	// A pre-switch reference keeps its audit trail and can never be redeemed again.
+	var state, capabilities string
+	var revokedAt sql.NullTime
+	must(t, pool.QueryRow(`SELECT secret_state, capabilities::text, revoked_at FROM credential_refs WHERE id=$1`, preset).Scan(&state, &capabilities, &revokedAt))
+	if state != "revoked" || capabilities != "[]" || !revokedAt.Valid {
+		t.Fatalf("a pre-switch reference = (%q, %q, %v), want it revoked with no capabilities", state, capabilities, revokedAt)
+	}
+
+	// The continuity column's value is the one that survives, and a Binding starts at version 1.
+	var effective sql.NullString
+	var bindingVersion int64
+	must(t, pool.QueryRow(`SELECT credential_ref_id, version FROM repository_bindings WHERE id=$1`, binding).Scan(&effective, &bindingVersion))
+	if !effective.Valid || effective.String != personal {
+		t.Fatalf("the Binding's credential reference = %v, want the continuity column's %s", effective, personal)
+	}
+	if bindingVersion != 1 {
+		t.Fatalf("the Binding version = %d, want 1", bindingVersion)
+	}
+
+	// The reference invariants hold against real rows.
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', revoked_at=NULL WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // a stored reference always has a store version
+	_, e = pool.Exec(`UPDATE credential_refs SET capabilities='["admin"]'::jsonb WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // the vocabulary is read and publish
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', store_version=1, revoked_at=NULL WHERE id=$1`, personal)
+	wantPGError(t, e, "23514") // a stored reference is scoped to a repository
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', store_version=1, revoked_at=NULL WHERE id=$1`, preset)
+	must(t, e)
+	_, e = pool.Exec(`UPDATE credential_refs SET pending_submission_id=gen_random_uuid(), pending_store_version=5, pending_submission_expires_at=now() WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // a pending submission is always the next version
+	_, e = pool.Exec(`UPDATE credential_refs SET store_revocation_pending=true WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // only a revoked reference may await the Store's revocation
+
+	// The Operation audit is append-only, which is what makes it evidence.
+	operation := uuid.NewString()
+	_, e = pool.Exec(`INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger)
+		VALUES($1,'repository_sync',$2,$3,$4,'pending','manual')`, operation, tenant, project, binding)
+	must(t, e)
+	_, e = pool.Exec(`INSERT INTO repository_operation_events(operation_id,tenant_id,kind) VALUES($1,$2,'queued')`, operation, tenant)
+	must(t, e)
+	_, e = pool.Exec(`UPDATE repository_operation_events SET kind='rewritten' WHERE operation_id=$1`, operation)
+	wantPGError(t, e, "P0001")
+	_, e = pool.Exec(`DELETE FROM repository_operation_events WHERE operation_id=$1`, operation)
+	wantPGError(t, e, "P0001")
+}
