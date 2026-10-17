@@ -26,6 +26,16 @@
 
 创建草稿按 tenant/space 重挂，活动草稿按 tenant/space/issue 重挂；切到已缓存的其他作用域也不能继承草稿。关联项目以服务端结果为准，版本化更新等待期间禁止再改属性，拒绝保留原值。缺项目提示定位到 `issue-project` 选择器；目标必须来自真实目录，空间合法性仍由服务端校验。
 
+Workflow 确认从创建 interaction 开始锁住重复提交、返回修改与取消；确认失败后仍用同一 interaction 重试，包括切换版本后的重试。确认行通过 `features/workflows/api` 读取 `IssueRun.workflowInvocationRef` 对应的 WorkflowRun 状态，详情链接使用 `executorId`、该引用和当前路由的空间 slug。
+
+初始表单按 `formRef + issueId` 读取活稿。只有 `snapshotId` select 的全部选项都属于该 Workflow 的已发布快照时，才识别为平台版本选择器；列表读取完成前不开放表单，失败可重试。作者自定义的同名文本字段或含自定义选项的 select 仍是普通输入。
+
+用户切换平台版本选择器时，按 tenant/workflow/snapshot/issue 读取既有 snapshot form 接口，清空旧字段草稿并初始化新版本默认值；选择器保留响应回显的 snapshotId，不采用它仍指向最新版本的默认值。加载或失败期间不能审阅旧字段，失败可重试。读取表单不代表服务端准入通过，Confirm 的 `workflow_version_fields_changed` 门禁保持不变；收到该拒绝时，界面提示所选版本字段与当前草稿不一致，并引导先发布草稿或选择其他版本。
+
+历史运行没有 WorkflowRun 引用时，确认行仍显示 IssueRun 状态，不请求 WorkflowRun，也不显示运行详情链接；有关联的运行始终以 WorkflowRun 状态为准。
+
 ## 测试
 
 组件测试用 MSW；属性栏和 Task Mode→Thread 经 `issue-detail-page.test.tsx` 覆盖。测试区分加载、空列表、拒绝、重试；创建、普通评论和目标提交失败保留草稿，作用域切换则清空草稿。
+
+Workflow 测试覆盖双击互斥、确认失败后复用 interaction（含切换版本）、版本字段/default/回显切换、作者同名 select 不发快照表单请求、字段差异拒绝的操作提示、读取等待与失败，以及 WorkflowRun 状态和详情链接。

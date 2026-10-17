@@ -88,6 +88,8 @@ export interface IssueRun {
   issueId: string
   executorType: 'agent' | 'team' | 'workflow'
   executorId: string
+  /** Workflow runs: the linked WorkflowRun id, whose status is authoritative for execution. */
+  workflowInvocationRef?: string | null
   input: Record<string, unknown>
   status: string
   /** Agent runs: the settled delivery, `{revisionId, deliveryState}`, once the run released its Workspace. */

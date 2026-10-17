@@ -173,7 +173,7 @@ workflow_not_available` (3B-1) is **SUPERSEDED**.
 | GET | `/collaboration/forms/{formRef}` | query `?issueId=` | `FormDescriptor` (`{formRef,title?,description?,fields[]}`) |
 | GET | `/workflows/{wfid}/snapshots/{snapshotId}/form` | query `?issueId=` | `WorkflowSnapshotForm` (`{snapshotId,formRef,title?,description?,fields[]}`) |
 | POST 🔑 | `/issues/{iid}/collaboration/assist` | `targetId`*, `values`(object) | `{suggestedValues, suggestedContextRefs, explanations?}` — **stateless, suggest only, no side effects** |
-| POST 🔑 | `/issues/{iid}/interactions/{ixid}/confirm` | `values`(object)*, `contextRefs`(array of `{refType,refId}`) | `{resource: IssueRun}` (the initial run, `status=queued`; dispatch is post-commit) |
+| POST 🔑 | `/issues/{iid}/interactions/{ixid}/confirm` | `values`(object)*, `contextRefs`(array of `{refType,refId}`) | `{resource: IssueRun}` (`status=queued`, linked by `workflowInvocationRef` to one pending WorkflowRun; no legacy dispatch) |
 
 - `formRef` is an **opaque** provider token (not a UUID) and appears in a path segment.
 - `?issueId=` is **optional** and additive. Omitted (or empty) ⇒ the descriptor is exactly the one this

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { AgentRequestFailure } from './agent-request-failure'
 import { ActorAvatar, type AvatarActor } from '@/components/common/actor-avatar'
@@ -16,6 +17,8 @@ import {
 import { PendingTargets } from '@/features/issues/components/pending-targets'
 import { TargetPicker } from '@/features/issues/components/target-picker'
 import { memberNameById } from '@/features/issues/present'
+import { useWorkflowRun } from '@/features/workflows/api'
+import { workspacePaths } from '@/lib/paths'
 import { cn } from '@/lib/utils'
 import type {
   CollaborationTargetSummary,
@@ -115,20 +118,40 @@ function ActivityItem({
 }
 
 /** A confirmed workflow interaction: it is history now, and never offers a second configuration. */
-function ConfirmedWorkflowRow({ name, run }: { name: string; run: IssueRun | undefined }) {
+function ConfirmedWorkflowRow({
+  slug,
+  name,
+  run,
+}: {
+  slug: string
+  name: string
+  run: IssueRun | undefined
+}) {
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  const runId = run?.workflowInvocationRef ?? undefined
+  const workflow = useWorkflowRun(slug, run?.executorId, runId)
+  const status = runId ? workflow.data?.status : run?.status
+  const path = workspacePaths(workspaceSlug ?? slug)
   return (
     <div className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
       <Badge variant="secondary">Workflow</Badge>
       <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
       <span className="shrink-0 text-xs text-muted-foreground">
-        已确认{run ? ` · 运行 ${run.status}` : ''}
+        已确认{status ? ` · 运行 ${status}` : ''}
       </span>
+      {workflow.isError ? <span className="text-xs text-destructive">运行状态加载失败</span> : null}
+      {run && runId ? (
+        <Link className="shrink-0 text-xs underline" to={path.workflowRun(run.executorId, runId)}>
+          运行详情
+        </Link>
+      ) : null}
     </div>
   )
 }
 
 /** Confirmed workflow interactions, shown as status rows next to the history. */
 function ConfirmedWorkflows(props: {
+  slug: string
   interactions: IssueInteraction[]
   runs: IssueRun[]
   catalog: CollaborationTargetSummary[]
@@ -140,6 +163,7 @@ function ConfirmedWorkflows(props: {
       {confirmed.map((item) => (
         <ConfirmedWorkflowRow
           key={item.id}
+          slug={props.slug}
           name={byId.get(item.targetId)?.displayName ?? 'Workflow'}
           run={props.runs.find((candidate) => candidate.id === item.runId)}
         />
@@ -224,7 +248,12 @@ function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
         )}
       </form>
 
-      <ConfirmedWorkflows interactions={interactions ?? []} runs={runs ?? []} catalog={catalog} />
+      <ConfirmedWorkflows
+        slug={slug}
+        interactions={interactions ?? []}
+        runs={runs ?? []}
+        catalog={catalog}
+      />
 
       <div className="space-y-1.5">
         <TargetPicker slug={slug} targets={targets} onChange={setTargets} />

@@ -843,6 +843,10 @@ func TestWorkflowConfirmReadsThePreRenameVersionKey(t *testing.T) {
 	if stored.S("snapshotId") != "1.2.3" {
 		t.Fatalf("the author's variable was overwritten by the version selection: %v", stored)
 	}
+	linked := f.call("GET", f.path("/workflows/"+owned+"/runs/"+run.S("workflowInvocationRef")), nil, "", 200)
+	if linked.O("input").S("snapshotId") != "1.2.3" || linked.S("snapshotId") != ownedOlder.S("id") {
+		t.Fatalf("the invocation confused the author's variable with the selected snapshot: %v", linked)
+	}
 	if _, kept := stored["version"]; kept {
 		t.Fatalf("the pre-rename key was stored: %v", stored)
 	}
@@ -1047,7 +1051,7 @@ func TestWorkflowAssistIsSideEffectFree(t *testing.T) {
 func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 	f := setup(t)
 	wid := reviewWorkflow(t, f)
-	publishWorkflow(t, f, wid, "wf-confirm-pub")
+	published := publishWorkflow(t, f, wid, "wf-confirm-pub")
 	iss := f.call("POST", f.path("/issues"), core.Object{"title": "Confirm me", "description": "desc"}, "wf-confirm-issue", 200).O("resource")
 	it := workflowComment(t, f, wid, iss.S("id"), "wf-confirm-1", "configure the review")
 
@@ -1076,8 +1080,7 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 	}
 
 	created := f.call("POST", confirmPath(f, iss.S("id"), it.S("id")), core.Object{"values": validValues()}, "wf-confirm-ok", 200).O("resource")
-	// The confirm response is the committed enqueue: dispatch is post-commit, so execution has not been
-	// observed yet. The frontend re-reads the run/timeline afterwards.
+	// Confirm commits the linked execution intent; the workflow scheduler owns later advancement.
 	if created.S("status") != "queued" || created.S("executorType") != "workflow" || created.S("executorId") != wid {
 		t.Fatalf("workflow run wrong at confirm time: %v", created)
 	}
@@ -1085,10 +1088,18 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 	if created.S("triggerEvidenceKind") != "interaction" || created.S("triggerEvidenceRefId") != it.S("id") {
 		t.Fatalf("workflow run provenance wrong: %v", created)
 	}
-	// Re-read: the mock dispatcher drove it to completion through the observer seam.
+	// The WorkflowRun owns execution. The legacy mock dispatcher must not fabricate a separate
+	// execution or advance this IssueRun through its unrelated observer lifecycle.
 	run := f.call("GET", f.path("/issues/"+iss.S("id")+"/runs/"+created.S("id")), nil, "", 200)
-	if run.S("status") != "completed" || run.S("externalExecutionId") == "" {
-		t.Fatalf("workflow run did not complete through the observer: %v", run)
+	if run.S("status") != "queued" || run.S("workflowInvocationRef") == "" || run.S("externalExecutionId") != "" {
+		t.Fatalf("workflow run was not linked or still used legacy dispatch: %v", run)
+	}
+	linked := f.call("GET", f.path("/workflows/"+wid+"/runs/"+run.S("workflowInvocationRef")), nil, "", 200)
+	if linked.S("snapshotId") != published.S("id") || run.O("input").S("workflowSnapshotId") != linked.S("snapshotId") {
+		t.Fatalf("linked workflow run does not execute the frozen snapshot: issue=%v workflow=%v", run, linked)
+	}
+	if n := f.scalar("SELECT count(*) FROM workflow_runs WHERE id=$1 AND tenant_id=$2", run.S("workflowInvocationRef"), f.tid); n != 1 {
+		t.Fatalf("confirm created %d linked WorkflowRuns", n)
 	}
 
 	// Exactly one run, and the interaction is now confirmed with its own persisted input.
@@ -1106,7 +1117,7 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 		t.Fatalf("the descriptor must never be stored as interaction input")
 	}
 
-	// The run snapshot is the effective execution-time input, and it equals what the dispatcher got.
+	// The IssueRun snapshot preserves the effective invocation input and its issue context.
 	input := run.O("input")
 	if input.S("task") != "" || input.O("interactionValues").S("repository") != "ora-space/cloud" {
 		t.Fatalf("run snapshot wrong: %v", input)
@@ -1118,7 +1129,7 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 		t.Fatalf("run snapshot lost the recent-comment window: %v", input)
 	}
 
-	// Timeline: comment, enqueued, started, progress, system message, completed — and NO workflow-authored comment.
+	// Without scheduler advancement, only enqueue is visible; legacy dispatch adds no fake execution.
 	tl := issueItems(f.call("GET", f.path("/issues/"+iss.S("id")+"/timeline"), nil, "", 200))
 	actions := []string{}
 	for _, e := range tl {
@@ -1126,7 +1137,7 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 			actions = append(actions, e.S("action"))
 		}
 	}
-	want := []string{"run.enqueued", "run.started", "run.progress", "run.message", "run.completed"}
+	want := []string{"run.enqueued"}
 	if len(actions) != len(want) {
 		t.Fatalf("workflow timeline actions = %v, want %v", actions, want)
 	}
@@ -1139,11 +1150,6 @@ func TestWorkflowConfirmValidatesAndExecutes(t *testing.T) {
 		if e.S("authorType") == "workflow" {
 			t.Fatalf("a workflow must never author content: %v", e)
 		}
-	}
-	message := tl[4]
-	if message.S("authorType") != "system" || message.O("details").S("executorType") != "workflow" ||
-		message.O("details").S("executorId") != wid || message.O("details").S("message") == "" {
-		t.Fatalf("workflow message activity wrong: %v", message)
 	}
 	// seq is strictly increasing and unique across the merged timeline.
 	for i := 1; i < len(tl); i++ {

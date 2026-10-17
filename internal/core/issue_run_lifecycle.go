@@ -72,6 +72,12 @@ func runActivityDetails(runID, executorType, executorID string, extra Object) Ob
 // trigger_evidence provenance seam, and appends the run.enqueued Timeline activity. It never
 // dispatches: dispatch is the caller's post-commit responsibility.
 func enqueueRun(t *transaction, tid, iid, executorType, executorID string, input Object, triggerKind string, triggerRef any, actorType, actorID string) Object {
+	return enqueueRunWithInvocation(t, tid, iid, executorType, executorID, input, triggerKind, triggerRef, actorType, actorID, "")
+}
+
+// enqueueRunWithInvocation inserts the reference with the IssueRun itself so PostgreSQL can enforce
+// the invocation shape immediately; no transient unlinked workflow IssueRun is ever inserted.
+func enqueueRunWithInvocation(t *transaction, tid, iid, executorType, executorID string, input Object, triggerKind string, triggerRef any, actorType, actorID, workflowRunID string) Object {
 	require(t.one("SELECT id FROM issue_runs WHERE issue_id=$1 AND executor_type=$2 AND executor_id=$3 AND status IN ('queued','dispatched') AND deleted_at IS NULL", iid, executorType, executorID) == nil, 409, "pending_run_exists")
 	if input == nil {
 		input = Object{}
@@ -85,7 +91,7 @@ func enqueueRun(t *transaction, tid, iid, executorType, executorID string, input
 		delete(input, "workflowSnapshotId")
 	}
 	id := newID()
-	t.exec("INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,input,status,trigger_evidence_kind,trigger_evidence_ref_id) VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8)", id, tid, iid, executorType, executorID, jsonText(input), triggerKind, triggerRef)
+	t.exec("INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,input,status,trigger_evidence_kind,trigger_evidence_ref_id,workflow_invocation_ref) VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9)", id, tid, iid, executorType, executorID, jsonText(input), triggerKind, triggerRef, nullable(workflowRunID))
 	if executorType == "agent" {
 		// Caller-supplied private bindings cannot authorize a model connection. The production
 		// OpenCode path always creates its own owner-scoped binding in this transaction.
@@ -111,6 +117,11 @@ func (s *Store) dispatchRun(ctx context.Context, tenantID, runID string) error {
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", runID, tenantID)
 		if o == nil || o.S("status") != "queued" {
+			return Object{}
+		}
+		if o.S("workflowInvocationRef") != "" {
+			// WorkflowRun owns execution. A legacy dispatcher (including dev doubles) must never
+			// create a second execution or advance its linked IssueRun independently.
 			return Object{}
 		}
 		if o.S("executorType") == "agent" && isSpaceAgentRun(t, tenantID, o.S("executorId")) {

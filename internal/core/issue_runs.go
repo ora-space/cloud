@@ -94,8 +94,7 @@ func createRun(t *transaction, r *PublicRequest, uid string) Object {
 	if executorType == "workflow" {
 		w := workflow(t, r.TenantID, executorID)
 		s := admitWorkflowRun(t, r.TenantID, w.S("id"), "", uid)
-		requireWorkflowRunInput(s.O("graph"), input)
-		freezeWorkflowSnapshot(input, s.S("id"))
+		return enqueueWorkflowInvocation(t, r.TenantID, i.S("id"), w, s, input, input, "", nil, uid)
 	}
 	if executorType == "agent" {
 		// Authoritative Space Agent (IssueRun D1): reuses the same evidence resolver as the comment

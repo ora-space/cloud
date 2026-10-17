@@ -110,3 +110,15 @@ only validate schema. `TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackf
 ## 0036: workflow plugin asset imports
 
 `0036_workflow_asset_imports.sql` records asset imports for `kind='workflow'` plugins: `workflow_asset_imports` holds one row per (space, plugin) with the `requested_revision` each administrator install/reinstall advances, the import progress and its lease; `workflow_asset_documents` holds one row per document path, and only an `outcome='imported'` row permanently occupies (space, namespace, identifier, document path) — failed documents are retried on the next trigger. The imported workflows and published snapshots are ordinary user data; these two tables only record provenance, idempotency and per-document outcomes. Forward-only and additive; no existing table changes.
+
+## 0037: WorkflowRun invocation references
+
+`0037_workflow_invocation_reference.sql` first settles every non-terminal unlinked historical
+workflow IssueRun (including running and deferred) as failed, with
+`workflow_execution_unavailable_before_invocation_linkage`. It then adds a tenant-scoped composite
+foreign key and a unique invocation reference. The CHECK requires a reference for non-terminal
+workflow executors and forbids it for other executors. Historical terminal workflow rows may retain
+NULL references and remain editable; their input and outcomes are preserved without inventing runs.
+The CHECK is unconditionally validated, so fresh and upgraded databases enforce the same schema.
+The number follows the 0036 migration already on main. Fresh, seeded upgrade, repeated migration,
+constraint validation and historical update coverage is in `integration/workflow_invocation_migration_test.go`.

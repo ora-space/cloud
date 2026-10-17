@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
@@ -180,6 +180,9 @@ function serveComposer(overrides: { descriptor?: unknown; suggestion?: AssistSug
     http.get('/api/v1/tenants/t1/collaboration/forms/security-review', () =>
       HttpResponse.json(overrides.descriptor ?? descriptor),
     ),
+    http.get('/api/v1/tenants/t1/workflows/wf1/snapshots', () =>
+      HttpResponse.json({ items: [{ id: 'snap-3' }, { id: 'snap-2' }], nextCursor: '' }),
+    ),
     http.post('/api/v1/tenants/t1/issues/i1/collaboration/assist', async ({ request }) => {
       assist(await request.json())
       return HttpResponse.json(overrides.suggestion ?? suggestion)
@@ -236,6 +239,44 @@ async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
 async function reviewAndConfirm(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: '审阅' }))
   await user.click(await screen.findByRole('button', { name: '确认执行' }))
+}
+
+/** Renders the composer and confirms once against a server that answers the field-divergence 409. */
+async function confirmIntoFieldsChanged() {
+  server.use(
+    http.post('/api/v1/tenants/t1/issues/i1/interactions/ix1/confirm', () =>
+      HttpResponse.json({ code: 'workflow_version_fields_changed' }, { status: 409 }),
+    ),
+  )
+  const user = userEvent.setup()
+  const { onConfirmed } = renderComposer()
+  await screen.findByLabelText(/提示词/)
+  await reviewAndConfirm(user)
+  return { user, onConfirmed }
+}
+
+function serveOldSnapshot() {
+  const read = vi.fn<(issueId: string | null) => void>()
+  server.use(
+    http.get('/api/v1/tenants/t1/workflows/wf1/snapshots/snap-2/form', ({ request }) => {
+      read(new URL(request.url).searchParams.get('issueId'))
+      return HttpResponse.json({
+        ...launchDescriptor,
+        snapshotId: 'snap-2',
+        fields: [
+          ...launchDescriptor.fields.filter((field) => field.key !== 'prompt'),
+          {
+            key: 'oldInput',
+            label: 'Old input',
+            type: 'text',
+            required: true,
+            defaultValue: 'old default',
+          },
+        ],
+      })
+    }),
+  )
+  return read
 }
 
 describe('WorkflowInteractionComposer', () => {
@@ -391,6 +432,92 @@ describe('WorkflowInteractionComposer', () => {
     )
   })
 
+  it('locks both confirm clicks while the first interaction is still being created', async () => {
+    const { comment, confirm } = serveComposer({ descriptor: platformDescriptor })
+    let release = vi.fn<() => void>()
+    const gate = new Promise<void>((resolve) => {
+      release = vi.fn<() => void>(resolve)
+    })
+    server.use(
+      http.post('/api/v1/tenants/t1/issues/i1/comments', async ({ request }) => {
+        comment(await request.json())
+        await gate
+        return HttpResponse.json({ resource: { id: 'c1' } })
+      }),
+    )
+    const user = userEvent.setup()
+    const { onConfirmed } = renderComposer()
+    await user.click(await screen.findByRole('button', { name: '审阅' }))
+    const button = screen.getByRole('button', { name: '确认执行' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    try {
+      await waitFor(() => expect(comment).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('button', { name: '确认中…' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '返回修改' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
+      expect(confirm).not.toHaveBeenCalled()
+    } finally {
+      release()
+    }
+    await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1))
+    expect(comment).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses its interaction after a rejected confirm, including edits before retry', async () => {
+    const { comment, confirm } = serveComposer({ descriptor: platformDescriptor })
+    let attempts = 0
+    server.use(
+      http.post('/api/v1/tenants/t1/issues/i1/interactions/ix1/confirm', async ({ request }) => {
+        confirm(await request.json())
+        attempts += 1
+        return attempts === 1
+          ? HttpResponse.json({ code: 'invalid_input' }, { status: 400 })
+          : HttpResponse.json({ resource: run() })
+      }),
+    )
+    const user = userEvent.setup()
+    const { onConfirmed } = renderComposer()
+    await screen.findByLabelText(/仓库地址/)
+    await reviewAndConfirm(user)
+    expect(await screen.findByText('确认失败，请重试。')).toBeInTheDocument()
+    expect(onConfirmed).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: '返回修改' }))
+    await user.type(screen.getByLabelText('Notes'), 'retry notes')
+    await reviewAndConfirm(user)
+
+    await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1))
+    expect(comment).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(confirm).toHaveBeenLastCalledWith({
+      values: {
+        repository: 'https://github.com/ora/cloud',
+        prompt: 'Review the diff',
+        notes: 'retry notes',
+      },
+    })
+  })
+
+  it('shows interaction creation failures and unlocks the form for a retry', async () => {
+    serveComposer({ descriptor: platformDescriptor })
+    server.use(
+      http.post('/api/v1/tenants/t1/issues/i1/comments', () =>
+        HttpResponse.json({ code: 'unavailable' }, { status: 503 }),
+      ),
+    )
+    const user = userEvent.setup()
+    renderComposer()
+    await screen.findByLabelText(/仓库地址/)
+    await reviewAndConfirm(user)
+
+    expect(await screen.findByText('确认失败，请重试。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认执行' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '返回修改' })).toBeEnabled()
+  })
+
   it('carries the ticked context references, once each even when Assist suggested one too', async () => {
     const { confirm } = serveComposer({
       descriptor: launchDescriptor,
@@ -424,6 +551,152 @@ describe('WorkflowInteractionComposer', () => {
           { refType: 'parent_issue', refId: 'p2' },
         ],
       }),
+    )
+  })
+
+  it('renders the selected snapshot defaults and retains its echo instead of the newest default', async () => {
+    const { confirm } = serveComposer({ descriptor: launchDescriptor })
+    const read = serveOldSnapshot()
+    const user = userEvent.setup()
+    renderComposer()
+    await user.type(await screen.findByLabelText(/提示词/), ' obsolete draft')
+    await user.click(selectTrigger('运行版本'))
+    await user.click(await screen.findByRole('option', { name: 'v2 · 发布 2' }))
+
+    expect(await screen.findByLabelText(/Old input/)).toHaveValue('old default')
+    expect(screen.queryByLabelText(/提示词/)).not.toBeInTheDocument()
+    expect(selectTrigger('运行版本')).toHaveTextContent('v2 · 发布 2')
+    expect(read).toHaveBeenCalledWith('i1')
+    await reviewAndConfirm(user)
+    await waitFor(() =>
+      expect(confirm).toHaveBeenCalledWith({
+        values: {
+          repository: 'https://github.com/ora/cloud',
+          branch: 'main',
+          snapshotId: 'snap-2',
+          oldInput: 'old default',
+        },
+      }),
+    )
+  })
+
+  it('blocks stale review while a selected snapshot loads and after a read failure', async () => {
+    serveComposer({ descriptor: launchDescriptor })
+    let release = vi.fn<() => void>()
+    const gate = new Promise<void>((resolve) => {
+      release = vi.fn<() => void>(resolve)
+    })
+    server.use(
+      http.get('/api/v1/tenants/t1/workflows/wf1/snapshots/snap-2/form', async () => {
+        await gate
+        return HttpResponse.json({ code: 'not_found' }, { status: 404 })
+      }),
+    )
+    const user = userEvent.setup()
+    renderComposer()
+    await user.click(await screen.findByLabelText(/运行版本/))
+    await user.click(await screen.findByRole('option', { name: 'v2 · 发布 2' }))
+    try {
+      expect(screen.queryByLabelText(/提示词/)).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '审阅' })).not.toBeInTheDocument()
+    } finally {
+      release()
+    }
+    expect(await screen.findByText(/当前部署无法加载/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '审阅' })).not.toBeInTheDocument()
+    const read = serveOldSnapshot()
+    await user.click(screen.getByRole('button', { name: '重试加载表单' }))
+    expect(await screen.findByLabelText(/Old input/)).toHaveValue('old default')
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an authors text variable named snapshotId as ordinary input', async () => {
+    const { confirm } = serveComposer({
+      descriptor: {
+        formRef: 'security-review',
+        fields: [
+          { key: 'snapshotId', label: 'Author snapshot name', type: 'text', required: true },
+        ],
+      },
+    })
+    const user = userEvent.setup()
+    renderComposer()
+    await user.type(await screen.findByLabelText(/Author snapshot name/), 'my snapshot')
+    await reviewAndConfirm(user)
+    await waitFor(() =>
+      expect(confirm).toHaveBeenCalledWith({ values: { snapshotId: 'my snapshot' } }),
+    )
+  })
+
+  it('keeps an authors select named snapshotId as ordinary input when any option is not published', async () => {
+    const { confirm } = serveComposer({
+      descriptor: {
+        formRef: 'security-review',
+        fields: [
+          {
+            key: 'snapshotId',
+            label: 'Author snapshot choice',
+            type: 'select',
+            required: true,
+            defaultValue: 'snap-3',
+            options: [
+              { value: 'snap-3', label: 'Author default' },
+              { value: 'custom-choice', label: 'Author custom choice' },
+            ],
+          },
+        ],
+      },
+    })
+    const formRead = vi.fn<() => void>()
+    server.use(
+      http.get('/api/v1/tenants/t1/workflows/wf1/snapshots/:id/form', () => {
+        formRead()
+        return HttpResponse.json({ code: 'not_found' }, { status: 404 })
+      }),
+    )
+    const user = userEvent.setup()
+    renderComposer()
+    await user.click(await screen.findByLabelText(/Author snapshot choice/))
+    await user.click(await screen.findByRole('option', { name: 'Author custom choice' }))
+    expect(selectTrigger('Author snapshot choice')).toHaveTextContent('Author custom choice')
+    await reviewAndConfirm(user)
+    await waitFor(() =>
+      expect(confirm).toHaveBeenCalledWith({ values: { snapshotId: 'custom-choice' } }),
+    )
+    expect(formRead).not.toHaveBeenCalled()
+  })
+
+  it('explains how to resolve workflow version field divergence after confirm', async () => {
+    serveComposer({ descriptor: launchDescriptor })
+    const { onConfirmed } = await confirmIntoFieldsChanged()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '所选版本的字段与当前草稿不一致，请先发布当前草稿或选择其他版本。',
+    )
+    expect(screen.queryByText('workflow_version_fields_changed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '返回修改' })).toBeEnabled()
+    expect(onConfirmed).not.toHaveBeenCalled()
+  })
+
+  it('keeps the same interaction when a rejected confirm is retried after switching snapshot', async () => {
+    const { comment, confirm } = serveComposer({ descriptor: launchDescriptor })
+    serveOldSnapshot()
+    const { user, onConfirmed } = await confirmIntoFieldsChanged()
+    await screen.findByText('所选版本的字段与当前草稿不一致，请先发布当前草稿或选择其他版本。')
+    await user.click(screen.getByRole('button', { name: '返回修改' }))
+    await user.click(selectTrigger('运行版本'))
+    await user.click(await screen.findByRole('option', { name: 'v2 · 发布 2' }))
+    await screen.findByLabelText(/Old input/)
+    server.use(
+      http.post('/api/v1/tenants/t1/issues/i1/interactions/ix1/confirm', async ({ request }) => {
+        confirm(await request.json())
+        return HttpResponse.json({ resource: run() })
+      }),
+    )
+    await reviewAndConfirm(user)
+    await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1))
+    expect(comment).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ values: expect.objectContaining({ snapshotId: 'snap-2' }) }),
     )
   })
 })

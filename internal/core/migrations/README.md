@@ -109,3 +109,14 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0036：工作流插件资产导入
 
 `0036_workflow_asset_imports.sql` 记录 `kind='workflow'` 插件的资产导入：`workflow_asset_imports` 每个（空间，插件）一行，保存管理员每次安装/重装递增的 `requested_revision`、导入进度与租约；`workflow_asset_documents` 每个文档路径一行，只有 `outcome='imported'` 的行永久占用（空间，命名空间，标识，文档路径），失败的文档下次触发重试。导入出的工作流和已发布快照是普通用户数据，这两张表只记录来源、幂等和逐文档结果。纯前向新增，不改动既有表。
+
+## 0037：WorkflowRun 调用引用
+
+`0037_workflow_invocation_reference.sql` 先将所有未关联的历史非终态 workflow IssueRun
+（含 running、deferred）结算为 failed，原因是
+`workflow_execution_unavailable_before_invocation_linkage`，再添加租户一致的复合外键及唯一引用。
+CHECK 要求非终态 workflow 行具有引用，其他 executor 不得携带引用。历史终态 workflow 行可保留
+NULL 引用并继续更新；迁移保留其输入和结果，不虚构执行。CHECK 无条件 VALIDATE，空库和升级库
+采用同一份已验证约束。编号接在 main 已有的 0036 之后。
+空库、种子升级、重复迁移、约束验证状态及
+历史行更新测试见 `integration/workflow_invocation_migration_test.go`。

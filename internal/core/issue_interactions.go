@@ -109,9 +109,9 @@ func applyCommentTargets(t *transaction, i Object, r *PublicRequest, uid, commen
 
 // confirmInteraction is the ONLY transition that turns a Workflow interaction into an execution intent
 // (Issue collaboration D9). It re-resolves the target server-side, re-validates the submitted values, persists them as
-// the interaction's Issue-owned input, creates the initial run, and claims the interaction with a
-// compare-and-set on `run_id IS NULL`. Dispatch is the caller's post-commit responsibility, so no
-// external effect happens inside this transaction (Issue collaboration D9).
+// the interaction's Issue-owned input, creates the WorkflowRun and linked IssueRun, and claims the
+// interaction with a compare-and-set on `run_id IS NULL`. WorkflowRun owns execution; this path never
+// hands the linked IssueRun to the legacy dispatcher or performs an external effect (Issue collaboration D9).
 //
 // The values are validated against the schema of the *version being confirmed* rather than the live
 // document the form was rendered from, and against the same admission gate the other two entries use.
@@ -132,7 +132,7 @@ func applyCommentTargets(t *transaction, i Object, r *PublicRequest, uid, commen
 // client rendered, which is the live document's. When the two have diverged the confirm refuses with
 // `workflow_version_fields_changed` and names the fields, rather than validating values the user was
 // shown against a schema they were never shown — see workflowFieldDivergence.
-func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches *[]dispatchTarget) Object {
+func confirmInteraction(t *transaction, r *PublicRequest, uid string) Object {
 	it := interaction(t, r.TenantID, r.IssueID, r.InteractionID)
 	require(it.S("mode") == "form", 409, "interaction_not_confirmable")
 	require(it["runId"] == nil, 409, "interaction_already_confirmed")
@@ -152,11 +152,9 @@ func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches
 	validateFormValues(versionDescriptor, values, true)
 
 	input := buildRunContext(t, i, "", targetType, targetID, values, appliedContextRefs(r.Body))
-	freezeWorkflowSnapshot(input, s.S("id"))
-	runObj := enqueueRun(t, r.TenantID, i.S("id"), targetType, targetID, input, "interaction", it.S("id"), "user", uid)
+	runObj := enqueueWorkflowInvocation(t, r.TenantID, i.S("id"), w, s, values, input, "interaction", it.S("id"), uid)
 	claimed := t.execRows("UPDATE issue_interactions SET input=$3, run_id=$4 WHERE id=$1 AND tenant_id=$2 AND run_id IS NULL", it.S("id"), r.TenantID, jsonText(values), runObj.S("id"))
 	require(claimed == 1, 409, "interaction_already_confirmed")
-	*dispatches = append(*dispatches, dispatchTarget{tenantID: r.TenantID, runID: runObj.S("id")})
 	return Object{"resource": runObj}
 }
 

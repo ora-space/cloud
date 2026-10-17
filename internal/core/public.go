@@ -244,7 +244,7 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				out = assistWorkflow(t, r)
 			case strings.Contains(r.Path, "/interactions"):
 				require(r.Method == "POST" && strings.HasSuffix(r.Path, "/confirm"), 404, "not_found")
-				out = confirmInteraction(t, r, uid, &dispatches)
+				out = confirmInteraction(t, r, uid)
 			case strings.Contains(r.Path, "/comments"):
 				switch r.Method {
 				case "POST":

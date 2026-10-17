@@ -179,7 +179,9 @@ the fixture Agent/Team targets with stable IDs (`internal/collab`:
 **Implemented (Wave 3B-2, migration `0012` — formerly `0010`/`0009`; renumbered in the workspace integration):**
 
 - Workflow Form Mode end-to-end: `@Workflow` → `GET /collaboration/forms/{formRef}` → dynamic form →
-  optional AI Assist → **explicit Confirm** → `IssueRun` → mock execution → Timeline.
+  optional AI Assist → **explicit Confirm** → one `WorkflowRun` and linked `IssueRun` in the same
+  transaction. Linked IssueRuns bypass legacy/mock dispatch. Execution advancement and its Timeline
+  projection await scheduler integration.
 - New ports `FormDescriptorProvider` + `InputAssistProvider` (both nil ⇒ 503). `FormDescriptorProvider`
   is now the production adapter `core.WorkflowFormDescriptors` (a workflow's Start variables projected
   onto renderable fields); only `MockInputAssistProvider` is still a fixture (deterministic, no LLM).
