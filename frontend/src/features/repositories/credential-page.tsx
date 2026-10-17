@@ -100,7 +100,10 @@ function CredentialForm({
         <option value="personal">个人</option>
         {space?.role === 'admin' && <option value="team">团队</option>}
       </select>
-      <Button disabled={pending}>申请提交授权</Button>
+      {/* Base UI's Button defaults to type="button", so a form's submit button must say so. */}
+      <Button type="submit" disabled={pending}>
+        申请提交授权
+      </Button>
     </form>
   )
 }
@@ -151,7 +154,9 @@ function SecretSubmission({
         onChange={(e) => setToken(e.target.value)}
         required
       />
-      <Button disabled={busy}>提交凭据</Button>{' '}
+      <Button type="submit" disabled={busy}>
+        提交凭据
+      </Button>{' '}
       <Button type="button" variant="outline" onClick={onDone}>
         取消
       </Button>

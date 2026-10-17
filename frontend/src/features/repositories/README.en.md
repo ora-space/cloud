@@ -23,8 +23,9 @@ Depends on `features/spaces/current-space` (tenant id and role), the generated c
 
 - The expected external commit (`expectedOldOid`) is derived from the target branch: the snapshot counts only while the target is still the Binding's branch, and every other branch is treated as one the publish creates (the all-zero oid).
 - The submit label and the approval controls express permission only; they are not authorization, which the backend decides again.
-- The credential list shows only available entries the current member may manage; a token never reaches the frontend or its query cache.
+- The credential list shows every credential Cloud returns and narrows only the controls, by the decision in `credential-authority.ts` (revocation additionally admits a tenant administrator, because revoking only tightens access); a token never reaches the frontend or its query cache.
 - One request describes one source: a filled Revision stops the branch from being sent.
+- The lists (credentials, operation history, publishable Workspaces) follow their cursor to the last page: the backend returns at most 100 rows per page and rejects a larger `limit` with 400 `invalid_pagination` rather than truncating.
 
 ## Testing
 

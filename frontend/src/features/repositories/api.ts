@@ -26,6 +26,16 @@ import {
 } from '@/api/repository/repository'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { mutationHeaders, useIdempotencyKeys } from '@/features/spaces/api'
+import { readAllPages } from '@/lib/pagination'
+
+/**
+ * One page of a Cloud list. The backend caps a page at 100 rows and rejects anything above that
+ * with 400 invalid_pagination, so a longer list is read by following its cursor, never by asking
+ * for a bigger page.
+ */
+function pageParams(after: string | undefined) {
+  return after ? { limit: 100, after } : { limit: 100 }
+}
 
 /** Current tenant's safe credential metadata; secrets never enter this query cache. */
 export function useGitCredentials() {
@@ -34,7 +44,9 @@ export function useGitCredentials() {
     queryKey: ['git-credentials', tenantId],
     enabled: !!tenantId,
     queryFn: ({ signal }) =>
-      getApiV1TenantsTidGitCredentials(tenantId ?? '', { limit: 200 }, undefined, signal),
+      readAllPages((after) =>
+        getApiV1TenantsTidGitCredentials(tenantId ?? '', pageParams(after), undefined, signal),
+      ),
     refetchInterval: 5000,
   })
 }
@@ -83,7 +95,9 @@ export function useCredentialActions() {
           { version: c.version },
           options,
         )
-      return postApiV1TenantsTidGitCredentialsGcidVerifications(tenantId, c.id, options)
+      // The verification request carries no body, but its idempotency key travels in `options`;
+      // passing it in the body position would send the key as JSON and drop the header.
+      return postApiV1TenantsTidGitCredentialsGcidVerifications(tenantId, c.id, {}, options)
     },
     onSuccess: () => {
       void cache.invalidateQueries({ queryKey: ['git-credentials', tenantId] })
@@ -121,12 +135,14 @@ export function useRepository(projectId: string) {
     queryKey: ['repository-operations', tenantId, projectId],
     enabled,
     queryFn: ({ signal }) =>
-      getApiV1TenantsTidProjectsPidRepositoryOperations(
-        tenantId ?? '',
-        projectId,
-        { limit: 200 },
-        undefined,
-        signal,
+      readAllPages((after) =>
+        getApiV1TenantsTidProjectsPidRepositoryOperations(
+          tenantId ?? '',
+          projectId,
+          pageParams(after),
+          undefined,
+          signal,
+        ),
       ),
     refetchInterval: 5000,
   })
@@ -188,12 +204,14 @@ export function usePublishSources(projectId: string, workspaceId: string) {
     queryFn: async ({ signal }) => {
       const { getApiV1TenantsTidProjectsPidWorkspaces } =
         await import('@/api/workspaces/workspaces')
-      return getApiV1TenantsTidProjectsPidWorkspaces(
-        tenantId ?? '',
-        projectId,
-        { limit: 200 },
-        undefined,
-        signal,
+      return readAllPages((after) =>
+        getApiV1TenantsTidProjectsPidWorkspaces(
+          tenantId ?? '',
+          projectId,
+          pageParams(after),
+          undefined,
+          signal,
+        ),
       )
     },
   })
