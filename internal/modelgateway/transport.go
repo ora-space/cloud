@@ -2,6 +2,8 @@ package modelgateway
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -86,6 +88,10 @@ func (d *secureDialer) dial(ctx context.Context, network, address string) (net.C
 type UpstreamConfig struct {
 	DevelopmentHosts []string
 	DNS              DNSConfig
+	// TLSRoots overrides the platform root pool. Production leaves it nil so upstream identity is
+	// verified against the deployment's system roots; hermetic transport tests inject the root that
+	// signed their controlled server, keeping every other transport check exactly as deployed.
+	TLSRoots *x509.CertPool
 }
 
 // NewUpstreamClient disables environmental proxies and redirects, and enforces the public-address
@@ -103,7 +109,7 @@ func NewUpstreamClient(config UpstreamConfig) (*http.Client, error) {
 		return nil, err
 	}
 	d := &secureDialer{resolver: resolver, fixtures: net.DefaultResolver, dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}, allowed: allowed}
-	transport := &http.Transport{Proxy: nil, DialContext: d.dial, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 60 * time.Second, MaxIdleConns: 64, MaxConnsPerHost: 32, MaxResponseHeaderBytes: 64 << 10, ForceAttemptHTTP2: true}
+	transport := &http.Transport{Proxy: nil, DialContext: d.dial, TLSClientConfig: &tls.Config{RootCAs: config.TLSRoots}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 60 * time.Second, MaxIdleConns: 64, MaxConnsPerHost: 32, MaxResponseHeaderBytes: 64 << 10, ForceAttemptHTTP2: true}
 	return &http.Client{Transport: &upstreamTransport{Transport: transport, resolver: resolver}, CheckRedirect: func(*http.Request, []*http.Request) error { return endpointRedirectForbidden }}, nil
 }
 
