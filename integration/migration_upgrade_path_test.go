@@ -1048,12 +1048,12 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 	}
 }
 
-// 0036 (external Git line) is the one destructive switch the contract allows: the independent
+// 0038 (external Git line) is the one destructive switch the contract allows: the independent
 // Credential Store becomes the only source of truth for a credential, so a pre-switch reference is
 // revoked rather than migrated, and a Binding's continuity column folds into the single credential
-// reference it keeps. A fresh database and a database that stopped at 0035 must reach the same
+// reference it keeps. A fresh database and a database that stopped at 0037 must reach the same
 // shape, and rerunning the migration must change nothing.
-func TestMigration0036ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
+func TestMigration0038ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
 	credentialColumns := func(pool *sql.DB) int {
 		t.Helper()
 		var n int
@@ -1086,7 +1086,7 @@ func TestMigration0036ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
 		return version, continuity
 	}
 
-	freshPool, _ := testSchema(t, "test_egl36f_")
+	freshPool, _ := testSchema(t, "test_egl38f_")
 	migratedTwice(t, newStoreOnSchema(t, freshPool))
 	if got := credentialColumns(freshPool); got != 10 {
 		t.Fatalf("a fresh database must have the ten Credential Store columns, got %d", got)
@@ -1103,17 +1103,17 @@ func TestMigration0036ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
 		}
 	}
 
-	// The upgrade path: a deployment that stopped at 0035, carrying real rows.
-	pool, _ := testSchema(t, "test_egl36_")
-	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0036_external_git_line.sql"))
+	// The upgrade path: a deployment that stopped at 0037, carrying real rows.
+	pool, _ := testSchema(t, "test_egl38_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0038_external_git_line.sql"))
 	if got := credentialColumns(pool); got != 0 {
-		t.Fatalf("before 0036 the Credential Store columns must be absent, got %d", got)
+		t.Fatalf("before 0038 the Credential Store columns must be absent, got %d", got)
 	}
 	if version, continuity := bindings(pool); version || !continuity {
-		t.Fatalf("before 0036: version column %v, continuity column %v", version, continuity)
+		t.Fatalf("before 0038: version column %v, continuity column %v", version, continuity)
 	}
 	if tableExists(t, pool, "credential_verifications") {
-		t.Fatal("credential_verifications must not exist before 0036")
+		t.Fatal("credential_verifications must not exist before 0038")
 	}
 
 	user, tenant, project, space := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -1152,10 +1152,10 @@ func TestMigration0036ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
 	migratedTwice(t, newStoreOnSchema(t, pool))
 
 	if got := credentialColumns(pool); got != 10 {
-		t.Fatalf("after 0036 the Credential Store columns must all be present, got %d", got)
+		t.Fatalf("after 0038 the Credential Store columns must all be present, got %d", got)
 	}
 	if version, continuity := bindings(pool); !version || continuity {
-		t.Fatalf("after 0036: version column %v, continuity column %v", version, continuity)
+		t.Fatalf("after 0038: version column %v, continuity column %v", version, continuity)
 	}
 
 	// A pre-switch reference keeps its audit trail and can never be redeemed again.
