@@ -36,28 +36,22 @@ func seedGitScene(t *testing.T, s *Store) gitScene {
 	return gitScene{takeoverScene: scene, scope: GitRuntimeScope{TenantID: scene.seed.seed.tenant, WorkspaceID: scene.ws, Generation: generation}, project: scene.seed.seed.project}
 }
 
-// restoring marks the session execution as one that restores a prior Revision.
-func (g gitScene) restoring(t *testing.T, s *Store) {
-	t.Helper()
-	if _, err := s.Pool.Exec(`UPDATE node_executions SET input=input||'{"priorRevision":{"revisionId":"r","finalCommit":"c"}}' WHERE execution_id=$1`, g.execution); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // delivering stages the rows a delivery leaves after the session ended: the session execution has
 // a result, the run is `delivering`, and a deliver_revision execution is registered for a work item
-// targeting the same sandbox. It returns the delivery execution and its work item id.
+// targeting the same sandbox, with the delivery ref and Workspace branch its fixed input names. It
+// returns the delivery execution and its work item id.
 func (g gitScene) delivering(t *testing.T, s *Store) (execution, work string) {
 	t.Helper()
 	execution, work = "exec-deliver-"+g.execution, uuid.NewString()
+	input := jsonText(Object{"kind": "deliver_revision", "deliveryRef": GitDeliveryRefPrefix + work, "workspaceRef": GitWorkspaceRefPrefix(g.ws) + "main"})
 	for _, q := range []struct {
 		query string
 		args  []any
 	}{
 		{`UPDATE node_executions SET result='{"outcome":"agent_session_ended"}' WHERE execution_id=$1`, []any{g.execution}},
 		{`UPDATE issue_runs SET phase='delivering' WHERE id=$1`, []any{g.run}},
-		{`INSERT INTO execution_work(id,run_id,kind,input,target,execution_id) SELECT $1,run_id,'deliver_revision','{}',target,$2 FROM execution_work WHERE id=$3`, []any{work, execution, g.work.S("id")}},
-		{`INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch) VALUES($1,'deliver_revision',$2,$3,$4,$5,'op-deliver','{}',1)`, []any{execution, g.run, work, g.ws, g.node}},
+		{`INSERT INTO execution_work(id,run_id,kind,input,target,execution_id) SELECT $1,run_id,'deliver_revision',$4,target,$2 FROM execution_work WHERE id=$3`, []any{work, execution, g.work.S("id"), input}},
+		{`INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch) VALUES($1,'deliver_revision',$2,$3,$4,$5,'op-deliver',$6,1)`, []any{execution, g.run, work, g.ws, g.node, input}},
 	} {
 		if _, err := s.Pool.Exec(q.query, q.args...); err != nil {
 			t.Fatalf("stage delivery: %v", err)
@@ -74,21 +68,21 @@ func expectGitDenied(t *testing.T, err error, why string) {
 	}
 }
 
-func TestGitAccessGrantsRestoreReadAndDeliveryWriteFromCurrentState(t *testing.T) {
+// Contract D5: every live session reads the repository and may create or fast-forward branches of
+// its own Workspace, restoring a prior or not; a delivery creates its own ref and fast-forwards its
+// Workspace's branch; an ended session keeps nothing.
+func TestGitAccessGrantsSessionBranchesAndDeliveryRefsFromCurrentState(t *testing.T) {
 	s := commandStore(t)
 	g := seedGitScene(t, s)
 	ctx := context.Background()
 
-	_, err := s.AuthorizeGitAccess(ctx, g.scope, g.execution, g.project)
-	expectGitDenied(t, err, "a session that restores nothing has no repository access")
-
-	g.restoring(t, s)
 	got, err := s.AuthorizeGitAccess(ctx, g.scope, g.execution, g.project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project}) {
-		t.Fatalf("restoring session access = %+v, want read-only", got)
+	session := GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project, Writable: []GitWritableRef{{Prefix: GitWorkspaceRefPrefix(g.ws), Rule: GitFastForward}}}
+	if !reflect.DeepEqual(got, session) {
+		t.Fatalf("session access = %+v, want its own Workspace prefix fast-forward", got)
 	}
 
 	delivery, work := g.delivering(t, s)
@@ -98,9 +92,36 @@ func TestGitAccessGrantsRestoreReadAndDeliveryWriteFromCurrentState(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project, Writable: []GitWritableRef{{Ref: GitDeliveryRefPrefix + work, Rule: GitCreateOnly}}}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("delivery access = %+v, want write to its own delivery ref", got)
+	want := GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project, Writable: []GitWritableRef{
+		{Ref: GitDeliveryRefPrefix + work, Rule: GitCreateOnly},
+		{Ref: GitWorkspaceRefPrefix(g.ws) + "main", Rule: GitFastForward},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("delivery access = %+v, want its own delivery ref and Workspace branch", got)
 	}
+}
+
+// A delivery input naming another Workspace's branch, or a delivery ref that is not its own, grants
+// no write beyond the contract's sandbox column.
+func TestGitAccessNeverWidensBeyondTheCertificateWorkspace(t *testing.T) {
+	s := commandStore(t)
+	g := seedGitScene(t, s)
+	delivery, work := g.delivering(t, s)
+	if _, err := s.Pool.Exec(`UPDATE node_executions SET input=jsonb_set(input,'{workspaceRef}',to_jsonb($2::text)) WHERE execution_id=$1`, delivery, GitWorkspaceRefPrefix(uuid.NewString())+"main"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AuthorizeGitAccess(context.Background(), g.scope, delivery, g.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []GitWritableRef{{Ref: GitDeliveryRefPrefix + work, Rule: GitCreateOnly}}; !reflect.DeepEqual(got.Writable, want) {
+		t.Fatalf("another Workspace's branch was granted: %+v", got.Writable)
+	}
+	if _, err := s.Pool.Exec(`UPDATE node_executions SET input=jsonb_set(input,'{deliveryRef}',to_jsonb($2::text)) WHERE execution_id=$1`, delivery, GitDeliveryRefPrefix+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AuthorizeGitAccess(context.Background(), g.scope, delivery, g.project)
+	expectGitDenied(t, err, "a delivery ref that is not the work item's own")
 }
 
 // Each case withdraws exactly one fact the decision depends on; the next request must be denied,
@@ -160,15 +181,14 @@ func TestGitAccessDeniesWhenAnyCurrentFactIsWithdrawn(t *testing.T) {
 	}
 }
 
-// The restoring session loses read access as soon as the run starts ending.
-func TestGitAccessRestoreReadEndsWithTheSession(t *testing.T) {
+// A session loses repository access as soon as the run starts ending.
+func TestGitAccessSessionAccessEndsWithTheSession(t *testing.T) {
 	for _, query := range []string{
 		"UPDATE issue_runs SET cancel_requested_at=now() WHERE id=$1",
 		"UPDATE issue_runs SET thread_state='ending' WHERE id=$1",
 	} {
 		s := commandStore(t)
 		g := seedGitScene(t, s)
-		g.restoring(t, s)
 		if _, err := s.Pool.Exec(query, g.run); err != nil {
 			t.Fatal(err)
 		}
@@ -177,11 +197,27 @@ func TestGitAccessRestoreReadEndsWithTheSession(t *testing.T) {
 	}
 }
 
+// Plugin executions of the same Workspace never reach the repository.
+func TestGitAccessDeniesPluginExecutions(t *testing.T) {
+	s := commandStore(t)
+	g := seedGitScene(t, s)
+	res, err := s.Pool.Exec(`INSERT INTO node_executions(execution_id,kind,operation_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch)
+	 SELECT 'exec-plugin','install_plugins',o.id,$1,$2,'op-plugin','{"kind":"install_plugins","plugins":[]}',1
+	 FROM operations o WHERE o.workspace_id=$1 LIMIT 1`, g.ws, g.node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatal("the scene has no Workspace operation to register a plugin execution under")
+	}
+	_, err = s.AuthorizeGitAccess(context.Background(), g.scope, "exec-plugin", g.project)
+	expectGitDenied(t, err, "a plugin execution")
+}
+
 // An unreachable database is not a denial: the caller must report unavailable and never allow.
 func TestGitAccessDatabaseFailureIsNotADenial(t *testing.T) {
 	s := commandStore(t)
 	g := seedGitScene(t, s)
-	g.restoring(t, s)
 	if err := s.Pool.Close(); err != nil {
 		t.Fatal(err)
 	}

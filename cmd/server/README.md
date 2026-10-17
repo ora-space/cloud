@@ -10,6 +10,7 @@
 - **PostgreSQL 连接池初始化**：通过 `internal/repository.InitDB` 建立与权威 PostgreSQL 数据库的连接，并执行强制 Ping 探活以验证连通性。
 - **迁移完整性门禁**：在启动时执行 `store.CheckSchema(ctx)`。严格校验 `internal/core/migrations` 中定义的所有迁移都已按顺序应用且 SHA256 校验和匹配，同时检查数据库中不存在任何意外的迁移版本。此过程从不应用 DDL 或运行 `AutoMigrate`。
 - **密码学信任配置**：使用配置的受信任验证公钥和预期受众字符串构建 `core.Authenticator`。
+- **Git Server 装配**：通过 `cfg.GitServer.Open()` 校验 `git_server` 段并加载 Cloud 的 ref 查询客户端证书，装入 `store.GitServer`；不访问网络，`repository_base_url` 为空时不配置 Git Server。
 - **HTTP 服务装配**：通过 `internal/api/router.New` 初始化 Gin 引擎，设置服务端超时参数（`ReadHeaderTimeout`、`ReadTimeout`、`WriteTimeout`、`IdleTimeout`），并监听配置的 TCP 端口。
 - **插件市场同步循环**：当 `plugins.sync_enabled` 时启动 `pluginmarket.RunSyncLoop` —— 启动即同步一次，此后每 `plugins.sync_interval` 一次；循环由进程生命周期持有（shutdown 时 cancel + WaitGroup 等待），失败只落 `plugin_sources.sync_error` 与日志，绝不中断服务。
 - **优雅停机**：捕获 `os.Interrupt` 和 `syscall.SIGTERM`。收到停机信号后，创建一个最长 10 秒的有界停机 context，以完成处理中的请求，然后关闭 PostgreSQL 连接池并刷新日志缓冲区。

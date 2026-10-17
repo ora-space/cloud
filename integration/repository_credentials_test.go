@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/wanglongan587/cloud/internal/core"
@@ -41,31 +42,27 @@ func TestCredentialDepartureFreezesPersonalAndUnknownButRetainsTeamHistory(t *te
 	}
 }
 
-func TestCredentialedCloneRefusesMissingExecutorAndAnonymousFallback(t *testing.T) {
+// A credentialed Project's Workspace clones its Git Server snapshot like any other: the external
+// repository's credential reference is the Repo Executor's business (operation D1), so it never
+// gates the clone and never reaches the clone input, the Controller snapshot or the Node.
+func TestCredentialedProjectClonesItsSnapshotWithoutTheCredential(t *testing.T) {
 	f := setup(t)
 	ref, err := f.store.ConfigureCredential(context.Background(), f.tid, f.uid, "deployment-controlled-reference")
 	must(t, err)
-	created := f.call("POST", f.path("/projects"), core.Object{"name": "Private", "repositoryUrl": "https://example.invalid/repo.git", "defaultBranch": "main", "credentialRefId": ref.S("id")}, "private", 202)
-	if err = f.controller.Drain(context.Background()); err == nil {
-		t.Fatal("credentialed Git must reject an unavailable scoped executor")
-	}
+	created := f.call("POST", f.path("/projects"), core.Object{"name": "Private", "repositoryUrl": "https://example.invalid/private.git", "defaultBranch": "main", "credentialRefId": ref.S("id")}, "private", 202)
+	f.drain()
 	wid := created.O("workspace").S("id")
-	if f.scalar("SELECT count(*) FROM clone_executions WHERE workspace_id=$1", wid) != 0 {
-		t.Fatal("credentialed project fell back to anonymous/static Git")
+	if w := f.ws(wid); w.S("observedState") != "ready" || w.S("baseCommitId") != f.commit {
+		t.Fatalf("a credentialed Project must clone its snapshot: %v", w)
+	}
+	var input string
+	must(t, f.store.Pool.QueryRow("SELECT input::text FROM clone_executions WHERE workspace_id=$1", wid).Scan(&input))
+	for _, private := range []string{"example.invalid/private.git", "deployment-controlled-reference", ref.S("id")} {
+		if strings.Contains(input, private) {
+			t.Fatalf("the clone input carries %q: %s", private, input)
+		}
 	}
 	if f.scalar("SELECT count(*) FROM projects p JOIN repository_bindings b ON b.project_id=p.id WHERE p.id=$1 AND p.owner_user_id=$2 AND b.credential_ref_id=$3", created.O("resource").S("id"), f.uid, ref.S("id")) != 1 {
-		t.Fatal("refusal rewrote durable ownership or reference")
-	}
-}
-
-func TestProductionStoreRefusesUnscopedCloneAdmission(t *testing.T) {
-	f := setup(t)
-	production := newStoreOnSchema(t, f.store.Pool)
-	_, err := production.EnqueueClone(context.Background(), f.tid, f.uid, "unscoped", "https://example.invalid/repo.git", "main")
-	if err == nil || core.ErrorCode(err).Code != "runtime_scope_required" {
-		t.Fatalf("production legacy admission: %v", err)
-	}
-	if f.scalar("SELECT count(*) FROM clone_requests") != 0 {
-		t.Fatal("refused legacy request was persisted")
+		t.Fatal("cloning rewrote durable ownership or reference")
 	}
 }

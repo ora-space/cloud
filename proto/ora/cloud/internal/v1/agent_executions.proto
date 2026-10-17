@@ -35,13 +35,33 @@ message UserTurn {
 }
 
 // The Revision a new run of the same Issue resumes from (IssueRun resume decision D1). On a session
-// spec it names the verified object holding the bundle, which may belong to an earlier Revision the
-// resumed one reused; on a delivery spec it carries only the identity and final commit.
+// spec it also says where the Node fetches the prior final commit and what it was based on; on a
+// delivery spec it carries only the identity and final commit.
 message PriorRevision {
+  reserved 3;
+  reserved "bundle";
   string revision_id = 1;
   string final_commit = 2;
-  // Set on AgentSessionSpec only. The download grant covers exactly this object key.
-  StoredObject bundle = 3;
+  // Session spec only: the Git Server repository and verified delivery ref holding final_commit.
+  string git_repository_url = 4;
+  string delivery_ref = 5;
+  // Session spec only: the base commit of the prior Revision, used to tell whether the Workspace
+  // snapshot still contains it.
+  string base_commit = 6;
+}
+
+// One Workspace of the session's Project, so `ora-git list` can name branches by Issue and run. It
+// is a snapshot taken when the work item was released and never takes part in authorization.
+message WorkspaceListing {
+  string workspace_id = 1;
+  // main | isolated | run
+  string kind = 2;
+  // Run Workspaces only.
+  string issue_id = 3;
+  string issue_title = 4;
+  string issue_run_id = 5;
+  // As of when the session work item was released.
+  string run_status = 6;
 }
 
 message AgentSessionSpec {
@@ -60,6 +80,8 @@ message AgentSessionSpec {
   // Opaque personal-model snapshot reference. Empty for agents that do not use model-gateway.
   // No provider credential or temporary access token crosses this contract.
   string model_binding_id = 7;
+  // Workspaces of this Project, newest first, at most 100, fixed when the work item was released.
+  repeated WorkspaceListing workspace_directory = 8;
 }
 
 enum AgentSessionEndReason {
@@ -82,19 +104,28 @@ message AgentSessionEnded {
 }
 
 message DeliverRevisionSpec {
+  reserved 5;
+  reserved "bundle_key";
   // The ended session whose Workspace and history are saved.
   string session_execution_id = 1;
   string checkout_execution_id = 2;
-  // Commit of the run Workspace's clone; the bundle is relative to it.
+  // Commit of the run Workspace's clone.
   string base_commit = 3;
   // Must be under `refs/ora/revisions/`.
   string revision_ref = 4;
-  // Object keys Cloud chose for this delivery; upload grants are issued only for these keys.
-  string bundle_key = 5;
+  // Object key Cloud chose for the session history; upload grants are issued only for this key.
   string history_key = 6;
-  // The session's resumed Revision, without bundle. A final commit equal to its final commit is
-  // reported as RevisionUnchanged.
+  // The session's resumed Revision, identity and final commit only. A final commit equal to its
+  // final commit is reported as RevisionUnchanged.
   PriorRevision prior_revision = 7;
+  // Fixed by Cloud when the work item was released; the Node pushes the final commit to
+  // delivery_ref (create only) in this repository.
+  string git_repository_url = 8;
+  // Under `refs/ora/deliveries/`.
+  string delivery_ref = 9;
+  // The run Workspace's branch, from its clone input. The Node fast-forwards it to the final commit
+  // after the delivery ref is pushed; failing to do so never fails the delivery.
+  string workspace_ref = 10;
 }
 
 // An object the Node uploaded, as the Node measured it; Cloud verifies it before registering.
@@ -105,16 +136,19 @@ message StoredObject {
   string sha256 = 3;
 }
 
+// The final commit was pushed to the input's delivery_ref; Cloud verifies the ref before registering.
 message RevisionDelivered {
+  reserved 4;
+  reserved "bundle";
   string final_commit = 1;
   string base_commit = 2;
   string revision_ref = 3;
-  StoredObject bundle = 4;
   StoredObject history = 5;
 }
 
 // The final commit equals the base commit, or the delivery spec's prior_revision final commit (a
-// resumed run that added nothing): no bundle, only the session history.
+// resumed run that added nothing). It still pushes its own delivery_ref and attempts to fast-forward
+// workspace_ref before uploading only the session history.
 message RevisionUnchanged {
   string final_commit = 1;
   string base_commit = 2;
@@ -127,11 +161,16 @@ enum RevisionFailureReason {
   REVISION_FAILURE_REASON_SESSION_NOT_SETTLED = 1;
   REVISION_FAILURE_REASON_CHECKOUT_UNAVAILABLE = 2;
   REVISION_FAILURE_REASON_SNAPSHOT_FAILED = 3;
+  // Kept for history only; a new result carrying it is rejected.
   REVISION_FAILURE_REASON_BUNDLE_FAILED = 4;
   REVISION_FAILURE_REASON_HISTORY_UNAVAILABLE = 5;
   REVISION_FAILURE_REASON_UPLOAD_FAILED = 6;
   // Recorded by Cloud when the declared objects are missing or differ; a Node never reports it.
   REVISION_FAILURE_REASON_VERIFICATION_FAILED = 7;
+  // The Git Server refused the delivery ref push (401, 403 or a declined ref update).
+  REVISION_FAILURE_REASON_PUSH_REJECTED = 8;
+  // The delivery ref push failed on 5xx, network, TLS or deadline after the retries ran out.
+  REVISION_FAILURE_REASON_PUSH_FAILED = 9;
 }
 
 message RevisionFailed {
@@ -153,14 +192,3 @@ message UploadGrant {
   google.protobuf.Timestamp expires_at = 5;
 }
 
-// A presigned single-object read of a prior Revision's bundle. Like UploadGrant it is a short-lived
-// bearer credential kept in memory only and never logged.
-message DownloadGrant {
-  string object_key = 1;
-  string url = 2;
-  // Always GET.
-  string method = 3;
-  // Headers the download must carry unchanged.
-  map<string, string> headers = 4;
-  google.protobuf.Timestamp expires_at = 5;
-}

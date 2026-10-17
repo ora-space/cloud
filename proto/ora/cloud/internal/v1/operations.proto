@@ -84,12 +84,13 @@ message Operation {
   optional string error_code = 9;
 }
 
+// The Project an operation belongs to. Its external repository, branch and credential reference
+// never reach a Controller: a Workspace clones only the Git Server snapshot its clone step was
+// handed (clone_input).
 message OperationProject {
+  reserved 2, 3, 4;
+  reserved "repository_url", "default_branch", "credential_ref";
   string id = 1;
-  string repository_url = 2;
-  string default_branch = 3;
-  // Infrastructure reference to the repository credential; never the credential itself.
-  optional string credential_ref = 4;
 }
 
 enum WorkspaceKind {
@@ -108,7 +109,8 @@ message OperationWorkspace {
   int64 runtime_generation = 5;
   bool admission_open = 6;
   int64 admission_epoch = 7;
-  // The ref the Workspace's Node clones.
+  // The short name of the Workspace's branch on the Git Server
+  // (refs/heads/workspaces/<id>/<requested_ref>) and of the checkout's local branch.
   string requested_ref = 8;
   // Commit of the Workspace's successful clone.
   optional string base_commit_id = 9;
@@ -258,6 +260,11 @@ message OperationSnapshot {
   // the operation entered the step. Unset outside the plugin step or when the set is empty, in which
   // case the step advances without an execution.
   optional ExecutionInput plugin_input = 9;
+  // The input the clone step's execution must carry, frozen by Cloud from the Binding's current
+  // snapshot before the step was handed out and identical for every attempt of the operation. Set
+  // whenever the operation is in the clone step; the Controller forwards it verbatim to
+  // RecordDispatch and the Node, and does not dispatch a clone step without it.
+  optional CloneSpec clone_input = 10;
 }
 
 message ClaimOperationRequest {

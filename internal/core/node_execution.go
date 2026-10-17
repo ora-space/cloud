@@ -149,9 +149,11 @@ var sessionEndReasons = map[string]bool{
 	"user_ended": true, "idle_timeout": true, "cancelled": true, "agent_failed": true, "interrupted": true,
 }
 
+// revisionFailureReasons is the closed set a Node may report. bundle_failed stays in the wire enum
+// for history only: no delivery makes a bundle any more, so a new result carrying it is refused.
 var revisionFailureReasons = map[string]bool{
 	"session_not_settled": true, "checkout_unavailable": true, "snapshot_failed": true,
-	"bundle_failed": true, "history_unavailable": true, "upload_failed": true,
+	"history_unavailable": true, "upload_failed": true, "push_rejected": true, "push_failed": true,
 }
 
 func recordNodeReceipt(t *transaction, execution string, sequence int64, event string) {

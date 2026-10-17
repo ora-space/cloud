@@ -22,7 +22,6 @@
 | `api/` | **生成物**（orval），禁止手改，见 [`../README.md`](../README.md)。 |
 | `components/ui/` | 无业务语义的展示原语（shadcn/ui）。 |
 | `features/auth/` | 会话与登录边界：Gateway 登录/登出、`/api/v1/me` 探测、401 策略、路由门禁。 |
-| `features/clones/` | 「仓库」页：经公开 clones API 提交 clone、跟踪 Node 回报的结果，并保证待确认请求不会被重复提交。 |
 | `features/onboarding/` | 首个工作区创建页。 |
 | `features/model-connections/` | 当前用户私有的模型连接、写入凭据与新会话默认模型；路由为 `settings/model-connections`。 |
 | `features/spaces/` | 协作空间接入层：租户/空间解析、空间 API、SSE 订阅。 |

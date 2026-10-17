@@ -23,8 +23,9 @@ import (
 
 // Substrate persists stable effect journals and project data outside cloud's database.
 type Substrate struct {
-	Root         string
-	Repositories map[string]string
+	Root string
+	// Git is the Git Server double the simulated Node clones snapshots from.
+	Git *GitServer
 	// Artifacts maps plugin release URLs to local fixture files so the
 	// simulated Node "downloads" real bytes and verifies real digests without
 	// network access. An unmapped URL fails the install, mirroring production.
@@ -33,7 +34,7 @@ type Substrate struct {
 	faults    map[string]string
 }
 
-func NewSubstrate(root string, repos map[string]string) (*Substrate, error) {
+func NewSubstrate(root string, git *GitServer) (*Substrate, error) {
 	absolute, e := filepath.Abs(root)
 	if e != nil {
 		return nil, e
@@ -43,7 +44,7 @@ func NewSubstrate(root string, repos map[string]string) (*Substrate, error) {
 			return nil, e
 		}
 	}
-	return &Substrate{Root: absolute, Repositories: repos, Artifacts: map[string]string{}, faults: map[string]string{}}, nil
+	return &Substrate{Root: absolute, Git: git, Artifacts: map[string]string{}, faults: map[string]string{}}, nil
 }
 
 // MapArtifact binds a plugin release URL to a local fixture file, mirroring

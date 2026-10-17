@@ -108,10 +108,17 @@ func (p *Preset) recordSnapshot(ctx context.Context, b binding, commit, snapshot
 		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var operation string
-	if err := tx.QueryRowContext(ctx, `INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,finished_at)
-	 VALUES(gen_random_uuid(),'repository_sync',$1,$2,$3,'succeeded','preset',clock_timestamp()) RETURNING id`, b.tenant, b.project, b.id).Scan(&operation); err != nil {
-		return "", fmt.Errorf("record sync: %w", err)
+	// The Binding's unfinished sync, such as the one every new Project starts with, is the sync this
+	// snapshot completes; only without one is a new succeeded sync recorded.
+	operation, err := advanceSync(ctx, tx, b, "succeeded", nil)
+	if err != nil {
+		return "", err
+	}
+	if operation == "" {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,finished_at)
+		 VALUES(gen_random_uuid(),'repository_sync',$1,$2,$3,'succeeded','preset',clock_timestamp()) RETURNING id`, b.tenant, b.project, b.id).Scan(&operation); err != nil {
+			return "", fmt.Errorf("record sync: %w", err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO repository_snapshots(binding_id,tenant_id,project_id,commit_oid,snapshot_ref,sync_operation_id) VALUES($1,$2,$3,$4,$5,$6)
 	 ON CONFLICT(binding_id) DO UPDATE SET commit_oid=EXCLUDED.commit_oid,snapshot_ref=EXCLUDED.snapshot_ref,sync_operation_id=EXCLUDED.sync_operation_id,recorded_at=clock_timestamp()`,

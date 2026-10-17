@@ -146,19 +146,43 @@ func leaseValid(t *transaction, r *ControlRequest) {
 	require(l != nil, 409, "stale_controller")
 }
 
+// claim hands the oldest claimable operation to the Controller. An operation that must not be handed
+// out yet is parked in this same transaction and the claim moves on to the next one, so a waiter at
+// the head of the queue never makes a claim come back empty while other work is claimable
+// (operation D2). Each parked operation leaves the claimable set, so the loop ends.
 func claim(t *transaction, r *ControlRequest) Object {
 	schedulePluginMaintenance(t)
-	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
-	if o == nil {
-		return Object{"operation": nil}
-	}
-	t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
-	o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
-	if o.S("step") == "plugin" {
-		enterPluginStep(t, o)
+	for {
+		o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
+		if o == nil {
+			return Object{"operation": nil}
+		}
+		if !readyToHandOut(t, o) {
+			continue
+		}
+		t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
 		o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		if o.S("step") == "plugin" {
+			enterPluginStep(t, o)
+			o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		}
+		return snapshot(t, o)
 	}
-	return snapshot(t, o)
+}
+
+// readyToHandOut decides, before a Controller sees an operation, the conditions only Cloud can
+// judge. A clone step needs its frozen snapshot input (operation D1, D2). delete_project does not
+// start quiescing while a sync or publish of the Project may still write to its repository
+// (operation D6); like a snapshot wait this consumes no attempt and fails nothing.
+func readyToHandOut(t *transaction, o Object) bool {
+	switch {
+	case o.S("step") == "clone":
+		return freezeCloneInput(t, o)
+	case o.S("kind") == "delete_project" && o.S("step") == "quiesce" && repositoryOperationsUnfinished(t, o.S("projectId")):
+		parkOperation(t, o, "retry_wait", repositoryOperationRunning, repositoryWaitSeconds)
+		return false
+	}
+	return true
 }
 
 func operation(t *transaction, r *ControlRequest) Object {
@@ -171,11 +195,13 @@ func operation(t *transaction, r *ControlRequest) Object {
 }
 
 // snapshot is everything a Controller needs to drive one operation. Workspaces carry their own
-// requested ref and baseline commit; the retired Project storage and worktree rows are not part of
-// it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
+// branch name and baseline commit, and a clone step carries its frozen input; the retired Project
+// storage and worktree rows are not part of it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM "+projectView+" p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	// The Project's external repository and credential reference stay in Cloud: a Workspace clones
+	// only the snapshot input frozen into its clone step.
+	p := t.one("SELECT p.* FROM projects p WHERE p.id=$1", o.S("projectId"))
 	out := Object{
 		"operation":  o,
 		"project":    p,
@@ -189,6 +215,9 @@ func snapshot(t *transaction, o Object) Object {
 	}
 	if input := pluginInputOf(o); len(input) > 0 {
 		out["pluginInput"] = input
+	}
+	if input := cloneInputOf(o); input != nil && o.S("step") == "clone" {
+		out["cloneInput"] = input
 	}
 	return out
 }
@@ -434,6 +463,11 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 		}
 	} else {
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
+		if next == "clone" {
+			// The step is frozen in the transaction that enters it; without a snapshot the operation
+			// leaves the Controller here, parked or failed, and returns through a later claim.
+			freezeCloneInput(t, t.one("SELECT * FROM operations WHERE id=$1", o.S("id")))
+		}
 	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 }

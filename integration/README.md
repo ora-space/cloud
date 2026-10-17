@@ -7,11 +7,13 @@
 ## 测试分类与覆盖范围
 
 - **`cloud_test.go`**：端到端完整生命周期验证：
-  - Project 与 Workspace 经 sandbox → node → clone 创建，真实 Git clone 到各 Workspace 自己的数据中，以及 `one_main` 约束执行。
+  - Project 与 Workspace 经 sandbox → node → clone 创建，从 Git Server 替身的快照真实 Git clone 到各 Workspace 自己的数据中，以及 `one_main` 约束执行。
   - Workspace 状态流转（`provisioning` $\rightarrow$ `ready` $\rightarrow$ `stopped` $\rightarrow$ `deleted`）。
   - Controller 租约获取、Epoch 栅栏隔离以及操作任务认领/推进。
   - 幂等性重放与冲突检测。
 - **`workspace_lifecycle_test.go`**：各步骤只计划保留的 effect、clone 失败重试与结果未知时阻塞、Workspace 数据删除等待终止。
+- **`clone_snapshot_test.go`**：clone 步骤消费 Binding 当前快照（git-server-preset 夹具代替外部线）：等待首次同步后冻结输入、同步失败时 operation 失败、领取越过停放的 operation、冻结输入不随快照更新、isolated `baseRef` 只能是已同步分支、run Workspace 不触发同步、delete_project 等待仓库 Operation、未配置 Git Server 时 blocked、租户级 clone 已移除。
+- **`git_server_grants_test.go`**：Git Server 授权：clone execution 只在自己的步骤内只读，Agent 会话只能写自己 Workspace 的分支。
 - **`workspace_operations_grpc_test.go`**：Controller 通过 `WorkspaceOperationService`／`NodeReportService` 驱动 Workspace、Node incarnation 替换以及 `OperationAvailable` 投递。
 - **`endpoints_test.go`**：针对所有公开端点和内部控制端点进行全面的路由与参数矩阵测试。
 - **`contract_test.go`**：对照实际 HTTP 响应数据结构，进行端到端 OpenAPI 契约验证。
@@ -46,6 +48,8 @@ task test:race
 `task test:revision` 强制真实 PostgreSQL 和 S3。设置 `TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY_FILE`、`TEST_S3_SECRET_KEY_FILE`，预建 `revisions` 桶；凭据仅为临时文件引用。设 `REQUIRE_S3=1` 时缺少存储立即失败。sandbox 用例还需 `TEST_S3_PUBLIC_ENDPOINT`、`TEST_S3_SANDBOX_NETWORK` 及 `REQUIRE_S3_SANDBOX=1`；集群配套 `task agent:acceptance` 自动配置这些环境。
 
 Revision 测试直接覆盖真实上传、checksum/大小/缺失、授权过期刷新、外部校验后围栏、事务失败与重放、双替身重启及历史升级。业务钩子测试验证 ready/failed、Thread、会话结束、交付、删除与控制证据同提交/回滚。完整 `task test`、`task test:race` 也应启用这些强制环境，避免把跳过 S3 当作已验收。范围见[控制面报告](../docs/agent-run-control-plane-review.md)。
+
+重启验收替换 Controller/Node 时保留同一个 Git Server 替身，验证交付 ref 已推送后仍能恢复冻结的 history 上传及授权刷新。
 
 ## 契约验证的测试作用域
 

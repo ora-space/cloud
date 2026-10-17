@@ -101,7 +101,6 @@ Both `0033` files retain their complete filenames and original SQL. The complete
 
 Adds startup_ready_at, startup_deadline_at, startup_resume, startup_ending_deadline_at and agent_run_residuals without rewriting historical outcomes. The serialized policy scan freezes legacy active windows once. Residual ownership commits with failed/done; late true terminal facts add evidence without granting cleanup authority. Fresh/upgrade/repeat coverage: TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade.
 
-
 `0035_model_attempt_statistics.sql` adds a content-free model HTTP attempt ledger and tenant/run/time index.
 Composite foreign keys bind run/tenant, binding/run and grant/binding/execution; CHECK constraints bound statuses,
 nullable counters, timing and completion shape. No historical backfill. Apply with `cloudctl migrate`; services still
@@ -110,3 +109,15 @@ only validate schema. `TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackf
 ## 0036: workflow plugin asset imports
 
 `0036_workflow_asset_imports.sql` records asset imports for `kind='workflow'` plugins: `workflow_asset_imports` holds one row per (space, plugin) with the `requested_revision` each administrator install/reinstall advances, the import progress and its lease; `workflow_asset_documents` holds one row per document path, and only an `outcome='imported'` row permanently occupies (space, namespace, identifier, document path) — failed documents are retried on the next trigger. The imported workflows and published snapshots are ordinary user data; these two tables only record provenance, idempotency and per-document outcomes. Forward-only and additive; no existing table changes.
+
+## 0037: Repository Bindings, snapshots and repository Operations
+
+The Git Server becomes the Project's code hub (cloud/git-server contract decision): a Project's external repository moves from `projects` columns to its Binding. `repository_bindings` is added (exactly one per Project in phase one, holding the repository URL, branch and credential references); every existing Project's `repository_url`, `default_branch`, `credential_ref_id` and `repository_credential_ref_id` are copied into its Binding as they are and the four columns are dropped from `projects`. `repository_operations` holds sync and publish Operations with the contract's states and terminal states, at most one unfinished sync per Binding, and `repository_snapshots` holds each Binding's current snapshot, which always names an immutable snapshot ref. The constraints' refusal of real rows is `TestRepositoryOperationStorageConstraints` in `integration/repository_binding_test.go`.
+
+## 0038: Retire tenant-level clones
+
+Part of the switch to Workspaces cloned from Git Server snapshots; no data is migrated. Clone executions that belong to no Workspace and their receipts are deleted, `clone_executions.clone_request_id` and the `one_request_execution` index are dropped, `clone_executions.workspace_id` becomes NOT NULL, and `clone_requests` is dropped; Workspace clone executions and their receipts stay. The migration is retry-safe. Upgrading a database that still holds tenant-level clones is `TestMigration0038RetiresTenantLevelClonesKeepingWorkspaceClones` in `integration/migration_upgrade_path_test.go`.
+
+## 0039: Revisions delivered over Git
+
+Part of the switch to Revisions delivered over Git; no data is migrated. `revisions` gains `delivery_ref`, and `revisions_bundle_shape` is replaced by `revisions_shape`: with a NULL `delivery_ref` a row keeps one of the legacy bundle shapes; with one, it must be a well-formed `refs/ora/deliveries/<UUID>` and carry no bundle column. The partial unique index `revisions_delivery_ref` lets one delivery ref belong to one Revision only. Existing bundle rows are never rewritten, and the migration is retry-safe. The constraints' refusal of real rows is `TestRevisionShapeKeepsGitAndBundleRowsApart` in `integration/agent_run_resume_test.go`.

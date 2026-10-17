@@ -19,6 +19,7 @@
 - [objectstore](objectstore/README.en.md) is cloud's own S3-compatible object-store client (SigV4-presigned upload grants, HEAD verification of an object's size and SHA-256), serving the Revision path alone.
 - [gitpreset](gitpreset/README.en.md) prepares and checks Git Server contract fixtures for acceptance only, writing the repository volume and database directly; no service process imports it.
 - [gitserver](gitserver/README.en.md) serves Git access to Project repositories: the sandbox and Repo Executor repository listeners, per-request ref rule sets from Core, `git http-backend`, per-namespace pre-receive rules and Cloud's ref query.
+- [gitrefquery](gitrefquery/README.en.md) is Cloud's client for the Git Server's read-only ref query (`GET /internal/v1/refs`), verifying outside any transaction that a ref Cloud is about to register exists and names the declared commit.
 - [config](config/README.en.md) loads and validates application configuration files and environment overrides.
 - [logger](logger/README.en.md) provides structured, non-blocking JSON logging via Zap and Lumberjack.
 - [simulator](simulator/README.en.md) implements in-process doubles for the Substrate execution engine, Controller, and Workspace Node.
@@ -35,6 +36,7 @@
    - `internal/repository` $\rightarrow$ `internal/config`, `gorm.io/gorm`.
    - `internal/gitpreset` $\rightarrow$ `internal/core` (ref vocabulary), `internal/gitserver` (repository creation); only `cmd/git-server-preset` imports it.
    - `internal/objectstore` $\rightarrow$ `internal/core` (the `UploadGrant` value type only); `internal/core` reaches it through the `RevisionObjects` interface it declares for itself and never imports this package back.
+   - `internal/gitrefquery` $\rightarrow$ `internal/core` (`ErrGitRefNotFound` and the commit format); `internal/config` builds `core.GitServer` with it, and `internal/core` reaches it only through the `GitRefResolver` interface it declares and never imports this package back.
    - Lower layers (`core`, `repository`, `objectstore`) never import upper presentation layers (`api`, `router`).
 2. **PostgreSQL is authoritative**:
    - All shared state is persisted in PostgreSQL. In-memory caching of authoritative domain state across requests is strictly prohibited.

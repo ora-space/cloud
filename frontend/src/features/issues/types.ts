@@ -116,7 +116,7 @@ export interface RunRevision {
   changed: boolean
   bundleSize: number | null
   historySize: number
-  /** The Revision the run resumed; with `changed: false` the run reused that Revision's bundle. */
+  /** The Revision the run resumed; with `changed: false` the run delivered no commits beyond it. */
   priorRevisionId?: string | null
   createdAt: string
 }

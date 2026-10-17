@@ -51,6 +51,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/objectstore"
+	"github.com/wanglongan587/cloud/internal/simulator"
 )
 
 // controllerClaims is the lease holder the seeded Thread scenes install (`ctrl-a`), which every
@@ -92,13 +93,10 @@ type revisionStore struct {
 }
 
 // storedMeasurements answers the size and digest a store that received the Node's upload would report
-// for one key. Cloud fixes each key's shape per D2 (`.../revision.bundle`, `.../session.jsonl`), so
-// the key itself says which object it is; the values are the ones this file's own result builders
-// declare, which is what keeps the fixture's declaration and the store's metadata one fact.
-func storedMeasurements(key string) (int64, string) {
-	if strings.HasSuffix(key, "/revision.bundle") {
-		return revisionBundleSize, revisionBundleSHA
-	}
+// for one key. The only object a delivery stores is the session history (Revision D1); the values are
+// the ones this file's own result builders declare, which is what keeps the fixture's declaration and
+// the store's metadata one fact.
+func storedMeasurements(string) (int64, string) {
 	return revisionHistorySize, revisionHistorySHA
 }
 
@@ -210,22 +208,32 @@ func (f *fixture) deliveryInputOf(execution string) core.Object {
 	return out
 }
 
-// deliveredResult renders the success outcome a Node reports after uploading a bundle, measured
-// against the attempt's own input: the Revision ref and the baseline it was dispatched with, the two
-// keys Cloud assigned it, and a size and digest for each.
+// deliveredResult renders the success outcome a Node reports after pushing its final commit to the
+// attempt's delivery ref and uploading the history, measured against the attempt's own input: the
+// Revision ref and the baseline it was dispatched with, the history key Cloud assigned it, and a size
+// and digest for it. Whether the push landed is the Git Server's fact, which a case states with push.
 func deliveredResult(scene liveThreadScene, in core.Object, final string) *controlpb.ExecutionResult {
 	return &controlpb.ExecutionResult{
 		Node: &controlpb.NodeIdentity{NodeId: scene.nodeID, NodeIncarnationId: "inc-" + scene.nodeID[:8]},
 		Outcome: &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{
 			FinalCommit: final, BaseCommit: in.S("baseCommit"), RevisionRef: in.S("revisionRef"),
-			Bundle:  &controlpb.StoredObject{Key: in.S("bundleKey"), Size: revisionBundleSize, Sha256: revisionBundleSHA},
 			History: &controlpb.StoredObject{Key: in.S("historyKey"), Size: revisionHistorySize, Sha256: revisionHistorySHA},
 		}},
 	}
 }
 
+// push records that the attempt's delivery ref names final on the Git Server, as the Node's accepted
+// push leaves it. Without it the ref query answers ref_not_found, which is a verification failure.
+func (f *fixture) push(in core.Object, final string) {
+	f.t.Helper()
+	var tenant, project string
+	must(f.t, f.store.Pool.QueryRow(`SELECT w.tenant_id,w.project_id FROM execution_work ew JOIN workspaces w ON w.issue_run_id=ew.run_id
+		WHERE ew.input->>'deliveryRef'=$1`, in.S("deliveryRef")).Scan(&tenant, &project))
+	f.refs.pin(tenant, project, in.S("deliveryRef"), final)
+}
+
 // unchangedResult renders the outcome for a session that changed nothing: the final commit equals the
-// baseline and only the history was uploaded, so the result declares no bundle at all.
+// baseline, which the Node still pushed to its delivery ref, and the history was uploaded.
 func unchangedResult(scene liveThreadScene, in core.Object) *controlpb.ExecutionResult {
 	return &controlpb.ExecutionResult{
 		Node: &controlpb.NodeIdentity{NodeId: scene.nodeID, NodeIncarnationId: "inc-" + scene.nodeID[:8]},
@@ -240,15 +248,11 @@ func unchangedResult(scene liveThreadScene, in core.Object) *controlpb.Execution
 // digest is 64 hex digits by contract; the values themselves are arbitrary, because nothing in Cloud
 // compares a digest against content — the object store does, and the fixture's double answers for it.
 const (
-	revisionBundleSize  = 4096
 	revisionHistorySize = 512
 	revisionFinalCommit = "1111111111111111111111111111111111111111"
 )
 
-var (
-	revisionBundleSHA  = strings.Repeat("a", 64)
-	revisionHistorySHA = strings.Repeat("b", 64)
-)
+var revisionHistorySHA = strings.Repeat("b", 64)
 
 // revisionRow is one `revisions` row in its typed column form, or nil when Cloud registered none.
 // The columns are read individually rather than as JSON because the assertions compare them against
@@ -263,7 +267,9 @@ type revisionRow struct {
 	BaseCommit    string
 	FinalCommit   string
 	RevisionRef   string
-	// The bundle exists exactly when the checkout changed: empty and nil together.
+	// DeliveryRef is the verified ref on the Git Server; every Git Revision has one.
+	DeliveryRef string
+	// A Git Revision never has a bundle: these stay empty and nil together.
 	BundleKey     string
 	BundleSize    *int64
 	BundleSHA256  string
@@ -280,19 +286,19 @@ func (f *fixture) revisionRow(runID string) *revisionRow {
 		return nil
 	}
 	var row revisionRow
-	var bundleKey, bundleSHA sql.NullString
+	var bundleKey, bundleSHA, deliveryRef sql.NullString
 	var bundleSize sql.NullInt64
 	var expires sql.NullTime
 	must(f.t, f.store.Pool.QueryRow(`
 		SELECT id::text, tenant_id::text, run_id::text, workspace_id::text, project_id::text,
-		       repository_url, base_commit, final_commit, revision_ref,
+		       repository_url, base_commit, final_commit, revision_ref, delivery_ref,
 		       bundle_key, bundle_size, bundle_sha256,
 		       history_key, history_size, history_sha256, expires_at
 		FROM revisions WHERE run_id=$1`, runID).
 		Scan(&row.ID, &row.TenantID, &row.RunID, &row.WorkspaceID, &row.ProjectID,
-			&row.RepositoryURL, &row.BaseCommit, &row.FinalCommit, &row.RevisionRef,
+			&row.RepositoryURL, &row.BaseCommit, &row.FinalCommit, &row.RevisionRef, &deliveryRef,
 			&bundleKey, &bundleSize, &bundleSHA, &row.HistoryKey, &row.HistorySize, &row.HistorySHA256, &expires))
-	row.BundleKey, row.BundleSHA256 = bundleKey.String, bundleSHA.String
+	row.BundleKey, row.BundleSHA256, row.DeliveryRef = bundleKey.String, bundleSHA.String, deliveryRef.String
 	if bundleSize.Valid {
 		size := bundleSize.Int64
 		row.BundleSize = &size
@@ -739,24 +745,27 @@ func TestDeliveryExecutionClaimCarriesTheFixedSpecAndMovesNothing(t *testing.T) 
 	if got := in.S("revisionRef"); got != "refs/ora/revisions/"+scene.runID {
 		t.Fatalf("revisionRef = %q, want the name Cloud owns for this run", got)
 	}
-	// The per-attempt object keys (D2): both live under the run's own prefix, so no two runs and no
-	// two attempts can overwrite each other's objects.
+	// The per-attempt locations (Revision D1): the history key lives under the run's own prefix and
+	// the delivery ref is the attempt's own, so no two runs and no two attempts can overwrite each
+	// other's evidence. There is no bundle key any more.
 	prefix := "revisions/" + scene.tenantID + "/" + scene.runID + "/"
-	if got := in.S("bundleKey"); !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, "/revision.bundle") {
-		t.Fatalf("bundleKey = %q, want a per-attempt key under %s", got, prefix)
-	}
 	if got := in.S("historyKey"); !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, "/session.jsonl") {
 		t.Fatalf("historyKey = %q, want a per-attempt key under %s", got, prefix)
 	}
-	// The third segment is the delivery attempt Cloud drew before this work item existed (D2). Both
-	// keys name the same one, and it is Cloud's own attempt id rather than the run or the execution:
-	// the Controller picks the execution id later, so a key read here cannot contain it.
-	attempt := strings.TrimSuffix(strings.TrimPrefix(in.S("bundleKey"), prefix), "/revision.bundle")
-	if attempt == "" || attempt == scene.runID {
-		t.Fatalf("the attempt segment %q must be Cloud's own attempt id, not the run", attempt)
+	if _, ok := in["bundleKey"]; ok {
+		t.Fatalf("a Git delivery input carries no bundle key: %v", in)
 	}
-	if got := strings.TrimSuffix(strings.TrimPrefix(in.S("historyKey"), prefix), "/session.jsonl"); got != attempt {
-		t.Fatalf("both object keys must name the same attempt: %q vs %q", got, attempt)
+	// The attempt is the work item itself: its id names both the history object and the delivery ref.
+	attempt := strings.TrimSuffix(strings.TrimPrefix(in.S("historyKey"), prefix), "/session.jsonl")
+	if attempt != work.S("id") || in.S("deliveryRef") != core.GitDeliveryRefPrefix+attempt {
+		t.Fatalf("history key %q and delivery ref %q must both name the work item %s", in.S("historyKey"), in.S("deliveryRef"), work.S("id"))
+	}
+	project, _ := f.runPlacement(scene.runID)
+	if got, want := in.S("gitRepositoryUrl"), simulator.GitServerBaseURL+"/"+scene.tenantID+"/"+project+".git"; got != want {
+		t.Fatalf("gitRepositoryUrl = %q, want the Project's Git Server repository %q", got, want)
+	}
+	if got, want := in.S("workspaceRef"), core.GitWorkspaceRefPrefix(f.runWorkspaceID(scene.runID))+"main"; got != want {
+		t.Fatalf("workspaceRef = %q, want the run Workspace's branch from its clone input %q", got, want)
 	}
 	if got := work.O("target").S("nodeId"); got != scene.nodeID {
 		t.Fatalf("the delivery target node = %q, want the run Workspace's Node %q", got, scene.nodeID)
@@ -764,9 +773,9 @@ func TestDeliveryExecutionClaimCarriesTheFixedSpecAndMovesNothing(t *testing.T) 
 
 	execution := "exec-delivery-" + work.S("id")[:8]
 	f.registerDelivery(t, scene, work, execution)
-	// The keys were drawn before any execution existed and are never rewritten to name it: a key that
-	// carried the execution id could not have been written into the frozen input at all.
-	for _, key := range []string{in.S("bundleKey"), in.S("historyKey")} {
+	// The locations were drawn before any execution existed and are never rewritten to name it: one
+	// that carried the execution id could not have been written into the frozen input at all.
+	for _, key := range []string{in.S("deliveryRef"), in.S("historyKey")} {
 		if strings.Contains(key, execution) {
 			t.Fatalf("the per-attempt key %q names the execution id, which did not exist when Cloud drew it", key)
 		}
@@ -850,14 +859,14 @@ func TestFailedDeliveryKeepsDeliveringAndReleasesOneBackoffRetry(t *testing.T) {
 	}
 	// One logical delivery: everything but the per-attempt keys is identical. The frozen input is the
 	// control plane's own spelling (proto DeliverRevisionSpec), which is what a Controller reads.
-	for _, key := range []string{"sessionExecutionId", "checkoutExecutionId", "baseCommit", "revisionRef"} {
+	for _, key := range []string{"sessionExecutionId", "checkoutExecutionId", "baseCommit", "revisionRef", "gitRepositoryUrl", "workspaceRef"} {
 		if attempts[0].S(key) != attempts[1].S(key) {
 			t.Fatalf("a retry must not become a new logical delivery: %s changed (%q → %q)", key, attempts[0].S(key), attempts[1].S(key))
 		}
 	}
-	if attempts[0].S("bundleKey") == attempts[1].S("bundleKey") || attempts[0].S("historyKey") == attempts[1].S("historyKey") {
-		t.Fatalf("a retry must not reuse the failed attempt's object keys, got %q / %q",
-			attempts[0].S("bundleKey"), attempts[0].S("historyKey"))
+	if attempts[0].S("deliveryRef") == attempts[1].S("deliveryRef") || attempts[0].S("historyKey") == attempts[1].S("historyKey") {
+		t.Fatalf("a retry must not reuse the failed attempt's delivery ref or object key, got %q / %q",
+			attempts[0].S("deliveryRef"), attempts[0].S("historyKey"))
 	}
 	// The run stayed delivering, so nothing released it: no delete intent exists yet.
 	if got := deleteOperations(f.runOperations(scene.runID)); len(got) != 0 {
@@ -1197,6 +1206,7 @@ func TestFullLifecycleSessionEndToDoneSkipsNoPhase(t *testing.T) {
 	// confirms the objects it declared before registering the row. The success is what releases the
 	// run here — the give-up path is D5's fallback, not the mainline.
 	in := f.deliveryInputOf(execution)
+	f.push(in, revisionFinalCommit)
 	if _, e := f.deliveryTerminal(scene, execution, "", 1,
 		deliveredResult(scene, in, revisionFinalCommit), "revision_delivered"); e != nil {
 		t.Fatalf("the verified delivery must be taken over: %v", e)
@@ -1236,46 +1246,35 @@ func TestFullLifecycleSessionEndToDoneSkipsNoPhase(t *testing.T) {
 	}
 }
 
-// The delivery mainline of Cloud Revision D4: a Node reports a Revision and Cloud
-// confirms the objects it declared, registers the row, releases the run and declares the delete — all
-// in the one takeover transaction, with the two object checks that precede it.
+// The delivery mainline of Cloud Revision D3: a Node reports a Revision and Cloud
+// confirms the delivery ref through the Git Server's ref query and the history through the object
+// store, registers the row with its delivery ref, releases the run and declares the delete — all in
+// the one takeover transaction, with the two checks that precede it.
 //
-// Both wire shapes are covered, because they differ in the one thing the row has to get right: a
-// delivered checkout carries a bundle, an unchanged one carries none and its final commit IS the
-// baseline it was dispatched with.
+// Both wire shapes are covered, and they verify the same evidence: an unchanged checkout also pushed
+// its final commit — which IS the baseline it was dispatched with — to its own delivery ref.
 func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 	cases := []struct {
 		name          string
 		outcome       string
 		deliveryState string
-		bundle        bool
+		changed       bool
+		final         func(core.Object) string
 		result        func(liveThreadScene, core.Object) *controlpb.ExecutionResult
-		// verified are the objects Cloud must spend a HEAD on, in the merged control plane's own
-		// order: the history first, because every outcome declares one, and the bundle second, only
-		// for a changed checkout. D4 fixes the *set* of objects to verify ("对声明的每个对象调用
-		// HEAD"), not the sequence, so what this pins is which keys Cloud asks about.
-		verified func(core.Object) []core.Object
 	}{
 		{
-			name: "a changed checkout declares the bundle and the history", outcome: "revision_delivered",
-			deliveryState: "saved", bundle: true,
+			name: "a changed checkout pushed new commits", outcome: "revision_delivered",
+			deliveryState: "saved", changed: true,
+			final: func(core.Object) string { return revisionFinalCommit },
 			result: func(s liveThreadScene, in core.Object) *controlpb.ExecutionResult {
 				return deliveredResult(s, in, revisionFinalCommit)
 			},
-			verified: func(in core.Object) []core.Object {
-				return []core.Object{
-					{"key": in.S("historyKey"), "size": int64(revisionHistorySize), "sha256": revisionHistorySHA},
-					{"key": in.S("bundleKey"), "size": int64(revisionBundleSize), "sha256": revisionBundleSHA},
-				}
-			},
 		},
 		{
-			name: "an unchanged checkout declares only the history", outcome: "revision_unchanged",
+			name: "an unchanged checkout pushed its baseline", outcome: "revision_unchanged",
 			deliveryState: "unchanged",
+			final:         func(in core.Object) string { return in.S("baseCommit") },
 			result:        unchangedResult,
-			verified: func(in core.Object) []core.Object {
-				return []core.Object{{"key": in.S("historyKey"), "size": int64(revisionHistorySize), "sha256": revisionHistorySHA}}
-			},
 		},
 	}
 	for _, c := range cases {
@@ -1286,15 +1285,19 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 			execution := f.deliverRevision(t, scene)
 			in := f.deliveryInputOf(execution)
 			before := f.runVersion(scene.runID)
+			f.push(in, c.final(in))
 
 			if _, e := f.deliveryTerminal(scene, execution, "p5-revision-saved", 1, c.result(scene, in), c.outcome); e != nil {
 				t.Fatalf("a verified delivery must be taken over: %v", e)
 			}
 
-			// Step 2 ran before the transaction opened, over exactly the objects the result declares —
-			// and only those: the grants path is a different action and must not have run.
-			if got, want := fmt.Sprint(objects.probed()), fmt.Sprint(c.verified(in)); got != want {
-				t.Fatalf("Cloud must verify exactly the declared objects:\n got %s\nwant %s", got, want)
+			// Step 2 ran before the transaction opened, over exactly the declared evidence: the
+			// attempt's own delivery ref on the Git Server and the history object, and only those.
+			if got, want := fmt.Sprint(f.refs.queried()), fmt.Sprint([]string{in.S("deliveryRef")}); got != want {
+				t.Fatalf("Cloud must verify exactly the attempt's delivery ref:\n got %s\nwant %s", got, want)
+			}
+			if got, want := fmt.Sprint(objects.probed()), fmt.Sprint([]core.Object{{"key": in.S("historyKey"), "size": int64(revisionHistorySize), "sha256": revisionHistorySHA}}); got != want {
+				t.Fatalf("Cloud must verify exactly the declared history:\n got %s\nwant %s", got, want)
 			}
 			// Signing a grant is local cryptography and sends nothing, so the store's only requests are
 			// the probes above: the takeover never asked the store for an upload capability, and the
@@ -1320,8 +1323,8 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 				t.Fatalf("the Revision must carry the run Workspace's placement: got ws=%s project=%s repo=%q, want %s/%s/%q",
 					row.WorkspaceID, row.ProjectID, row.RepositoryURL, wid, projectID, repositoryURL)
 			}
-			if row.BaseCommit != in.S("baseCommit") || row.RevisionRef != in.S("revisionRef") {
-				t.Fatalf("the Revision must carry the attempt's own baseline and ref, got %s/%s", row.BaseCommit, row.RevisionRef)
+			if row.BaseCommit != in.S("baseCommit") || row.RevisionRef != in.S("revisionRef") || row.DeliveryRef != in.S("deliveryRef") {
+				t.Fatalf("the Revision must carry the attempt's own baseline, revision ref and delivery ref, got %s/%s/%s", row.BaseCommit, row.RevisionRef, row.DeliveryRef)
 			}
 			// D5: the public run read projects the Revision as metadata only — commits, whether the
 			// run changed anything and the object sizes, never a key, ref, digest or URL.
@@ -1338,13 +1341,13 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 				}
 				revision := view.O("revision")
 				if revision.S("id") != row.ID || revision.S("finalCommit") != row.FinalCommit || revision.S("baseCommit") != row.BaseCommit ||
-					revision.B("changed") != c.bundle || revision.N("historySize") != revisionHistorySize {
+					revision.B("changed") != c.changed || revision.N("historySize") != revisionHistorySize {
 					t.Fatalf("GET %s must project the registered Revision, got %v", read, revision)
 				}
-				if c.bundle != (revision["bundleSize"] != nil) {
-					t.Fatalf("bundleSize must be present exactly for a changed checkout, got %v", revision)
+				if size, ok := revision["bundleSize"]; !ok || size != nil {
+					t.Fatalf("a Git Revision projects bundleSize as null, got %v", revision)
 				}
-				for _, private := range []string{in.S("bundleKey"), in.S("historyKey"), in.S("revisionRef"), revisionHistorySHA} {
+				for _, private := range []string{in.S("deliveryRef"), in.S("gitRepositoryUrl"), in.S("historyKey"), in.S("revisionRef"), revisionHistorySHA} {
 					if strings.Contains(mustJSON(t, view), private) {
 						t.Fatalf("GET %s leaks %q", read, private)
 					}
@@ -1357,25 +1360,12 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 			if row.ExpiresAt != nil {
 				t.Fatalf("expiry is an explicit non-goal: expires_at must stay NULL, got %v", row.ExpiresAt)
 			}
-			if c.bundle {
-				if row.BundleKey != in.S("bundleKey") || row.BundleSHA256 != revisionBundleSHA {
-					t.Fatalf("a changed checkout must record the bundle it declared, got %v", row)
-				}
-				if row.BundleSize == nil || *row.BundleSize != revisionBundleSize {
-					t.Fatalf("bundle_size = %v, want %d", row.BundleSize, revisionBundleSize)
-				}
-				if row.FinalCommit != revisionFinalCommit {
-					t.Fatalf("final_commit = %q, want the delivered commit %q", row.FinalCommit, revisionFinalCommit)
-				}
-			} else {
-				// The bundle columns are all-or-nothing and NULL together when nothing changed, so "no
-				// bundle" is a fact of the row rather than a sentinel size or an empty digest.
-				if row.BundleKey != "" || row.BundleSHA256 != "" || row.BundleSize != nil {
-					t.Fatalf("an unchanged delivery must record no bundle, got %v", row)
-				}
-				if row.FinalCommit != in.S("baseCommit") {
-					t.Fatalf("an unchanged delivery's final commit IS the baseline, got %q", row.FinalCommit)
-				}
+			// A Git Revision never has a bundle, changed or not (Revision invariant 4).
+			if row.BundleKey != "" || row.BundleSHA256 != "" || row.BundleSize != nil {
+				t.Fatalf("a Git delivery must record no bundle, got %v", row)
+			}
+			if row.FinalCommit != c.final(in) {
+				t.Fatalf("final_commit = %q, want the delivered commit %q", row.FinalCommit, c.final(in))
 			}
 
 			// The settlement: phase, D4's result pair and D3's status, all from the same transaction.
@@ -1432,17 +1422,16 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 // payload* is therefore part of the contract here and not a detail: it is what makes an exact replay
 // of the original payload compare equal and stay a no-op.
 //
-// The store's verdict is definitive here, not a transport failure: it holds every declared object but
-// answers for the bundle with metadata that disagrees with the declaration, so the object Cloud was
-// told to expect is not the object that is there. A store that is merely unreachable is the other
-// case, and is a refusal that settles nothing (see the transient test below).
+// The Git Server's answer is definitive here, not a transport failure: the ref query says the
+// attempt's delivery ref does not exist, so the commit the Node claims to have pushed is not there. A
+// Git Server or store that is merely unreachable is the other case, and is a refusal that settles
+// nothing (see the transient tests below).
 func TestRevisionVerificationFailureIsCloudsOwnVerdict(t *testing.T) {
 	f := setup(t)
-	objects := f.useObjectStore()
+	f.useObjectStore()
 	scene := deliveringScene(t, f)
 	execution := f.deliverRevision(t, scene)
 	in := f.deliveryInputOf(execution)
-	objects.breakObject(in.S("bundleKey"))
 
 	res := deliveredResult(scene, in, revisionFinalCommit)
 	if _, e := f.deliveryTerminal(scene, execution, "p5-verification-failed", 1, res, "revision_delivered"); e != nil {
@@ -1503,6 +1492,123 @@ func TestRevisionVerificationFailureIsCloudsOwnVerdict(t *testing.T) {
 	}
 }
 
+// Revision D3 step 4: a delivery ref naming another commit, or a history object that disagrees with
+// its declaration, is as definitive as a missing ref; each is Cloud's verification failure.
+func TestRevisionVerificationFailsOnAnyDisagreeingEvidence(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		stage func(f *fixture, objects *revisionStore, in core.Object)
+	}{
+		{"the delivery ref names another commit", func(f *fixture, _ *revisionStore, in core.Object) {
+			f.push(in, strings.Repeat("9", 40))
+		}},
+		{"the history disagrees with its declaration", func(f *fixture, objects *revisionStore, in core.Object) {
+			f.push(in, revisionFinalCommit)
+			objects.breakObject(in.S("historyKey"))
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			objects := f.useObjectStore()
+			scene := deliveringScene(t, f)
+			execution := f.deliverRevision(t, scene)
+			in := f.deliveryInputOf(execution)
+			c.stage(f, objects, in)
+			if _, e := f.deliveryTerminal(scene, execution, "", 1, deliveredResult(scene, in, revisionFinalCommit), "revision_delivered"); e != nil {
+				t.Fatalf("an unverifiable delivery must be taken over as Cloud's own verdict: %v", e)
+			}
+			if row := f.revisionRow(scene.runID); row != nil {
+				t.Fatalf("no Revision may be registered for evidence Cloud could not confirm, got %v", row)
+			}
+			if verdict := f.revisionVerification(execution); verdict.S("outcome") != "failed" || verdict.S("reason") != "verification_failed" {
+				t.Fatalf("Cloud's verdict must be failed{verification_failed}, got %v", verdict)
+			}
+			if got := len(f.deliveryAttempts(scene.runID)); got != 2 {
+				t.Fatalf("a failed verification must release exactly one retry, got %d attempts", got)
+			}
+		})
+	}
+}
+
+// Revision D3 step 2: a Git Server Cloud cannot reach proves nothing about the push. The takeover is
+// refused as unavailable with nothing written, and the same submission settles once it answers.
+func TestDeliveryWithAnUnreachableGitServerIsRefusedTransiently(t *testing.T) {
+	f := setup(t)
+	f.useObjectStore()
+	scene := deliveringScene(t, f)
+	execution := f.deliverRevision(t, scene)
+	in := f.deliveryInputOf(execution)
+	f.push(in, revisionFinalCommit)
+	res := deliveredResult(scene, in, revisionFinalCommit)
+	before := f.runVersion(scene.runID)
+
+	f.refs.setUnavailable(true)
+	_, e := f.deliveryTerminal(scene, execution, "git-server-down", 1, res, "revision_delivered")
+	expectStatus(t, e, codes.Unavailable, controlpb.ErrorCode_ERROR_CODE_UNAVAILABLE)
+	if got := f.nodeResult(execution); len(got) != 0 || f.revisionVerification(execution) != nil || len(f.receipts(execution)) != 0 {
+		t.Fatalf("a refused verification must write nothing, got result %v", got)
+	}
+	if got := f.runVersion(scene.runID); got != before || len(f.deliveryAttempts(scene.runID)) != 1 {
+		t.Fatalf("a refused verification must not touch the run or release a retry, version %d want %d", got, before)
+	}
+
+	f.refs.setUnavailable(false)
+	if _, e := f.deliveryTerminal(scene, execution, "git-server-down", 1, res, "revision_delivered"); e != nil {
+		t.Fatalf("the retry after the Git Server came back must settle the delivery: %v", e)
+	}
+	if row := f.revisionRow(scene.runID); row == nil || row.DeliveryRef != in.S("deliveryRef") {
+		t.Fatalf("the retry must register the Revision with its delivery ref, got %v", row)
+	}
+}
+
+// Revision D2: a delivery needs the Git Server as well as the object store. A deployment without a
+// Git Server releases no delivery work at all: the run's delivery is recorded as skipped with
+// git_server_unconfigured and the run is released at once, with no Revision and nothing to claim.
+func TestDeliveryWithoutAGitServerIsSkipped(t *testing.T) {
+	f := setup(t)
+	f.bindBusinessHooks()
+	f.useObjectStore()
+	scene := seedLiveThreadScene(t, f)
+	scene.start(t, f)
+	f.runningThread(t, scene)
+	// The business hook is where the reason goes; record what the control plane hands it
+	// (after the scene, which binds the hooks itself).
+	var (
+		mu          sync.Mutex
+		settlements []string
+	)
+	settle := f.store.OnDeliverySettled
+	f.store.OnDeliverySettled = func(ctx context.Context, tx *sql.Tx, run, execution string, settled core.Object) error {
+		mu.Lock()
+		settlements = append(settlements, settled.S("outcome")+"/"+settled.S("reason"))
+		mu.Unlock()
+		return settle(ctx, tx, run, execution, settled)
+	}
+	f.store.GitServer = nil
+	f.sessionEndOK(t, scene, "", 2, controlpb.AgentSessionEndReason_AGENT_SESSION_END_REASON_USER_ENDED)
+	if got := len(f.deliveryWork(scene.runID)); got != 0 {
+		t.Fatalf("no delivery work may be released without a Git Server, got %d", got)
+	}
+	mu.Lock()
+	settled := fmt.Sprint(settlements)
+	mu.Unlock()
+	if f.scalar(`SELECT count(*) FROM revision_delivery_skips WHERE run_id=$1`, scene.runID) != 1 || settled != "[skipped/git_server_unconfigured]" {
+		t.Fatalf("the skipped delivery must be recorded once with its reason, settled %s", settled)
+	}
+	if got := f.runPhase(scene.runID); got != "releasing" {
+		t.Fatalf("a skipped delivery releases the run, got phase %q", got)
+	}
+	if got := f.runResult(scene.runID); got.S("deliveryState") != "skipped" || f.revisionRow(scene.runID) != nil {
+		t.Fatalf("a skipped delivery registers no Revision, got result %v", got)
+	}
+	// Enqueuing again, as a retry or a replay would, stays skipped and still releases nothing.
+	out, e := f.store.EnqueueExecutionWork(t.Context(), scene.runID, "deliver_revision", core.Object{"kind": "deliver_revision"}, core.Object{"workspaceId": "w", "sandboxInstanceId": "s", "nodeId": "n"}, time.Time{})
+	must(t, e)
+	if !out.B("skipped") || len(f.deliveryWork(scene.runID)) != 0 {
+		t.Fatalf("a repeated enqueue must stay skipped, got %v", out)
+	}
+}
+
 // A store Cloud cannot reach is a different verdict from a store that disagrees. The
 // endpoint is contacted between two transactions, so a delivery result that arrives while the store is
 // down must be refused as transient: nothing is settled, nothing is receipted, and the Node's next
@@ -1518,6 +1624,7 @@ func TestDeliveryWithAnUnreachableObjectStoreIsRefusedTransiently(t *testing.T) 
 	scene := deliveringScene(t, f)
 	execution := f.deliverRevision(t, scene)
 	in := f.deliveryInputOf(execution)
+	f.push(in, revisionFinalCommit)
 	res := deliveredResult(scene, in, revisionFinalCommit)
 	before := f.runVersion(scene.runID)
 
@@ -1600,11 +1707,11 @@ func TestRevisionResultContradictingItsInputNeverReachesTheObjectStore(t *testin
 		{"base_commit", func(r *controlpb.RevisionDelivered, _ core.Object) {
 			r.BaseCommit = strings.Repeat("f", 40)
 		}, codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT},
-		{"bundle_key", func(r *controlpb.RevisionDelivered, in core.Object) {
-			r.Bundle.Key = in.S("historyKey")
+		{"final_commit_on_base", func(r *controlpb.RevisionDelivered, in core.Object) {
+			r.FinalCommit = in.S("baseCommit")
 		}, codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT},
 		{"history_key", func(r *controlpb.RevisionDelivered, in core.Object) {
-			r.History.Key = in.S("bundleKey")
+			r.History.Key = strings.TrimSuffix(in.S("historyKey"), "session.jsonl") + "other.jsonl"
 		}, codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT},
 	}
 	for _, c := range cases {
@@ -1623,6 +1730,9 @@ func TestRevisionResultContradictingItsInputNeverReachesTheObjectStore(t *testin
 
 			if probed := objects.probed(); len(probed) != 0 {
 				t.Fatalf("the input comparison must precede the probes: %d object(s) probed for a result Cloud could already refuse (%v)", len(probed), probed)
+			}
+			if queried := f.refs.queried(); len(queried) != 0 {
+				t.Fatalf("the input comparison must precede the ref query, queried %v", queried)
 			}
 			if row := f.revisionRow(scene.runID); row != nil {
 				t.Fatalf("no Revision may be registered for a result that contradicts its input, got %v", row)
@@ -1817,9 +1927,6 @@ func TestLateDeliveredRevisionRegistersNothingOnAReleasedRun(t *testing.T) {
 // an earlier attempt already registered without restating fifteen columns.
 type deliveryRevisionRow struct {
 	finalCommit string
-	// withBundle selects the changed-checkout shape: the three bundle columns set together, from the
-	// same input the delivered attempt carries.
-	withBundle bool
 }
 
 // seedRevision writes the Revision an earlier attempt left for this run, through the same schema the
@@ -1838,14 +1945,12 @@ func (f *fixture) seedRevision(t *testing.T, scene liveThreadScene, in core.Obje
 	id := uuid.NewString()
 	wid := f.runWorkspaceID(scene.runID)
 	projectID, repositoryURL := f.runPlacement(scene.runID)
-	var bundleKey, bundleSHA *string
-	var bundleSize *int64
 	outcome := "unchanged"
-	if row.withBundle {
-		key, size, sha := in.S("bundleKey"), int64(revisionBundleSize), revisionBundleSHA
-		bundleKey, bundleSize, bundleSHA = &key, &size, &sha
+	if row.finalCommit != in.S("baseCommit") {
 		outcome = "delivered"
 	}
+	// The earlier attempt verified its own delivery ref, never this attempt's.
+	deliveryRef := core.GitDeliveryRefPrefix + uuid.NewString()
 	prior := "exec-prior-" + uuid.NewString()
 	input, e := json.Marshal(in)
 	must(t, e)
@@ -1860,13 +1965,11 @@ func (f *fixture) seedRevision(t *testing.T, scene liveThreadScene, in core.Obje
 	must(t, e)
 	_, e = f.store.Pool.Exec(`
 		INSERT INTO revisions(id, execution_id, tenant_id, run_id, workspace_id, project_id, repository_url,
-		                      base_commit, final_commit, revision_ref,
-		                      bundle_key, bundle_size, bundle_sha256,
+		                      base_commit, final_commit, revision_ref, delivery_ref,
 		                      history_key, history_size, history_sha256)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		id, prior, scene.tenantID, scene.runID, wid, projectID, repositoryURL,
-		in.S("baseCommit"), row.finalCommit, in.S("revisionRef"),
-		bundleKey, bundleSize, bundleSHA,
+		in.S("baseCommit"), row.finalCommit, in.S("revisionRef"), deliveryRef,
 		in.S("historyKey"), revisionHistorySize, revisionHistorySHA)
 	must(t, e)
 	return id
@@ -1899,21 +2002,21 @@ func TestRevisionRegistrationIsUniquePerRunAndRollsBackAConflictingAttempt(t *te
 	}{
 		{
 			name:       "the same outcome an earlier attempt already registered",
-			registered: deliveryRevisionRow{finalCommit: revisionFinalCommit, withBundle: true},
+			registered: deliveryRevisionRow{finalCommit: revisionFinalCommit},
 			delivered: func(scene liveThreadScene, in core.Object) *controlpb.ExecutionResult {
 				return deliveredResult(scene, in, revisionFinalCommit)
 			},
 		},
 		{
 			name:       "a different final commit",
-			registered: deliveryRevisionRow{finalCommit: strings.Repeat("c", 40), withBundle: true},
+			registered: deliveryRevisionRow{finalCommit: strings.Repeat("c", 40)},
 			delivered: func(scene liveThreadScene, in core.Object) *controlpb.ExecutionResult {
 				return deliveredResult(scene, in, revisionFinalCommit)
 			},
 		},
 		{
-			name:       "an unchanged delivery against a Revision that saved a bundle",
-			registered: deliveryRevisionRow{finalCommit: revisionFinalCommit, withBundle: true},
+			name:       "an unchanged delivery against a Revision that delivered new commits",
+			registered: deliveryRevisionRow{finalCommit: revisionFinalCommit},
 			delivered: func(scene liveThreadScene, in core.Object) *controlpb.ExecutionResult {
 				return unchangedResult(scene, in)
 			},
@@ -1929,6 +2032,7 @@ func TestRevisionRegistrationIsUniquePerRunAndRollsBackAConflictingAttempt(t *te
 			before := f.runVersion(scene.runID)
 			registeredID := f.seedRevision(t, scene, in, c.registered)
 			res := c.delivered(scene, in)
+			f.push(in, res.GetRevisionDelivered().GetFinalCommit()+res.GetRevisionUnchanged().GetFinalCommit())
 
 			takeover := errOnly(f.deliveryTerminal(scene, execution, "p5-revision-conflict", 1, res, "revision_delivered"))
 			// A constraint violation carries no Fault of its own, so it takes the mapping's safe
@@ -1988,7 +2092,7 @@ func TestRevisionRegistrationIsUniquePerRunAndRollsBackAConflictingAttempt(t *te
 		scene := deliveringScene(t, f)
 		execution := f.deliverRevision(t, scene)
 		in := f.deliveryInputOf(execution)
-		registeredID := f.seedRevision(t, scene, in, deliveryRevisionRow{finalCommit: revisionFinalCommit, withBundle: true})
+		registeredID := f.seedRevision(t, scene, in, deliveryRevisionRow{finalCommit: revisionFinalCommit})
 		target := f.deliveryTarget(scene.runID)
 
 		if _, e := f.store.EnqueueExecutionWork(context.Background(), scene.runID, "deliver_revision", in, target, time.Time{}); e == nil {
@@ -2006,15 +2110,16 @@ func TestRevisionRegistrationIsUniquePerRunAndRollsBackAConflictingAttempt(t *te
 	})
 }
 
-// D2/D3's upload grants over the contract the Controller actually speaks. Cloud signs
-// one presigned PUT per object key of that attempt's frozen input, and each grant names exactly one
-// key and one method: the URL carries the capability, so nothing the Node does can widen it to another
-// object, and nothing is persisted — the grants exist only in the reply.
+// D2/D3's upload grants over the contract the Controller actually speaks. The only
+// object a Git delivery stores is the session history (contract D3), so Cloud signs exactly one
+// presigned PUT, for the attempt's history key, and refuses a checksum for any other key: the URL
+// carries the capability, so nothing the Node does can widen it to another object, and nothing is
+// persisted — the grant exists only in the reply.
 //
 // The refusals are D3's ordered set, asserted here because the Controller's retry policy depends on
 // which one it gets: UNAVAILABLE means "a capability is missing, keep the attempt", 404 means "Cloud
 // never registered this execution", and 409 means "this attempt can no longer upload anything".
-func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
+func TestGrantRevisionUploadSignsOnlyTheHistoryKey(t *testing.T) {
 	f := setup(t)
 	objects := f.useObjectStore()
 	scene := deliveringScene(t, f)
@@ -2031,10 +2136,10 @@ func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
 
 	out, e := grant(execution)
 	must(t, e)
-	if len(out.GetGrants()) != 2 {
-		t.Fatalf("one attempt gets one grant per object key of its input, got %d", len(out.GetGrants()))
+	if len(out.GetGrants()) != 1 {
+		t.Fatalf("one attempt gets one grant, for its history key, got %d", len(out.GetGrants()))
 	}
-	wantKeys := []string{in.S("bundleKey"), in.S("historyKey")}
+	wantKeys := []string{in.S("historyKey")}
 	for i, g := range out.GetGrants() {
 		if g.GetObjectKey() != wantKeys[i] {
 			t.Fatalf("grant %d names %q, want the input's own key %q", i, g.GetObjectKey(), wantKeys[i])
@@ -2077,7 +2182,7 @@ func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
 	executionRow, workInput := f.deliveryRows(execution)
 	repeat, e := grant(execution)
 	must(t, e)
-	if len(repeat.GetGrants()) != 2 {
+	if len(repeat.GetGrants()) != 1 {
 		t.Fatalf("an attempt that has not reported can ask for its grants again, got %d", len(repeat.GetGrants()))
 	}
 	if got, want := repeat.GetGrants()[0].GetObjectKey(), wantKeys[0]; got != want {
@@ -2097,6 +2202,17 @@ func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
 		WHERE table_schema=current_schema() AND (column_name ILIKE '%grant%' OR column_name ILIKE '%presign%')
 		AND NOT (table_name='model_request_attempts' AND column_name='grant_id' AND data_type='uuid')`); got != 0 {
 		t.Fatalf("the schema must have nowhere to persist an upload grant, got %d column(s)", got)
+	}
+
+	// A checksum may bind only the history key: there is no other object a delivery could upload.
+	for _, key := range []string{strings.TrimSuffix(in.S("historyKey"), "session.jsonl") + "revision.bundle", "revisions/elsewhere/session.jsonl"} {
+		_, e := client.GrantRevisionUpload(asController("ctrl-a"), &controlpb.GrantRevisionUploadRequest{Epoch: 1, ExecutionId: execution, Checksums: map[string]string{key: revisionHistorySHA}})
+		expectStatus(t, e, codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
+	}
+	bound, e := client.GrantRevisionUpload(asController("ctrl-a"), &controlpb.GrantRevisionUploadRequest{Epoch: 1, ExecutionId: execution, Checksums: map[string]string{in.S("historyKey"): revisionHistorySHA}})
+	must(t, e)
+	if len(bound.GetGrants()) != 1 || bound.GetGrants()[0].GetObjectKey() != in.S("historyKey") || bound.GetGrants()[0].GetHeaders()["x-amz-checksum-sha256"] == "" {
+		t.Fatalf("a checksum-bound grant names the history key and binds its digest, got %v", bound.GetGrants())
 	}
 
 	// Unknown execution: Cloud never registered it. A session execution gets the same answer, because

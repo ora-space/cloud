@@ -160,19 +160,20 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 }
 
 // sessionDeliverySpec builds the fixed DeliverRevision snapshot the delivery work item carries
-// (proto DeliverRevisionSpec; Revision D2). Everything but the object keys is read from
+// (proto DeliverRevisionSpec; Revision D1). Everything but the server-owned locations is read from
 // authoritative rows in the caller's transaction:
 //
 //	sessionExecutionId:  the ended session execution.
 //	checkoutExecutionId: the clone execution that produced the run Workspace's recorded baseline.
-//	baseCommit:          workspaces.base_commit_id, the commit the bundle is relative to.
-//	priorRevision:       the Revision the session resumed, without bundle (resume decision D5).
+//	baseCommit:          workspaces.base_commit_id, the commit the delivery is measured against.
+//	priorRevision:       the Revision the session resumed (resume decision D5).
 //	kind:                the work item kind, which the control plane's enqueue re-checks.
 //
-// The three server-owned locations — the per-attempt `bundleKey`/`historyKey` and the
-// `revisionRef` — are deliberately absent: the control plane fixes them while it inserts the work
-// item, so a retried delivery is a new attempt with new keys by construction and no caller can name
-// an object another attempt already wrote.
+// The server-owned locations — the per-attempt `historyKey` and `deliveryRef`, the Git Server
+// repository, the Workspace branch and the Node-local `revisionRef` — are deliberately absent: the
+// control plane fixes them while it inserts the work item, so a retried delivery is a new attempt
+// with a new key and ref by construction and no caller can name an object or ref another attempt
+// already wrote.
 //
 // A run Workspace with no recorded baseline, or one whose baseline names no successful clone
 // execution, is an invariant violation: a session cannot have run in a Workspace that was never

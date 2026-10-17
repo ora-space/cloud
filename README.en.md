@@ -60,7 +60,7 @@ Before starting production, configure internal verification public keys as descr
 go run ./cmd/server -config /path/to/config.yaml
 ```
 
-The server only checks applied migrations and their checksums; it does not execute DDL. Database, migration, trust, or listen failures cause a non-zero exit. `GET /healthz` checks PostgreSQL reachability.
+The server only checks applied migrations and their checksums; it does not execute DDL. Database, migration, trust, or listen failures cause a non-zero exit. `GET /healthz` checks PostgreSQL reachability and reports whether the object store and the Git Server are configured (`objectStore`, `gitServer`: `configured|unconfigured`).
 
 Local end-to-end development (browser → Gateway → Cloud, see [Authentication Gateway](docs/gateway.md)) needs no GitHub account: the Gateway ships a local-only developer login where any typed identity signs in. To exercise real GitHub login, create an OAuth App (callback `http://localhost:5173/auth/callback/github`) and fill in `[github]` in `config.toml`.
 
@@ -79,7 +79,7 @@ go run ./cmd/cloudctl -command migrate
 go run ./cmd/simulator
 ```
 
-The demo starts isolated loopback HTTP cloud and Substrate services, creates a test tenant, a simulated sandbox and Node, and a real clone into the main Workspace's own data, and then outputs the ready Workspace. Disk state remains under `.local/demo/`, and PostgreSQL records are retained; each subsequent run creates another demo tenant. The simulator has no production infrastructure credentials, does not deploy Kubernetes, and does not start real Agent or Deno runtimes.
+The demo starts isolated loopback HTTP cloud and Substrate services, creates a test tenant, a simulated sandbox and Node, records the demo Project's snapshot in the Git Server double, and makes a real clone of that snapshot into the main Workspace's own data, and then outputs the ready Workspace. Disk state remains under `.local/demo/`, and PostgreSQL records are retained; each subsequent run creates another demo tenant. The simulator has no production infrastructure credentials, does not deploy Kubernetes, and does not start real Agent or Deno runtimes.
 
 ## Frontend
 
@@ -139,4 +139,4 @@ Phase one serializes core transactions with a database-level global advisory loc
 
 The container packages server, gateway, and cloudctl and runs as a non-root user. Build it with `docker build -f scripts/Dockerfile -t ora-cloud:phase-one .`, mount your own configuration and public keys, run migrations separately from the same image with `--entrypoint /app/cloudctl`, and run the authentication Gateway with `--entrypoint /app/gateway` (see `docs/gateway.md`). The image also carries the built frontend at `/app/web`; with `GATEWAY_WEB_DIST_DIR=/app/web` the Gateway serves it on the same origin as `/auth` and `/api` (see `docs/gateway.md`). A separate `devsetup` target (`cmd/devsetup`, local key generation and migrations only, never part of the service image) serves the `ora-space/cluster` Compose file. Repository CI is split into two workflows: `Backend` runs formatting, static checks and race-enabled integration tests against a PostgreSQL service; `Frontend` runs only when `frontend/`, `api/` or `internal/contract/` change, verifies the generated client matches the contract and runs the format, lint, type, coverage, module docs/tests, dead-code, duplication and build gates (see `frontend/AGENTS.md`). Docker images and real deployment are outside the locally validated scope.
 
-The in-process simulator explicitly uses the development-only retired clone fixture. Its plugin selection remains durable pending because no real plugin executor is available. It is not evidence of runtime control, management authentication or workload isolation; use cluster Compose and the real acceptance script.
+The in-process simulator's Node clones only from the Git Server double, which stands in for the external line to record the demo Project's snapshot. Its plugin selection remains durable pending because no real plugin executor is available. It is not evidence of runtime control, management authentication or workload isolation; use cluster Compose and the real acceptance script.

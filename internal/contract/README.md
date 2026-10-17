@@ -9,7 +9,7 @@
 - **编程式生成 OpenAPI 文档**：`contract.Document()` 构建完整的 OpenAPI 3.0 规范树，定义元数据、安全方案（HTTP Bearer JWT）、参数、请求体、状态码和响应 Schema。
 - **组件模式（Component Schema）建模**：为领域实体定义严格的 JSON Schema：
   - 核心资源实体：`Tenant`、`TenantMember`、`User`、`Project`、`Workspace`、`Task`、`Operation`、`Effect`、`WorkspaceNode`、`Ticket`。
-  - clone 工作项：`CloneOperation` 与带 `kind` 标签的 `CloneState`（`pending` / `succeeded{path, commit}` / `failed{reason, retainedPath?}`），字段与 Controller 过渡 DTO 逐字对应。
+  - clone 步骤：`CloneInput`（`{kind, repositoryUrl, snapshotRef, baseCommit, workspaceRef}`，内部控制快照的 `cloneInput` 与 `OperationRequest.clone`）与 `CloneExecution`。
   - 错误 Schema：包含错误码、参数映射和请求 ID 的标准 `Fault` Schema。
   - 参数类型强校验：包含 `uuid`、`date-time`、`int64` 及字符串枚举等严谨的数据校验格式。
 - **契约完整性校验测试**：

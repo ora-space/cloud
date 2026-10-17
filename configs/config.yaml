@@ -113,3 +113,19 @@ object_store:
   access_key_id_file: ""
   secret_access_key_file: ""
   upload_grant_ttl: 15m
+
+git_server:
+  # The Git Server holding every Project repository (Revision D2). Workspaces clone Binding
+  # snapshots from it and Revisions are delivered to it; Cloud writes `repository_base_url` into
+  # clone, session and delivery inputs and verifies refs through the ref query listener with its own
+  # client certificate. Leaving `repository_base_url` empty runs without a Git Server: clone steps
+  # block as git_server_unconfigured and deliveries are skipped. The key is a file reference, never a
+  # value here.
+  # Overrides: CLOUD_GIT_SERVER_REPOSITORY_BASE_URL / _REF_QUERY_URL / _CA_FILE / _CLIENT_CERT_FILE /
+  # _CLIENT_KEY_FILE / _REF_QUERY_TIMEOUT.
+  repository_base_url: ""
+  ref_query_url: ""
+  ca_file: ""
+  client_cert_file: ""
+  client_key_file: ""
+  ref_query_timeout: 10s

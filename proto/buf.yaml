@@ -1,7 +1,6 @@
 # Cloud owns the Controller-facing internal control contract: this directory is the single source,
 # Cloud generates its gRPC server from it, and consumers (desktop's ora-controller) pin a commit of
-# this repository and generate their clients. `v1` accepts additive changes only; a breaking change
-# is expressed as a sibling `v2` package while `v1` stays.
+# this repository and generate their clients. Cloud, Controller and Node are released together.
 version: v2
 modules:
   - path: .
@@ -11,3 +10,17 @@ lint:
 breaking:
   use:
     - FILE
+  # One-time exemption for the switch to Git-native Workspace code (clone from a Git Server snapshot,
+  # Revision delivery over Git without bundles). It is removed in the next change to this file.
+  ignore_only:
+    FIELD_NO_DELETE:
+      - ora/cloud/internal/v1/executions.proto
+      - ora/cloud/internal/v1/operations.proto
+      - ora/cloud/internal/v1/agent_executions.proto
+    MESSAGE_NO_DELETE:
+      - ora/cloud/internal/v1/agent_executions.proto
+      - ora/cloud/internal/v1/agent_runs.proto
+    RPC_NO_DELETE:
+      - ora/cloud/internal/v1/agent_runs.proto
+    ENUM_VALUE_NO_DELETE:
+      - ora/cloud/internal/v1/executions.proto

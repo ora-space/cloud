@@ -22,7 +22,7 @@ The separate force-stop endpoint requires reason, target version, explicit impac
 
 Only administrators change fixed space plugin selections. Existing targets retain pending intent and recovery scans revisit idle conditions under the same maintenance exclusion. Stopped runtimes do not autostart. Production has no real plugin executor, so it reports executor_capability_unavailable and never claims success; simulation is explicitly wired only in development fixtures.
 
-Credential references retain attribution, scope, capabilities, version and availability without secrets. Departure atomically freezes personal/unknown references; team references survive old owner departure; rejoining does not unfreeze them. Original owner FKs and historical references remain. A scoped provider and verified atomic team rebinding are absent: new credentialed remote Git fails explicitly, without anonymous or global personal fallback. The existing anonymous public Git path is fenced. Cloud file/terminal/Agent product execution remains closed.
+Credential references retain attribution, scope, capabilities, version and availability without secrets. Departure atomically freezes personal/unknown references; team references survive old owner departure; rejoining does not unfreeze them. Original owner FKs and historical references remain. A scoped provider and verified atomic team rebinding are absent. Repository credentials gate no Node work: clone, Agent sessions and delivery talk only to the Git Server, and Nodes never reach the external repository. Cloud file/terminal/Agent product execution remains closed.
 
 ## Deployment and evidence
 

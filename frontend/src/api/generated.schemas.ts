@@ -164,8 +164,6 @@ export type CloneExecutionInput = { [key: string]: unknown };
 export type CloneExecutionResult = { [key: string]: unknown } | null;
 
 export interface CloneExecution {
-  /** @nullable */
-  cloneRequestId: string | null;
   createdAt: string;
   /** @nullable */
   credentialRefId?: string | null;
@@ -182,51 +180,23 @@ export interface CloneExecution {
   /** @nullable */
   terminatedByForceStopId: string | null;
   updatedAt: string;
-  /** @nullable */
-  workspaceId: string | null;
+  workspaceId: string;
 }
 
-export type CloneStateKind = typeof CloneStateKind[keyof typeof CloneStateKind];
+export type CloneInputKind = typeof CloneInputKind[keyof typeof CloneInputKind];
 
 
-export const CloneStateKind = {
-  pending: 'pending',
-  succeeded: 'succeeded',
-  failed: 'failed',
+export const CloneInputKind = {
+  clone: 'clone',
 } as const;
 
-export type CloneStateReason = typeof CloneStateReason[keyof typeof CloneStateReason];
-
-
-export const CloneStateReason = {
-  sourceUnavailable: 'sourceUnavailable',
-  branchNotFound: 'branchNotFound',
-  destinationConflict: 'destinationConflict',
-  operationFailed: 'operationFailed',
-  interrupted: 'interrupted',
-  unspecified: 'unspecified',
-} as const;
-
-export interface CloneState {
-  commit?: string;
-  kind: CloneStateKind;
-  path?: string;
-  reason?: CloneStateReason;
-  retainedPath?: string;
-}
-
-export interface CloneOperation {
-  branch: string;
-  createdAt: string;
-  /** @nullable */
-  executionId: string | null;
-  /** @nullable */
-  nodeId: string | null;
-  operationId: string;
-  repository: string;
-  requestId: string;
-  state: CloneState;
-  updatedAt: string;
+export interface CloneInput {
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  baseCommit: string;
+  kind: CloneInputKind;
+  repositoryUrl: string;
+  snapshotRef: string;
+  workspaceRef: string;
 }
 
 export type CollaborationTargetType = typeof CollaborationTargetType[keyof typeof CollaborationTargetType];
@@ -308,19 +278,11 @@ export interface ContextRef {
 export interface ControllerProject {
   createdAt: string;
   /** @nullable */
-  credentialRefId: string | null;
-  defaultBranch: string;
-  /** @nullable */
   deletedAt: string | null;
   id: string;
   lifecycle: string;
   name: string;
   ownerUserId: string;
-  /** @nullable */
-  repositoryCredentialRefId?: string | null;
-  repositoryUrl: string;
-  /** @nullable */
-  secretRef: string | null;
   spaceId: string;
   tenantId: string;
   version: number;
@@ -1229,6 +1191,7 @@ export type OperationRequestPluginsItem = { [key: string]: unknown };
 export type OperationRequestPrevious = {[key: string]: Workspace};
 
 export interface OperationRequest {
+  clone?: CloneInput;
   desiredRevision?: number;
   pluginId?: string;
   pluginMeta?: OperationRequestPluginMetaItem[];
@@ -1242,6 +1205,7 @@ export interface OperationRequest {
 export interface OperationResult {
   forceStopId?: string;
   resourceId?: string;
+  syncErrorCode?: string;
 }
 
 export interface Operation {
@@ -1512,6 +1476,7 @@ export interface SessionModelStatistics {
 export type SnapshotPluginInput = { [key: string]: unknown };
 
 export interface Snapshot {
+  cloneInput?: CloneInput;
   clones: CloneExecution[];
   effects: Effect[];
   nodes: Node[];
@@ -2216,29 +2181,6 @@ to?: string;
 export type GetApiV1TenantsTidAgentSessions200 = {
   items: AgentSessionSummary[];
   nextCursor: string;
-};
-
-export type GetApiV1TenantsTidClonesParams = {
-/**
- * @minimum 1
- * @maximum 100
- */
-limit?: number;
-/**
- * Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.
- */
-after?: string;
-};
-
-export type GetApiV1TenantsTidClones200 = {
-  items: CloneOperation[];
-  nextCursor: string;
-};
-
-export type PostApiV1TenantsTidClonesBody = {
-  branch: string;
-  repository: string;
-  requestId: string;
 };
 
 export type GetApiV1TenantsTidCollaborationFormsFormRefParams = {
@@ -3360,6 +3302,14 @@ export type PostApiV1TenantsTidWorkspacesWidStop202 = {
   resource: Workspace;
 };
 
+export type Health200DependenciesGitServer = typeof Health200DependenciesGitServer[keyof typeof Health200DependenciesGitServer];
+
+
+export const Health200DependenciesGitServer = {
+  configured: 'configured',
+  unconfigured: 'unconfigured',
+} as const;
+
 export type Health200DependenciesObjectStore = typeof Health200DependenciesObjectStore[keyof typeof Health200DependenciesObjectStore];
 
 
@@ -3369,6 +3319,7 @@ export const Health200DependenciesObjectStore = {
 } as const;
 
 export type Health200Dependencies = {
+  gitServer: Health200DependenciesGitServer;
   objectStore: Health200DependenciesObjectStore;
 };
 

@@ -86,6 +86,10 @@ func run() (runErr error) {
 	if e != nil {
 		return e
 	}
+	store.GitServer, e = cfg.GitServer.Open()
+	if e != nil {
+		return e
+	}
 	configureCollaboration(store, cfg.Collaboration.DevelopmentFixtures, log)
 	// The B side of the Agent Run seam: Cloud's IssueRun/Thread lifecycle is driven by these five
 	// callbacks, each of which runs inside the control-plane transaction that just persisted the

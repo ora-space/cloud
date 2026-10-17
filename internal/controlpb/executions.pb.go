@@ -24,14 +24,19 @@ const (
 type CloneFailureReason int32
 
 const (
-	CloneFailureReason_CLONE_FAILURE_REASON_UNSPECIFIED          CloneFailureReason = 0
+	CloneFailureReason_CLONE_FAILURE_REASON_UNSPECIFIED CloneFailureReason = 0
+	// The Git Server was unreachable, or answered 5xx until the retries ran out.
 	CloneFailureReason_CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE   CloneFailureReason = 1
-	CloneFailureReason_CLONE_FAILURE_REASON_BRANCH_NOT_FOUND     CloneFailureReason = 2
 	CloneFailureReason_CLONE_FAILURE_REASON_DESTINATION_CONFLICT CloneFailureReason = 3
 	CloneFailureReason_CLONE_FAILURE_REASON_OPERATION_FAILED     CloneFailureReason = 4
 	// The attempt was terminated before Git reached its own verdict (Node stop, command deadline,
 	// or an external signal) and its cleanup was confirmed; a new execution may simply retry.
 	CloneFailureReason_CLONE_FAILURE_REASON_INTERRUPTED CloneFailureReason = 5
+	// The Git Server answered that the snapshot ref is missing or not readable (it gives both the
+	// same answer).
+	CloneFailureReason_CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE CloneFailureReason = 6
+	// The fetched snapshot ref did not point at base_commit.
+	CloneFailureReason_CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH CloneFailureReason = 7
 )
 
 // Enum value maps for CloneFailureReason.
@@ -39,18 +44,20 @@ var (
 	CloneFailureReason_name = map[int32]string{
 		0: "CLONE_FAILURE_REASON_UNSPECIFIED",
 		1: "CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE",
-		2: "CLONE_FAILURE_REASON_BRANCH_NOT_FOUND",
 		3: "CLONE_FAILURE_REASON_DESTINATION_CONFLICT",
 		4: "CLONE_FAILURE_REASON_OPERATION_FAILED",
 		5: "CLONE_FAILURE_REASON_INTERRUPTED",
+		6: "CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE",
+		7: "CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH",
 	}
 	CloneFailureReason_value = map[string]int32{
 		"CLONE_FAILURE_REASON_UNSPECIFIED":          0,
 		"CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE":   1,
-		"CLONE_FAILURE_REASON_BRANCH_NOT_FOUND":     2,
 		"CLONE_FAILURE_REASON_DESTINATION_CONFLICT": 3,
 		"CLONE_FAILURE_REASON_OPERATION_FAILED":     4,
 		"CLONE_FAILURE_REASON_INTERRUPTED":          5,
+		"CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE": 6,
+		"CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH": 7,
 	}
 )
 
@@ -135,11 +142,19 @@ func (x *NodeIdentity) GetNodeIncarnationId() string {
 	return ""
 }
 
+// A Workspace clone from a Binding snapshot on the Git Server. Cloud freezes all four fields before
+// the clone step is handed to a Controller; the Controller forwards them verbatim. Checkout paths
+// belong to the Node, never to the caller.
 type CloneSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// HTTPS or SSH repository URL. Checkout paths belong to the Node, never to the caller.
-	Repository    string `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	Branch        string `protobuf:"bytes,2,opt,name=branch,proto3" json:"branch,omitempty"`
+	// https://<git-server>/<tenantId>/<projectId>.git
+	RepositoryUrl string `protobuf:"bytes,3,opt,name=repository_url,json=repositoryUrl,proto3" json:"repository_url,omitempty"`
+	// refs/ora/upstreams/<bindingId>/snapshots/<commitOid>
+	SnapshotRef string `protobuf:"bytes,4,opt,name=snapshot_ref,json=snapshotRef,proto3" json:"snapshot_ref,omitempty"`
+	// The commit snapshot_ref points to; the checkout is verified against it.
+	BaseCommit string `protobuf:"bytes,5,opt,name=base_commit,json=baseCommit,proto3" json:"base_commit,omitempty"`
+	// refs/heads/workspaces/<workspaceId>/<branch>; <branch> is the local branch of the checkout.
+	WorkspaceRef  string `protobuf:"bytes,6,opt,name=workspace_ref,json=workspaceRef,proto3" json:"workspace_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,16 +189,30 @@ func (*CloneSpec) Descriptor() ([]byte, []int) {
 	return file_ora_cloud_internal_v1_executions_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *CloneSpec) GetRepository() string {
+func (x *CloneSpec) GetRepositoryUrl() string {
 	if x != nil {
-		return x.Repository
+		return x.RepositoryUrl
 	}
 	return ""
 }
 
-func (x *CloneSpec) GetBranch() string {
+func (x *CloneSpec) GetSnapshotRef() string {
 	if x != nil {
-		return x.Branch
+		return x.SnapshotRef
+	}
+	return ""
+}
+
+func (x *CloneSpec) GetBaseCommit() string {
+	if x != nil {
+		return x.BaseCommit
+	}
+	return ""
+}
+
+func (x *CloneSpec) GetWorkspaceRef() string {
+	if x != nil {
+		return x.WorkspaceRef
 	}
 	return ""
 }
@@ -321,9 +350,10 @@ func (*ExecutionInput_AgentSession) isExecutionInput_Spec() {}
 func (*ExecutionInput_DeliverRevision) isExecutionInput_Spec() {}
 
 type CloneReady struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Commit        string                 `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Path  string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// Must equal the input's base_commit.
+	Commit        string `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -680,8 +710,7 @@ type WorkItem struct {
 	// The IssueRun ID for Agent session and Revision delivery work.
 	OperationId string          `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Input       *ExecutionInput `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`
-	// Set for Agent session and Revision delivery work; unset for a tenant-level clone, whose Node
-	// the Controller chooses.
+	// Always set: Agent session and Revision delivery work name their run Workspace sandbox.
 	Target        *WorkTarget `protobuf:"bytes,3,opt,name=target,proto3,oneof" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1493,12 +1522,14 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"&ora/cloud/internal/v1/executions.proto\x12\x15ora.cloud.internal.v1\x1a,ora/cloud/internal/v1/agent_executions.proto\x1a-ora/cloud/internal/v1/plugin_executions.proto\"W\n" +
 	"\fNodeIdentity\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12.\n" +
-	"\x13node_incarnation_id\x18\x02 \x01(\tR\x11nodeIncarnationId\"C\n" +
-	"\tCloneSpec\x12\x1e\n" +
-	"\n" +
-	"repository\x18\x01 \x01(\tR\n" +
-	"repository\x12\x16\n" +
-	"\x06branch\x18\x02 \x01(\tR\x06branch\"\xa4\x03\n" +
+	"\x13node_incarnation_id\x18\x02 \x01(\tR\x11nodeIncarnationId\"\xbb\x01\n" +
+	"\tCloneSpec\x12%\n" +
+	"\x0erepository_url\x18\x03 \x01(\tR\rrepositoryUrl\x12!\n" +
+	"\fsnapshot_ref\x18\x04 \x01(\tR\vsnapshotRef\x12\x1f\n" +
+	"\vbase_commit\x18\x05 \x01(\tR\n" +
+	"baseCommit\x12#\n" +
+	"\rworkspace_ref\x18\x06 \x01(\tR\fworkspaceRefJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\n" +
+	"repositoryR\x06branch\"\xa4\x03\n" +
 	"\x0eExecutionInput\x128\n" +
 	"\x05clone\x18\x01 \x01(\v2 .ora.cloud.internal.v1.CloneSpecH\x00R\x05clone\x12T\n" +
 	"\x0finstall_plugins\x18\x02 \x01(\v2).ora.cloud.internal.v1.InstallPluginsSpecH\x00R\x0einstallPlugins\x12Q\n" +
@@ -1584,14 +1615,15 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"\x1cListPendingDispatchesRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"a\n" +
 	"\x1dListPendingDispatchesResponse\x12@\n" +
-	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\x92\x02\n" +
+	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\xf2\x02\n" +
 	"\x12CloneFailureReason\x12$\n" +
 	" CLONE_FAILURE_REASON_UNSPECIFIED\x10\x00\x12+\n" +
-	"'CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE\x10\x01\x12)\n" +
-	"%CLONE_FAILURE_REASON_BRANCH_NOT_FOUND\x10\x02\x12-\n" +
+	"'CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE\x10\x01\x12-\n" +
 	")CLONE_FAILURE_REASON_DESTINATION_CONFLICT\x10\x03\x12)\n" +
 	"%CLONE_FAILURE_REASON_OPERATION_FAILED\x10\x04\x12$\n" +
-	" CLONE_FAILURE_REASON_INTERRUPTED\x10\x052\xc2\x05\n" +
+	" CLONE_FAILURE_REASON_INTERRUPTED\x10\x05\x12-\n" +
+	")CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE\x10\x06\x12-\n" +
+	")CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH\x10\a\"\x04\b\x02\x10\x02*%CLONE_FAILURE_REASON_BRANCH_NOT_FOUND2\xc2\x05\n" +
 	"\x10ExecutionService\x12^\n" +
 	"\tClaimWork\x12'.ora.cloud.internal.v1.ClaimWorkRequest\x1a(.ora.cloud.internal.v1.ClaimWorkResponse\x12m\n" +
 	"\x0eRecordDispatch\x12,.ora.cloud.internal.v1.RecordDispatchRequest\x1a-.ora.cloud.internal.v1.RecordDispatchResponse\x12v\n" +

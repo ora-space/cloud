@@ -16,7 +16,7 @@ A 的 Cloud 控制闭环已实现，直接验收使用真实 PostgreSQL、Git �
 | ObjectStore 与 Revision | 事务外私网 HEAD 检查存在、大小、S3 保存的 SHA-256；重查租约、输入和状态；同事务保存原 Node 证据、验证结论、Revision 和 hook。`TestRevisionS3VerificationAndAtomicTakeover` 及网络/状态围栏测试 |
 | plugin 与运行 Workspace | 固定计划、逐项校验、整体失败新执行、未知结果 blocked；公开 start/stop/delete 返回 404。`TestStartPluginPlanSurvivesSelectionChangesAndExecutionFailures`、`TestRunWorkspaceAndPluginStep` |
 | 五钩子与四 helper | 使用调用方事务；ready/failed、Thread、sessionEnded、delivery、deleted 的成功、失败、重复、回滚直接测试 |
-| Go 替身 | 真实 Git 累计 bundle、封存 JSONL、真实上传；过期授权刷新、上传后双替身重启、原终态重放、Workspace 删除后保留 Revision。`TestSimulatorDeliversRevisionToS3AcrossRestart`、Git 快照测试 |
+| Go 替身 | 真实 Git 推送交付 ref、封存 JSONL、真实上传；过期授权刷新、上传后双替身重启、原终态重放、Workspace 删除后保留 Revision。`TestSimulatorDeliversRevisionToS3AcrossRestart`、Git 快照测试 |
 | 前向迁移 | 仅新增 0027；新库及 0023/0024/0026 重复升级保留历史 effect、输入、命令、原 Node 结果和收据，不补造 Revision |
 | cluster 联调 | RustFS 持久卷、凭据文件、幂等建桶、私网/公网 endpoint；独立 sandbox 网络直接上传。`task agent:acceptance` 强制真实 PostgreSQL、S3、sandbox 证据 |
 
@@ -26,9 +26,9 @@ A 的 Cloud 控制闭环已实现，直接验收使用真实 PostgreSQL、Git �
 
 成功交付 hook 为 `saved`/`unchanged`，含 `revisionId` 和元数据；失败为 `failed` 加安全 reason；未配置存储一次性 `skipped/object_store_unconfigured`，不派发工作。hook 失败回滚业务写和控制证据。对象不匹配保留原 Node 成功声明，另记 Cloud `verification_failed`，无 Revision；网络失败不 ACK，可重放。已接管重放不重新访问 S3。临时 `revision_verification_required` 拒绝已替换。
 
-最新草案把 Git bundle/JSONL 内容语义交给 Node；Cloud 不下载解释它们。真实 Git 替身证明累计恢复，不代替 D 真实 Agent。当前 A schema 没有 B 的 delivering/releasing phase：A 重查已登记交付、已结束会话、运行非终态、maintenance binding、Workspace 准入及当前 Node，B 通过钩子维护 phase。
+代码经 Git Server 交付，提交与 JSONL 内容语义交给 Node；Cloud 只经 Git Server ref 查询核对交付 ref 指向声明的提交、经 HEAD 核对 JSONL，不下载解释它们。真实 Git 替身证明累计恢复，不代替 D 真实 Agent。当前 A schema 没有 B 的 delivering/releasing phase：A 重查已登记交付、已结束会话、运行非终态、maintenance binding、Workspace 准入及当前 Node，B 通过钩子维护 phase。
 
-授权只在内存流转，不进入数据库、日志、文件、环境或命令参数。checksum map 仅影响当前签名，不改输入；上传发送所有返回签名头。健康信息报告数据库可达和存储配置状态，configured 不代表 S3 在线，不泄漏 endpoint/凭据。
+授权只在内存流转，不进入数据库、日志、文件、环境或命令参数。checksum map 仅影响当前签名，不改输入；上传发送所有返回签名头。健康信息报告数据库可达和对象存储、Git Server 的配置状态，configured 不代表 S3 或 Git Server 在线，不泄漏 endpoint/凭据。
 
 ## 验证与跨仓边界
 

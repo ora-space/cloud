@@ -7,11 +7,13 @@
 ## Test categories and coverage
 
 - **`cloud_test.go`**: End-to-end lifecycle verification:
-  - Project and Workspace creation through sandbox → node → clone, with a real Git clone into each Workspace's own data, and `one_main` constraint enforcement.
+  - Project and Workspace creation through sandbox → node → clone, with a real Git clone of a Git Server double snapshot into each Workspace's own data, and `one_main` constraint enforcement.
   - Workspace state progression (`provisioning` $\rightarrow$ `ready` $\rightarrow$ `stopped` $\rightarrow$ `deleted`).
   - Controller leasing, epoch fencing, and operation claiming/advancing.
   - Idempotency replay and conflict detection.
 - **`workspace_lifecycle_test.go`**: retained effect kinds per step, clone failure/retry and unknown-outcome blocking, and Workspace data deletion waiting for termination.
+- **`clone_snapshot_test.go`**: the clone step consuming the Binding's current snapshot (git-server-preset fixtures stand in for the external line): waiting for the first sync then freezing the input, failing with the sync's failure, claims passing a parked operation, frozen input outliving snapshot updates, isolated `baseRef` limited to the synced branch, run Workspaces never syncing, delete_project waiting for a repository Operation, blocking without a Git Server, and tenant-level clones being gone.
+- **`git_server_grants_test.go`**: Git Server authorization: a clone execution reads only during its step, and an Agent session writes only its own Workspace's branches.
 - **`workspace_operations_grpc_test.go`**: the Controller driving a Workspace through `WorkspaceOperationService` / `NodeReportService`, Node incarnation replacement, and `OperationAvailable` delivery.
 - **`endpoints_test.go`**: Comprehensive route and parameter matrix testing for all public and internal control endpoints.
 - **`contract_test.go`**: End-to-end OpenAPI contract validation against live HTTP responses.
@@ -46,6 +48,8 @@ Upstream reconciliation coverage: `tenant_upstream_migration_test.go` verifies 0
 `task test:revision` requires real PostgreSQL and S3. Set `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_FILE` and `TEST_S3_SECRET_KEY_FILE` and create the `revisions` bucket; credentials are temporary file references. `REQUIRE_S3=1` makes missing storage fatal. Sandbox acceptance additionally needs `TEST_S3_PUBLIC_ENDPOINT`, `TEST_S3_SANDBOX_NETWORK` and `REQUIRE_S3_SANDBOX=1`; the cluster companion's `task agent:acceptance` configures these automatically.
 
 Revision tests directly cover real uploads, checksum/size/missing objects, expired-grant refresh, post-I/O fencing, transaction failures, replay, both doubles restarting and historical upgrades. Hook tests cover ready/failed, Thread, session end, delivery and deletion committing/rolling back with control evidence. Enable mandatory storage/network environments for full `task test` and `task test:race` too; skipped S3 is not acceptance. See the [control-plane report](../docs/agent-run-control-plane-review.en.md).
+
+When restart acceptance replaces the Controller/Node, it preserves the same Git Server double to verify frozen history uploads and grant refresh after the delivery ref has been pushed.
 
 ## Test-scoped contract validation
 

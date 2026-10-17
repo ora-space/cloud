@@ -36,9 +36,14 @@ ref is written and checks every ref:
 | `refs/ora/deliveries/<deliveryWorkId>` | create-only |
 
 No ref is ever deleted and no ref outside the table is written; one update that no rule admits rejects
-the whole push. Today sandbox executions produce only the delivery rule and a sync Operation only its
-Binding's snapshot prefix; the internal and external lines each add their own rule sources for
-Workspace branches and tracking refs.
+the whole push. Core decides sandbox executions per request from current state, and every granted execution
+reads the whole Project repository: a Workspace clone is read-only (only while it has no result, its
+operation is at the `clone` step, its Node is the Workspace's current Node and its input's
+`repositoryUrl` names the requested repository); an Agent session may create or fast-forward branches
+under the certificate Workspace's `refs/heads/workspaces/<workspaceId>/`; a Revision delivery may only
+create its own `refs/ora/deliveries/<workId>` and fast-forward its input's `workspaceRef` (only when it
+belongs to the certificate Workspace); plugin executions are always denied. A sync Operation produces
+only its Binding's snapshot prefix; the external line adds the rule source for tracking refs.
 
 Repository policy and the hook path are applied to every git process through `GIT_CONFIG_*`
 environment variables rather than stored in repositories, so a restart (new hook directory) or an

@@ -11,11 +11,11 @@
 |---|---|
 | `errors.proto` | `ErrorDetail{ErrorCode}`：附在 `google.rpc.Status` detail 上的错误分类；gRPC 状态码是主分类，枚举细分 |
 | `lease.proto` | `ControllerLeaseService`：全局协调租约，`epoch` 作为所有写操作的 fencing token |
-| `executions.proto` | `ExecutionService`：领取工作、派发前登记、Node 事件接管、查询结果保存与恢复读取；执行种类包括 clone、插件安装/移除、Agent 会话与 Revision 交付，会话与交付工作项带目标 Node（`WorkTarget`） |
+| `executions.proto` | `ExecutionService`：领取工作、派发前登记、Node 事件接管、查询结果保存与恢复读取；执行种类包括 clone、插件安装/移除、Agent 会话与 Revision 交付，会话与交付工作项带目标 Node（`WorkTarget`）；clone 输入 `CloneSpec` 为 Git Server 仓库 URL、快照 ref、基础提交与 Workspace 分支 ref，失败原因含 `SNAPSHOT_UNAVAILABLE`／`BASE_COMMIT_MISMATCH` |
 | `plugin_executions.proto` | 插件安装/移除执行的输入（Cloud 从目录快照拼装的下载与 SHA-256）与逐插件结果 |
-| `agent_executions.proto` | Agent 会话与 Revision 交付执行的输入与结果、git 身份、用户轮次，以及只存在于内存的上传授权 `UploadGrant` |
+| `agent_executions.proto` | Agent 会话与 Revision 交付执行的输入与结果、git 身份、用户轮次、会话的 Workspace 目录（`WorkspaceListing`）、带 Git 字段的前序 Revision，以及只存在于内存的上传授权 `UploadGrant`；交付输入带 Git Server 仓库 URL、交付 ref 与 Workspace ref，不带 bundle，推送失败原因为 `PUSH_REJECTED`／`PUSH_FAILED` |
 | `agent_runs.proto` | `AgentRunService`：按序批量接管 Thread 事件、领取与登记 Thread 命令、签发 Revision 上传授权 |
-| `operations.proto` | `WorkspaceOperationService`：领取、计划 effect、登记 effect 结果、推进与延期 Workspace 生命周期操作 |
+| `operations.proto` | `WorkspaceOperationService`：领取、计划 effect、登记 effect 结果、推进与延期 Workspace 生命周期操作；快照的 `clone_input` 是 clone 步骤冻结的输入，`OperationProject` 只有 `id` |
 | `nodes.proto` | `NodeReportService`：Controller 登记它持有会话的 desktop Node（`node_id` + `node_incarnation_id`），并报告状态、结束与 idle |
 | `signals.proto` | `ControlSignalService.Watch`：Controller 发起的服务端流，下发 `WorkAvailable`／`OperationAvailable`／`ThreadCommandAvailable`／`Drain`／`NodeAssignment` |
 
@@ -31,7 +31,7 @@
 
 ## 生成与检查
 
-- `buf.yaml`：`STANDARD` lint，`FILE` 级 breaking；`v1` 只接受非破坏性修改，破坏性变更以并列的 `v2` package 表达。
+- `buf.yaml`：`STANDARD` lint，`FILE` 级 breaking；Cloud、Controller 与 Node 一同发布。当前带一次性 `ignore_only` 豁免，覆盖切换到 Git 原生 Workspace 代码时删除的字段、消息、RPC 与枚举值，下一次修改该文件时移除。
 - `buf.gen.yaml`：固定版本的 `protocolbuffers/go` 与 `grpc/go` 远程插件，生成到 [`internal/controlpb`](../internal/controlpb/README.md)（需要网络，不需要本机 `protoc`）。
 - `task proto:lint`、`task proto:breaking`（以 `PROTO_BASE_REF`，默认 `main` 为基线）、`task proto:generate`、
   `task proto:check`（重新生成并在有 diff 时失败）；`task check` 与 CI 执行 lint、breaking 与漂移检查。

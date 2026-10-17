@@ -81,8 +81,8 @@ func deliveryRetryBackoff(attempted int) time.Duration {
 //	                            with D5's backoff (a retry never creates a new logical delivery —
 //	                            the run, its Revision target and its Workspace are unchanged).
 //	skipped                  → releasing with deliveryState=skipped: the deployment has no object
-//	                            store, so no attempt could ever succeed and retrying would hold the
-//	                            Workspace against a limit that can never be reached.
+//	                            store or no Git Server, so no attempt could ever succeed and retrying
+//	                            would hold the Workspace against a limit that can never be reached.
 //
 // Identity is re-read, never taken from the caller: the run must be the one the registered delivery
 // execution was dispatched for, through execution → execution_work → run, and the work item must be
@@ -149,7 +149,7 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 		}
 		return s.releaseAfterDelivery(t, o, outcome, revisionID)
 	case deliveryStateSkipped:
-		// No object store is configured, so no delivery attempt was ever declared and none ever will
+		// No object store or Git Server is configured, so no delivery attempt was ever declared and none ever will
 		// be: the control plane's enqueue recorded the skip instead of a work item. Release with
 		// deliveryState=skipped, which is D4's own spelling for "no delivery happened", rather than
 		// waiting on a give-up window that no attempt is running against.

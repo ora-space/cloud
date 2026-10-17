@@ -622,13 +622,12 @@ func (x *Operation) GetErrorCode() string {
 	return ""
 }
 
+// The Project an operation belongs to. Its external repository, branch and credential reference
+// never reach a Controller: a Workspace clones only the Git Server snapshot its clone step was
+// handed (clone_input).
 type OperationProject struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	RepositoryUrl string                 `protobuf:"bytes,2,opt,name=repository_url,json=repositoryUrl,proto3" json:"repository_url,omitempty"`
-	DefaultBranch string                 `protobuf:"bytes,3,opt,name=default_branch,json=defaultBranch,proto3" json:"default_branch,omitempty"`
-	// Infrastructure reference to the repository credential; never the credential itself.
-	CredentialRef *string `protobuf:"bytes,4,opt,name=credential_ref,json=credentialRef,proto3,oneof" json:"credential_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -670,27 +669,6 @@ func (x *OperationProject) GetId() string {
 	return ""
 }
 
-func (x *OperationProject) GetRepositoryUrl() string {
-	if x != nil {
-		return x.RepositoryUrl
-	}
-	return ""
-}
-
-func (x *OperationProject) GetDefaultBranch() string {
-	if x != nil {
-		return x.DefaultBranch
-	}
-	return ""
-}
-
-func (x *OperationProject) GetCredentialRef() string {
-	if x != nil && x.CredentialRef != nil {
-		return *x.CredentialRef
-	}
-	return ""
-}
-
 type OperationWorkspace struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -702,7 +680,8 @@ type OperationWorkspace struct {
 	RuntimeGeneration int64  `protobuf:"varint,5,opt,name=runtime_generation,json=runtimeGeneration,proto3" json:"runtime_generation,omitempty"`
 	AdmissionOpen     bool   `protobuf:"varint,6,opt,name=admission_open,json=admissionOpen,proto3" json:"admission_open,omitempty"`
 	AdmissionEpoch    int64  `protobuf:"varint,7,opt,name=admission_epoch,json=admissionEpoch,proto3" json:"admission_epoch,omitempty"`
-	// The ref the Workspace's Node clones.
+	// The short name of the Workspace's branch on the Git Server
+	// (refs/heads/workspaces/<id>/<requested_ref>) and of the checkout's local branch.
 	RequestedRef string `protobuf:"bytes,8,opt,name=requested_ref,json=requestedRef,proto3" json:"requested_ref,omitempty"`
 	// Commit of the Workspace's successful clone.
 	BaseCommitId  *string `protobuf:"bytes,9,opt,name=base_commit_id,json=baseCommitId,proto3,oneof" json:"base_commit_id,omitempty"`
@@ -1870,7 +1849,12 @@ type OperationSnapshot struct {
 	// The input the plugin step's execution must carry (install_plugins or remove_plugins), fixed when
 	// the operation entered the step. Unset outside the plugin step or when the set is empty, in which
 	// case the step advances without an execution.
-	PluginInput   *ExecutionInput `protobuf:"bytes,9,opt,name=plugin_input,json=pluginInput,proto3,oneof" json:"plugin_input,omitempty"`
+	PluginInput *ExecutionInput `protobuf:"bytes,9,opt,name=plugin_input,json=pluginInput,proto3,oneof" json:"plugin_input,omitempty"`
+	// The input the clone step's execution must carry, frozen by Cloud from the Binding's current
+	// snapshot before the step was handed out and identical for every attempt of the operation. Set
+	// whenever the operation is in the clone step; the Controller forwards it verbatim to
+	// RecordDispatch and the Node, and does not dispatch a clone step without it.
+	CloneInput    *CloneSpec `protobuf:"bytes,10,opt,name=clone_input,json=cloneInput,proto3,oneof" json:"clone_input,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1964,6 +1948,13 @@ func (x *OperationSnapshot) GetPluginExecutions() []*ExecutionRecord {
 func (x *OperationSnapshot) GetPluginInput() *ExecutionInput {
 	if x != nil {
 		return x.PluginInput
+	}
+	return nil
+}
+
+func (x *OperationSnapshot) GetCloneInput() *CloneSpec {
+	if x != nil {
+		return x.CloneInput
 	}
 	return nil
 }
@@ -2778,13 +2769,9 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"error_code\x18\t \x01(\tH\x02R\terrorCode\x88\x01\x01B\x0f\n" +
 	"\r_workspace_idB\x13\n" +
 	"\x11_controller_epochB\r\n" +
-	"\v_error_code\"\xaf\x01\n" +
+	"\v_error_code\"d\n" +
 	"\x10OperationProject\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
-	"\x0erepository_url\x18\x02 \x01(\tR\rrepositoryUrl\x12%\n" +
-	"\x0edefault_branch\x18\x03 \x01(\tR\rdefaultBranch\x12*\n" +
-	"\x0ecredential_ref\x18\x04 \x01(\tH\x00R\rcredentialRef\x88\x01\x01B\x11\n" +
-	"\x0f_credential_ref\"\xa6\x03\n" +
+	"\x02id\x18\x01 \x01(\tR\x02idJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x0erepository_urlR\x0edefault_branchR\x0ecredential_ref\"\xa6\x03\n" +
 	"\x12OperationWorkspace\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\x04kind\x18\x02 \x01(\x0e2$.ora.cloud.internal.v1.WorkspaceKindR\x04kind\x12#\n" +
@@ -2879,7 +2866,7 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"\f_external_idB\v\n" +
 	"\t_evidenceB\n" +
 	"\n" +
-	"\b_failure\"\x8c\x05\n" +
+	"\b_failure\"\xe4\x05\n" +
 	"\x11OperationSnapshot\x12>\n" +
 	"\toperation\x18\x01 \x01(\v2 .ora.cloud.internal.v1.OperationR\toperation\x12A\n" +
 	"\aproject\x18\x02 \x01(\v2'.ora.cloud.internal.v1.OperationProjectR\aproject\x12I\n" +
@@ -2891,8 +2878,12 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"\aeffects\x18\x06 \x03(\v2\x1d.ora.cloud.internal.v1.EffectR\aeffects\x12>\n" +
 	"\x06clones\x18\a \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\x06clones\x12S\n" +
 	"\x11plugin_executions\x18\b \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\x10pluginExecutions\x12M\n" +
-	"\fplugin_input\x18\t \x01(\v2%.ora.cloud.internal.v1.ExecutionInputH\x00R\vpluginInput\x88\x01\x01B\x0f\n" +
-	"\r_plugin_input\"-\n" +
+	"\fplugin_input\x18\t \x01(\v2%.ora.cloud.internal.v1.ExecutionInputH\x00R\vpluginInput\x88\x01\x01\x12F\n" +
+	"\vclone_input\x18\n" +
+	" \x01(\v2 .ora.cloud.internal.v1.CloneSpecH\x01R\n" +
+	"cloneInput\x88\x01\x01B\x0f\n" +
+	"\r_plugin_inputB\x0e\n" +
+	"\f_clone_input\"-\n" +
 	"\x15ClaimOperationRequest\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\"p\n" +
 	"\x16ClaimOperationResponse\x12I\n" +
@@ -3083,6 +3074,7 @@ var file_ora_cloud_internal_v1_operations_proto_goTypes = []any{
 	(*NodeRecord)(nil),                 // 40: ora.cloud.internal.v1.NodeRecord
 	(*ExecutionRecord)(nil),            // 41: ora.cloud.internal.v1.ExecutionRecord
 	(*ExecutionInput)(nil),             // 42: ora.cloud.internal.v1.ExecutionInput
+	(*CloneSpec)(nil),                  // 43: ora.cloud.internal.v1.CloneSpec
 }
 var file_ora_cloud_internal_v1_operations_proto_depIdxs = []int32{
 	0,  // 0: ora.cloud.internal.v1.Operation.kind:type_name -> ora.cloud.internal.v1.OperationKind
@@ -3114,38 +3106,39 @@ var file_ora_cloud_internal_v1_operations_proto_depIdxs = []int32{
 	41, // 26: ora.cloud.internal.v1.OperationSnapshot.clones:type_name -> ora.cloud.internal.v1.ExecutionRecord
 	41, // 27: ora.cloud.internal.v1.OperationSnapshot.plugin_executions:type_name -> ora.cloud.internal.v1.ExecutionRecord
 	42, // 28: ora.cloud.internal.v1.OperationSnapshot.plugin_input:type_name -> ora.cloud.internal.v1.ExecutionInput
-	26, // 29: ora.cloud.internal.v1.ClaimOperationResponse.snapshot:type_name -> ora.cloud.internal.v1.OperationSnapshot
-	4,  // 30: ora.cloud.internal.v1.PlanEffectRequest.kind:type_name -> ora.cloud.internal.v1.EffectKind
-	25, // 31: ora.cloud.internal.v1.PlanEffectResponse.effect:type_name -> ora.cloud.internal.v1.Effect
-	8,  // 32: ora.cloud.internal.v1.PlanEffectResponse.operation:type_name -> ora.cloud.internal.v1.Operation
-	5,  // 33: ora.cloud.internal.v1.RecordEffectResultRequest.state:type_name -> ora.cloud.internal.v1.EffectState
-	24, // 34: ora.cloud.internal.v1.RecordEffectResultRequest.evidence:type_name -> ora.cloud.internal.v1.EffectEvidence
-	25, // 35: ora.cloud.internal.v1.RecordEffectResultResponse.effect:type_name -> ora.cloud.internal.v1.Effect
-	8,  // 36: ora.cloud.internal.v1.RecordEffectResultResponse.operation:type_name -> ora.cloud.internal.v1.Operation
-	8,  // 37: ora.cloud.internal.v1.AdvanceOperationResponse.operation:type_name -> ora.cloud.internal.v1.Operation
-	6,  // 38: ora.cloud.internal.v1.DeferOperationRequest.state:type_name -> ora.cloud.internal.v1.DeferState
-	7,  // 39: ora.cloud.internal.v1.DeferOperationRequest.reason:type_name -> ora.cloud.internal.v1.DeferReason
-	8,  // 40: ora.cloud.internal.v1.DeferOperationResponse.operation:type_name -> ora.cloud.internal.v1.Operation
-	11, // 41: ora.cloud.internal.v1.LiveSandbox.sandbox:type_name -> ora.cloud.internal.v1.SandboxRecord
-	40, // 42: ora.cloud.internal.v1.LiveSandbox.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
-	38, // 43: ora.cloud.internal.v1.ListLiveSandboxesResponse.sandboxes:type_name -> ora.cloud.internal.v1.LiveSandbox
-	27, // 44: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:input_type -> ora.cloud.internal.v1.ClaimOperationRequest
-	29, // 45: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:input_type -> ora.cloud.internal.v1.PlanEffectRequest
-	31, // 46: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:input_type -> ora.cloud.internal.v1.RecordEffectResultRequest
-	33, // 47: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:input_type -> ora.cloud.internal.v1.AdvanceOperationRequest
-	35, // 48: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:input_type -> ora.cloud.internal.v1.DeferOperationRequest
-	37, // 49: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:input_type -> ora.cloud.internal.v1.ListLiveSandboxesRequest
-	28, // 50: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:output_type -> ora.cloud.internal.v1.ClaimOperationResponse
-	30, // 51: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:output_type -> ora.cloud.internal.v1.PlanEffectResponse
-	32, // 52: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:output_type -> ora.cloud.internal.v1.RecordEffectResultResponse
-	34, // 53: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:output_type -> ora.cloud.internal.v1.AdvanceOperationResponse
-	36, // 54: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:output_type -> ora.cloud.internal.v1.DeferOperationResponse
-	39, // 55: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:output_type -> ora.cloud.internal.v1.ListLiveSandboxesResponse
-	50, // [50:56] is the sub-list for method output_type
-	44, // [44:50] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	43, // 29: ora.cloud.internal.v1.OperationSnapshot.clone_input:type_name -> ora.cloud.internal.v1.CloneSpec
+	26, // 30: ora.cloud.internal.v1.ClaimOperationResponse.snapshot:type_name -> ora.cloud.internal.v1.OperationSnapshot
+	4,  // 31: ora.cloud.internal.v1.PlanEffectRequest.kind:type_name -> ora.cloud.internal.v1.EffectKind
+	25, // 32: ora.cloud.internal.v1.PlanEffectResponse.effect:type_name -> ora.cloud.internal.v1.Effect
+	8,  // 33: ora.cloud.internal.v1.PlanEffectResponse.operation:type_name -> ora.cloud.internal.v1.Operation
+	5,  // 34: ora.cloud.internal.v1.RecordEffectResultRequest.state:type_name -> ora.cloud.internal.v1.EffectState
+	24, // 35: ora.cloud.internal.v1.RecordEffectResultRequest.evidence:type_name -> ora.cloud.internal.v1.EffectEvidence
+	25, // 36: ora.cloud.internal.v1.RecordEffectResultResponse.effect:type_name -> ora.cloud.internal.v1.Effect
+	8,  // 37: ora.cloud.internal.v1.RecordEffectResultResponse.operation:type_name -> ora.cloud.internal.v1.Operation
+	8,  // 38: ora.cloud.internal.v1.AdvanceOperationResponse.operation:type_name -> ora.cloud.internal.v1.Operation
+	6,  // 39: ora.cloud.internal.v1.DeferOperationRequest.state:type_name -> ora.cloud.internal.v1.DeferState
+	7,  // 40: ora.cloud.internal.v1.DeferOperationRequest.reason:type_name -> ora.cloud.internal.v1.DeferReason
+	8,  // 41: ora.cloud.internal.v1.DeferOperationResponse.operation:type_name -> ora.cloud.internal.v1.Operation
+	11, // 42: ora.cloud.internal.v1.LiveSandbox.sandbox:type_name -> ora.cloud.internal.v1.SandboxRecord
+	40, // 43: ora.cloud.internal.v1.LiveSandbox.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
+	38, // 44: ora.cloud.internal.v1.ListLiveSandboxesResponse.sandboxes:type_name -> ora.cloud.internal.v1.LiveSandbox
+	27, // 45: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:input_type -> ora.cloud.internal.v1.ClaimOperationRequest
+	29, // 46: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:input_type -> ora.cloud.internal.v1.PlanEffectRequest
+	31, // 47: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:input_type -> ora.cloud.internal.v1.RecordEffectResultRequest
+	33, // 48: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:input_type -> ora.cloud.internal.v1.AdvanceOperationRequest
+	35, // 49: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:input_type -> ora.cloud.internal.v1.DeferOperationRequest
+	37, // 50: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:input_type -> ora.cloud.internal.v1.ListLiveSandboxesRequest
+	28, // 51: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:output_type -> ora.cloud.internal.v1.ClaimOperationResponse
+	30, // 52: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:output_type -> ora.cloud.internal.v1.PlanEffectResponse
+	32, // 53: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:output_type -> ora.cloud.internal.v1.RecordEffectResultResponse
+	34, // 54: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:output_type -> ora.cloud.internal.v1.AdvanceOperationResponse
+	36, // 55: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:output_type -> ora.cloud.internal.v1.DeferOperationResponse
+	39, // 56: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:output_type -> ora.cloud.internal.v1.ListLiveSandboxesResponse
+	51, // [51:57] is the sub-list for method output_type
+	45, // [45:51] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_operations_proto_init() }
@@ -3156,7 +3149,6 @@ func file_ora_cloud_internal_v1_operations_proto_init() {
 	file_ora_cloud_internal_v1_executions_proto_init()
 	file_ora_cloud_internal_v1_nodes_proto_init()
 	file_ora_cloud_internal_v1_operations_proto_msgTypes[0].OneofWrappers = []any{}
-	file_ora_cloud_internal_v1_operations_proto_msgTypes[1].OneofWrappers = []any{}
 	file_ora_cloud_internal_v1_operations_proto_msgTypes[2].OneofWrappers = []any{}
 	file_ora_cloud_internal_v1_operations_proto_msgTypes[3].OneofWrappers = []any{}
 	file_ora_cloud_internal_v1_operations_proto_msgTypes[7].OneofWrappers = []any{}

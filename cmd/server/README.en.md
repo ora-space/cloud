@@ -10,6 +10,7 @@
 - **PostgreSQL pool initialization**: Connects to the authoritative PostgreSQL database via `internal/repository.InitDB` and verifies connectivity with a mandatory ping.
 - **Migration integrity gate**: Executes `store.CheckSchema(ctx)` at startup. It strictly verifies that all migrations defined in `internal/core/migrations` have been applied in order with matching SHA256 checksums, and that no unexpected migration versions exist. It never applies DDL or runs `AutoMigrate`.
 - **Cryptographic trust setup**: Constructs the `core.Authenticator` using configured trusted verification public keys and the expected audience string.
+- **Git Server wiring**: Validates the `git_server` section through `cfg.GitServer.Open()`, loads Cloud's ref-query client certificate and installs the result as `store.GitServer`; no network call is made, and an empty `repository_base_url` leaves the Git Server unconfigured.
 - **HTTP server composition**: Initializes the Gin engine via `internal/api/router.New`, applies server timeouts (`ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`), and listens on the configured TCP port.
 - **Graceful shutdown**: Intercepts `os.Interrupt` and `syscall.SIGTERM`. On receipt of a shutdown signal, it allocates a bounded 10-second shutdown context to finish in-flight requests and cleanly closes the PostgreSQL pool and logger buffers.
 

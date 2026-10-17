@@ -44,17 +44,21 @@ func runList(t *transaction, r *PublicRequest) Object {
 // a private storage location. `revision` is null for a run that registered none (not an agent run,
 // delivery still pending, skipped or failed); the run's `result.deliveryState` says which.
 //
-// `changed` says whether this run stored a bundle of its own: a resumed run that added nothing reuses
-// its prior Revision's bundle and is unchanged (resume decision D5). `priorRevisionId` names the
-// Revision the run resumed; the run's own `resumeRevisionId` shows it from session start on.
+// `changed` is Cloud's own verification verdict: true when the run delivered new commits, false when
+// it ended on its base commit or on its resumed prior's final commit (Revision D8). For a Revision
+// registered before Git delivery that is exactly "it stored a bundle of its own". `bundleSize` is
+// null for a Revision delivered over Git and keeps its size on an older one. `priorRevisionId` names
+// the Revision the run resumed; the run's own `resumeRevisionId` shows it from session start on.
 func withRevision(t *transaction, o Object) Object {
 	o["revision"] = nil
 	if o.S("executorType") != "agent" {
 		return o
 	}
-	rev := t.one(`SELECT id, base_commit, final_commit, bundle_key IS NOT NULL AS stored_bundle, bundle_size,
-		history_size, prior_revision_id, created_at
-		FROM revisions WHERE run_id=$1 AND tenant_id=$2`, o.S("id"), o.S("tenantId"))
+	rev := t.one(`SELECT r.id, r.base_commit, r.final_commit,
+		COALESCE(v.outcome = 'delivered', r.bundle_key IS NOT NULL) AS stored_bundle, r.bundle_size,
+		r.history_size, r.prior_revision_id, r.created_at
+		FROM revisions r LEFT JOIN revision_verifications v ON v.execution_id = r.execution_id
+		WHERE r.run_id=$1 AND r.tenant_id=$2`, o.S("id"), o.S("tenantId"))
 	if rev == nil {
 		return o
 	}

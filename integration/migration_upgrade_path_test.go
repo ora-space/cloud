@@ -1019,7 +1019,7 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 		t.Helper()
 		var names string
 		must(t, pool.QueryRow(`SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint
-			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused')`).Scan(&names))
+			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused','revisions_shape')`).Scan(&names))
 		return names
 	}
 	columns := func(pool *sql.DB) int {
@@ -1043,7 +1043,48 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 		t.Fatalf("before 0033: columns %d constraints %q", got, names)
 	}
 	migratedTwice(t, newStoreOnSchema(t, pool))
-	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_bundle_shape,revisions_resume_refused" {
+	// 0039 later replaces the bundle shape 0033 introduced with revisions_shape.
+	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_resume_refused,revisions_shape" {
 		t.Fatalf("after 0033: columns %d constraints %q", got, names)
+	}
+}
+
+// Migration 0038 upgrades a database that still holds tenant-level clones: their requests,
+// executions and receipts are removed, while a Workspace operation's clone execution and its receipt
+// stay, and every remaining clone execution must name its Workspace.
+func TestMigration0038RetiresTenantLevelClonesKeepingWorkspaceClones(t *testing.T) {
+	pool, _ := testSchema(t, "test_gn36_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0038_retire_tenant_level_clones.sql"))
+	s := seedOwnershipChain(t, pool)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		_, e := pool.Exec(q, args...)
+		must(t, e)
+	}
+	request, operation := uuid.NewString(), uuid.NewString()
+	exec(`INSERT INTO clone_requests(id,tenant_id,actor_user_id,request_id,repository_url,branch,state) VALUES($1,$2,$3,'tenant-request','https://example.invalid/repo.git','main','succeeded')`, request, s.tenantID, s.userID)
+	exec(`INSERT INTO clone_executions(execution_id,operation_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES('tenant-clone',$1,'node','tenant-clone','{}','{"outcome":"clone_ready"}',1)`, request)
+	exec(`INSERT INTO clone_event_receipts(execution_id,sequence,event) VALUES('tenant-clone',1,'ready')`)
+	exec(`INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash) VALUES($1,$2,$3,$4,$5,'create_project','succeeded','done','{}','gn36','gn36')`, operation, s.tenantID, s.userID, s.projectID, s.mainWorkspaceID)
+	exec(`INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES('workspace-clone',$1,$2,'node','workspace-clone','{}','{"outcome":"clone_ready"}',1)`, operation, s.mainWorkspaceID)
+	exec(`INSERT INTO clone_event_receipts(execution_id,sequence,event) VALUES('workspace-clone',1,'ready')`)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if tableExists(t, pool, "clone_requests") {
+		t.Fatal("0038 must drop clone_requests")
+	}
+	var executions, receipts string
+	must(t, pool.QueryRow(`SELECT string_agg(execution_id, ',' ORDER BY execution_id) FROM clone_executions`).Scan(&executions))
+	must(t, pool.QueryRow(`SELECT string_agg(execution_id, ',' ORDER BY execution_id) FROM clone_event_receipts`).Scan(&receipts))
+	if executions != "workspace-clone" || receipts != "workspace-clone" {
+		t.Fatalf("only the Workspace clone and its receipt may remain, got executions %q receipts %q", executions, receipts)
+	}
+	if columnNullable(t, pool, "clone_executions", "workspace_id") {
+		t.Fatal("every clone execution must name its Workspace after 0036")
+	}
+	var requestColumns int
+	must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='clone_executions' AND column_name='clone_request_id'`).Scan(&requestColumns))
+	if requestColumns != 0 {
+		t.Fatal("0038 must drop clone_executions.clone_request_id")
 	}
 }

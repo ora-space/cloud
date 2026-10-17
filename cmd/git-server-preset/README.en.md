@@ -12,7 +12,7 @@ wires dependencies and sets the exit code.
 
 | Subcommand | Effect |
 |---|---|
-| `snapshot --project <id> (--commit <oid> \| --synthetic <n>)` | Writes `snapshots/<oid>` and the tracking ref, records a `succeeded` sync and makes it the current snapshot; `--synthetic` first creates a deterministic history of n commits |
+| `snapshot --project <id> (--commit <oid> \| --synthetic <n>)` | Writes `snapshots/<oid>` and the tracking ref, advances the Binding's unfinished sync (such as the one a new Project starts with) to `succeeded` or records a new `succeeded` sync when there is none, and makes it the current snapshot; `--synthetic` first creates a deterministic history of n commits |
 | `ref --project <id> --ref <name> --commit <oid>` | Writes one ref of any namespace (for example a Workspace branch to publish from); the commit must already be in the repository |
 | `operation --project <id> --type sync\|publish --state <state> [--error-code <code>]` | Writes one Operation in the given state for waiting, failure and deletion scenarios; terminal states get `finished_at`. A sync moves the Binding's unfinished sync (such as the one written when the Project was created) to the given state and writes a new row only when there is none, so every sync state can be preset; a publish is always a new row |
 | `check --project <id>` | Contract assertion: do the Git Server's refs and Cloud's records satisfy the contract |

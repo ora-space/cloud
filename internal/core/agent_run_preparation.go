@@ -13,6 +13,10 @@ func withAgentRunDetails(t *transaction, run Object) Object {
 	return withRevision(t, stripAgentRunSkeleton(run))
 }
 
+// preparationWaitCodes are the clone-step codes a run's preparation shows as they are: safe, bounded
+// reasons the step is not making progress that name no Binding, snapshot or deployment detail.
+var preparationWaitCodes = map[string]bool{snapshotNotReady: true, gitServerUnconfigured: true}
+
 // repositorySyncFailed is the preparation error code of a clone step that ended because its
 // Binding's latest sync failed; syncErrorCode then names why.
 const repositorySyncFailed = "repository_sync_failed"
@@ -24,6 +28,11 @@ const repositorySyncFailed = "repository_sync_failed"
 func preparationSyncErrorCode(t *transaction, run, progress Object) any {
 	if progress.S("errorCode") != repositorySyncFailed || run.S("workspaceId") == "" {
 		return nil
+	}
+	// The clone step recorded the very sync it failed on (operation D2); the latest failed sync of
+	// the Binding answers for operations that ended before that record existed.
+	if op := t.one("SELECT result FROM operations WHERE workspace_id=$1 AND kind='create_workspace' AND error_code=$2 ORDER BY created_at DESC,id DESC LIMIT 1", run.S("workspaceId"), repositorySyncFailed); op.O("result").S("syncErrorCode") != "" {
+		return op.O("result").S("syncErrorCode")
 	}
 	o := t.one(`SELECT o.error_code FROM repository_operations o JOIN workspaces w ON w.project_id=o.project_id
 	 WHERE w.id=$1 AND o.type='repository_sync' AND o.state='failed' ORDER BY o.finished_at DESC,o.id DESC LIMIT 1`, run.S("workspaceId"))
@@ -67,7 +76,14 @@ func agentRunPreparation(t *transaction, run Object) Object {
 				progress["errorCode"] = "clone_attempts_exhausted"
 				return progress
 			}
-			if code := op.S("errorCode"); deferCodes[code] {
+			// The Binding's sync ended without a snapshot to clone: the run fails for that reason,
+			// whatever the session layer later records (operation D2).
+			if op.S("state") == "failed" && op.S("errorCode") == repositorySyncFailed {
+				progress["stage"] = "failed"
+				progress["errorCode"] = repositorySyncFailed
+				return progress
+			}
+			if code := op.S("errorCode"); deferCodes[code] || preparationWaitCodes[code] {
 				progress["errorCode"] = code
 			}
 		}

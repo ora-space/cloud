@@ -11,7 +11,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 // PublicRequest is populated only after service and final-user credentials are verified.
 type PublicRequest struct {
-	Method, Path, TenantID, ProjectID, WorkspaceID, SpaceID, OperationID, CloneID, UserID, IssueID, CommentID, LabelID, StatusID, ViewID, RunID, ContextRefID, InteractionID, WorkflowID, SnapshotID, FormRef, InvitationID, JoinLinkID, JoinRequestID, Key, After, Before, Query, GroupBy string
+	Method, Path, TenantID, ProjectID, WorkspaceID, SpaceID, OperationID, UserID, IssueID, CommentID, LabelID, StatusID, ViewID, RunID, ContextRefID, InteractionID, WorkflowID, SnapshotID, FormRef, InvitationID, JoinLinkID, JoinRequestID, Key, After, Before, Query, GroupBy string
 	// FormIssueID is the optional `issueId` query parameter of the form-descriptor route. It is
 	// deliberately its own field rather than a fallback into IssueID: IssueID drives dispatch in both
 	// readPublic and Public, so a query parameter folded into it would let `GET /issues?issueId=…`
@@ -44,7 +44,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 	status := 200
 	var dispatches []dispatchTarget
 	var events []SpaceEvent
-	var accepted []string
 	result, e := s.transact(ctx, func(t *transaction) Object {
 		u := identityWithAlias(t, r.Identity)
 		uid := u.S("id")
@@ -143,15 +142,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			out = createProject(t, r, uid, hash)
 			status = 202
 			events = append(events, SpaceEvent{Type: "project.created", SpaceID: out.O("resource").S("spaceId"), ProjectID: out.O("resource").S("id")})
-		case strings.HasSuffix(r.Path, "/clones"):
-			// Clone requests are accepted work items outside the operation model; they share the
-			// public idempotency scope but never create an operation or effect.
-			var queued string
-			out, queued = clonesPublic(t, r, uid)
-			status = 202
-			if queued != "" {
-				accepted = append(accepted, queued)
-			}
 		case r.OperationID != "":
 			out = retryOperation(t, r, uid)
 			status = 202
@@ -360,9 +350,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				s.Events.Publish(ev)
 			}
 		}
-		for _, id := range accepted {
-			s.signalWork(id)
-		}
 	}
 	return result, status, e
 }
@@ -438,9 +425,6 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 	switch {
 	case strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests"):
 		return adminJoinRead(t, r)
-	case r.CloneID != "" || strings.HasSuffix(r.Path, "/clones"):
-		out, _ := clonesPublic(t, r, uid)
-		return out
 	case strings.HasSuffix(r.Path, "/spaces"):
 		return listSpaces(t, r, uid)
 	case strings.HasSuffix(r.Path, "/members"):
@@ -571,12 +555,14 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 		_, password := parsed.User.Password()
 		require(!password && parsed.Scheme == "ssh", 400, "embedded_credentials_forbidden")
 	}
-	// The Node clones only a literal branch name and Cloud reads no remote repository, so the
-	// caller names the branch; HEAD would leave the Workspace's clone step blocked for good.
+	// The Binding syncs one literal branch and Cloud reads no remote repository, so the caller names
+	// it; HEAD names no branch. Workspaces take it as the short name of their Git Server branch
+	// refs/heads/workspaces/<id>/<branch>, so it must be a name Git accepts in a ref.
 	branch := r.Body.S("defaultBranch")
 	require(strings.TrimSpace(branch) != "", 400, "default_branch_required")
 	branch = validRef(branch)
 	require(branch != "HEAD", 400, "default_branch_required")
+	require(validBranchName(branch), 400, "invalid_ref")
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
@@ -592,8 +578,8 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 }
 
 func insertWorkspace(t *transaction, tid, owner, creator, pid, wid, kind, ref, title string) {
-	// The Workspace's Node clones ref into the Workspace's own data; there is no shared Project
-	// repository or linked worktree any more.
+	// ref is the short name of the Workspace's branch on the Git Server; its Node checks the
+	// snapshot out on a local branch of that name in the Workspace's own data.
 	t.exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'verified_request',$5,$6,'running','provisioning',$7)", wid, tid, owner, creator, pid, kind, ref)
 	if kind == "isolated" {
 		t.exec("INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,$3)", newID(), wid, title)
@@ -604,13 +590,14 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	require(p.S("lifecycle") == "active", 409, "resource_unavailable")
 	idleProject(t, p.S("id"))
 	title := validText(r.Body.S("title"), 200)
-	ref := validRef(r.Body.S("baseRef"))
-	if ref == "HEAD" {
-		// HEAD means the Project's default branch, which is concrete for every Project created
-		// since defaultBranch became required; an older Project that still stores HEAD cannot say.
-		ref = p.S("defaultBranch")
-		require(ref != "HEAD", 400, "default_branch_required")
+	// A Workspace starts from its Binding's current snapshot, which holds only the Binding's branch
+	// (operation D3). An absent, empty or HEAD baseRef means that branch; naming any other branch
+	// would give a Workspace called "feature" the content of "main", so it is refused.
+	ref := p.S("defaultBranch")
+	if requested := strings.TrimSpace(r.Body.S("baseRef")); requested != "" && requested != "HEAD" {
+		require(validRef(requested) == ref, 400, "base_ref_not_synced")
 	}
+	require(ref != "" && ref != "HEAD", 400, "default_branch_required")
 	wid := newID()
 	// The project's durable owner is part of the workspace FK. A different
 	// tenant member may initiate this action, recorded separately as actor.
@@ -717,6 +704,14 @@ func ownedOperation(t *transaction, r *PublicRequest, uid string) Object {
 		membership(t, r.TenantID, uid, true)
 		return adminOperation(o)
 	}
+	// The frozen clone input names the Git Server's repository and refs; like a Revision's delivery
+	// ref it is Cloud's and the Controller's, never part of the public API.
+	if req := o.O("request"); req["clone"] != nil {
+		delete(req, "clone")
+	}
+	// A clone step that ended with repository_sync_failed keeps the sync Operation's ID for Cloud and
+	// operators; the public view carries only the sync's safe error code (operation D2).
+	delete(o.O("result"), "syncOperationId")
 	return o
 }
 

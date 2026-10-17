@@ -1,37 +1,9 @@
 package core
 
-import (
-	"context"
-	"net/url"
-	"strings"
-	"unicode"
-)
+import "strings"
 
-// EnqueueClone accepts a clone request in Cloud's own transaction and hands it to Controllers as
-// queued work; it is the programmatic twin of the public clones API used by tests and tooling.
-func (s *Store) EnqueueClone(ctx context.Context, tenantID, userID, requestID, repositoryURL, branch string) (Object, error) {
-	created := false
-	out, err := s.transact(ctx, func(t *transaction) Object {
-		var row Object
-		row, created = enqueueClone(t, tenantID, userID, requestID, repositoryURL, branch)
-		return row
-	})
-	if err == nil && created {
-		s.signalWork(out.S("id"))
-	}
-	return out, err
-}
-
-// signalWork tells the lease holder that a claim is worth trying. It runs only after the accepting
-// transaction committed so a Controller that claims immediately finds the row.
-func (s *Store) signalWork(operationID string) {
-	if s.Signals != nil {
-		s.Signals.Publish(ControlSignal{Kind: SignalWorkAvailable, OperationID: operationID})
-	}
-}
-
-// signalOperations tells the lease holder which operations became claimable. Like signalWork it
-// runs only after the queuing transaction committed.
+// signalOperations tells the lease holder which operations became claimable. It runs only after
+// the queuing transaction committed so a Controller that claims immediately finds the row.
 func (s *Store) signalOperations(ids []string) {
 	if s.Signals == nil {
 		return
@@ -53,112 +25,6 @@ func (s *Store) signalRuns(kind ControlSignalKind, ids []string) {
 		}
 		s.Signals.Publish(signal)
 	}
-}
-
-// enqueueClone records one clone request inside the caller's transaction. Repeating
-// (tenant, user, requestId) with the same input returns the original request and reports nothing
-// new; different input is a conflict. Nothing is dispatched here: a Controller claims the row.
-func enqueueClone(t *transaction, tenantID, userID, requestID, repositoryURL, branch string) (row Object, created bool) {
-	require(t.legacyCloneFixture, 410, "runtime_scope_required")
-	require(requestID != "" && len(requestID) <= 200, 400, "invalid_clone_request")
-	validCloneSource(repositoryURL, branch)
-	membership(t, tenantID, userID, false)
-	if existing := t.one("SELECT * FROM clone_requests WHERE tenant_id=$1 AND actor_user_id=$2 AND request_id=$3", tenantID, userID, requestID); existing != nil {
-		require(existing.S("repositoryUrl") == repositoryURL && existing.S("branch") == branch, 409, "idempotency_conflict")
-		return existing, false
-	}
-	id := newID()
-	t.exec("INSERT INTO clone_requests(id,tenant_id,actor_user_id,request_id,repository_url,branch,state) VALUES($1,$2,$3,$4,$5,$6,'queued')", id, tenantID, userID, requestID, repositoryURL, branch)
-	return t.one("SELECT * FROM clone_requests WHERE id=$1", id), true
-}
-
-// validCloneSource applies the Controller's own clone input policy at acceptance time. Cloud must
-// not accept what no Controller can dispatch: such a request would sit queued forever with no
-// terminal fact, and the caller would read that as "awaiting reconciliation" rather than failure.
-func validCloneSource(repository, branch string) {
-	require(repository != "" && len(repository) <= 2000 && !strings.ContainsAny(repository, "\\") && !hasSpaceOrControl(repository), 400, "invalid_repository_url")
-	scheme, rest, ok := strings.Cut(repository, "://")
-	require(ok && (scheme == "https" || scheme == "ssh") && !strings.HasPrefix(rest, "/"), 400, "invalid_repository_url")
-	parsed, e := url.Parse(repository)
-	require(e == nil && parsed.Host != "" && parsed.Path != "" && parsed.Path != "/" && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "", 400, "invalid_repository_url")
-	authority, _, _ := strings.Cut(rest, "/")
-	// Git receives the text verbatim: https never carries userinfo, ssh carries a user but no password.
-	if i := strings.LastIndex(authority, "@"); i >= 0 {
-		require(scheme == "ssh" && i > 0 && !strings.Contains(authority[:i], ":"), 400, "invalid_repository_url")
-	}
-	require(branch != "HEAD", 400, "invalid_ref")
-	// validRef judges the trimmed text, but the branch is stored and handed to Git verbatim. A
-	// surrounding space or an inner tab or control character would pass here and be refused by the
-	// Controller; ClaimWork keeps returning the oldest queued request, so that one refusal would
-	// stall every clone queued behind it.
-	require(!hasSpaceOrControl(branch), 400, "invalid_ref")
-	validRef(branch)
-	require(!strings.HasPrefix(branch, "refs/") && !strings.HasPrefix(branch, "/") && !strings.HasSuffix(branch, "/") && !strings.Contains(branch, "//") && !strings.HasSuffix(branch, ".") && branch != "@", 400, "invalid_ref")
-	for component := range strings.SplitSeq(branch, "/") {
-		require(!strings.HasPrefix(component, ".") && !strings.HasSuffix(component, ".lock"), 400, "invalid_ref")
-	}
-}
-
-// hasSpaceOrControl reports any Unicode space or control character, which Git never receives from
-// a clone source: the text is passed verbatim, so nothing is trimmed on its behalf.
-func hasSpaceOrControl(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0
-}
-
-// cloneQuery joins each request with its at-most-one execution; the LEFT JOIN keeps queued
-// requests visible before a Controller registers a dispatch.
-const cloneQuery = "SELECT r.*, e.execution_id, e.node_id, e.result FROM clone_requests r LEFT JOIN clone_executions e ON e.operation_id=r.id WHERE r.tenant_id=$1 AND r.actor_user_id=$2"
-
-// clonesPublic serves the public clones routes for the verified actor: only the user who submitted
-// a request can read it, mirroring operation visibility. accepted names a newly queued request the
-// caller must signal once the transaction committed.
-func clonesPublic(t *transaction, r *PublicRequest, uid string) (out Object, accepted string) {
-	switch {
-	case r.CloneID != "":
-		require(validID(r.CloneID), 404, "not_found")
-		row := t.one(cloneQuery+" AND r.id=$3", r.TenantID, uid, r.CloneID)
-		require(row != nil, 404, "not_found")
-		return cloneView(row), ""
-	case r.Method == "GET":
-		listing := page(t, cloneQuery, []any{r.TenantID, uid}, "r.id", r)
-		rows, _ := listing["items"].([]Object)
-		items := make([]Object, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, cloneView(row))
-		}
-		listing["items"] = items
-		return listing, ""
-	default:
-		row, created := enqueueClone(t, r.TenantID, uid, r.Body.S("requestId"), r.Body.S("repository"), r.Body.S("branch"))
-		if created {
-			accepted = row.S("id")
-		}
-		return cloneView(t.one(cloneQuery+" AND r.id=$3", r.TenantID, uid, row.S("id"))), accepted
-	}
-}
-
-// cloneView is the public shape of one clone request: the transitional Controller DTO field for
-// field, so a browser observes one clone semantics whichever authority accepted the request.
-// executionId and nodeId are null until a Controller records the dispatch.
-func cloneView(row Object) Object {
-	state := Object{"kind": "pending"}
-	result := row.O("result")
-	switch row.S("state") {
-	case "succeeded":
-		state = Object{"kind": "succeeded", "path": result.S("path"), "commit": result.S("commit")}
-	case "failed":
-		state = Object{"kind": "failed", "reason": cloneFailureReason(result.S("reason"))}
-		if retained, ok := result["retainedPath"].(string); ok {
-			state["retainedPath"] = retained
-		}
-	}
-	return Object{"operationId": row.S("id"), "requestId": row.S("requestId"), "repository": row.S("repositoryUrl"), "branch": row.S("branch"), "executionId": row["executionId"], "nodeId": row["nodeId"], "state": state, "createdAt": row["createdAt"], "updatedAt": row["updatedAt"]}
-}
-
-// cloneFailureReason turns the stored contract enum name (CLONE_FAILURE_REASON_BRANCH_NOT_FOUND)
-// into the public camelCase value (branchNotFound) the browser DTO uses.
-func cloneFailureReason(stored string) string {
-	return camel(strings.ToLower(strings.TrimPrefix(stored, "CLONE_FAILURE_REASON_")))
 }
 
 // submitted wraps one state-changing control action in its submission identity. The identity is
@@ -210,8 +76,6 @@ func cloneCommand(t *transaction, r *ControlRequest) Object {
 		return submitted(t, r, func() Object { return recordThreadCommandDelivered(t, r) })
 	case "grant_revision_upload":
 		return revisionGrants(t, r.Body.S("executionId"), r.Body.O("checksums"))
-	case "grant_revision_download":
-		return revisionDownloadGrants(t, r.Body.S("executionId"))
 	default:
 		reject(404, "not_found")
 	}
@@ -219,28 +83,13 @@ func cloneCommand(t *transaction, r *ControlRequest) Object {
 }
 
 // cloneDispatch registers execution identity, target Node and full input before any Node sees the
-// command. The request must still be queued (or already dispatched as exactly this execution). An
-// operation ID that names no tenant clone request is a Workspace operation's clone step.
+// command. Every clone is the clone step of a Workspace operation: Cloud has no tenant-level clone.
 func cloneDispatch(t *transaction, r *ControlRequest) Object {
 	operation, execution, node := r.Body.S("operationId"), r.Body.S("executionId"), r.Body.S("nodeId")
 	input := r.Body.O("input")
 	require(validID(operation) && execution != "" && node != "" && len(input) > 0, 400, "invalid_dispatch")
 	require(t.one("SELECT execution_id FROM node_executions WHERE execution_id=$1", execution) == nil, 409, "dispatch_conflict")
-	request := t.one("SELECT * FROM clone_requests WHERE id=$1", operation)
-	if request == nil {
-		return workspaceCloneDispatch(t, r, operation, execution, node, input)
-	}
-	require(t.legacyCloneFixture, 410, "runtime_scope_required")
-	require(input.S("repositoryUrl") == request.S("repositoryUrl") && input.S("branch") == request.S("branch"), 409, "dispatch_conflict")
-	if existing := t.one("SELECT * FROM clone_executions WHERE operation_id=$1", operation); existing != nil {
-		require(existing.S("executionId") == execution && existing.S("nodeId") == node && jsonText(existing.O("input")) == jsonText(input), 409, "dispatch_conflict")
-		return existing
-	}
-	require(request.S("state") == "queued", 409, "dispatch_conflict")
-	require(t.one("SELECT execution_id FROM clone_executions WHERE execution_id=$1", execution) == nil, 409, "dispatch_conflict")
-	t.exec("INSERT INTO clone_executions(execution_id,operation_id,node_id,input,dispatched_epoch,node_operation_id) VALUES($1,$2,$3,$4,$5,$2::uuid::text)", execution, operation, node, jsonText(input), r.Body.N("epoch"))
-	t.exec("UPDATE clone_requests SET state='dispatched',updated_at=now() WHERE id=$1", operation)
-	return t.one("SELECT * FROM clone_executions WHERE execution_id=$1", execution)
+	return workspaceCloneDispatch(t, r, operation, execution, node, input)
 }
 
 // cloneResult commits an execution fact. With a receipt it is the takeover of a Node event and the
@@ -253,15 +102,13 @@ func cloneResult(t *transaction, r *ControlRequest, withReceipt bool) Object {
 	require(e != nil, 404, "not_found")
 	outcome := result.S("outcome")
 	require((outcome == "clone_ready" || outcome == "clone_failed") && result.O("node").S("nodeId") == e.S("nodeId"), 409, "result_conflict")
+	// A checkout of any other commit than the snapshot it was given is a contradiction, not a
+	// fact to record: the baseline would be wrong for every later delivery and resume (contract D3).
+	require(outcome != "clone_ready" || result.S("commit") == e.O("input").S("baseCommit"), 400, "base_commit_mismatch")
 	if previous := e.O("result"); len(previous) > 0 {
 		require(jsonText(previous) == jsonText(result), 409, "result_conflict")
 	} else {
-		state := "succeeded"
-		if outcome == "clone_failed" {
-			state = "failed"
-		}
 		t.exec("UPDATE clone_executions SET result=$2,updated_at=now() WHERE execution_id=$1", execution, jsonText(result))
-		t.exec("UPDATE clone_requests SET state=$2,updated_at=now() WHERE id=$1", operation, state)
 	}
 	if withReceipt {
 		sequence, event := r.Body.N("sequence"), r.Body.S("event")
@@ -278,5 +125,5 @@ func cloneResult(t *transaction, r *ControlRequest, withReceipt bool) Object {
 // isCloneAction reports whether a control action belongs to the execution registry, including the
 // Agent session methods that share its lease and submission rules.
 func isCloneAction(action string) bool {
-	return strings.HasPrefix(action, "clone_") || strings.HasPrefix(action, "thread_") || action == "grant_revision_upload" || action == "grant_revision_download"
+	return strings.HasPrefix(action, "clone_") || strings.HasPrefix(action, "thread_") || action == "grant_revision_upload"
 }

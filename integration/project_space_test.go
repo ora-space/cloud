@@ -32,6 +32,8 @@ func TestProjectSpaceScopingAndRoleGates(t *testing.T) {
 		t.Fatalf("space project list: want 1 got %d", len(items))
 	}
 	pid := core.Object(items[0].(map[string]any)).S("id")
+	// The project was created outside f.call, so stand in for its first sync here.
+	f.syncProject(pid)
 	if core.Object(items[0].(map[string]any)).S("spaceId") != sid {
 		t.Fatal("project missing spaceId")
 	}

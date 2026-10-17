@@ -40,10 +40,20 @@ message NodeIdentity {
   string node_incarnation_id = 2;
 }
 
+// A Workspace clone from a Binding snapshot on the Git Server. Cloud freezes all four fields before
+// the clone step is handed to a Controller; the Controller forwards them verbatim. Checkout paths
+// belong to the Node, never to the caller.
 message CloneSpec {
-  // HTTPS or SSH repository URL. Checkout paths belong to the Node, never to the caller.
-  string repository = 1;
-  string branch = 2;
+  reserved 1, 2;
+  reserved "repository", "branch";
+  // https://<git-server>/<tenantId>/<projectId>.git
+  string repository_url = 3;
+  // refs/ora/upstreams/<bindingId>/snapshots/<commitOid>
+  string snapshot_ref = 4;
+  // The commit snapshot_ref points to; the checkout is verified against it.
+  string base_commit = 5;
+  // refs/heads/workspaces/<workspaceId>/<branch>; <branch> is the local branch of the checkout.
+  string workspace_ref = 6;
 }
 
 // Full execution input as dispatched; extended with new oneof members as further execution kinds
@@ -60,6 +70,7 @@ message ExecutionInput {
 
 message CloneReady {
   string path = 1;
+  // Must equal the input's base_commit.
   string commit = 2;
 }
 
@@ -70,14 +81,21 @@ message CloneFailed {
 }
 
 enum CloneFailureReason {
+  reserved 2;
+  reserved "CLONE_FAILURE_REASON_BRANCH_NOT_FOUND";
   CLONE_FAILURE_REASON_UNSPECIFIED = 0;
+  // The Git Server was unreachable, or answered 5xx until the retries ran out.
   CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE = 1;
-  CLONE_FAILURE_REASON_BRANCH_NOT_FOUND = 2;
   CLONE_FAILURE_REASON_DESTINATION_CONFLICT = 3;
   CLONE_FAILURE_REASON_OPERATION_FAILED = 4;
   // The attempt was terminated before Git reached its own verdict (Node stop, command deadline,
   // or an external signal) and its cleanup was confirmed; a new execution may simply retry.
   CLONE_FAILURE_REASON_INTERRUPTED = 5;
+  // The Git Server answered that the snapshot ref is missing or not readable (it gives both the
+  // same answer).
+  CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE = 6;
+  // The fetched snapshot ref did not point at base_commit.
+  CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH = 7;
 }
 
 // Terminal fact reported by a Node for one execution.
@@ -108,8 +126,7 @@ message WorkItem {
   // The IssueRun ID for Agent session and Revision delivery work.
   string operation_id = 1;
   ExecutionInput input = 2;
-  // Set for Agent session and Revision delivery work; unset for a tenant-level clone, whose Node
-  // the Controller chooses.
+  // Always set: Agent session and Revision delivery work name their run Workspace sandbox.
   optional WorkTarget target = 3;
 }
 

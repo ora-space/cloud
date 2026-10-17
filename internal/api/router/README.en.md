@@ -8,9 +8,9 @@
 
 ### Route allowlist and dispatch
 - `Routes()` declares the explicit allowlist of supported endpoints:
-  - **Public API (`/api/v1/...`)**: users, tenants, memberships, collaboration spaces and their members, projects, workspaces, operations, status queries, Issue collaboration (issues, statuses, labels, views, comments, subscribers, runs, context refs, interactions and collaboration targets), workspace plugins (`/tenants/:tid/spaces/:spaceId/plugins`: catalog snapshot, selection list, install, remove), Agent session discovery and complete archive reads, and clone requests as independent work items (`/tenants/:tid/clones`, `/clones/:cloneId`: submit, list, read one; unrelated to the project/workspace operation model).
+  - **Public API (`/api/v1/...`)**: users, tenants, memberships, collaboration spaces and their members, projects, workspaces, operations, status queries, Issue collaboration (issues, statuses, labels, views, comments, subscribers, runs, context refs, interactions and collaboration targets), workspace plugins (`/tenants/:tid/spaces/:spaceId/plugins`: catalog snapshot, selection list, install, remove), Agent session discovery and complete archive reads.
   - **Internal Control API (`/internal/v1/...`)**: 15 endpoints for controller leasing, operation claiming/advancing, node registration, and ticket admissions.
-  - **Health check (`/healthz`)**: Verifies database reachability via `store.Pool.PingContext`; adds configured/unconfigured in `dependencies.objectStore` without probing S3 or exposing endpoints/credentials.
+  - **Health check (`/healthz`)**: Verifies database reachability via `store.Pool.PingContext`; adds configured/unconfigured in `dependencies.objectStore` and `dependencies.gitServer` without probing S3 or the Git Server or exposing endpoints/credentials.
 - Any unregistered endpoint is caught by `r.NoRoute` and returns `404 not_found`.
 
 ### Two-tier authentication

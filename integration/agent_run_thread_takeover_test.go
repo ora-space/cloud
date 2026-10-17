@@ -36,7 +36,7 @@ import (
 )
 
 // seedRunWorkspaceCommit is the 40-hex commit the seeded run Workspace's clone produced, i.e. the
-// baseline every Revision bundle is relative to. It is the shape commitID validates, so a scene that
+// baseline every Revision is delivered against. It is the shape commitID validates, so a scene that
 // seeds it can never be the reason a delivery input is rejected.
 const seedRunWorkspaceCommit = "0123456789abcdef0123456789abcdef01234567"
 
@@ -139,7 +139,7 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 	// insertWorkspace always records the resolved trigger actor with 'verified_request' evidence. A
 	// row with the column left NULL is a state createRunWorkspace cannot produce, and the delete would
 	// then enqueue an operation with an empty actor.
-	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,admission_open,runtime_generation,requested_ref,issue_run_id) VALUES($1,$2,$3,$4,'verified_request',$5,'isolated','running','ready',true,1,'HEAD',$6)`, workspaceID, tenant, user, user, project, runID)
+	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,admission_open,runtime_generation,requested_ref,issue_run_id) VALUES($1,$2,$3,$4,'verified_request',$5,'isolated','running','ready',true,1,'main',$6)`, workspaceID, tenant, user, user, project, runID)
 	exec("task", `INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'takeover task')`, uuid.NewString(), workspaceID)
 	exec("run-workspace-bind", `UPDATE issue_runs SET workspace_id=$2, version=version+1, updated_at=now() WHERE id=$1`, runID, workspaceID)
 	// The run Workspace's baseline. A Workspace observed `ready` reached that state through its
@@ -151,7 +151,7 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 		baselineOperationID, tenant, user, project, workspaceID, "run-workspace-"+workspaceID[:8])
 	exec("run-workspace-clone", `INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,1)`,
 		baselineExecutionID, baselineOperationID, workspaceID, nodeID, baselineExecutionID,
-		mustJSON(t, core.Object{"kind": "clone", "repositoryUrl": "https://example.invalid/takeover.git", "branch": "main"}),
+		mustJSON(t, seedCloneInput(tenant, project, workspaceID, seedRunWorkspaceCommit)),
 		mustJSON(t, core.Object{"node": core.Object{"nodeId": nodeID, "nodeIncarnationId": "inc-" + nodeID[:8]}, "outcome": "clone_ready", "path": "/work", "commit": seedRunWorkspaceCommit}))
 	exec("run-workspace-baseline", `UPDATE workspaces SET base_commit_id=$2, version=version+1 WHERE id=$1`, workspaceID, seedRunWorkspaceCommit)
 	// The run's runtime binding, in exactly the state the create_workspace operation's last step

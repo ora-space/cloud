@@ -30,7 +30,6 @@ export function workspacePaths(slug: string) {
     agentSession: (issueId: string, runId: string) => `${base}/sessions/agent/${issueId}/${runId}`,
     projects: `${base}/projects`,
     projectDetail: (id: string) => `${base}/projects/${id}`,
-    repositories: `${base}/repositories`,
     workflows: `${base}/workflows`,
     workflowDetail: (id: string) => `${base}/workflows/${id}`,
     workflowRun: (workflowId: string, runId: string) =>

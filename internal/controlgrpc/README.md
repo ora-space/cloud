@@ -32,18 +32,27 @@
 - `ControllerLeaseService`：`AcquireLease`／`RenewLease`／`ReleaseLease` 直接对应 `lease_acquire`／
   `lease_renew`／`lease_release`；全局单租约、30 秒过期、`epoch` 单调递增，过期由数据库时钟判定。
 
-- `ExecutionService`：clone 闭环的执行登记，对应 `core` 的 `clone_*` 动作。`ClaimWork` 是纯读（归属在
-  `RecordDispatch` 事务中决定）；`RecordDispatch`／`TakeOverNodeEvent`／`RecordQueriedResult` 携带
+- `ExecutionService`：Workspace clone、插件安装、Agent session 与 Revision 交付的执行登记，对应 `core` 的
+  `clone_*` 动作。`ClaimWork` 是纯读（归属在 `RecordDispatch` 事务中决定），只返回 Agent session 与 Revision
+  交付工作；clone 只经 Workspace operation 的 clone 步骤派发，`RecordDispatch` 必须原样携带该步骤冻结的输入
+  （否则 `ABORTED+CONFLICT`），不属于 Workspace operation 的 operation id 为 `NOT_FOUND`；
+  `CloneReady.commit` 不等于输入的 `base_commit` 时 `TakeOverNodeEvent`／`RecordQueriedResult` 返回
+  `INVALID_ARGUMENT`。`RecordDispatch`／`TakeOverNodeEvent`／`RecordQueriedResult` 携带
   `submission_id`，同身份同内容回放记录的响应、不同内容 `ABORTED+CONFLICT`；`GetDispatch`／
   `ListPendingDispatches` 是恢复读取，不要求持有租约。输入与结果以固定 JSON 形状落库
-  （`{kind, repositoryUrl, branch}`；`{node, outcome, path, commit | reason, retainedPath}`），冲突按该形状比较。
+  （clone 为 `{kind, repositoryUrl, snapshotRef, baseCommit, workspaceRef}`；`{node, outcome, path, commit | reason, retainedPath}`），冲突按该形状比较。
+  编解码校验 `CloneSpec`：`repository_url` 为不带 userinfo、query、fragment 且以 `.git` 结尾的 https URL，
+  `snapshot_ref` 位于 Binding 快照 namespace 且最后一段等于 `base_commit`，`workspace_ref` 位于
+  `refs/heads/workspaces/<id>/` 下且分支名不是 `HEAD`；不合格的输入或结果为 `INVALID_ARGUMENT+INVALID_INPUT`，不会进入登记。
 
 - `WorkspaceOperationService`：Workspace 生命周期操作（specs
   `decisions/cloud/controller-integration/20260926-workspace-operations-and-controller-reported-nodes.md`）。
   `ClaimOperation`／`PlanEffect`／`RecordEffectResult`／`AdvanceOperation`／`DeferOperation` 与
   `/internal/v1/operations` JSON 路由使用相同的 control 动作，两个入口共享租约、operation version 与步骤
   fencing。`ClaimOperation` 会领取（重新领取递增 version），不是纯读。快照携带该 operation 的 clone
-  execution，已退役的 storage/worktree effect 不出现在其中。`ListLiveSandboxes` 没有 JSON 路由：它是租约
+  execution 和 clone 步骤冻结的 `clone_input`（`CloneSpec`），`OperationProject` 只有 `id`，不带仓库 URL、默认分支或
+  凭据引用；已退役的 storage/worktree effect 不出现在其中。`AdvanceOperation` 返回非 running 的 operation（已停放或
+  失败）时 Controller 停止驱动它。`ListLiveSandboxes` 没有 JSON 路由：它是租约
   持有者的只读列表，列出应当持有 Node 会话的 sandbox（未在终止、未终止、当前 generation、ensure 已成功），
   附带 ensure 报告的 NodeId、Substrate 标识与未结束的 Node 记录，使重启后的 Controller 无需等待各
   Workspace 的下一个 operation 即可重连。
@@ -53,7 +62,7 @@
   `ReportNodeStatus`／`EndNode`／`ReportNodeIdle` 与 Node 凭据路由共享事务与 fencing。
 
 - `ControlSignalService.Watch`：Controller 发起的服务端流。打开时以 `lease_check` 校验 epoch（只读，不续期）；
-  之后从进程内 `core.ControlHub` 转发信号：`clone_requests` 提交后的 `WorkAvailable{operation_id}`、Workspace operation 创建或重试后的 `OperationAvailable{operation_id}`、
+  之后从进程内 `core.ControlHub` 转发信号：执行工作（Agent session、Revision 交付）入队后的 `WorkAvailable`（clone 从不发送）、Workspace operation 创建或重试后的 `OperationAvailable{operation_id}`、
   服务关停前的 `Drain`。至多一次、不持久化、慢订阅者丢信号；`Drain` 后流干净结束（EOF），
   关停期间新的 `Watch` 返回 `UNAVAILABLE`。流只在排空时以 OK 结束，其他结束都带错误状态，持有者可以把
   干净结束当作 `Drain`；`Drain` 只表示本实例即将停止，不要求持有者释放租约。监听接受间隔不短于 5 秒的

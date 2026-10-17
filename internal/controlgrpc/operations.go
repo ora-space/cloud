@@ -171,7 +171,7 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 	p := out.O("project")
 	snap := &controlpb.OperationSnapshot{
 		Operation: operation(out.O("operation")),
-		Project:   &controlpb.OperationProject{Id: p.S("id"), RepositoryUrl: p.S("repositoryUrl"), DefaultBranch: p.S("defaultBranch"), CredentialRef: optionalString(p, "secretRef")},
+		Project:   &controlpb.OperationProject{Id: p.S("id")},
 	}
 	for _, w := range rows(out["workspaces"]) {
 		snap.Workspaces = append(snap.Workspaces, &controlpb.OperationWorkspace{
@@ -198,6 +198,9 @@ func snapshot(out core.Object) *controlpb.OperationSnapshot {
 	}
 	if pluginInput := out.O("pluginInput"); pluginInput.S("kind") != "" {
 		snap.PluginInput = input(pluginInput)
+	}
+	if cloneInput := out.O("cloneInput"); cloneInput.S("kind") == "clone" {
+		snap.CloneInput = cloneMessage(cloneInput)
 	}
 	for _, execution := range rows(out["pluginExecutions"]) {
 		snap.PluginExecutions = append(snap.PluginExecutions, record(execution))

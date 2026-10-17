@@ -193,6 +193,50 @@ func TestRefAndOperationPresets(t *testing.T) {
 	}
 }
 
+// A Project's unfinished sync, such as the one every new Project starts with, is the sync a preset
+// ends: snapshot completes it and a terminal sync state ends it, instead of adding a second row
+// beside a sync that would then never finish.
+func TestPresetsAdvanceTheUnfinishedSync(t *testing.T) {
+	p, tenant, project, binding := newPreset(t)
+	ctx := context.Background()
+	pending := func() string {
+		t.Helper()
+		var id string
+		if err := p.DB.QueryRow(`INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger) VALUES(gen_random_uuid(),'repository_sync',$1,$2,$3,'pending','project_created') RETURNING id`, tenant, project, binding).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	state := func(id string) (string, string) {
+		t.Helper()
+		var s, code string
+		if err := p.DB.QueryRow(`SELECT state,COALESCE(error_code,'') FROM repository_operations WHERE id=$1`, id).Scan(&s, &code); err != nil {
+			t.Fatal(err)
+		}
+		return s, code
+	}
+	first := pending()
+	snapshot := (expect{t}).ok(p.Snapshot(ctx, project, "", 2))
+	if snapshot["operationId"] != first {
+		t.Fatalf("snapshot recorded sync %v, want the pending one %s", snapshot["operationId"], first)
+	}
+	if s, _ := state(first); s != "succeeded" {
+		t.Fatalf("the pending sync is %s, want succeeded", s)
+	}
+	second := pending()
+	failed := (expect{t}).ok(p.Operation(ctx, project, "sync", "failed", "credential_rejected"))
+	if failed["operationId"] != second {
+		t.Fatalf("failing a sync wrote %v, want the pending one %s", failed["operationId"], second)
+	}
+	if s, code := state(second); s != "failed" || code != "credential_rejected" {
+		t.Fatalf("the pending sync is %s/%s, want failed/credential_rejected", s, code)
+	}
+	var syncs int
+	if err := p.DB.QueryRow(`SELECT count(*) FROM repository_operations WHERE project_id=$1`, project).Scan(&syncs); err != nil || syncs != 2 {
+		t.Fatalf("presets added rows beside the syncs they ended: %d %v", syncs, err)
+	}
+}
+
 // check reports each kind of contract violation without failing to run.
 func TestCheckReportsViolations(t *testing.T) {
 	p, tenant, project, binding := newPreset(t)

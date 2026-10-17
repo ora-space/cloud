@@ -22,7 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/gitrefquery"
 	"github.com/wanglongan587/cloud/internal/gitserver"
 )
 
@@ -90,48 +93,11 @@ func TestGitServerAuthorizesDeliveryPushFromCloudState(t *testing.T) {
 	must(t, f.store.Pool.QueryRow(`SELECT w.id,w.tenant_id,w.project_id,w.runtime_generation,e.work_id FROM node_executions e JOIN workspaces w ON w.id=e.workspace_id WHERE e.execution_id=$1`, execution).Scan(&workspace, &tenant, &project, &generation, &work))
 	f.acknowledgeRuntime(t, workspace)
 
-	pki := newGitPKI(t)
-	pki.issue(t, "server", "", x509.ExtKeyUsageServerAuth)
-	pki.issue(t, "sandbox", "spiffe://ora.local/git-access/tenant/"+tenant+"/runtime/"+workspace+"/generation/"+strconv.FormatInt(generation, 10), x509.ExtKeyUsageClientAuth)
-	pki.issue(t, "stale", "spiffe://ora.local/git-access/tenant/"+tenant+"/runtime/"+workspace+"/generation/"+strconv.FormatInt(generation-1, 10), x509.ExtKeyUsageClientAuth)
-	cloud := pki.issue(t, "cloud", "spiffe://ora.local/cloud/git-ref-query", x509.ExtKeyUsageClientAuth)
-	deployment := gitserver.Config{CertificateFile: filepath.Join(pki.dir, "server.pem"), PrivateKeyFile: filepath.Join(pki.dir, "server-key.pem"), SandboxCAFile: filepath.Join(pki.dir, "ca.pem"), CloudClientCertFile: filepath.Join(pki.dir, "cloud.pem")}
-
-	// The hook is the shipped command, so the pre-receive path under test is the deployed one.
-	hook := filepath.Join(t.TempDir(), "git-server")
-	build := exec.Command("go", "build", "-o", hook, "../cmd/git-server")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build git-server: %v: %s", err, out)
-	}
-	cloudLeaf, err := deployment.CloudClient()
-	must(t, err)
-	service, err := gitserver.New(&gitserver.Options{Store: f.store, RepositoryRoot: filepath.Join(t.TempDir(), "repositories"), GitProgram: "git", CloudClient: cloudLeaf, Hook: []string{hook, "-pre-receive"}, Health: f.store.Pool.PingContext})
-	must(t, err)
-	repoTLS, err := deployment.RepositoryTLS()
-	must(t, err)
-	refTLS, err := deployment.RefTLS()
-	must(t, err)
-	repoServer := httptest.NewUnstartedServer(http.HandlerFunc(service.RepositoryHandler))
-	repoServer.TLS = repoTLS
-	repoServer.StartTLS()
-	refServer := httptest.NewUnstartedServer(http.HandlerFunc(service.RefHandler))
-	refServer.TLS = refTLS
-	refServer.StartTLS()
-	t.Cleanup(func() {
-		repoServer.Close()
-		refServer.Close()
-		must(t, service.Close())
-	})
-
-	remote := repoServer.URL + "/" + tenant + "/" + project + ".git"
-	git := func(dir, who, executionID string, args ...string) (string, error) {
-		base := []string{"-c", "http.sslCert=" + filepath.Join(pki.dir, who+".pem"), "-c", "http.sslKey=" + filepath.Join(pki.dir, who+"-key.pem"), "-c", "http.sslCAInfo=" + deployment.SandboxCAFile, "-c", "http.extraHeader=" + gitserver.ExecutionHeader + ": " + executionID}
-		cmd := exec.Command("git", append(base, args...)...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
+	server := startGitServer(t, f, t.TempDir())
+	server.sandbox(t, "sandbox", tenant, workspace, generation)
+	server.sandbox(t, "stale", tenant, workspace, generation-1)
+	remote := server.remote(tenant, project)
+	git := server.git
 	checkout := t.TempDir()
 	for _, args := range [][]string{{"init", "--quiet"}, {"commit", "--quiet", "--allow-empty", "-m", "delivered"}} {
 		if out, err := git(checkout, "sandbox", "", args...); err != nil {
@@ -152,13 +118,51 @@ func TestGitServerAuthorizesDeliveryPushFromCloudState(t *testing.T) {
 	if out, err := git(checkout, "sandbox", execution, "push", remote, "HEAD:"+ref); err != nil {
 		t.Fatalf("authorized delivery push failed: %s", out)
 	}
-	if got := queryDeliveryRef(t, refServer.URL, pki.pool, cloud, tenant, project, ref); got != head {
+	if got := queryDeliveryRef(t, server.refs.URL, server.pki.pool, server.cloud, tenant, project, ref); got != head {
 		t.Fatalf("ref query = %q, want the pushed commit %q", got, head)
 	}
+	if out, err := git(checkout, "sandbox", execution, "push", remote, "HEAD:"+ref); err != nil || !strings.Contains(out, "up-to-date") {
+		t.Fatalf("re-pushing the same commit to the delivery ref must be a no-op: %v %s", err, out)
+	}
 
-	// The delivery execution ending in Cloud ends its repository access on the next request.
-	_, err = f.store.Pool.Exec(`UPDATE node_executions SET result='{"outcome":"revision_delivered"}' WHERE execution_id=$1`, execution)
+	// Contract D6: the delivery may also fast-forward its own Workspace branch, the one its input
+	// names, and nothing else under any Workspace prefix.
+	in := f.deliveryInputOf(execution)
+	workspaceRef := in.S("workspaceRef")
+	if workspaceRef != core.GitWorkspaceRefPrefix(workspace)+"main" {
+		t.Fatalf("the delivery input names %q, want the run Workspace's branch", workspaceRef)
+	}
+	if out, err := git(checkout, "sandbox", execution, "push", remote, "HEAD:"+workspaceRef); err != nil {
+		t.Fatalf("the delivery must be able to create its Workspace branch: %s", out)
+	}
+	for _, other := range []string{core.GitWorkspaceRefPrefix(workspace) + "other", core.GitWorkspaceRefPrefix(uuid.NewString()) + "main", "refs/heads/main"} {
+		if out, err := git(checkout, "sandbox", execution, "push", remote, "HEAD:"+other); err == nil {
+			t.Fatalf("the delivery wrote %s outside its grant: %s", other, out)
+		}
+	}
+	if out, err := git(checkout, "sandbox", "", "commit", "--quiet", "--allow-empty", "-m", "descendant"); err != nil {
+		t.Fatal(out)
+	}
+	if out, err := git(checkout, "sandbox", execution, "push", remote, "HEAD:"+workspaceRef); err != nil {
+		t.Fatalf("a fast-forward of the Workspace branch must be accepted: %s", out)
+	}
+	if out, err := git(checkout, "sandbox", execution, "push", remote, "+"+head+":"+workspaceRef); err == nil {
+		t.Fatalf("a non-fast-forward of the Workspace branch was accepted: %s", out)
+	}
+
+	// Revision D3 against the real ref query: Cloud verifies the pushed delivery ref through the Git
+	// Server's ref listener with its pinned identity, then registers the Revision; the execution's
+	// result ends its repository access on the next request.
+	refClient, err := gitrefquery.New(server.refs.URL, &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: server.pki.pool, Certificates: []tls.Certificate{server.cloud}}}}, 5*time.Second)
 	must(t, err)
+	f.store.GitServer = &core.GitServer{RepositoryBaseURL: f.store.GitServer.RepositoryBaseURL, Refs: refClient}
+	f.useObjectStore()
+	if _, err := f.deliveryTerminal(scene, execution, "", 1, deliveredResult(scene, in, head), "revision_delivered"); err != nil {
+		t.Fatalf("a delivery whose ref the Git Server confirms must register: %v", err)
+	}
+	if row := f.revisionRow(scene.runID); row == nil || row.DeliveryRef != ref || row.FinalCommit != head {
+		t.Fatalf("the registered Revision must name the verified delivery ref and commit, got %+v", row)
+	}
 	if out, err := git(t.TempDir(), "sandbox", execution, "ls-remote", remote); err == nil || !strings.Contains(out, "403") {
 		t.Fatalf("an ended execution still reached the repository: %v %s", err, out)
 	}
@@ -201,4 +205,79 @@ func queryDeliveryRef(t *testing.T, base string, roots *x509.CertPool, cloud tls
 		t.Fatalf("ref query status %d: %v", response.StatusCode, body)
 	}
 	return body["commit"]
+}
+
+// gitServerHarness is a real Git Server on loopback TLS: the shipped pre-receive hook, policy from
+// the fixture's Cloud Store on PostgreSQL, repositories under root, and certificates from one PKI.
+type gitServerHarness struct {
+	pki        *gitPKI
+	repository *httptest.Server
+	refs       *httptest.Server
+	cloud      tls.Certificate
+	caFile     string
+}
+
+func startGitServer(t *testing.T, f *fixture, root string) *gitServerHarness {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Fatal("git is required for the Git Server boundary")
+	}
+	pki := newGitPKI(t)
+	pki.issue(t, "server", "", x509.ExtKeyUsageServerAuth)
+	cloud := pki.issue(t, "cloud", "spiffe://ora.local/cloud/git-ref-query", x509.ExtKeyUsageClientAuth)
+	deployment := gitserver.Config{CertificateFile: filepath.Join(pki.dir, "server.pem"), PrivateKeyFile: filepath.Join(pki.dir, "server-key.pem"), SandboxCAFile: filepath.Join(pki.dir, "ca.pem"), CloudClientCertFile: filepath.Join(pki.dir, "cloud.pem")}
+	// The hook is the shipped command, so the pre-receive path under test is the deployed one.
+	hook := filepath.Join(t.TempDir(), "git-server")
+	build := exec.Command("go", "build", "-o", hook, "../cmd/git-server")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build git-server: %v: %s", err, out)
+	}
+	cloudLeaf, err := deployment.CloudClient()
+	must(t, err)
+	service, err := gitserver.New(&gitserver.Options{Store: f.store, RepositoryRoot: root, GitProgram: "git", CloudClient: cloudLeaf, Hook: []string{hook, "-pre-receive"}, Health: f.store.Pool.PingContext})
+	must(t, err)
+	repoTLS, err := deployment.RepositoryTLS()
+	must(t, err)
+	refTLS, err := deployment.RefTLS()
+	must(t, err)
+	repoServer := httptest.NewUnstartedServer(http.HandlerFunc(service.RepositoryHandler))
+	repoServer.TLS = repoTLS
+	repoServer.StartTLS()
+	refServer := httptest.NewUnstartedServer(http.HandlerFunc(service.RefHandler))
+	refServer.TLS = refTLS
+	refServer.StartTLS()
+	t.Cleanup(func() {
+		repoServer.Close()
+		refServer.Close()
+		must(t, service.Close())
+	})
+	return &gitServerHarness{pki: pki, repository: repoServer, refs: refServer, cloud: cloud, caFile: deployment.SandboxCAFile}
+}
+
+// sandbox issues the git-access certificate a sandbox of workspace's generation holds, as who.
+func (h *gitServerHarness) sandbox(t *testing.T, who, tenant, workspace string, generation int64) {
+	t.Helper()
+	h.pki.issue(t, who, "spiffe://ora.local/git-access/tenant/"+tenant+"/runtime/"+workspace+"/generation/"+strconv.FormatInt(generation, 10), x509.ExtKeyUsageClientAuth)
+}
+
+func (h *gitServerHarness) remote(tenant, project string) string {
+	return h.repository.URL + "/" + tenant + "/" + project + ".git"
+}
+
+// git runs a real git client in dir as the sandbox certificate who, declaring executionID.
+func (h *gitServerHarness) git(dir, who, executionID string, args ...string) (string, error) {
+	base := []string{"-c", "http.sslCert=" + filepath.Join(h.pki.dir, who+".pem"), "-c", "http.sslKey=" + filepath.Join(h.pki.dir, who+"-key.pem"), "-c", "http.sslCAInfo=" + h.caFile, "-c", "http.extraHeader=" + gitserver.ExecutionHeader + ": " + executionID}
+	cmd := exec.Command("git", append(base, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// serverRef reads one ref straight from the Git Server's repository on disk.
+func serverRef(t *testing.T, root, tenant, project, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "--git-dir", gitserver.RepositoryPath(root, tenant, project), "for-each-ref", "--format=%(objectname)", ref).Output()
+	must(t, err)
+	return strings.TrimSpace(string(out))
 }

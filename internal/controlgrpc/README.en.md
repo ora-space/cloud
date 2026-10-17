@@ -36,21 +36,32 @@ The status code is the primary classification and `ErrorDetail{ErrorCode}` is at
   `lease_renew` / `lease_release`; one global lease, 30-second expiry, monotonic `epoch`, expiry judged
   by the database clock.
 
-- `ExecutionService`: the execution registry of the clone loop, mapping to the `clone_*` control
-  actions. `ClaimWork` is a pure read (ownership is decided inside the `RecordDispatch` transaction);
+- `ExecutionService`: the execution registry of Workspace clones, plugin installs, Agent sessions and
+  Revision deliveries, mapping to the `clone_*` control actions. `ClaimWork` is a pure read (ownership is
+  decided inside the `RecordDispatch` transaction) and returns only Agent session and Revision delivery
+  work; clones are dispatched only from a Workspace operation's clone step, `RecordDispatch` must carry
+  that step's frozen input verbatim (otherwise `ABORTED+CONFLICT`), and an operation id that is not a
+  Workspace operation is `NOT_FOUND`; a `CloneReady.commit` other than the input's `base_commit` makes
+  `TakeOverNodeEvent` / `RecordQueriedResult` return `INVALID_ARGUMENT`;
   `RecordDispatch` / `TakeOverNodeEvent` / `RecordQueriedResult` carry a `submission_id`: the same
   identity with the same content replays the recorded response, different content fails with
   `ABORTED+CONFLICT`; `GetDispatch` / `ListPendingDispatches` are recovery reads that need no lease.
-  Input and result are stored in fixed JSON shapes (`{kind, repositoryUrl, branch}`;
-  `{node, outcome, path, commit | reason, retainedPath}`) and conflicts are compared on those shapes.
+  Input and result are stored in fixed JSON shapes (for a clone
+  `{kind, repositoryUrl, snapshotRef, baseCommit, workspaceRef}`; `{node, outcome, path, commit | reason, retainedPath}`)
+  and conflicts are compared on those shapes. The codec validates `CloneSpec`: `repository_url` is an
+  https URL ending in `.git` without userinfo, query or fragment, `snapshot_ref` lies in the Binding
+  snapshot namespace with a last segment equal to `base_commit`, and `workspace_ref` lies under
+  `refs/heads/workspaces/<id>/` with a branch other than `HEAD`; a malformed input or result is `INVALID_ARGUMENT+INVALID_INPUT` and never reaches the registry.
 
 - `WorkspaceOperationService`: the Workspace lifecycle operations (specs
   `decisions/cloud/controller-integration/20260926-workspace-operations-and-controller-reported-nodes.md`).
   `ClaimOperation` / `PlanEffect` / `RecordEffectResult` / `AdvanceOperation` / `DeferOperation` map
   to the same control actions as the `/internal/v1/operations` JSON routes, so both surfaces share
   lease, operation-version and step fencing. `ClaimOperation` claims (bumping the version on a
-  re-claim), it is not a pure read. The snapshot carries the operation's clone executions; retired
-  storage/worktree effects are left out. `ListLiveSandboxes` has no JSON route: it is the lease
+  re-claim), it is not a pure read. The snapshot carries the operation's clone executions and the clone step's frozen
+  `clone_input` (`CloneSpec`); `OperationProject` carries only `id`, no repository URL, default branch or
+  credential reference; retired storage/worktree effects are left out. A Controller that gets back a
+  non-running operation from `AdvanceOperation` (parked or failed) stops driving it. `ListLiveSandboxes` has no JSON route: it is the lease
   holder's read-only list of sandboxes to hold Node sessions with (not terminating or terminated,
   current generation, ensure succeeded), with the ensured NodeId, Substrate identity and unended
   Node records, so a restarted Controller reconnects without waiting for each Workspace's next
@@ -64,7 +75,7 @@ The status code is the primary classification and `ErrorDetail{ErrorCode}` is at
 
 - `ControlSignalService.Watch`: the Controller-opened server stream. Opening verifies the epoch with
   `lease_check` (read-only, no renewal); afterwards it forwards signals from the in-process
-  `core.ControlHub`: `WorkAvailable{operation_id}` after a `clone_requests` row commits, `OperationAvailable{operation_id}` after a Workspace operation is created or retried, `Drain` before
+  `core.ControlHub`: `WorkAvailable` after execution work (Agent session, Revision delivery) is enqueued (never for clones), `OperationAvailable{operation_id}` after a Workspace operation is created or retried, `Drain` before
   the server stops. At-most-once, not persisted, a slow subscriber loses signals; after `Drain` the
   stream ends cleanly (EOF) and new `Watch` calls during shutdown return `UNAVAILABLE`. The stream ends with
   OK only while draining and with an error status otherwise, so a holder may treat a clean end as `Drain`;

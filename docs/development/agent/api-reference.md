@@ -297,12 +297,12 @@ workflow_not_available` (3B-1) is **SUPERSEDED**.
 | Method | Path | Body fields | Response |
 | --- | --- | --- | --- |
 | GET | `/projects` | — | `{items, nextCursor}` (tenant-level, **owner-filtered** — see access note) |
-| POST 🔑 | `/projects` | `name`*, `repositoryUrl`*, `defaultBranch`* (not `HEAD`), `credentialRefId` | 202 `{resource, workspace, operation}` |
+| POST 🔑 | `/projects` | `name`*, `repositoryUrl`*, `defaultBranch`* (a branch name valid in a ref, else `400 invalid_ref`; it is the Binding branch), `credentialRefId` | 202 `{resource, workspace, operation}` |
 | GET | `/projects/{pid}` | — | Project |
 | PATCH | `/projects/{pid}` | `name`, 🔢`version` | Project |
 | DELETE 🔑 | `/projects/{pid}` | 🔢`version` | 202 `{resource, operation}` |
 | GET | `/projects/{pid}/workspaces` | — | `{items, nextCursor}` |
-| POST 🔑 | `/projects/{pid}/workspaces` | `title`*, `baseRef`* | 202 `{resource, operation}` |
+| POST 🔑 | `/projects/{pid}/workspaces` | `title`*, `baseRef` (omitted, empty, `HEAD` or the Project's `defaultBranch`; anything else `400 base_ref_not_synced`) | 202 `{resource, operation}` |
 | GET | `/workspaces/{wid}` | — | Workspace |
 | POST 🔑 | `/workspaces/{wid}/start` | 🔢`version` | 202 `{resource, operation}` |
 | POST 🔑 | `/workspaces/{wid}/stop` | 🔢`version` | 202 `{resource, operation}` |

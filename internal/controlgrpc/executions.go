@@ -12,7 +12,8 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 )
 
-// executionService is the execution registry of the clone loop. Each RPC is one clone_* control
+// executionService is the execution registry of Workspace clones, plugin installs, Agent sessions
+// and Revision deliveries. Each RPC is one clone_* control
 // action; state-changing calls carry their submission identity so Cloud replays a recorded
 // response instead of reapplying when the Controller retries after a lost reply.
 type executionService struct {
@@ -33,11 +34,7 @@ func (s *executionService) ClaimWork(ctx context.Context, req *controlpb.ClaimWo
 			Target:      &controlpb.WorkTarget{WorkspaceId: target.S("workspaceId"), SandboxInstanceId: target.S("sandboxInstanceId"), NodeId: target.S("nodeId")},
 		}}, nil
 	}
-	request := out.O("request")
-	if request.S("id") == "" {
-		return &controlpb.ClaimWorkResponse{}, nil
-	}
-	return &controlpb.ClaimWorkResponse{Item: &controlpb.WorkItem{OperationId: request.S("id"), Input: input(core.Object{"kind": "clone", "repositoryUrl": request.S("repositoryUrl"), "branch": request.S("branch")})}}, nil
+	return &controlpb.ClaimWorkResponse{}, nil
 }
 
 func (s *executionService) RecordDispatch(ctx context.Context, req *controlpb.RecordDispatchRequest) (*controlpb.RecordDispatchResponse, error) {

@@ -51,10 +51,18 @@ type fixture struct {
 	tid, uid, root, commit string
 	cloud                  *httptest.Server
 	external               *httptest.Server
-	pgConfig               *pgx.ConnConfig
-	executions             controlpb.ExecutionServiceClient
-	controlConn            *grpc.ClientConn
-	controlSessions        map[string]string
+	// git is the Git Server double: the Project repositories Workspaces clone snapshots from and
+	// deliveries push to. refs answers Cloud's ref query from it, or from refs a case pins.
+	git  *simulator.GitServer
+	refs *gitRefs
+	// source is the local repository whose HEAD every Project created through f.call is synced to,
+	// standing in for the external line's first sync. withoutSnapshot leaves new Projects unsynced.
+	source          string
+	withoutSnapshot bool
+	pgConfig        *pgx.ConnConfig
+	executions      controlpb.ExecutionServiceClient
+	controlConn     *grpc.ClientConn
+	controlSessions map[string]string
 	// objects is the fixture's one object-store double. It is created on first use and reused, so a
 	// test that installs storage and a helper that needs storage configured name the same endpoint
 	// and the same recorded probes.
@@ -101,7 +109,7 @@ func setup(t *testing.T) *fixture {
 	pool, config := testSchema(t, "test_")
 	db, e := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	must(t, e)
-	store, e := core.NewDevelopmentStore(db)
+	store, e := core.NewStore(db)
 	must(t, e)
 	// Wire the dev/demo collaboration fixtures so the mock execution path is exercised. Workflow
 	// targets and their form descriptors stay database-backed: the fixtures layer agent/team in front
@@ -137,18 +145,22 @@ func setup(t *testing.T) *fixture {
 	runGit(t, "-C", repo, "add", ".")
 	runGit(t, "-C", repo, "commit", "-m", "fixture")
 	commit := runGit(t, "-C", repo, "rev-parse", "HEAD")
-	substrate, e := simulator.NewSubstrate(filepath.Join(root, "substrate"), map[string]string{"https://example.invalid/repo.git": repo})
+	git, e := simulator.NewGitServer(filepath.Join(root, "git"))
+	must(t, e)
+	refs := &gitRefs{git: git, pinned: map[string]string{}}
+	store.GitServer = &core.GitServer{RepositoryBaseURL: simulator.GitServerBaseURL, Refs: refs}
+	substrate, e := simulator.NewSubstrate(filepath.Join(root, "substrate"), git)
 	must(t, e)
 	external := httptest.NewServer(substrate)
 	t.Cleanup(external.Close)
 	client := &simulator.Client{URL: cloud.URL, Credentials: credentials, HTTP: &http.Client{Timeout: 10 * time.Second}, Subject: "controller-a"}
-	f := &fixture{t: t, store: store, client: client, substrate: substrate, root: root, commit: commit, cloud: cloud, user: core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "alice"}, Source: "corp", DisplayName: "Alice"}}
+	f := &fixture{t: t, store: store, client: client, substrate: substrate, root: root, commit: commit, cloud: cloud, git: git, refs: refs, source: repo, user: core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "alice"}, Source: "corp", DisplayName: "Alice"}}
 	bootstrap, e := store.Bootstrap(context.Background(), "Test tenant", "corp", "alice", "Alice")
 	must(t, e)
 	f.tid, f.uid = bootstrap.S("tenantId"), bootstrap.S("userId")
 	f.controlConn = controlConn(t, store)
 	f.executions = controlpb.NewExecutionServiceClient(f.controlConn)
-	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: f.executions}
+	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: f.executions, Git: git}
 	f.controller.AgentRuns = controlpb.NewAgentRunServiceClient(f.controlConn)
 	f.controller.AgentNode, e = simulator.NewAgentNode(filepath.Join(root, "agent-node"))
 	must(t, e)
@@ -254,6 +266,11 @@ func (f *fixture) call(method, path string, body core.Object, key string, want i
 	must(f.t, e)
 	if status != want {
 		f.t.Fatalf("%s %s: want %d got %d %v", method, path, want, status, o)
+	}
+	// A replayed creation already has its snapshot; only a new Project gets its first sync.
+	if pid := o.O("resource").S("id"); method == "POST" && strings.HasSuffix(path, "/projects") && status == 202 && !f.withoutSnapshot &&
+		f.scalar("SELECT count(*) FROM repository_snapshots WHERE project_id=$1", pid) == 0 {
+		f.syncProject(pid)
 	}
 	return o
 }

@@ -54,8 +54,10 @@ func (s *Substrate) serveClone(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, outcome)
 }
 
-// clone checks out the requested ref of a mapped repository into the Workspace's Node home and
-// reports the commit, or a failure reason in the contract's enum names.
+// clone stands in for the Node's clone from a Git Server snapshot: it fetches the snapshot ref from
+// the Git Server double into a new checkout without any remote, verifies the fetched commit is the
+// input's base commit and checks it out on the Workspace branch's short name. It reports the commit,
+// or a failure reason in the contract's enum names. The external repository is never involved.
 func (s *Substrate) clone(ctx context.Context, b core.Object) core.Object {
 	failed := func(reason string) core.Object {
 		return core.Object{"outcome": "clone_failed", "reason": "CLONE_FAILURE_REASON_" + reason}
@@ -63,23 +65,31 @@ func (s *Substrate) clone(ctx context.Context, b core.Object) core.Object {
 	if s.faults["clone"] == "fail" {
 		return failed("OPERATION_FAILED")
 	}
-	wid, ref := b.S("workspaceId"), b.S("branch")
-	source, ok := s.Repositories[b.S("repositoryUrl")]
-	if _, e := uuid.Parse(wid); e != nil || !ok {
+	wid := b.S("workspaceId")
+	if s.Git == nil {
 		return failed("SOURCE_UNAVAILABLE")
 	}
-	if ref == "" || strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, "\r\n\x00") {
-		return failed("BRANCH_NOT_FOUND")
+	source, ok := s.Git.Repository(b.S("repositoryUrl"))
+	branch, branchOK := core.ParseGitRef(b.S("workspaceRef"))
+	if _, e := uuid.Parse(wid); e != nil || !ok || !branchOK || branch.Namespace != core.GitWorkspaceBranch || branch.Owner != wid {
+		return failed("OPERATION_FAILED")
 	}
 	checkout := filepath.Join(s.WorkspaceData(wid), "home", "checkout")
 	if !exists(checkout) {
-		args := []string{"clone", "--quiet"}
-		if ref != "HEAD" {
-			args = append(args, "--branch", ref)
+		if _, e := git(ctx, "init", "--quiet", checkout); e != nil {
+			return failed("OPERATION_FAILED")
 		}
-		if _, e := git(ctx, append(args, "--", source, checkout)...); e != nil {
+		if _, e := git(ctx, "-C", checkout, "fetch", "--quiet", "--no-tags", "--", source, b.S("snapshotRef")); e != nil {
 			_ = os.RemoveAll(checkout)
-			return failed("BRANCH_NOT_FOUND")
+			return failed("SNAPSHOT_UNAVAILABLE")
+		}
+		if fetched, e := git(ctx, "-C", checkout, "rev-parse", "FETCH_HEAD"); e != nil || fetched != b.S("baseCommit") {
+			_ = os.RemoveAll(checkout)
+			return failed("BASE_COMMIT_MISMATCH")
+		}
+		if _, e := git(ctx, "-C", checkout, "checkout", "--quiet", "-B", branch.Name, b.S("baseCommit")); e != nil {
+			_ = os.RemoveAll(checkout)
+			return failed("OPERATION_FAILED")
 		}
 	}
 	commit, e := git(ctx, "-C", checkout, "rev-parse", "HEAD")

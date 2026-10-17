@@ -173,9 +173,6 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/start", "", []string{"version", "sessionId"}},
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/stop", "", []string{"version", "sessionId"}},
 		{"DELETE", "/api/v1/tenants/:tid/workspaces/:wid", "", []string{"version", "sessionId"}},
-		{"GET", "/api/v1/tenants/:tid/clones", "", nil},
-		{"POST", "/api/v1/tenants/:tid/clones", "", []string{"requestId", "repository", "branch"}},
-		{"GET", "/api/v1/tenants/:tid/clones/:cloneId", "", nil},
 		{"GET", "/api/v1/tenants/:tid/operations/:oid", "", nil},
 		{"POST", "/api/v1/tenants/:tid/operations/:oid/retry", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/resource-status", "", nil},
@@ -243,11 +240,13 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 			failure(c, &core.Fault{Code: "database_unavailable", Status: 503, Params: core.Object{}})
 			return
 		}
-		storage := "unconfigured"
-		if store.ObjectStore != nil {
-			storage = "configured"
+		configured := func(ok bool) string {
+			if ok {
+				return "configured"
+			}
+			return "unconfigured"
 		}
-		c.JSON(200, gin.H{"status": "ok", "dependencies": gin.H{"objectStore": storage}})
+		c.JSON(200, gin.H{"status": "ok", "dependencies": gin.H{"objectStore": configured(store.ObjectStore != nil), "gitServer": configured(store.GitServer != nil)}})
 	})
 	for _, route := range Routes() {
 		r.Handle(route.Method, route.Path, func(c *gin.Context) {
@@ -398,7 +397,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.

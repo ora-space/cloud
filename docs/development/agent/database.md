@@ -39,7 +39,8 @@ applied file; add a new `NNNN_*.sql`.
 ### Projects / workspaces / operations
 | Table | Purpose | Key columns |
 | --- | --- | --- |
-| `projects` | dev-environment repo | tenant_id, owner_user_id (creator), name, repository_url, default_branch, lifecycle, **space_id** (mandatory FK to the tenant's sole space) |
+| `projects` | dev-environment repo | tenant_id, owner_user_id (creator), name, lifecycle, **space_id** (mandatory FK to the tenant's sole space); the external repository lives in `repository_bindings` since 0035 |
+| `repository_bindings` | a Project's external repository (one per Project in phase one) | project_id, repository_url, branch, credential_ref_id, repository_credential_ref_id |
 | `project_storage` | retired per-project volume state (history only, inserts refused since 0016) | project_id, observed_state |
 | `workspaces` | main/isolated runtime env with its own data | project_id, tenant_id, owner_user_id, kind, desired/observed_state, runtime_generation, requested_ref, base_commit_id |
 | `workspace_worktrees` | retired linked-worktree metadata (history only, inserts refused since 0016) | workspace_id, branch_name, base_commit_id |

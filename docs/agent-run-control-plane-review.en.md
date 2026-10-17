@@ -16,7 +16,7 @@ Sources: [specs#58](https://github.com/ora-space/specs/pull/58), [cluster#5](htt
 | Storage and Revision | Private S3 HEAD outside SQL, checking existence, size and stored SHA-256; recheck lease, input and state, then atomically store raw Node evidence, verdict, Revision and hook writes; `TestRevisionS3VerificationAndAtomicTakeover`, network and fencing tests |
 | Plugins and run Workspace | Frozen plan, complete per-item results, new execution on failure, blocked unknown result; hidden public start/stop/delete APIs; `TestStartPluginPlanSurvivesSelectionChangesAndExecutionFailures`, `TestRunWorkspaceAndPluginStep` |
 | Five hooks and four helpers | Caller-owned transactions; ready/failed, Thread, sessionEnded, delivery and deleted tests directly cover success, failure, duplicates and rollback |
-| Go doubles | Real cumulative Git bundle, sealed JSONL, upload, expired-grant refresh, both doubles restarting after upload, terminal replay and Revision retention after Workspace deletion; simulator delivery and Git snapshot tests |
+| Go doubles | Real Git push to the delivery ref, sealed JSONL, upload, expired-grant refresh, both doubles restarting after upload, terminal replay and Revision retention after Workspace deletion; simulator delivery and Git snapshot tests |
 | Forward migration | Only new 0027; fresh schema and repeated 0023/0024/0026 upgrades preserve historical effects, input, commands, Node results and receipts without inventing Revisions |
 | Cluster acceptance | Persistent RustFS, credential files, idempotent bucket creation, private/public endpoints and independent sandbox upload; mandatory PostgreSQL/S3/sandbox acceptance task |
 
@@ -26,9 +26,9 @@ Sources: [specs#58](https://github.com/ora-space/specs/pull/58), [cluster#5](htt
 
 Object mismatch preserves the original Node success declaration and records a separate Cloud `verification_failed` verdict without a Revision. Network failure produces no ACK and remains replayable. Committed replay avoids S3. The temporary `revision_verification_required` rejection is replaced.
 
-The latest drafts assign Git/JSONL content semantics to Node; Cloud does not download and interpret them. Real Git doubles prove cumulative restoration, not a real D Agent. A's schema lacks B's delivering/releasing phases: A fences against registered delivery, ended session, nonterminal run, maintenance binding, open admission and current Node. B owns phases through the hooks.
+Code is delivered through the Git Server and commit/JSONL content semantics belong to Node; Cloud only checks through the Git Server ref query that the delivery ref names the declared commit and HEADs the JSONL, and does not download or interpret them. Real Git doubles prove cumulative restoration, not a real D Agent. A's schema lacks B's delivering/releasing phases: A fences against registered delivery, ended session, nonterminal run, maintenance binding, open admission and current Node. B owns phases through the hooks.
 
-Grants stay in memory, never databases, journals, files, environment or arguments. The checksum map only affects ephemeral signing; send every returned signed header. Health reports database reachability and storage configuration, not S3 availability or configuration secrets.
+Grants stay in memory, never databases, journals, files, environment or arguments. The checksum map only affects ephemeral signing; send every returned signed header. Health reports database reachability and object store and Git Server configuration, not S3 or Git Server availability or configuration secrets.
 
 ## Validation and remaining work
 

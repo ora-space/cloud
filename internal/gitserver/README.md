@@ -31,8 +31,12 @@
 | `refs/heads/workspaces/<workspaceId>/<branch>` | fast-forward：新建或快进（hook 在隔离区内判定祖先关系） |
 | `refs/ora/deliveries/<deliveryWorkId>` | create-only |
 
-任何 ref 都不能删除，也不能写表外的 ref；只要有一个更新不被规则接受，整次推送拒绝。目前沙盒执行只产生交付规则，
-同步 Operation 只产生本 Binding 的快照前缀；工作区分支与跟踪 ref 的规则来源由内部线、外部线各自添加。
+任何 ref 都不能删除，也不能写表外的 ref；只要有一个更新不被规则接受，整次推送拒绝。沙盒执行的授权由 Core 按当前状态逐请求判定，
+每个获准的 execution 都读整个 Project 仓库：Workspace clone 只读（仅在它没有结果、operation 停在 `clone` 步骤、
+Node 是 Workspace 当前 Node 且输入的 `repositoryUrl` 指向所请求仓库时）；Agent session 可新建或快进证书所属 Workspace
+`refs/heads/workspaces/<workspaceId>/` 下的分支；Revision 交付只能新建自己的 `refs/ora/deliveries/<workId>`，并快进输入的
+`workspaceRef`（仅当它属于证书所属 Workspace）；插件 execution 一律拒绝。同步 Operation 只产生本 Binding 的快照前缀；
+跟踪 ref 的规则来源由外部线添加。
 
 仓库策略与 hook 路径通过 `GIT_CONFIG_*` 环境变量作用于每个 git 进程，而不写进仓库，因此重启（hook 目录变化）
 或旧仓库都无法削弱它们。仓库监听保持 `receive.denyNonFastForwards=true`；服务仓库监听关闭它，使跟踪 ref 能跟随外部

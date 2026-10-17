@@ -3,14 +3,16 @@ package core
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 
 	"github.com/wanglongan587/cloud/internal/objectstore"
 )
 
 // revisionVerificationFailure is the reason Cloud records on its own verdict when the declared
-// objects could not be confirmed. It is Cloud's word, never a Node's: the wire's closed set
-// deliberately excludes it so a Node cannot assert Cloud's verification outcome about objects Cloud
-// has not looked at. The business settlement recognizes it as the one reason outside that set.
+// delivery ref or session history could not be confirmed. It is Cloud's word, never a Node's: the
+// wire's closed set deliberately excludes it so a Node cannot assert Cloud's verification outcome
+// about evidence Cloud has not looked at. The business settlement recognizes it as the one reason
+// outside that set.
 const revisionVerificationFailure = "verification_failed"
 
 type revisionVerification struct {
@@ -22,8 +24,11 @@ func revisionSuccess(result Object) bool {
 	return result.S("outcome") == "revision_delivered" || result.S("outcome") == "revision_unchanged"
 }
 
-// prepareRevision authenticates and validates the frozen declaration before contacting storage.
-// Definitive negative evidence is settled, while transport failures remain retryable with no ACK.
+// prepareRevision authenticates and validates the frozen declaration, then checks it against the
+// Git Server and the object store outside any transaction (Revision D3): the delivery ref must name
+// the declared final commit and the session history must match its declared size and digest.
+// Definitive negative evidence is settled as a verification failure, while an unreachable Git
+// Server or object store stays retryable with no takeover and no ACK.
 func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisionVerification, error) {
 	e, err := s.transact(ctx, func(t *transaction) Object {
 		require(r.Service != nil && r.Service.Role == "controller", 403, "service_forbidden")
@@ -42,6 +47,8 @@ func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisi
 		validateDeliveryDeclaration(e, r.Body.O("result"))
 		liveDelivery(t, e)
 		require(r.Body.N("sequence") == e.N("lastEventSequence")+1 && r.Body.S("event") != "", 409, "receipt_conflict")
+		w := t.one("SELECT tenant_id,project_id FROM workspaces WHERE id=$1", e.S("workspaceId"))
+		e["tenantId"], e["projectId"] = w.S("tenantId"), w.S("projectId")
 		return e
 	})
 	if err != nil || e == nil {
@@ -49,36 +56,44 @@ func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisi
 	}
 	result := r.Body.O("result")
 	verified := &revisionVerification{input: jsonText(e.O("input")), valid: true}
-	objects := []Object{result.O("history")}
-	if result.S("outcome") == "revision_delivered" {
-		objects = append(objects, result.O("bundle"))
+	if s.GitServer == nil || s.GitServer.Refs == nil {
+		return nil, &Fault{Code: "git_server_unavailable", Status: 503, Params: Object{}}
 	}
-	for _, object := range objects {
-		valid, err := objectstore.Verify(ctx, s.ObjectStore, object.S("key"), object.N("size"), object.S("sha256"))
-		if err != nil {
-			return nil, &Fault{Code: "object_store_unavailable", Status: 503, Params: Object{}}
-		}
-		verified.valid = verified.valid && valid
+	// A delivery ref can only be created, never moved or deleted, so what the query sees now is
+	// what it names when the Revision is registered and ever after.
+	commit, err := s.GitServer.Refs.ResolveGitRef(ctx, e.S("tenantId"), e.S("projectId"), e.O("input").S("deliveryRef"))
+	switch {
+	case errors.Is(err, ErrGitRefNotFound):
+		verified.valid = false
+	case err != nil:
+		return nil, &Fault{Code: "git_server_unavailable", Status: 503, Params: Object{}}
+	default:
+		verified.valid = commit == result.S("finalCommit")
 	}
+	history := result.O("history")
+	valid, err := objectstore.Verify(ctx, s.ObjectStore, history.S("key"), history.N("size"), history.S("sha256"))
+	if err != nil {
+		return nil, &Fault{Code: "object_store_unavailable", Status: 503, Params: Object{}}
+	}
+	verified.valid = verified.valid && valid
 	return verified, nil
 }
 
+// validateDeliveryDeclaration compares a delivery result with its frozen input before any external
+// check, so a contradictory declaration never reaches the Git Server or the object store.
 func validateDeliveryDeclaration(e, result Object) {
 	input := e.O("input")
 	require(result.O("node").S("nodeId") == e.S("nodeId"), 409, "result_conflict")
 	require(result.S("baseCommit") == input.S("baseCommit") && commitID(result.S("finalCommit")) && result.S("revisionRef") == input.S("revisionRef"), 409, "result_conflict")
+	// A bundle has no place in a Git delivery; a result carrying one is not this contract's.
+	require(len(result.O("bundle")) == 0, 409, "result_conflict")
 	history := result.O("history")
 	require(history.S("key") == input.S("historyKey") && validStoredObject(history), 400, "invalid_result")
-	if result.S("outcome") == "revision_unchanged" {
-		// A resumed run that added nothing ends on its prior Revision's final commit (contract D4).
-		prior := input.O("priorRevision")
-		unchanged := result.S("finalCommit") == result.S("baseCommit") ||
-			(prior.S("finalCommit") != "" && result.S("finalCommit") == prior.S("finalCommit"))
-		require(unchanged && len(result.O("bundle")) == 0, 409, "result_conflict")
-	} else {
-		bundle := result.O("bundle")
-		require(result.S("finalCommit") != result.S("baseCommit") && bundle.S("key") == input.S("bundleKey") && validStoredObject(bundle) && bundle.N("size") > 0, 409, "result_conflict")
-	}
+	// A resumed run that added nothing ends on its prior Revision's final commit (contract D4).
+	prior := input.O("priorRevision")
+	unchanged := result.S("finalCommit") == result.S("baseCommit") ||
+		(prior.S("finalCommit") != "" && result.S("finalCommit") == prior.S("finalCommit"))
+	require(unchanged == (result.S("outcome") == "revision_unchanged"), 409, "result_conflict")
 }
 
 func validStoredObject(object Object) bool {
@@ -120,23 +135,17 @@ func settleVerifiedRevision(t *transaction, r *ControlRequest, e Object) {
 		settled["reason"] = reason
 	} else {
 		w := t.one("SELECT w.*,b.repository_url FROM workspaces w JOIN repository_bindings b ON b.project_id=w.project_id WHERE w.id=$1", e.S("workspaceId"))
-		bundle, history := result.O("bundle"), result.O("history")
-		var bundleKey, bundleSize, bundleDigest any
-		if len(bundle) > 0 {
-			bundleKey, bundleSize, bundleDigest = bundle.S("key"), bundle.N("size"), bundle.S("sha256")
-		}
-		// A run that resumed and moved off its base commit records its prior Revision; one that ended
-		// on the prior's final commit reuses the prior's bundle instead of storing one (resume D5).
-		var priorID, holderID any
+		history := result.O("history")
+		// A run that resumed and moved off its base commit records its prior Revision. Every Git
+		// Revision, an unchanged one included, has its own verified delivery ref, so nothing is
+		// borrowed from the prior (Revision D7).
+		var priorID any
 		if prior := e.O("input").O("priorRevision"); prior.S("revisionId") != "" && result.S("finalCommit") != result.S("baseCommit") {
 			priorID = prior.S("revisionId")
-			if len(bundle) == 0 {
-				holderID = resumedBundleHolder(t, prior.S("revisionId"))
-			}
 		}
 		id := newID()
-		t.exec(`INSERT INTO revisions(id,execution_id,tenant_id,run_id,workspace_id,project_id,repository_url,base_commit,final_commit,revision_ref,bundle_key,bundle_size,bundle_sha256,history_key,history_size,history_sha256,prior_revision_id,bundle_revision_id)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, id, e.S("executionId"), w.S("tenantId"), e.S("operationId"), w.S("id"), w.S("projectId"), w.S("repositoryUrl"), result.S("baseCommit"), result.S("finalCommit"), result.S("revisionRef"), bundleKey, bundleSize, bundleDigest, history.S("key"), history.N("size"), history.S("sha256"), priorID, holderID)
+		t.exec(`INSERT INTO revisions(id,execution_id,tenant_id,run_id,workspace_id,project_id,repository_url,base_commit,final_commit,revision_ref,delivery_ref,history_key,history_size,history_sha256,prior_revision_id)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, id, e.S("executionId"), w.S("tenantId"), e.S("operationId"), w.S("id"), w.S("projectId"), w.S("repositoryUrl"), result.S("baseCommit"), result.S("finalCommit"), result.S("revisionRef"), e.O("input").S("deliveryRef"), history.S("key"), history.N("size"), history.S("sha256"), priorID)
 		settled["revision"] = t.one("SELECT * FROM revisions WHERE id=$1", id)
 		settled["revisionId"] = id
 		if outcome == "delivered" {

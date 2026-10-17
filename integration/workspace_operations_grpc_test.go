@@ -6,13 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wanglongan587/cloud/internal/controlpb"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/simulator"
 )
 
 // grpcController is a test Controller that drives runtime Workspace operations only through the
@@ -116,13 +120,10 @@ func (c *grpcController) status(n *controlpb.NodeRecord, connection controlpb.No
 	return out.GetNode(), e
 }
 
-func cloneSpec(repository, branch string) *controlpb.ExecutionInput {
-	return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{Repository: repository, Branch: branch}}}
-}
-
 // A Rust-shaped Controller creates a Project purely over gRPC: sandbox, then the Controller reports
-// the sandbox's Node, then the Workspace's clone is registered against Cloud-decided input and
-// Node; admission opens only once the clone succeeded. Stop then quiesces with Controller-reported
+// the sandbox's Node, then the Workspace's clone is registered with the snapshot input Cloud froze
+// into the clone step and against the Workspace's Node; admission opens only once the clone of
+// exactly that snapshot commit succeeded. Stop then quiesces with Controller-reported
 // idle evidence and terminates, after which every report about the old sandbox is fenced.
 //
 // Evidence for specs test-cases/cloud/operation/workspace-runtime-lifecycle.md
@@ -135,7 +136,7 @@ func TestGRPCControllerDrivesWorkspaceThroughNodeAndClone(t *testing.T) {
 	wid := created.O("workspace").S("id")
 	snap := c.claim()
 	op := snap.GetOperation()
-	if op.GetKind() != controlpb.OperationKind_OPERATION_KIND_CREATE_PROJECT || op.GetStep() != controlpb.OperationStep_OPERATION_STEP_SANDBOX || snap.GetWorkspaces()[0].GetRequestedRef() != "main" || snap.GetProject().GetRepositoryUrl() != "https://example.invalid/repo.git" {
+	if op.GetKind() != controlpb.OperationKind_OPERATION_KIND_CREATE_PROJECT || op.GetStep() != controlpb.OperationStep_OPERATION_STEP_SANDBOX || snap.GetWorkspaces()[0].GetRequestedRef() != "main" || snap.GetProject().GetId() != created.O("resource").S("id") || snap.GetCloneInput() != nil {
 		t.Fatalf("unexpected snapshot: %v", snap)
 	}
 	_, e := c.operations.PlanEffect(c.ctx, &controlpb.PlanEffectRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), Version: op.GetVersion(), Kind: controlpb.EffectKind_EFFECT_KIND_WORKSPACE_DATA_DELETE, WorkspaceId: wid})
@@ -189,39 +190,65 @@ func TestGRPCControllerDrivesWorkspaceThroughNodeAndClone(t *testing.T) {
 		t.Fatalf("execution before the clone must be refused as execution_closed: %v", closed)
 	}
 
-	// Cloud, not the Controller, decides the clone's input and target Node.
+	// Cloud, not the Controller, decides the clone's input and target Node: the step carries the
+	// snapshot input Cloud froze when it entered the step, and nothing of the external repository.
+	snap = c.claim()
+	op = snap.GetOperation()
+	frozen := snap.GetCloneInput()
+	var binding string
+	must(t, f.store.Pool.QueryRow("SELECT id FROM repository_bindings WHERE project_id=$1", created.O("resource").S("id")).Scan(&binding))
+	want := &controlpb.CloneSpec{
+		RepositoryUrl: simulator.GitServerBaseURL + "/" + f.tid + "/" + created.O("resource").S("id") + ".git",
+		SnapshotRef:   core.GitSnapshotRef(binding, f.commit), BaseCommit: f.commit, WorkspaceRef: core.GitWorkspaceRefPrefix(wid) + "main",
+	}
+	if !proto.Equal(frozen, want) {
+		t.Fatalf("clone_input = %v, want %v", frozen, want)
+	}
 	executions := f.executions
-	dispatch := func(repository, branch, node, execution string) error {
-		_, err := executions.RecordDispatch(c.ctx, &controlpb.RecordDispatchRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), ExecutionId: execution, NodeId: node, Input: cloneSpec(repository, branch)})
+	dispatch := func(spec *controlpb.CloneSpec, node, execution string) error {
+		_, err := executions.RecordDispatch(c.ctx, &controlpb.RecordDispatchRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), ExecutionId: execution, NodeId: node, Input: &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: spec}}})
 		return err
 	}
-	expectStatus(t, dispatch("https://example.invalid/other.git", "main", nodeID, "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
-	expectStatus(t, dispatch("https://example.invalid/repo.git", "other", nodeID, "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
-	expectStatus(t, dispatch("https://example.invalid/repo.git", "main", "not-this-node", "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
-	must(t, dispatch("https://example.invalid/repo.git", "main", nodeID, "exec-a"))
-	expectStatus(t, dispatch("https://example.invalid/repo.git", "main", nodeID, "exec-b"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
-	// A tenant clone request and the Workspace clone coexist: recovery sees both, ClaimWork only the
-	// tenant request.
-	tenantRequest, e := f.store.EnqueueClone(context.Background(), f.tid, f.uid, "tenant-request", "https://example.invalid/repo.git", "main")
-	must(t, e)
+	altered := func(edit func(*controlpb.CloneSpec)) *controlpb.CloneSpec {
+		spec := proto.Clone(frozen).(*controlpb.CloneSpec)
+		edit(spec)
+		return spec
+	}
+	other := strings.Repeat("f", 40)
+	expectStatus(t, dispatch(altered(func(s *controlpb.CloneSpec) { s.BaseCommit, s.SnapshotRef = other, core.GitSnapshotRef(binding, other) }), nodeID, "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
+	expectStatus(t, dispatch(altered(func(s *controlpb.CloneSpec) { s.WorkspaceRef = core.GitWorkspaceRefPrefix(wid) + "other" }), nodeID, "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
+	// A malformed input never reaches the registry: the snapshot ref must name the base commit.
+	expectStatus(t, dispatch(altered(func(s *controlpb.CloneSpec) { s.BaseCommit = other }), nodeID, "exec-a"), codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
+	expectStatus(t, dispatch(frozen, "not-this-node", "exec-a"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
+	must(t, dispatch(frozen, nodeID, "exec-a"))
+	expectStatus(t, dispatch(frozen, nodeID, "exec-b"), codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
+	// There is no tenant-level clone: ClaimWork offers no clone work, and a dispatch naming an ID that
+	// is not a Workspace operation is refused.
 	work, e := executions.ClaimWork(c.ctx, &controlpb.ClaimWorkRequest{SubmissionId: c.sub(), Epoch: c.epoch})
 	must(t, e)
-	if work.GetItem().GetOperationId() != tenantRequest.S("id") {
-		t.Fatalf("ClaimWork must offer only tenant clone requests: %v", work.GetItem())
+	if work.GetItem() != nil {
+		t.Fatalf("ClaimWork must not offer clone work: %v", work.GetItem())
 	}
-	must(t, func() error {
-		_, err := executions.RecordDispatch(c.ctx, &controlpb.RecordDispatchRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: tenantRequest.S("id"), ExecutionId: "exec-tenant", NodeId: "fixed-node", Input: work.GetItem().GetInput()})
-		return err
-	}())
+	_, e = executions.RecordDispatch(c.ctx, &controlpb.RecordDispatchRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: uuid.NewString(), ExecutionId: "exec-tenant", NodeId: "fixed-node", Input: &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: frozen}}})
+	expectStatus(t, e, codes.NotFound, controlpb.ErrorCode_ERROR_CODE_NOT_FOUND)
 	pending, e := executions.ListPendingDispatches(c.ctx, &controlpb.ListPendingDispatchesRequest{})
 	must(t, e)
-	if len(pending.GetRecords()) != 2 {
-		t.Fatalf("recovery must list the Workspace and the tenant clone: %v", pending.GetRecords())
+	if len(pending.GetRecords()) != 1 || !proto.Equal(pending.GetRecords()[0].GetInput().GetClone(), frozen) {
+		t.Fatalf("recovery must list exactly the Workspace clone with its frozen input: %v", pending.GetRecords())
 	}
 	_, e = c.advance(op)
 	expectStatus(t, e, codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
 
-	outcome := c.put("/clones/"+"00000000-0000-4000-8000-000000000001", core.Object{"workspaceId": wid, "repositoryUrl": "https://example.invalid/repo.git", "branch": "main"})
+	outcome := c.put("/clones/"+"00000000-0000-4000-8000-000000000001", core.Object{"workspaceId": wid, "repositoryUrl": frozen.GetRepositoryUrl(), "snapshotRef": frozen.GetSnapshotRef(), "baseCommit": frozen.GetBaseCommit(), "workspaceRef": frozen.GetWorkspaceRef()})
+	// A checkout of any other commit is a contradiction Cloud refuses, through both result paths.
+	wrong := &controlpb.ExecutionResult{Node: &controlpb.NodeIdentity{NodeId: nodeID, NodeIncarnationId: "inc-1"}, Outcome: &controlpb.ExecutionResult_CloneReady{CloneReady: &controlpb.CloneReady{Path: outcome.S("path"), Commit: other}}}
+	_, e = executions.RecordQueriedResult(c.ctx, &controlpb.RecordQueriedResultRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), ExecutionId: "exec-a", Result: wrong})
+	expectStatus(t, e, codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
+	_, e = executions.TakeOverNodeEvent(c.ctx, &controlpb.TakeOverNodeEventRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), ExecutionId: "exec-a", Sequence: 1, Result: wrong, Event: []byte("wrong")})
+	expectStatus(t, e, codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
+	if f.scalar("SELECT count(*) FROM clone_executions WHERE execution_id='exec-a' AND result IS NULL") != 1 {
+		t.Fatal("a contradictory clone result was recorded")
+	}
 	ready := &controlpb.ExecutionResult{Node: &controlpb.NodeIdentity{NodeId: nodeID, NodeIncarnationId: "inc-1"}, Outcome: &controlpb.ExecutionResult_CloneReady{CloneReady: &controlpb.CloneReady{Path: outcome.S("path"), Commit: outcome.S("commit")}}}
 	_, e = executions.RecordQueriedResult(c.ctx, &controlpb.RecordQueriedResultRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: op.GetId(), ExecutionId: "exec-a", Result: ready})
 	must(t, e)
@@ -303,8 +330,7 @@ func TestGRPCNodeIncarnationIsReplacedOnlyAfterEnd(t *testing.T) {
 	}
 }
 
-// OperationAvailable follows the commit that queued a Workspace operation, just like WorkAvailable
-// follows a tenant clone request.
+// OperationAvailable follows the commit that queued a Workspace operation.
 func TestGRPCWatchDeliversOperationAvailable(t *testing.T) {
 	f := setup(t)
 	c := newGRPCController(t, f)

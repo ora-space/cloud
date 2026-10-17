@@ -142,7 +142,7 @@ func TestCloneFailureRetriesAsNewExecutionAndUnknownBlocks(t *testing.T) {
 	must(t, f.store.Pool.QueryRow("SELECT n.node_id FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id WHERE s.workspace_id=$1 AND n.ended_at IS NULL", uwid).Scan(&node))
 	ctx := asController(f.client.Subject)
 	dispatch := func(execution string) error {
-		_, e := f.executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "dispatch-" + execution, Epoch: at.N("epoch"), OperationId: uoid, ExecutionId: execution, NodeId: node, Input: cloneSpec("https://example.invalid/repo.git", "main")})
+		_, e := f.executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "dispatch-" + execution, Epoch: at.N("epoch"), OperationId: uoid, ExecutionId: execution, NodeId: node, Input: cloneInputSpec(f.frozenClone(uoid))})
 		return e
 	}
 	must(t, dispatch("unknown-1"))

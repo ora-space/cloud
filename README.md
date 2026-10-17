@@ -60,7 +60,7 @@ go run ./cmd/cloudctl -command credential-ref -tenant '<tenant UUID>' -owner '<u
 go run ./cmd/server -config /path/to/config.yaml
 ```
 
-server 只检查已执行迁移及 checksum，不执行 DDL；数据库、迁移、trust 或监听失败会非零退出。`GET /healthz` 检查 PG 可达性。
+server 只检查已执行迁移及 checksum，不执行 DDL；数据库、迁移、trust 或监听失败会非零退出。`GET /healthz` 检查 PG 可达性，并报告对象存储与 Git Server 是否已配置（`objectStore`、`gitServer`：`configured|unconfigured`）。
 
 本地联调（浏览器 → Gateway → Cloud，见 [认证 Gateway](docs/gateway.md)）不需要 GitHub 账号：Gateway 自带仅限本地的开发者登录，输入任意身份即可进入。要测真实 GitHub 登录时再新建一个 OAuth App（callback 登记为 `http://localhost:5173/auth/callback/github`）并填进 `config.toml` 的 `[github]`。
 
@@ -79,7 +79,7 @@ go run ./cmd/cloudctl -command migrate
 go run ./cmd/simulator
 ```
 
-演示启动独立 loopback HTTP cloud/Substrate，创建测试租户、模拟 sandbox 和 Node，并把仓库真实 clone 到 main Workspace 自己的数据中，再输出 Ready Workspace。磁盘在 `.local/demo/`，PG 记录保留；再次运行创建新的演示租户。模拟器没有生产基础设施凭据，不部署 Kubernetes，不启动真实 Agent/Deno。
+演示启动独立 loopback HTTP cloud/Substrate，创建测试租户、模拟 sandbox 和 Node，在 Git Server 替身中登记演示 Project 的快照，并把该快照真实 clone 到 main Workspace 自己的数据中，再输出 Ready Workspace。磁盘在 `.local/demo/`，PG 记录保留；再次运行创建新的演示租户。模拟器没有生产基础设施凭据，不部署 Kubernetes，不启动真实 Agent/Deno。
 
 ## 前端
 
@@ -142,4 +142,4 @@ npm run build          # tsc -b && vite build
 
 参见 [运行时控制](docs/runtime-control.md) / [English](docs/runtime-control.en.md)：创建者使用权限、页面独占、持久重启和目标强停。部署必须配置管理双向 TLS；旧无 scope 新执行关闭。真实插件执行器、项目凭据提供方与云端文件/终端/Agent 执行尚未开放。
 
-进程内模拟器显式使用仅供开发的旧 clone 测试夹具；插件选择因缺少真实执行器保留持久 pending（待执行）。它不证明运行时独占、管理认证或工作负载隔离；这些保障须通过 cluster Compose 和真实验收脚本验证。
+进程内模拟器的 Node 只从 Git Server 替身取快照，演示 Project 的快照由替身代替外部线登记；插件选择因缺少真实执行器保留持久 pending（待执行）。它不证明运行时独占、管理认证或工作负载隔离；这些保障须通过 cluster Compose 和真实验收脚本验证。

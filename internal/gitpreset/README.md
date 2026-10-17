@@ -7,7 +7,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `preset.go` | `Snapshot`（确定性的合成历史或已有提交 → 快照 ref、跟踪 ref、`succeeded` 同步与当前快照，一个事务登记）、`Ref`、`Operation` |
+| `preset.go` | `Snapshot`（确定性的合成历史或已有提交 → 快照 ref、跟踪 ref、把 Binding 未结束的同步推进为 `succeeded`（没有时新登记一行）与当前快照，一个事务登记）、`Ref`、`Operation`（同步的终态先推进未结束的同步） |
 | `check.go` | `Check`：ref 都在契约 namespace 内并指向提交；上游 ref 属于本 Project 的 Binding；快照 ref 名称等于目标；跟踪 ref 指向已有快照；至多一个未结束同步；当前快照来自本 Binding 的成功同步，且 Git Server 上的快照 ref 指向记录的提交 |
 
 用法错误返回 `UsageError`，契约问题以 `violations` 返回，二者都与命令无法执行（数据库、git 故障）区分开。

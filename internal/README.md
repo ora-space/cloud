@@ -19,6 +19,7 @@
 - [objectstore](objectstore/README.md)：Cloud 自己的 S3 兼容对象存储客户端（SigV4 预签上传授权、HEAD 校验对象的大小与 SHA-256），只服务 Revision 链路。
 - [gitpreset](gitpreset/README.md)：仅用于验收的 Git Server 契约预置与断言，直接写仓库卷与数据库，不被服务进程引用。
 - [gitserver](gitserver/README.md)：Project 仓库的 Git 访问：沙盒与 Repo Executor 两个仓库监听、按 Core 逐请求授权的 ref 规则集、`git http-backend`、pre-receive 按 namespace 执行规则与 Cloud 的 ref 查询。
+- [gitrefquery](gitrefquery/README.md)：Cloud 访问 Git Server 只读 ref 查询（`GET /internal/v1/refs`）的客户端，在事务外核对要登记的 ref 存在且指向声明的提交。
 - [config](config/README.md)：加载并校验应用程序配置文件及环境变量覆盖。
 - [logger](logger/README.md)：基于 Zap 和 Lumberjack 提供结构化、非阻塞的 JSON 日志记录。
 - [simulator](simulator/README.md)：实现 Substrate 执行引擎、Controller 与 Workspace Node 的进程内替身。
@@ -35,6 +36,7 @@
    - `internal/repository` $\rightarrow$ `internal/config`, `gorm.io/gorm`。
    - `internal/gitpreset` $\rightarrow$ `internal/core`（ref 词汇）、`internal/gitserver`（建仓）；只有 `cmd/git-server-preset` 导入它。
    - `internal/objectstore` $\rightarrow$ `internal/core`（仅 `UploadGrant` 值类型）；`internal/core` 通过自己声明的 `RevisionObjects` 接口调用它，**不**反向导入本包。
+   - `internal/gitrefquery` $\rightarrow$ `internal/core`（`ErrGitRefNotFound` 与提交格式）；`internal/config` 用它构造 `core.GitServer`，`internal/core` 只经自己声明的 `GitRefResolver` 接口调用，**不**反向导入本包。
    - 底层包（`core`、`repository`、`objectstore`）严禁反向导入上层表现层包（`api`、`router`）。
 2. **PostgreSQL 为唯一权威持久化**：
    - 所有共享业务状态必须持久化在 PostgreSQL 中。严禁跨请求在内存中缓存权威领域状态。

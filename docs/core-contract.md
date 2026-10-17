@@ -6,7 +6,7 @@ Cloud 是唯一业务权威存储。Gateway 转发查询/生命周期到 cloud�
 
 `tenant_memberships(tenant_id,user_id)` 为 Project owner 的 FK 目标。Workspace 通过 `(project_id,tenant_id,owner_user_id)` 复合 FK 继承完整归属。Project/Workspace 归属和 Workspace kind 不可更新；operation/effect/ticket/node 也有跨表作用域约束。软删保留所有运行及清理引用。
 
-每个未软删 Project 通过延迟约束触发器检查恰有一个未软删 main Workspace，允许在同一事务原子创建或整体删除；不能单独删 main。partial unique index 防止两个 main。isolated Workspace 有唯一 Task 展示身份。每个 Workspace 保存自己的 `requested_ref` 与 clone 得到的 `base_commit_id`；Cloud 不再为 Workspace 建立 linked worktree，历史 `workspace_worktrees` 行只保留、不再新增。
+每个未软删 Project 通过延迟约束触发器检查恰有一个未软删 main Workspace，允许在同一事务原子创建或整体删除；不能单独删 main。partial unique index 防止两个 main。isolated Workspace 有唯一 Task 展示身份。每个 Workspace 保存自己的 `requested_ref`（Binding 分支，即 Project `defaultBranch`）与 clone 得到的 `base_commit_id`；Cloud 不再为 Workspace 建立 linked worktree，历史 `workspace_worktrees` 行只保留、不再新增。
 
 每个租户恰有一个可见协作空间，`tenant_memberships` 是唯一的成员角色与状态权威。`cloudctl bootstrap` 为部署原子创建租户、唯一空间与首位管理员，空间 slug 使用生成的全局唯一值；`POST /api/v1/tenants` 允许已验证用户用名称与全局唯一 slug 创建自己的空间和租户，并成为首位管理员。用户可拥有和加入多个租户，通过 `GET /api/v1/me/spaces` 取得完整分页列表并切换。租户级与空间级项目路径均指向该唯一空间；空间 slug 不可变、不可复用，改名同时更新租户与空间。空间级创建、归档和成员写接口已停用。
 
@@ -35,7 +35,7 @@ PATCH 与生命周期动作携带整数 `version`；现存 membership PUT/operat
 | delete_workspace | quiesce → terminate → cleanup → done |
 | delete_project | quiesce → terminate → cleanup → done |
 
-接口不接受“设 state=succeeded”这类任意写入。sandbox 阶段必须有同 epoch 成功 sandbox_ensure；Node 阶段必须有当前实例已初始化、connected、30 秒内 heartbeat 且 NodeId 等于 sandbox_ensure 返回值的 Node；create 还必须经过 clone 阶段：当前 Node 上最近一次 clone execution 为 clone_ready 且带真实 40/64 位 commit，才原子写入 `base_commit_id`、Workspace Ready/开放准入和 operation success。start 在 Node 阶段直接完成。Pod Running 或单个 Substrate 创建结果不能代替 Node 协议确认。
+接口不接受“设 state=succeeded”这类任意写入。sandbox 阶段必须有同 epoch 成功 sandbox_ensure；Node 阶段必须有当前实例已初始化、connected、30 秒内 heartbeat 且 NodeId 等于 sandbox_ensure 返回值的 Node；create 还必须经过 clone 阶段：当前 Node 上最近一次 clone execution 为 clone_ready、带真实 40/64 位 commit 且等于冻结的 clone 输入的 `baseCommit`，才原子写入 `base_commit_id`、Workspace Ready/开放准入和 operation success。start 在 Node 阶段直接完成。Pod Running 或单个 Substrate 创建结果不能代替 Node 协议确认。
 
 sandbox terminate 包含真实终止确认；cleanup 为每个待删 Workspace 计划 `workspace_data_delete`，只有该 Workspace 没有未终止 sandbox 时才能计划（否则 409 termination_unconfirmed），成功证据为 removed。delete_project 在 cleanup 完成全部 Workspace 数据删除后直接结束。0016 迁移把停在 storage/worktree 的进行中 operation 标记为 failed（lifecycle_flow_retired），把停在 storage_delete 的 delete_project 退回 cleanup。Cloud 信任受认证 Controller 对 Substrate 的观察，但仍检查类型、绑定和阶段。实际证明基础设施终止是 Substrate/Node 阶段二实现的责任，不能拿 PG fencing 替代。
 
@@ -45,7 +45,7 @@ sandbox terminate 包含真实终止确认；cleanup 为每个待删 Workspace �
 
 全局 `controller_leases(name=global)` 使用 PG `clock_timestamp()`，有效期 30 秒，约定每 10 秒续租；模拟器每个短 Step 续租。未过期 holder 不能被夺取；过期 acquire 增加 epoch，renew/release 需要精确 holder+epoch。Controller 调度前、领取、阶段结果、推进、重试安排、sandbox 分配和 execute 准入均验证有效租约；用户 read access 只做权限查询。
 
-claim 会领取 queued、到期 retry_wait 或任意 running operation；同一 holder/epoch 重启后重新领取 running operation 时递增 operation version，从而 fence 仍持有旧内存快照的 worker。claim 返回当前 operation、Project、全部相关 Workspace/sandbox/Node/effect 以及该 operation 的 clone execution。旧 epoch effect 必须先按稳定 ID 查询 Substrate，再登记本 epoch 的观察；否则 plan/advance 返回 reconcile_required。结果未知的 clone execution 阻止登记第二个，不能盲目再次 clone。epoch 与 Workspace runtime_generation 是独立的。
+claim 会领取 queued、到期 retry_wait 或任意 running operation；同一 holder/epoch 重启后重新领取 running operation 时递增 operation version，从而 fence 仍持有旧内存快照的 worker。claim 返回当前 operation、Project、全部相关 Workspace/sandbox/Node/effect、该 operation 的 clone execution，以及 clone 步骤从 Binding 当前快照冻结的 `cloneInput`（每个 operation 冻结一次，重试沿用）。没有可用快照的 clone 步骤、仍有未结束 sync/publish Operation 的 delete_project 不交给 Controller：claim 把它们停放（`retry_wait`/`failed`/`blocked`，见 [execution-contract.md](execution-contract.md)；delete_project 为 `retry_wait`/`repository_operation_running`，10 秒后重试、不计次数），同一次 claim 继续领取下一个。旧 epoch effect 必须先按稳定 ID 查询 Substrate，再登记本 epoch 的观察；否则 plan/advance 返回 reconcile_required。结果未知的 clone execution 阻止登记第二个，不能盲目再次 clone。epoch 与 Workspace runtime_generation 是独立的。
 
 `UNIQUE(workspace_id,generation)` 及唯一未终止 sandbox 保护替换。分配新 generation 前必须确认旧实例 terminated；登记新 Node 也不能覆盖活实例。数据库拒绝旧 epoch/旧实例迟到回写，但不会终止已经运行的文件写入。因此真实接管必须先查询/fence 外部进程；无法确认时保持 blocked，不能重放未知结果 prompt 或全局标记 Session 失败。
 

@@ -293,11 +293,6 @@
       "CloneExecution": {
         "additionalProperties": false,
         "properties": {
-          "cloneRequestId": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string"
-          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -349,7 +344,6 @@
           },
           "workspaceId": {
             "format": "uuid",
-            "nullable": true,
             "type": "string"
           }
         },
@@ -357,7 +351,6 @@
           "executionId",
           "operationId",
           "workspaceId",
-          "cloneRequestId",
           "nodeId",
           "input",
           "result",
@@ -369,89 +362,35 @@
         ],
         "type": "object"
       },
-      "CloneOperation": {
+      "CloneInput": {
         "additionalProperties": false,
         "properties": {
-          "branch": {
-            "type": "string"
-          },
-          "createdAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "executionId": {
-            "nullable": true,
-            "type": "string"
-          },
-          "nodeId": {
-            "nullable": true,
-            "type": "string"
-          },
-          "operationId": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string"
-          },
-          "state": {
-            "$ref": "#/components/schemas/CloneState"
-          },
-          "updatedAt": {
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "operationId",
-          "requestId",
-          "repository",
-          "branch",
-          "executionId",
-          "nodeId",
-          "state",
-          "createdAt",
-          "updatedAt"
-        ],
-        "type": "object"
-      },
-      "CloneState": {
-        "additionalProperties": false,
-        "properties": {
-          "commit": {
+          "baseCommit": {
+            "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$",
             "type": "string"
           },
           "kind": {
             "enum": [
-              "pending",
-              "succeeded",
-              "failed"
+              "clone"
             ],
             "type": "string"
           },
-          "path": {
+          "repositoryUrl": {
             "type": "string"
           },
-          "reason": {
-            "enum": [
-              "sourceUnavailable",
-              "branchNotFound",
-              "destinationConflict",
-              "operationFailed",
-              "interrupted",
-              "unspecified"
-            ],
+          "snapshotRef": {
             "type": "string"
           },
-          "retainedPath": {
+          "workspaceRef": {
             "type": "string"
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "repositoryUrl",
+          "snapshotRef",
+          "baseCommit",
+          "workspaceRef"
         ],
         "type": "object"
       },
@@ -644,14 +583,6 @@
             "format": "date-time",
             "type": "string"
           },
-          "credentialRefId": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string"
-          },
-          "defaultBranch": {
-            "type": "string"
-          },
           "deletedAt": {
             "format": "date-time",
             "nullable": true,
@@ -669,18 +600,6 @@
           },
           "ownerUserId": {
             "format": "uuid",
-            "type": "string"
-          },
-          "repositoryCredentialRefId": {
-            "format": "uuid",
-            "nullable": true,
-            "type": "string"
-          },
-          "repositoryUrl": {
-            "type": "string"
-          },
-          "secretRef": {
-            "nullable": true,
             "type": "string"
           },
           "spaceId": {
@@ -702,14 +621,10 @@
           "ownerUserId",
           "spaceId",
           "name",
-          "repositoryUrl",
-          "defaultBranch",
-          "credentialRefId",
           "lifecycle",
           "version",
           "createdAt",
-          "deletedAt",
-          "secretRef"
+          "deletedAt"
         ],
         "type": "object"
       },
@@ -2692,6 +2607,9 @@
       "OperationRequest": {
         "additionalProperties": false,
         "properties": {
+          "clone": {
+            "$ref": "#/components/schemas/CloneInput"
+          },
           "desiredRevision": {
             "format": "int64",
             "type": "integer"
@@ -2753,6 +2671,9 @@
           },
           "resourceId": {
             "format": "uuid",
+            "type": "string"
+          },
+          "syncErrorCode": {
             "type": "string"
           }
         },
@@ -3532,6 +3453,9 @@
       "Snapshot": {
         "additionalProperties": false,
         "properties": {
+          "cloneInput": {
+            "$ref": "#/components/schemas/CloneInput"
+          },
           "clones": {
             "items": {
               "$ref": "#/components/schemas/CloneExecution"
@@ -7688,443 +7612,6 @@
         "summary": "GET /api/v1/tenants/:tid/agent-sessions",
         "tags": [
           "tenants"
-        ]
-      }
-    },
-    "/api/v1/tenants/{tid}/clones": {
-      "get": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Unscoped clone submission is retired in production and returns 410 runtime_scope_required; existing requests remain readable by their original submitter. An explicit development store can exercise the legacy coordination fixture without enabling a production bypass. requestId is the caller's durable request identity: repeating it with the same repository and branch returns the original request, a different input is 409 idempotency_conflict. repository must be an https or ssh URL the Controller can clone; branch is a short branch name, never HEAD. executionId and nodeId are null until a dispatch is recorded; a pending state means awaiting reconciliation, never failure. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
-        "operationId": "get_api_v1_tenants_tid_clones",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "tid",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "default": 50,
-              "maximum": 100,
-              "minimum": 1,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.",
-            "in": "query",
-            "name": "after",
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "items": {
-                      "items": {
-                        "$ref": "#/components/schemas/CloneOperation"
-                      },
-                      "type": "array"
-                    },
-                    "nextCursor": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "items",
-                    "nextCursor"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful command or resource response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Resource absent or outside authorized tenant/owner scope"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
-          },
-          "428": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version precondition required"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Internal error; no SQL or secret details are exposed"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
-          }
-        },
-        "security": [
-          {
-            "serviceCredential": [],
-            "userCredential": []
-          }
-        ],
-        "summary": "GET /api/v1/tenants/:tid/clones",
-        "tags": [
-          "clones"
-        ]
-      },
-      "post": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Unscoped clone submission is retired in production and returns 410 runtime_scope_required; existing requests remain readable by their original submitter. An explicit development store can exercise the legacy coordination fixture without enabling a production bypass. requestId is the caller's durable request identity: repeating it with the same repository and branch returns the original request, a different input is 409 idempotency_conflict. repository must be an https or ssh URL the Controller can clone; branch is a short branch name, never HEAD. executionId and nodeId are null until a dispatch is recorded; a pending state means awaiting reconciliation, never failure. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
-        "operationId": "post_api_v1_tenants_tid_clones",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "tid",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Scoped to tenant and user. Same key and canonical method/path/body returns the original response before version validation; changed request is 409.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "branch": {
-                    "type": "string"
-                  },
-                  "repository": {
-                    "type": "string"
-                  },
-                  "requestId": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "requestId",
-                  "repository",
-                  "branch"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CloneOperation"
-                }
-              }
-            },
-            "description": "Successful command or resource response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Resource absent or outside authorized tenant/owner scope"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
-          },
-          "428": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version precondition required"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Internal error; no SQL or secret details are exposed"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
-          }
-        },
-        "security": [
-          {
-            "serviceCredential": [],
-            "userCredential": []
-          }
-        ],
-        "summary": "POST /api/v1/tenants/:tid/clones",
-        "tags": [
-          "clones"
-        ]
-      }
-    },
-    "/api/v1/tenants/{tid}/clones/{cloneId}": {
-      "get": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Unscoped clone submission is retired in production and returns 410 runtime_scope_required; existing requests remain readable by their original submitter. An explicit development store can exercise the legacy coordination fixture without enabling a production bypass. requestId is the caller's durable request identity: repeating it with the same repository and branch returns the original request, a different input is 409 idempotency_conflict. repository must be an https or ssh URL the Controller can clone; branch is a short branch name, never HEAD. executionId and nodeId are null until a dispatch is recorded; a pending state means awaiting reconciliation, never failure. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
-        "operationId": "get_api_v1_tenants_tid_clones_cloneId",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "tid",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "cloneId",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CloneOperation"
-                }
-              }
-            },
-            "description": "Successful command or resource response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid JSON/field/input, missing idempotency key, invalid pagination or evidence"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Invalid, forged, expired, wrong-audience, untrusted, or caller-mismatched credential"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Disabled user, inactive/missing membership, wrong service role, or admin required"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Resource absent or outside authorized tenant/owner scope"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
-          },
-          "428": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Version precondition required"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "Internal error; no SQL or secret details are exposed"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            },
-            "description": "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
-          }
-        },
-        "security": [
-          {
-            "serviceCredential": [],
-            "userCredential": []
-          }
-        ],
-        "summary": "GET /api/v1/tenants/:tid/clones/:cloneId",
-        "tags": [
-          "clones"
         ]
       }
     },
@@ -18466,7 +17953,7 @@
         ]
       },
       "post": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must name a branch, not HEAD (Cloud never reads the remote repository); credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must be a branch name Git accepts in a ref, not HEAD (Cloud never reads the remote repository); it is the branch the Project's Binding syncs. credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous; the main Workspace clones the Binding's first snapshot and waits for it. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
         "operationId": "post_api_v1_tenants_tid_projects",
         "parameters": [
           {
@@ -19255,7 +18742,7 @@
         ]
       },
       "post": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Creates one isolated Workspace and Task display identity. title/baseRef required; baseRef becomes the Workspace's requestedRef, which its Node clones; HEAD means the Project's defaultBranch. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Creates one isolated Workspace and Task display identity. title is required. The Workspace clones the Project's current snapshot of its Binding branch: baseRef may be omitted, empty, HEAD or that branch, and any other value is 400 base_ref_not_synced with nothing recorded. The branch becomes the Workspace's requestedRef, the short name of its Git Server branch refs/heads/workspaces/\u003cworkspaceId\u003e/\u003crequestedRef\u003e. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
         "operationId": "post_api_v1_tenants_tid_projects_pid_workspaces",
         "parameters": [
           {
@@ -20987,7 +20474,7 @@
         ]
       },
       "post": {
-        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Project collection scoped to the tenant's sole collaboration space; active tenant membership is required. Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must name a branch, not HEAD (Cloud never reads the remote repository); credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
+        "description": "Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Project collection scoped to the tenant's sole collaboration space; active tenant membership is required. Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must be a branch name Git accepts in a ref, not HEAD (Cloud never reads the remote repository); it is the branch the Project's Binding syncs. credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous; the main Workspace clones the Binding's first snapshot and waits for it. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.",
         "operationId": "post_api_v1_tenants_tid_spaces_spaceId_projects",
         "parameters": [
           {
@@ -24946,6 +24433,13 @@
                     "dependencies": {
                       "additionalProperties": false,
                       "properties": {
+                        "gitServer": {
+                          "enum": [
+                            "configured",
+                            "unconfigured"
+                          ],
+                          "type": "string"
+                        },
                         "objectStore": {
                           "enum": [
                             "configured",
@@ -24955,7 +24449,8 @@
                         }
                       },
                       "required": [
-                        "objectStore"
+                        "objectStore",
+                        "gitServer"
                       ],
                       "type": "object"
                     },
@@ -26241,7 +25736,7 @@
     },
     "/internal/v1/operations/claim": {
       "post": {
-        "description": "Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Claims queued/due retry/any running operation; reclaiming with the same epoch increments the operation version and fences stale in-memory workers. Returns a full scoped recovery snapshot. Reconcile every existing effect with Substrate by stable ID before planning or advancing. No automatic prompt replay.",
+        "description": "Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Claims queued/due retry/any running operation; reclaiming with the same epoch increments the operation version and fences stale in-memory workers. Returns a full scoped recovery snapshot. Reconcile every existing effect with Substrate by stable ID before planning or advancing. No automatic prompt replay. A clone step is handed out only with its cloneInput, frozen once per operation from the Project's current Binding snapshot; without a snapshot the operation is parked as retry_wait snapshot_not_ready while the Binding's latest sync is unfinished, fails as repository_sync_failed once it ended unsuccessfully, and is blocked as git_server_unconfigured without a Git Server. delete_project is not handed out to quiesce while a sync or publish of the Project is unfinished (retry_wait repository_operation_running). A parked operation never empties the claim: the next claimable one is returned.",
         "operationId": "post_internal_v1_operations_claim",
         "requestBody": {
           "content": {
@@ -26376,7 +25871,7 @@
     },
     "/internal/v1/operations/{oid}/advance": {
       "post": {
-        "description": "Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Derives the next step server-side. Requires current-epoch successful effects. Create goes sandbox, node, clone; start goes sandbox, node. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. The clone step requires the operation's latest clone execution (registered over gRPC) to have succeeded on the current Node; it records the baseline commit and commits Workspace Ready/admission with operation success, re-checking the fresh initialized current Node. start commits the same readiness at its node step. Workspace data deletion is planned and completed only after termination confirmation.",
+        "description": "Controller requests require an independent controller service credential; holder, active database-time lease epoch and operation version are checked. Derives the next step server-side. Requires current-epoch successful effects. Create goes sandbox, node, clone; start goes sandbox, node. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. Entering the clone step freezes its cloneInput, or parks or fails the operation as claim does. The clone step requires the operation's latest clone execution (registered over gRPC with exactly the frozen input) to have succeeded on the current Node with exactly the input's baseCommit; it records that commit as the baseline and commits Workspace Ready/admission with operation success, re-checking the fresh initialized current Node. start commits the same readiness at its node step. Workspace data deletion is planned and completed only after termination confirmation.",
         "operationId": "post_internal_v1_operations_oid_advance",
         "parameters": [
           {

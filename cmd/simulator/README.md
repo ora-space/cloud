@@ -8,13 +8,14 @@
 
 - **持久化演示夹具**：在 `.local/demo/fixture` 下初始化真实的本地 Git 仓库测试夹具，并包含初始提交与分支。
 - **进程内 Cloud 服务**：拉起基于真实 PostgreSQL 数据库的临时 `httptest.Server`，提供完整的 Gin 路由服务。
+- **Git Server 替身**：在 `.local/demo/git` 下按 Git Server 卷布局保存 Project 仓库，并代替外部线把夹具提交登记为演示 Project 的快照（`SeedSnapshot`）；外部仓库 URL 从不访问。
 - **Substrate 模拟**：在 `.local/demo/substrate` 下启动本地 HTTP 服务，提供 Substrate 存储和 Effect 模拟。
 - **临时密钥材料**：在内存中为 `gateway`、`controller`、`node` 和 `user` 四种角色生成 Ed25519 密钥对，以便在不依赖外部 IdP 基础设施的情况下签发和验证短期 JWT token。
 - **Controller 驱动执行主循环**：
   1. 引导配置演示租户和用户。
   2. 通过 `/internal/v1/controller-lease/acquire` 获取 Controller 独占租约。
   3. 通过公开 API 发起项目创建请求（`POST /api/v1/tenants/{tid}/projects`）。
-  4. 模拟 Controller 清空队列：执行 Effect 计划（调度沙箱、注册节点，并通过 loopback gRPC `ExecutionService` 把仓库 clone 到 Workspace 数据中）。
+  4. 模拟 Controller 清空队列：执行 Effect 计划（调度沙箱、注册节点，并通过 loopback gRPC `ExecutionService` 登记 Cloud 冻结的 clone 输入，把快照从 Git Server 替身 clone 到 Workspace 数据中）。
   5. 验证 Workspace 成功达到 `ready` 就绪状态，并通过公开 API 查询校验。
   6. 正常释放 Controller 租约。
   7. 向 `stdout` 输出 JSON 摘要。
@@ -26,4 +27,4 @@
 
 参见 [cmd 入口总览](../README.md)、[模拟器内部实现](../../internal/simulator/README.md) 与 [执行契约与边界](../../docs/execution-contract.md)。
 
-进程内模拟器显式使用仅供开发的旧 clone 测试夹具；插件选择因缺少真实执行器保留持久 pending（待执行）。它不证明运行时独占、管理认证或工作负载隔离；这些保障须通过 cluster Compose 和真实验收脚本验证。
+进程内模拟器的 Node 只从 Git Server 替身取快照；插件选择因缺少真实执行器保留持久 pending（待执行）。它不证明运行时独占、管理认证或工作负载隔离；这些保障须通过 cluster Compose 和真实验收脚本验证。

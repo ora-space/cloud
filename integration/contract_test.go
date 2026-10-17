@@ -99,13 +99,13 @@ func TestRestartRecreatesCloudSubstrateAndController(t *testing.T) {
 	must(t, f.store.Pool.Close())
 	auth, e := core.NewAuthenticator("ora-cloud", f.client.Credentials.Trust)
 	must(t, e)
-	reopened := &core.Store{Pool: stdlib.OpenDB(*f.pgConfig)}
+	reopened := &core.Store{Pool: stdlib.OpenDB(*f.pgConfig), GitServer: f.store.GitServer}
 	t.Cleanup(func() { reopened.Pool.Close() })
 	must(t, reopened.CheckSchema(context.Background()))
 	f.store = reopened
 	cloud := httptest.NewServer(router.NewDevelopment(reopened, auth, zap.NewNop()))
 	t.Cleanup(cloud.Close)
-	substrate, e := simulator.NewSubstrate(f.substrate.Root, f.substrate.Repositories)
+	substrate, e := simulator.NewSubstrate(f.substrate.Root, f.substrate.Git)
 	must(t, e)
 	external := httptest.NewServer(substrate)
 	t.Cleanup(external.Close)
@@ -117,7 +117,7 @@ func TestRestartRecreatesCloudSubstrateAndController(t *testing.T) {
 	must(t, e)
 	_, e = f.store.Pool.Exec("UPDATE operations SET retry_at=clock_timestamp()-interval '1 second' WHERE id=$1", created.O("operation").S("id"))
 	must(t, e)
-	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(controlConn(t, reopened))}
+	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(controlConn(t, reopened)), Git: f.git}
 	must(t, controller.Acquire(context.Background()))
 	must(t, controller.Drain(context.Background()))
 	if f.ws(wid).S("observedState") != "ready" || f.scalar("SELECT count(*) FROM sandbox_instances WHERE workspace_id=$1", wid) != 1 || f.scalar("SELECT count(*) FROM external_effects WHERE workspace_id=$1 AND kind='sandbox_ensure'", wid) != 1 {

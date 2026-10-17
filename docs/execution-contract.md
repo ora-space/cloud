@@ -6,9 +6,11 @@
 
 Workspace 运行时跟随 desktop Node（specs `decisions/cloud/operation/0-workspace-runtime-follows-desktop-node.md`）：每个 Workspace 有自己的持久数据，被该 Workspace 的每一代 sandbox 挂载为 Node home；stop 保留，只有 `workspace_data_delete` 删除。Cloud 不再维护 Project 共享卷、bare repository、linked worktree 或维护 Job，也不生成 `ora/{workspace UUID}` 分支；`project_storage` 与 `workspace_worktrees` 只作为历史保留，数据库拒绝新行。
 
-create_project / create_workspace 依次经过 sandbox → node → clone → plugin：sandbox_ensure 返回 `nodeId`，Controller 报告的 Node 必须带相同 NodeId；clone 步骤由 Controller 先通过 gRPC `ExecutionService.RecordDispatch` 登记一次 execution（输入固定为 Project 仓库与 Workspace `requestedRef`，目标为当前 Node），再交给 Node 执行，最后用 `RecordQueriedResult` 登记 Node 报告的结果。成功结果中的 commit 写入 Workspace `baseCommitId`，固定插件集合为空或 Node 全部逐项结果已接管后才开放准入。失败的 execution 保留，operation 进入 retry_wait，重试登记新的 execution；结果未知的 execution 阻止再次登记，operation 只能 blocked，不会自动重试。start 经过 node 与 plugin，不重新 clone。插件安装由 Node execution 执行，单项失败保存在实例，不阻止 Workspace ready。
+create_project / create_workspace 依次经过 sandbox → node → clone → plugin：sandbox_ensure 返回 `nodeId`，Controller 报告的 Node 必须带相同 NodeId；clone 的输入由 Cloud 在推进到 clone 步骤（以及领取）的事务里，从 Project 的 Binding 当前快照冻结进 `operations.request.clone`：`{kind:"clone", repositoryUrl, snapshotRef, baseCommit, workspaceRef}`，其中 `repositoryUrl` 为 `git_server.repository_base_url` + `/<tenantId>/<projectId>.git`，`snapshotRef` 为 `refs/ora/upstreams/<bindingId>/snapshots/<commit>`，`workspaceRef` 为 `refs/heads/workspaces/<workspaceId>/<requestedRef>`；每个 operation 只冻结一次，重试沿用。Controller 领取到的 snapshot 以 `cloneInput`（gRPC `OperationSnapshot.clone_input`）带出这份输入，先通过 gRPC `ExecutionService.RecordDispatch` 原样登记一次 execution（目标为当前 Node，输入不一致为 ABORTED），再交给 Node 执行，最后用 `RecordQueriedResult` 登记 Node 报告的结果。成功结果的 commit 必须等于输入的 `baseCommit`，推进时再核对一次后写入 Workspace `baseCommitId`，固定插件集合为空或 Node 全部逐项结果已接管后才开放准入。失败的 execution 保留，operation 进入 retry_wait，重试登记新的 execution；结果未知的 execution 阻止再次登记，operation 只能 blocked，不会自动重试。start 经过 node 与 plugin，不重新 clone。插件安装由 Node execution 执行，单项失败保存在实例，不阻止 Workspace ready。
 
-Node 不能自选路径、分支或仓库；克隆的 Git 凭据仍是基础设施引用，Cloud 不保存密钥值。
+没有可用快照时不派发 clone，也不消耗重试次数：快照与 Binding 最近一次同步在同一条语句里读取；最近一次同步尚未结束时 operation 进入 `retry_wait`（`snapshot_not_ready`，10 秒后重试）；最近一次同步以失败、被取代或取消结束时 operation `failed`（`repository_sync_failed`，`operations.result` 为 `{syncOperationId, syncErrorCode}`，公开的 operation 只返回 `syncErrorCode`），失败的 create_project 保留 `active` 的 Project；未配置 Git Server 时 `blocked`（`git_server_unconfigured`）。领取时遇到这类 operation 先停放，同一次领取继续找下一个可领取的。clone 从不回退到外部仓库，Cloud 也不在这里触发同步；创建 run Workspace 不同步。Controller 从推进得到非 running 的 operation（已停放或失败）时停止驱动它。
+
+Node 不能自选路径、分支或仓库，只与 Git Server 通信；仓库凭据不控制任何 Node 工作（clone、session、交付）。
 
 ## Substrate 最小接口
 
@@ -18,9 +20,9 @@ Node 不能自选路径、分支或仓库；克隆的 Git 凭据仍是基础设�
 |---|---|---|
 | GET `/effects/{effectId}` | cloud 事先分配的 UUID | 404=确知尚无该 intent；否则返回原 request、externalId、state、result，查询不会创建 |
 | PUT `/effects/{effectId}` | kind、projectId、workspaceId、sandboxInstanceId? | 首次先落 journal 再执行；同 ID 同 payload 幂等，同 ID 不同 payload 409；成功后原结果保留 |
-| PUT/GET `/clones/{executionId}` | 仅模拟器：模拟 Node 执行 clone；workspaceId、repositoryUrl、branch | 同 execution 只执行一次并落 journal；返回 clone_ready+commitId 或 clone_failed+reason |
+| PUT/GET `/clones/{executionId}` | 仅模拟器：模拟 Node 执行 clone；workspaceId、repositoryUrl、snapshotRef、baseCommit、workspaceRef | 同 execution 只执行一次并落 journal；从 Git Server 替身取快照 ref，返回 clone_ready+commit 或 clone_failed+reason |
 
-kind 支持 sandbox_ensure（返回 sandboxInstanceId 与 nodeId）、sandbox_terminate（返回 terminated）、workspace_data_delete（返回 removed）。storage/worktree 与插件 effect 已退役，Cloud 拒绝再计划或接管插件 effect 结果。模拟器只接受显式 repository URL→本地 fixture 映射，不接入真实私有 Git 凭据。cloud 内部的 snapshot 才向受控 Controller 提供本 Project 的 credential reference；基础设施负责解析引用、注入 Git 凭据、审计和轮换，Cloud 从不保存密钥值。Cloud 不读取远端仓库：创建 Project 必须给出具体的 `defaultBranch`（不接受 `HEAD`），isolated Workspace 的 `baseRef` 为 `HEAD` 时取 Project 的默认分支，因此下发的 `requestedRef` 总是 desktop Node 接受的具体分支名。
+kind 支持 sandbox_ensure（返回 sandboxInstanceId 与 nodeId）、sandbox_terminate（返回 terminated）、workspace_data_delete（返回 removed）。storage/worktree 与插件 effect 已退役，Cloud 拒绝再计划或接管插件 effect 结果。模拟器的 Node 只从 Git Server 替身（按 Git Server 卷布局存放的磁盘仓库）取快照，不接入外部仓库或 Git 凭据。cloud 内部的 snapshot 中 Project 只有 `id`，不带仓库 URL、默认分支或 credential reference。Cloud 不读取远端仓库：创建 Project 必须给出可作为 ref 的具体分支名 `defaultBranch`（否则 `400 invalid_ref`），它就是 Binding 分支；Workspace 的 `requestedRef` 等于它，是 Workspace 在 Git Server 上分支的短名，也是 checkout 的本地分支。isolated Workspace 的 `baseRef` 只接受省略、空、`HEAD` 或该分支，其他值 `400 base_ref_not_synced` 且不登记任何东西。
 
 生产 Substrate 应用独立服务身份与受控网络保护这些接口，并验证 Project/Workspace/effect scope；模拟 HTTP handler 仅供 loopback 测试，不能作为生产公共端点发布。幂等 ensure 必须能查询“执行成功但响应丢失”的实际对象，不能以调用方超时判定不存在。terminate 返回确认旧进程不会再访问存储的证据；不确定就 blocked，不分配新 generation。
 

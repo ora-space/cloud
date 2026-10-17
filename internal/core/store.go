@@ -87,14 +87,16 @@ type Store struct {
 
 	// PluginExecution remains for fixtures that still name the old simulation mode. Plugin installs
 	// are Node executions and are no longer gated on it.
-	PluginExecution    PluginExecutionCapability
-	legacyCloneFixture bool
+	PluginExecution PluginExecutionCapability
 	// ObjectStore signs upload grants and verifies stored checksums outside SQL transactions.
 	// Nil means delivery is explicitly skipped through the transaction-scoped business hook.
 	ObjectStore *objectstore.Config
 	// WorkflowAssets downloads the pinned package of a workflow plugin for asset import. Nil
 	// keeps the import loop idle, so a control-plane-only deployment never leaves the cluster.
 	WorkflowAssets WorkflowAssetSource
+	// GitServer is where Workspaces clone from and Revisions are delivered to. Nil means clone
+	// steps block as git_server_unconfigured and deliveries are skipped.
+	GitServer *GitServer
 	// OnThreadEvents receives only first-taken-over events and the caller's SQL transaction.
 	// Hooks must use that transaction; starting another Store transaction would deadlock.
 	OnThreadEvents func(context.Context, *sql.Tx, string, string, []Object) error
@@ -188,17 +190,6 @@ func NewStore(db *gorm.DB) (*Store, error) {
 	}, nil
 }
 
-// NewDevelopmentStore explicitly enables the retired unscoped clone test contract. Production
-// NewStore remains runtime-scoped; this constructor must never be used by the production server.
-func NewDevelopmentStore(db *gorm.DB) (*Store, error) {
-	s, err := NewStore(db)
-	if err != nil {
-		return nil, err
-	}
-	s.legacyCloneFixture = true
-	return s, nil
-}
-
 type transaction struct {
 	tx  *sql.Tx
 	ctx context.Context
@@ -213,7 +204,6 @@ type transaction struct {
 	assist         InputAssistProvider
 	simulator      WorkflowRunSimulator
 	// queued names operations this transaction made claimable; they are published only after commit.
-	legacyCloneFixture    bool
 	pluginExecution       PluginExecutionCapability
 	objectStore           *objectstore.Config
 	onThreadEvents        func(context.Context, *sql.Tx, string, string, []Object) error
@@ -330,7 +320,7 @@ func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (out
 			}
 		}
 	}()
-	t := &transaction{tx: tx, ctx: ctx, store: s, pluginExecution: s.PluginExecution, legacyCloneFixture: s.legacyCloneFixture, directory: s.Directory, contextBuilder: s.Context, forms: s.Forms, assist: s.Assist, simulator: s.Simulator, objectStore: s.ObjectStore, onThreadEvents: s.OnThreadEvents, onSessionEnded: s.OnSessionEnded}
+	t := &transaction{tx: tx, ctx: ctx, store: s, pluginExecution: s.PluginExecution, directory: s.Directory, contextBuilder: s.Context, forms: s.Forms, assist: s.Assist, simulator: s.Simulator, objectStore: s.ObjectStore, onThreadEvents: s.OnThreadEvents, onSessionEnded: s.OnSessionEnded}
 	t.onRunWorkspaceSettled, t.onRunWorkspaceDeleted, t.onDeliverySettled = s.OnRunWorkspaceSettled, s.OnRunWorkspaceDeleted, s.OnDeliverySettled
 	// Publish this transaction to the B-side hooks, which the seams below invoke with the *sql.Tx
 	// alone. Without it a hook could only wrap the handle in a second transaction view, and every

@@ -43,6 +43,7 @@ func (f *fixture) repositoryOperationState(id string) (state, code string) {
 // exists, in the same transaction; the published Project keeps its repository fields.
 func TestCreateProjectRecordsBindingAndInitialSync(t *testing.T) {
 	f := setup(t)
+	f.withoutSnapshot = true
 	created := f.create("binding-create")
 	project := created.O("resource")
 	if project.S("repositoryUrl") != "https://example.invalid/repo.git" || project.S("defaultBranch") != "main" {
@@ -72,6 +73,7 @@ func TestCreateProjectRecordsBindingAndInitialSync(t *testing.T) {
 // one unfinished sync per Binding, and the snapshot ref's name.
 func TestRepositoryOperationStorageConstraints(t *testing.T) {
 	f := setup(t)
+	f.withoutSnapshot = true
 	pid := f.create("binding-constraints").O("resource").S("id")
 	bid := f.bindingOf(pid).S("id")
 
@@ -120,9 +122,10 @@ func TestDeletingProjectCancelsQueuedRepositoryOperationsAndWaitsForRunning(t *t
 	pid := f.create("binding-delete").O("resource").S("id")
 	f.drain()
 	bid := f.bindingOf(pid).S("id")
-	var initial string
-	must(t, f.store.Pool.QueryRow("SELECT id FROM repository_operations WHERE binding_id=$1", bid).Scan(&initial))
-	queued := []string{initial}
+	// The Project's first sync produced its snapshot; a later one is still pending.
+	pending, err := f.repositoryOperation(pid, bid, core.RepositorySync, "pending")
+	must(t, err)
+	queued := []string{pending}
 	for _, state := range []string{"awaiting_approval", "pending", "leased"} {
 		id, err := f.repositoryOperation(pid, bid, core.RepositoryPublish, state)
 		must(t, err)
@@ -152,15 +155,16 @@ func TestDeletingProjectCancelsQueuedRepositoryOperationsAndWaitsForRunning(t *t
 		t.Fatal("entering deleting kept the resync request")
 	}
 
+	// Operation D6: the claim does not hand delete_project to the Controller while Operations are
+	// unfinished; it waits without failing.
 	f.acknowledgeSimulatorBindings()
-	if err := f.controller.Drain(context.Background()); err == nil || !strings.Contains(err.Error(), "repository_operation_unfinished") {
-		t.Fatalf("delete_project started with unfinished repository Operations: %v", err)
-	}
-	if lifecycle := f.call("GET", f.path("/operations/"+deleting.O("operation").S("id")), nil, "", 200).S("step"); lifecycle != "quiesce" {
-		t.Fatalf("delete_project left quiesce at step %s", lifecycle)
+	f.drain()
+	if op := f.call("GET", f.path("/operations/"+deleting.O("operation").S("id")), nil, "", 200); op.S("step") != "quiesce" || op.S("state") != "retry_wait" || op.S("errorCode") != "repository_operation_running" {
+		t.Fatalf("delete_project must wait at quiesce, got %v", op)
 	}
 	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='succeeded',finished_at=clock_timestamp() WHERE id=$1", running)))
 	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='failed',error_code='test',finished_at=clock_timestamp() WHERE id=$1", uncertain)))
+	f.due(deleting.O("operation").S("id"))
 	f.drain()
 	var lifecycle string
 	must(t, f.store.Pool.QueryRow("SELECT lifecycle FROM projects WHERE id=$1", pid).Scan(&lifecycle))
@@ -183,6 +187,10 @@ func TestAbortedProjectDeletionRestoresTheOwedSync(t *testing.T) {
 		{
 			name: "queued sync cancelled",
 			prepare: func(f *fixture, pid, bid, _ string) string {
+				// The fixture's Git Server double already ended the project_created sync with a
+				// snapshot, so the queued sync the deletion cancels is a later one.
+				_, err := f.repositoryOperation(pid, bid, core.RepositorySync, "pending")
+				must(f.t, err)
 				publish, err := f.repositoryOperation(pid, bid, core.RepositoryPublish, "awaiting_approval")
 				must(f.t, err)
 				return publish
@@ -191,8 +199,9 @@ func TestAbortedProjectDeletionRestoresTheOwedSync(t *testing.T) {
 		},
 		{
 			name: "resync requested while a sync runs",
-			prepare: func(f *fixture, _, bid, initial string) string {
-				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running' WHERE id=$1", initial)))
+			prepare: func(f *fixture, pid, bid, _ string) string {
+				_, err := f.repositoryOperation(pid, bid, core.RepositorySync, "running")
+				must(f.t, err)
 				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_bindings SET resync_requested=true WHERE id=$1", bid)))
 				return ""
 			},

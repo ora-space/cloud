@@ -10,6 +10,7 @@ const FAILURE_LABELS: Record<string, string> = {
   model_access_expired: '模型授权已过期',
   thread_unavailable: '会话记录不可用',
   clone_attempts_exhausted: '获取仓库失败，自动重试次数已用尽',
+  repository_sync_failed: '项目仓库同步失败，无法获取仓库',
 }
 
 /** Unknown data is replaced by a fixed code; provider diagnostics never become display text. */

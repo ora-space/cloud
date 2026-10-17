@@ -12,11 +12,11 @@ their own clients; they never copy the `.proto` files.
 |---|---|
 | `errors.proto` | `ErrorDetail{ErrorCode}` attached as a `google.rpc.Status` detail; the gRPC status code is the primary classification, the enum refines it |
 | `lease.proto` | `ControllerLeaseService`: the global coordination lease whose `epoch` fences every write |
-| `executions.proto` | `ExecutionService`: claim work, register before dispatch, take over Node events, store queried results, recovery reads; execution kinds are clone, plugin install/remove, Agent session and Revision delivery, and session and delivery work items carry their target Node (`WorkTarget`) |
+| `executions.proto` | `ExecutionService`: claim work, register before dispatch, take over Node events, store queried results, recovery reads; execution kinds are clone, plugin install/remove, Agent session and Revision delivery, and session and delivery work items carry their target Node (`WorkTarget`); the clone input `CloneSpec` is the Git Server repository URL, snapshot ref, base commit and Workspace branch ref, with failure reasons including `SNAPSHOT_UNAVAILABLE` / `BASE_COMMIT_MISMATCH` |
 | `plugin_executions.proto` | Input of plugin install/remove executions (downloads and SHA-256 assembled by Cloud from its catalog snapshot) and per-plugin results |
-| `agent_executions.proto` | Input and results of Agent session and Revision delivery executions, the git identity, user turns, and the memory-only upload grant `UploadGrant` |
+| `agent_executions.proto` | Input and results of Agent session and Revision delivery executions, the git identity, user turns, the session's Workspace directory (`WorkspaceListing`), the prior Revision with its Git fields, and the memory-only upload grant `UploadGrant`; delivery input carries the Git Server repository URL, delivery ref and Workspace ref and no bundle, and push failures are `PUSH_REJECTED` / `PUSH_FAILED` |
 | `agent_runs.proto` | `AgentRunService`: ordered batch takeover of Thread events, claiming and recording Thread commands, issuing Revision upload grants |
-| `operations.proto` | `WorkspaceOperationService`: claim, plan effects, record effect results, advance and defer Workspace lifecycle operations |
+| `operations.proto` | `WorkspaceOperationService`: claim, plan effects, record effect results, advance and defer Workspace lifecycle operations; the snapshot's `clone_input` is the clone step's frozen input and `OperationProject` carries only `id` |
 | `nodes.proto` | `NodeReportService`: the Controller registers the desktop Nodes it holds sessions with (`node_id` + `node_incarnation_id`) and reports their status, end and idle |
 | `signals.proto` | `ControlSignalService.Watch`: a Controller-opened server stream carrying `WorkAvailable` / `OperationAvailable` / `ThreadCommandAvailable` / `Drain` / `NodeAssignment` |
 
@@ -37,8 +37,9 @@ their own clients; they never copy the `.proto` files.
 
 ## Generation and checks
 
-- `buf.yaml`: `STANDARD` lint, `FILE`-level breaking; `v1` accepts additive changes only, a breaking change
-  is expressed as a sibling `v2` package.
+- `buf.yaml`: `STANDARD` lint, `FILE`-level breaking; Cloud, Controller and Node are released together. It
+  currently carries a one-time `ignore_only` exemption for the fields, messages, RPCs and enum values
+  deleted in the switch to Git-native Workspace code, removed in the next change to the file.
 - `buf.gen.yaml`: pinned `protocolbuffers/go` and `grpc/go` remote plugins generating into
   [`internal/controlpb`](../internal/controlpb/README.en.md) (needs network, not a local `protoc`).
 - `task proto:lint`, `task proto:breaking` (against `PROTO_BASE_REF`, default `main`), `task proto:generate`,

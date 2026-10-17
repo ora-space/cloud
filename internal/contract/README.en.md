@@ -9,7 +9,7 @@
 - **Programmatic OpenAPI generation**: `contract.Document()` builds the complete OpenAPI 3.0 specification tree, defining metadata, security schemes (HTTP Bearer JWT), parameters, request bodies, status codes, and response schemas.
 - **Component schema modeling**: Defines strict JSON schemas for domain entities:
   - Core resources: `Tenant`, `TenantMember`, `User`, `Project`, `Workspace`, `Task`, `Operation`, `Effect`, `WorkspaceNode`, `Ticket`.
-  - Clone work items: `CloneOperation` and the `kind`-tagged `CloneState` (`pending` / `succeeded{path, commit}` / `failed{reason, retainedPath?}`), field for field the transitional Controller DTO.
+  - Clone step: `CloneInput` (`{kind, repositoryUrl, snapshotRef, baseCommit, workspaceRef}`, the internal control snapshot's `cloneInput` and `OperationRequest.clone`) and `CloneExecution`.
   - Error schema: Standardized `Fault` schema with error code, parameter mapping, and request ID.
   - Parameter typing: Strong validation formats including `uuid`, `date-time`, `int64`, and string enumerations.
 - **Contract verification tests**:

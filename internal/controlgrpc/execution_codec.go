@@ -2,10 +2,10 @@ package controlgrpc
 
 import (
 	"math"
+	"net/url"
+	"strings"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wanglongan587/cloud/internal/controlpb"
@@ -17,14 +17,11 @@ import (
 
 func inputObject(in *controlpb.ExecutionInput) (core.Object, error) {
 	if in == nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 	switch spec := in.GetSpec().(type) {
 	case *controlpb.ExecutionInput_Clone:
-		if spec.Clone.GetRepository() == "" || spec.Clone.GetBranch() == "" {
-			return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
-		}
-		return core.Object{"kind": "clone", "repositoryUrl": spec.Clone.GetRepository(), "branch": spec.Clone.GetBranch()}, nil
+		return cloneObject(spec.Clone)
 	case *controlpb.ExecutionInput_InstallPlugins:
 		return core.Object{"kind": "install_plugins", "plugins": installObjects(spec.InstallPlugins.GetPlugins())}, nil
 	case *controlpb.ExecutionInput_RemovePlugins:
@@ -34,7 +31,7 @@ func inputObject(in *controlpb.ExecutionInput) (core.Object, error) {
 	case *controlpb.ExecutionInput_DeliverRevision:
 		return deliveryObject(spec.DeliverRevision)
 	default:
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 }
 
@@ -49,8 +46,33 @@ func input(o core.Object) *controlpb.ExecutionInput {
 	case "deliver_revision":
 		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_DeliverRevision{DeliverRevision: deliveryMessage(o)}}
 	default:
-		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{Repository: o.S("repositoryUrl"), Branch: o.S("branch")}}}
+		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: cloneMessage(o)}}
 	}
+}
+
+// cloneObject is the durable form of a Workspace clone input: a Git Server snapshot. Its shape is
+// checked here so a malformed input never reaches the registry, where it could only conflict with
+// the operation's frozen input (contract D1).
+func cloneObject(spec *controlpb.CloneSpec) (core.Object, error) {
+	snapshot, snapshotOK := core.ParseGitRef(spec.GetSnapshotRef())
+	workspace, workspaceOK := core.ParseGitRef(spec.GetWorkspaceRef())
+	if !gitRepositoryURL(spec.GetRepositoryUrl()) || !core.GitObjectID(spec.GetBaseCommit()) ||
+		!snapshotOK || snapshot.Namespace != core.GitUpstreamSnapshot || snapshot.Name != spec.GetBaseCommit() ||
+		!workspaceOK || workspace.Namespace != core.GitWorkspaceBranch || workspace.Name == "HEAD" {
+		return nil, invalidInput("invalid_dispatch")
+	}
+	return core.Object{"kind": "clone", "repositoryUrl": spec.GetRepositoryUrl(), "snapshotRef": spec.GetSnapshotRef(), "baseCommit": spec.GetBaseCommit(), "workspaceRef": spec.GetWorkspaceRef()}, nil
+}
+
+func cloneMessage(o core.Object) *controlpb.CloneSpec {
+	return &controlpb.CloneSpec{RepositoryUrl: o.S("repositoryUrl"), SnapshotRef: o.S("snapshotRef"), BaseCommit: o.S("baseCommit"), WorkspaceRef: o.S("workspaceRef")}
+}
+
+// gitRepositoryURL accepts the Git Server repository addresses Cloud writes into inputs: https,
+// with a host, and no userinfo, query or fragment for a credential or option to hide in.
+func gitRepositoryURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && strings.HasSuffix(u.Path, ".git")
 }
 
 func installObjects(plugins []*controlpb.PluginInstall) []core.Object {
@@ -105,7 +127,7 @@ func removalMessages(plugins []core.Object) []*controlpb.PluginRemoval {
 
 func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 	if spec.GetAgentPluginId() == "" || spec.GetCheckoutExecutionId() == "" || spec.GetGitIdentity().GetName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 	turn := spec.GetInitialTurn()
 	out := core.Object{
@@ -120,14 +142,26 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
 	}
+	if listings := spec.GetWorkspaceDirectory(); len(listings) > 0 {
+		directory := make([]core.Object, 0, len(listings))
+		for _, l := range listings {
+			listing := core.Object{"workspaceId": l.GetWorkspaceId(), "kind": l.GetKind()}
+			if l.GetIssueRunId() != "" {
+				listing["issueId"], listing["issueTitle"], listing["issueRunId"], listing["runStatus"] = l.GetIssueId(), l.GetIssueTitle(), l.GetIssueRunId(), l.GetRunStatus()
+			}
+			directory = append(directory, listing)
+		}
+		out["workspaceDirectory"] = directory
+	}
 	return out, nil
 }
 
-// priorObject is the durable form of a PriorRevision; a delivery spec's has no bundle.
+// priorObject is the durable form of a PriorRevision. A session spec's names where the Node fetches
+// it and what it was based on; a delivery spec's carries only the identity and final commit.
 func priorObject(prior *controlpb.PriorRevision) core.Object {
 	out := core.Object{"revisionId": prior.GetRevisionId(), "finalCommit": prior.GetFinalCommit()}
-	if prior.GetBundle() != nil {
-		out["bundle"] = storedObject(prior.GetBundle())
+	if prior.GetGitRepositoryUrl() != "" || prior.GetDeliveryRef() != "" || prior.GetBaseCommit() != "" {
+		out["gitRepositoryUrl"], out["deliveryRef"], out["baseCommit"] = prior.GetGitRepositoryUrl(), prior.GetDeliveryRef(), prior.GetBaseCommit()
 	}
 	return out
 }
@@ -136,11 +170,15 @@ func priorMessage(o core.Object) *controlpb.PriorRevision {
 	if o.S("revisionId") == "" {
 		return nil
 	}
-	prior := &controlpb.PriorRevision{RevisionId: o.S("revisionId"), FinalCommit: o.S("finalCommit")}
-	if bundle := o.O("bundle"); len(bundle) > 0 {
-		prior.Bundle = storedMessage(bundle)
+	return &controlpb.PriorRevision{RevisionId: o.S("revisionId"), FinalCommit: o.S("finalCommit"), GitRepositoryUrl: o.S("gitRepositoryUrl"), DeliveryRef: o.S("deliveryRef"), BaseCommit: o.S("baseCommit")}
+}
+
+func directoryMessages(rows []core.Object) []*controlpb.WorkspaceListing {
+	out := make([]*controlpb.WorkspaceListing, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &controlpb.WorkspaceListing{WorkspaceId: row.S("workspaceId"), Kind: row.S("kind"), IssueId: row.S("issueId"), IssueTitle: row.S("issueTitle"), IssueRunId: row.S("issueRunId"), RunStatus: row.S("runStatus")})
 	}
-	return prior
+	return out
 }
 
 func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
@@ -148,10 +186,11 @@ func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
 	turn := o.O("initialTurn")
 	return &controlpb.AgentSessionSpec{
 		AgentPluginId: o.S("agentPluginId"), AgentPluginVersion: o.S("agentPluginVersion"), CheckoutExecutionId: o.S("checkoutExecutionId"),
-		ModelBindingId: o.S("modelBindingId"),
-		GitIdentity:    &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
-		InitialTurn:    &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
-		PriorRevision:  priorMessage(o.O("priorRevision")),
+		ModelBindingId:     o.S("modelBindingId"),
+		GitIdentity:        &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
+		InitialTurn:        &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
+		PriorRevision:      priorMessage(o.O("priorRevision")),
+		WorkspaceDirectory: directoryMessages(rows(o["workspaceDirectory"])),
 	}
 }
 
@@ -172,12 +211,16 @@ func contentMessages(blocks []core.Object) []*controlpb.ContentBlock {
 }
 
 func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
-	if spec.GetSessionExecutionId() == "" || spec.GetBundleKey() == "" || spec.GetHistoryKey() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+	delivery, deliveryOK := core.ParseGitRef(spec.GetDeliveryRef())
+	workspace, workspaceOK := core.ParseGitRef(spec.GetWorkspaceRef())
+	if spec.GetSessionExecutionId() == "" || spec.GetHistoryKey() == "" || !gitRepositoryURL(spec.GetGitRepositoryUrl()) ||
+		!deliveryOK || delivery.Namespace != core.GitDelivery || !workspaceOK || workspace.Namespace != core.GitWorkspaceBranch {
+		return nil, invalidInput("invalid_dispatch")
 	}
 	out := core.Object{
 		"kind": "deliver_revision", "sessionExecutionId": spec.GetSessionExecutionId(), "checkoutExecutionId": spec.GetCheckoutExecutionId(),
-		"baseCommit": spec.GetBaseCommit(), "revisionRef": spec.GetRevisionRef(), "bundleKey": spec.GetBundleKey(), "historyKey": spec.GetHistoryKey(),
+		"baseCommit": spec.GetBaseCommit(), "revisionRef": spec.GetRevisionRef(), "historyKey": spec.GetHistoryKey(),
+		"gitRepositoryUrl": spec.GetGitRepositoryUrl(), "deliveryRef": spec.GetDeliveryRef(), "workspaceRef": spec.GetWorkspaceRef(),
 	}
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
@@ -188,7 +231,8 @@ func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
 func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
 	return &controlpb.DeliverRevisionSpec{
 		SessionExecutionId: o.S("sessionExecutionId"), CheckoutExecutionId: o.S("checkoutExecutionId"), BaseCommit: o.S("baseCommit"),
-		RevisionRef: o.S("revisionRef"), BundleKey: o.S("bundleKey"), HistoryKey: o.S("historyKey"),
+		RevisionRef: o.S("revisionRef"), HistoryKey: o.S("historyKey"),
+		GitRepositoryUrl: o.S("gitRepositoryUrl"), DeliveryRef: o.S("deliveryRef"), WorkspaceRef: o.S("workspaceRef"),
 		PriorRevision: priorMessage(o.O("priorRevision")),
 	}
 }
@@ -196,7 +240,7 @@ func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
 func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {
 	node := res.GetNode()
 	if node == nil || node.GetNodeId() == "" || node.GetNodeIncarnationId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_result")
+		return nil, invalidInput("invalid_result")
 	}
 	out := core.Object{"node": core.Object{"nodeId": node.GetNodeId(), "nodeIncarnationId": node.GetNodeIncarnationId()}}
 	switch outcome := res.GetOutcome().(type) {
@@ -221,7 +265,7 @@ func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {
 		out["outcome"] = "revision_delivered"
 		delivered := outcome.RevisionDelivered
 		out["finalCommit"], out["baseCommit"], out["revisionRef"] = delivered.GetFinalCommit(), delivered.GetBaseCommit(), delivered.GetRevisionRef()
-		out["bundle"], out["history"] = storedObject(delivered.GetBundle()), storedObject(delivered.GetHistory())
+		out["history"] = storedObject(delivered.GetHistory())
 	case *controlpb.ExecutionResult_RevisionUnchanged:
 		out["outcome"] = "revision_unchanged"
 		unchanged := outcome.RevisionUnchanged
@@ -230,7 +274,7 @@ func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {
 	case *controlpb.ExecutionResult_RevisionFailed:
 		out["outcome"], out["reason"] = "revision_failed", shortEnum(outcome.RevisionFailed.GetReason().String(), "REVISION_FAILURE_REASON_")
 	default:
-		return nil, status.Error(codes.InvalidArgument, "invalid_result")
+		return nil, invalidInput("invalid_result")
 	}
 	return out, nil
 }
@@ -281,7 +325,7 @@ func result(o core.Object) *controlpb.ExecutionResult {
 		}
 		out.Outcome = &controlpb.ExecutionResult_AgentSessionEnded{AgentSessionEnded: ended}
 	case "revision_delivered":
-		out.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), Bundle: storedMessage(o.O("bundle")), History: storedMessage(o.O("history"))}}
+		out.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), History: storedMessage(o.O("history"))}}
 	case "revision_unchanged":
 		out.Outcome = &controlpb.ExecutionResult_RevisionUnchanged{RevisionUnchanged: &controlpb.RevisionUnchanged{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), History: storedMessage(o.O("history"))}}
 	case "revision_failed":
@@ -349,4 +393,11 @@ func grantMessage(o core.Object) *controlpb.UploadGrant {
 		grant.ExpiresAt = timestamppb.New(exp)
 	}
 	return grant
+}
+
+// invalidInput rejects a malformed execution input or result before it reaches the registry. It is
+// a 400 Fault mapped in fault.go, so the status carries ErrorDetail INVALID_INPUT like every other
+// invalid argument the contract reports.
+func invalidInput(code string) error {
+	return toStatus(&core.Fault{Code: code, Status: 400, Params: core.Object{}})
 }

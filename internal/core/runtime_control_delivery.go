@@ -50,7 +50,6 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 			run := t.one("SELECT r.id FROM issue_runs r JOIN issues i ON i.id=r.issue_id WHERE r.id=$1 AND r.deleted_at IS NULL AND i.deleted_at IS NULL", c.S("maintenanceRunId"))
 			w := t.one("SELECT * FROM workspaces WHERE id=$1", c.S("workspaceId"))
 			require(run != nil && runtimeUsable(t, w, w.S("creatorUserId")), 403, "runtime_use_forbidden")
-			requireRepositoryAccess(t, w.S("projectId"))
 			binding := runtimeBinding(t, c, n)
 			binding["executionId"], binding["nodeOperationId"] = e.S("executionId"), e.S("nodeOperationId")
 			return binding
@@ -59,7 +58,6 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 		o := t.one("SELECT * FROM operations WHERE id=$1", c.S("maintenanceOperationId"))
 		require(o.S("state") == "running" && o.N("controllerEpoch") == r.Body.N("epoch") && o.S("step") == step, 409, "execution_closed")
 		require(runtimeUsable(t, t.one("SELECT * FROM workspaces WHERE id=$1", c.S("workspaceId")), o.S("actorUserId")), 403, "runtime_use_forbidden")
-		requireRepositoryAccess(t, o.S("projectId"))
 		binding := runtimeBinding(t, c, n)
 		binding["executionId"] = e.S("executionId")
 		binding["nodeOperationId"] = e.S("nodeOperationId")

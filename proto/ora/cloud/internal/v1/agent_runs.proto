@@ -20,9 +20,6 @@ service AgentRunService {
   // Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
   // write: nothing is recorded, and every call issues new grants.
   rpc GrantRevisionUpload(GrantRevisionUploadRequest) returns (GrantRevisionUploadResponse);
-  // Issues a fresh read grant for the prior Revision bundle of a registered session execution that
-  // has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
-  rpc GrantRevisionDownload(GrantRevisionDownloadRequest) returns (GrantRevisionDownloadResponse);
 }
 
 // One non-terminal event of a session execution, as the Node sent it. Thread events share the
@@ -111,24 +108,13 @@ message GrantRevisionUploadRequest {
   int64 epoch = 1;
   // A delivery execution registered through RecordDispatch.
   string execution_id = 2;
-  // Optional object key -> lowercase hexadecimal SHA-256. Keys must belong to the frozen
-  // delivery input. Cloud binds each checksum into its ephemeral PUT signature; refreshing
-  // this capability never changes the execution input. Omit for legacy v1 grants.
+  // Optional object key -> lowercase hexadecimal SHA-256. The only accepted key is the frozen
+  // delivery input's history_key. Cloud binds the checksum into its ephemeral PUT signature;
+  // refreshing this capability never changes the execution input. Omit for unbound grants.
   map<string, string> checksums = 3;
 }
 
 message GrantRevisionUploadResponse {
-  // One grant per requested checksum key, or both input keys for legacy requests.
+  // Exactly one grant, for the input's history_key.
   repeated UploadGrant grants = 1;
-}
-
-message GrantRevisionDownloadRequest {
-  int64 epoch = 1;
-  // A session execution registered through RecordDispatch whose input carries prior_revision.
-  string execution_id = 2;
-}
-
-message GrantRevisionDownloadResponse {
-  // Exactly one grant, for the input's prior_revision bundle key.
-  repeated DownloadGrant grants = 1;
 }
