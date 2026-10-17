@@ -16,7 +16,7 @@ import { useCreateProject } from '@/features/projects/api'
  * backend enforces the same rule and reports 400 for anything else.
  */
 function looksLikeRepositoryUrl(value: string): boolean {
-  return /^https:\/\//.test(value.trim())
+  return value.trim().startsWith('https://')
 }
 
 /** Form fields for a new project in the current space. */

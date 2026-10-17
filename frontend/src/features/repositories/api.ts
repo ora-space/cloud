@@ -4,8 +4,26 @@ import type {
   GitCredentialSubmission,
   PostApiV1TenantsTidProjectsPidRepositoryPublishesBody,
 } from '@/api/generated.schemas'
-import * as credentials from '@/api/git-credentials/git-credentials'
-import * as repository from '@/api/repository/repository'
+import {
+  deleteApiV1TenantsTidGitCredentialsGcid,
+  getApiV1TenantsTidGitCredentials,
+  postApiV1TenantsTidGitCredentials,
+  postApiV1TenantsTidGitCredentialsGcidConfirm,
+  postApiV1TenantsTidGitCredentialsGcidRotate,
+  postApiV1TenantsTidGitCredentialsGcidVerifications,
+} from '@/api/git-credentials/git-credentials'
+import {
+  getApiV1TenantsTidProjectsPidRepository,
+  getApiV1TenantsTidProjectsPidRepositoryOperations,
+  getApiV1TenantsTidProjectsPidRepositoryWorkspacesWidBranches,
+  postApiV1TenantsTidProjectsPidRepositoryCredential,
+  postApiV1TenantsTidProjectsPidRepositoryOperationsRoidApprove,
+  postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancel,
+  postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheck,
+  postApiV1TenantsTidProjectsPidRepositoryOperationsRoidReject,
+  postApiV1TenantsTidProjectsPidRepositoryPublishes,
+  postApiV1TenantsTidProjectsPidRepositorySyncs,
+} from '@/api/repository/repository'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { mutationHeaders, useIdempotencyKeys } from '@/features/spaces/api'
 
@@ -16,12 +34,7 @@ export function useGitCredentials() {
     queryKey: ['git-credentials', tenantId],
     enabled: !!tenantId,
     queryFn: ({ signal }) =>
-      credentials.getApiV1TenantsTidGitCredentials(
-        tenantId ?? '',
-        { limit: 200 },
-        undefined,
-        signal,
-      ),
+      getApiV1TenantsTidGitCredentials(tenantId ?? '', { limit: 200 }, undefined, signal),
     refetchInterval: 5000,
   })
 }
@@ -45,7 +58,7 @@ export function useCredentialActions() {
       if (!tenantId) throw new Error('请选择空间')
       const options = { headers: mutationHeaders(keyFor(input)) }
       if (input.action === 'create')
-        return credentials.postApiV1TenantsTidGitCredentials(
+        return postApiV1TenantsTidGitCredentials(
           tenantId,
           {
             name: input.name,
@@ -57,20 +70,20 @@ export function useCredentialActions() {
         )
       const c = input.credential
       if (input.action === 'rotate')
-        return credentials.postApiV1TenantsTidGitCredentialsGcidRotate(
+        return postApiV1TenantsTidGitCredentialsGcidRotate(
           tenantId,
           c.id,
           { version: c.version },
           options,
         )
       if (input.action === 'revoke')
-        return credentials.deleteApiV1TenantsTidGitCredentialsGcid(
+        return deleteApiV1TenantsTidGitCredentialsGcid(
           tenantId,
           c.id,
           { version: c.version },
           options,
         )
-      return credentials.postApiV1TenantsTidGitCredentialsGcidVerifications(tenantId, c.id, options)
+      return postApiV1TenantsTidGitCredentialsGcidVerifications(tenantId, c.id, options)
     },
     onSuccess: () => {
       void cache.invalidateQueries({ queryKey: ['git-credentials', tenantId] })
@@ -84,7 +97,7 @@ export function useConfirmCredential() {
   const cache = useQueryClient()
   return useMutation({
     mutationFn: (input: { credentialId: string; submissionId: string }) =>
-      credentials.postApiV1TenantsTidGitCredentialsGcidConfirm(tenantId ?? '', input.credentialId, {
+      postApiV1TenantsTidGitCredentialsGcidConfirm(tenantId ?? '', input.credentialId, {
         submissionId: input.submissionId,
       }),
     onSuccess: () => {
@@ -101,19 +114,14 @@ export function useRepository(projectId: string) {
     queryKey: ['repository', tenantId, projectId],
     enabled,
     queryFn: ({ signal }) =>
-      repository.getApiV1TenantsTidProjectsPidRepository(
-        tenantId ?? '',
-        projectId,
-        undefined,
-        signal,
-      ),
+      getApiV1TenantsTidProjectsPidRepository(tenantId ?? '', projectId, undefined, signal),
     refetchInterval: 5000,
   })
   const operations = useQuery({
     queryKey: ['repository-operations', tenantId, projectId],
     enabled,
     queryFn: ({ signal }) =>
-      repository.getApiV1TenantsTidProjectsPidRepositoryOperations(
+      getApiV1TenantsTidProjectsPidRepositoryOperations(
         tenantId ?? '',
         projectId,
         { limit: 200 },
@@ -141,31 +149,26 @@ export function useRepositoryAction(projectId: string) {
       if (!tenantId) throw new Error('请选择空间')
       const opts = { headers: mutationHeaders(keyFor(input)) }
       if (input.action === 'sync')
-        return repository.postApiV1TenantsTidProjectsPidRepositorySyncs(
-          tenantId,
-          projectId,
-          {},
-          opts,
-        )
+        return postApiV1TenantsTidProjectsPidRepositorySyncs(tenantId, projectId, {}, opts)
       if (input.action === 'credential')
-        return repository.postApiV1TenantsTidProjectsPidRepositoryCredential(
+        return postApiV1TenantsTidProjectsPidRepositoryCredential(
           tenantId,
           projectId,
           { credentialRefId: input.credentialRefId, version: input.version },
           opts,
         )
       if (input.action === 'publish')
-        return repository.postApiV1TenantsTidProjectsPidRepositoryPublishes(
+        return postApiV1TenantsTidProjectsPidRepositoryPublishes(
           tenantId,
           projectId,
           input.body,
           opts,
         )
       const actions = {
-        approve: repository.postApiV1TenantsTidProjectsPidRepositoryOperationsRoidApprove,
-        reject: repository.postApiV1TenantsTidProjectsPidRepositoryOperationsRoidReject,
-        cancel: repository.postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancel,
-        check: repository.postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheck,
+        approve: postApiV1TenantsTidProjectsPidRepositoryOperationsRoidApprove,
+        reject: postApiV1TenantsTidProjectsPidRepositoryOperationsRoidReject,
+        cancel: postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancel,
+        check: postApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheck,
       }
       return actions[input.action](tenantId, projectId, input.operationId, {}, opts)
     },
@@ -198,7 +201,7 @@ export function usePublishSources(projectId: string, workspaceId: string) {
     queryKey: ['publish-branches', tenantId, projectId, workspaceId],
     enabled: !!tenantId && !!workspaceId,
     queryFn: ({ signal }) =>
-      repository.getApiV1TenantsTidProjectsPidRepositoryWorkspacesWidBranches(
+      getApiV1TenantsTidProjectsPidRepositoryWorkspacesWidBranches(
         tenantId ?? '',
         projectId,
         workspaceId,

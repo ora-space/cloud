@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import type { RepositoryOperation } from '@/api/generated.schemas'
+import type { ProjectRepository, RepositoryOperation } from '@/api/generated.schemas'
 import { Button } from '@/components/ui/button'
-import { useSession } from '@/features/auth/session'
-import { useCurrentSpace } from '@/features/spaces/current-space'
 import { faultCode } from '@/lib/api-client'
 import { useGitCredentials, useRepository, useRepositoryAction } from './api'
+import { mayManageCredential, useCredentialViewer } from './credential-authority'
 import { CredentialSelect } from './credential-select'
 import { PublishDialog } from './publish-dialog'
 
@@ -33,6 +32,9 @@ const errors: Record<string, string> = {
   credential_changed: '凭据已轮换，请重新发起发布',
   repository_too_large: '仓库超过大小限制',
 }
+
+/** One publish Operation's actions, as its state and the viewer's rights allow them. */
+type PublishActionName = 'approve' | 'reject' | 'cancel' | 'check'
 
 /** Code source, explicit sync/candidate changes, and auditable publication status. */
 export function RepositoryPanel({ projectId }: { projectId: string }) {
@@ -69,23 +71,7 @@ export function RepositoryPanel({ projectId }: { projectId: string }) {
   return (
     <section className="space-y-3 border-b p-6">
       <h2 className="font-semibold">代码来源</h2>
-      <p>
-        {data.binding.repositoryUrl} · {data.binding.branch}
-      </p>
-      <p>
-        当前快照：{data.snapshot?.commitOid ?? '尚未同步'}{' '}
-        {data.snapshot?.forced && '（外部历史已改写，旧快照仍保留）'}
-      </p>
-      <p>
-        同步：{data.latestSync ? states[data.latestSync.state] : '暂无'} ·{' '}
-        {data.latestSync?.errorCode
-          ? (errors[data.latestSync.errorCode] ?? data.latestSync.errorCode)
-          : ''}
-      </p>
-      <p>
-        凭据：{data.credential?.name ?? '匿名读取'}{' '}
-        {data.binding.resyncRequested && ' · 发布后的补同步已安排'}
-      </p>
+      <SourceSummary source={data} />
       <Button disabled={action.isPending} onClick={() => void sync()}>
         立即同步
       </Button>
@@ -117,18 +103,81 @@ export function RepositoryPanel({ projectId }: { projectId: string }) {
   )
 }
 
+/** What the Binding currently points at, in the terms the contract reports it. */
+function SourceSummary({ source }: { source: ProjectRepository }) {
+  const sync = source.latestSync
+  return (
+    <>
+      <p>
+        {source.binding.repositoryUrl} · {source.binding.branch}
+      </p>
+      <p>
+        当前快照：{source.snapshot?.commitOid ?? '尚未同步'}{' '}
+        {source.snapshot?.forced && '（外部历史已改写，旧快照仍保留）'}
+      </p>
+      <p>
+        同步：{sync ? states[sync.state] : '暂无'} ·{' '}
+        {sync?.errorCode ? (errors[sync.errorCode] ?? sync.errorCode) : ''}
+      </p>
+      <p>
+        凭据：{source.credential?.name ?? '匿名读取'}{' '}
+        {source.binding.resyncRequested && ' · 发布后的补同步已安排'}
+      </p>
+    </>
+  )
+}
+
+/** The publish buttons one Operation offers, which depend on who is looking at it. */
+function PublishActions({
+  operation: o,
+  approver,
+  requester,
+  pending,
+  onAct,
+}: {
+  operation: RepositoryOperation
+  approver: boolean
+  requester: boolean
+  pending: boolean
+  onAct: (name: PublishActionName) => Promise<void>
+}) {
+  const awaiting = o.state === 'awaiting_approval'
+  const canCancel = (awaiting || o.state === 'pending') && requester
+  const canCheck = o.state === 'uncertain' && (approver || requester)
+  return (
+    <>
+      {awaiting && approver && (
+        <>
+          <Button disabled={pending} onClick={() => void onAct('approve')}>
+            批准
+          </Button>
+          <Button disabled={pending} onClick={() => void onAct('reject')}>
+            拒绝
+          </Button>
+        </>
+      )}
+      {canCancel && (
+        <Button disabled={pending} onClick={() => void onAct('cancel')}>
+          取消发布
+        </Button>
+      )}
+      {canCheck && (
+        <Button disabled={pending} onClick={() => void onAct('check')}>
+          立即核验
+        </Button>
+      )}
+    </>
+  )
+}
+
 function PublishRow({ operation: o }: { operation: RepositoryOperation }) {
   const action = useRepositoryAction(o.projectId)
   const credentials = useGitCredentials()
-  const { session } = useSession()
-  const { space } = useCurrentSpace()
-  const c = credentials.data?.items.find((c) => c.id === o.credentialRefId)
-  const uid = session.status === 'signed-in' ? session.user.id : ''
-  const approver =
-    c?.attribution === 'personal'
-      ? c.ownerUserId === uid
-      : c?.attribution === 'team' && space?.role === 'admin'
-  async function act(name: 'approve' | 'reject' | 'cancel' | 'check') {
+  const viewer = useCredentialViewer()
+  const credential = credentials.data?.items.find((item) => item.id === o.credentialRefId)
+  const approver = mayManageCredential(credential, viewer)
+  const requester = viewer.userId !== '' && viewer.userId === o.requestedBy
+  async function act(name: PublishActionName) {
     try {
       await action.mutateAsync({ action: name, operationId: o.id })
     } catch {
@@ -148,26 +197,13 @@ function PublishRow({ operation: o }: { operation: RepositoryOperation }) {
       </p>
       {o.errorCode && <p>{errors[o.errorCode] ?? o.errorCode}</p>}
       {o.result['confirmedByVerification'] === true && <p>结果由核验确认</p>}
-      {o.state === 'awaiting_approval' && approver && (
-        <>
-          <Button disabled={action.isPending} onClick={() => void act('approve')}>
-            批准
-          </Button>
-          <Button disabled={action.isPending} onClick={() => void act('reject')}>
-            拒绝
-          </Button>
-        </>
-      )}
-      {['awaiting_approval', 'pending'].includes(o.state) && uid === o.requestedBy && (
-        <Button disabled={action.isPending} onClick={() => void act('cancel')}>
-          取消发布
-        </Button>
-      )}
-      {o.state === 'uncertain' && (approver || uid === o.requestedBy) && (
-        <Button disabled={action.isPending} onClick={() => void act('check')}>
-          立即核验
-        </Button>
-      )}
+      <PublishActions
+        operation={o}
+        approver={approver}
+        requester={requester}
+        pending={action.isPending}
+        onAct={act}
+      />
       {action.isError && <p role="alert">{faultCode(action.error) ?? '操作失败'}</p>}
     </article>
   )

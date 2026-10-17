@@ -1,5 +1,4 @@
-import { useSession } from '@/features/auth/session'
-import { useCurrentSpace } from '@/features/spaces/current-space'
+import { mayManageCredential, useCredentialViewer } from './credential-authority'
 import { useGitCredentials } from './api'
 
 /** Bind only credentials the current member may manage; Cloud rechecks scope and availability. */
@@ -11,16 +10,13 @@ export function CredentialSelect({
   onChange: (id: string) => void
 }) {
   const list = useGitCredentials()
-  const { session } = useSession()
-  const { space } = useCurrentSpace()
+  const viewer = useCredentialViewer()
   const options =
     list.data?.items.filter(
       (c) =>
         c.secretState === 'stored' &&
         c.availability === 'available' &&
-        (c.attribution === 'team'
-          ? space?.role === 'admin'
-          : session.status === 'signed-in' && c.ownerUserId === session.user.id),
+        mayManageCredential(c, viewer),
     ) ?? []
   return (
     <label className="block text-sm">

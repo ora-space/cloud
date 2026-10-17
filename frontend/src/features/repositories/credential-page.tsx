@@ -2,10 +2,10 @@ import { useState } from 'react'
 import type { GitCredential, GitCredentialSubmission } from '@/api/generated.schemas'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useSession } from '@/features/auth/session'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { faultCode } from '@/lib/api-client'
 import { useConfirmCredential, useCredentialActions, useGitCredentials } from './api'
+import { mayManageCredential, useCredentialViewer } from './credential-authority'
 import { submitGitToken } from './submission'
 
 /** Tenant-scoped Git credential metadata, with secrets submitted directly to the Store. */
@@ -167,13 +167,9 @@ function CredentialRow({
   credential: GitCredential
   onRotate: (s: GitCredentialSubmission) => void
 }) {
-  const { session } = useSession()
-  const { space } = useCurrentSpace()
+  const viewer = useCredentialViewer()
   const actions = useCredentialActions()
-  const manager =
-    c.attribution === 'personal'
-      ? session.status === 'signed-in' && session.user.id === c.ownerUserId
-      : space?.role === 'admin'
+  const manager = mayManageCredential(c, viewer)
   async function act(action: 'rotate' | 'verify' | 'revoke') {
     try {
       const result = await actions.mutateAsync({ action, credential: c })
@@ -205,7 +201,7 @@ function CredentialRow({
           </Button>
         </>
       )}
-      {(manager || space?.role === 'admin') && c.secretState !== 'revoked' && (
+      {(manager || viewer.isTenantAdmin) && c.secretState !== 'revoked' && (
         <Button
           variant="destructive"
           disabled={actions.isPending}
