@@ -114,11 +114,13 @@ type GitHubConfig struct {
 	Source           string `mapstructure:"source"`
 }
 
-// IDaaSConfig configures the Huawei corporate provider. The identity source and endpoint paths are
-// fixed in the adapter; only the environment origin, application credential, display field, and
-// total request timeout vary by deployment.
+// IDaaSConfig configures the Huawei corporate provider. Endpoint overrides belong to the
+// deployment, never to a browser request; the identity source and wire protocol remain fixed.
 type IDaaSConfig struct {
 	BaseURL          string        `mapstructure:"base_url"`
+	AuthorizeURL     string        `mapstructure:"authorize_url"`
+	TokenURL         string        `mapstructure:"token_url"`
+	UserInfoURL      string        `mapstructure:"userinfo_url"`
 	ClientID         string        `mapstructure:"client_id"`
 	ClientSecretFile string        `mapstructure:"client_secret_file"`
 	DisplayNameField string        `mapstructure:"display_name_field"`
@@ -266,6 +268,13 @@ func (c *Config) Validate() error {
 		}
 		if c.IDaaS.Timeout <= 0 {
 			return fmt.Errorf("idaas.timeout must be positive")
+		}
+		for _, endpoint := range []string{c.IDaaS.AuthorizeURL, c.IDaaS.TokenURL, c.IDaaS.UserInfoURL} {
+			if endpoint != "" {
+				if _, e := IDaaSEndpoint(endpoint); e != nil {
+					return e
+				}
+			}
 		}
 		if c.IDaaS.DisplayNameField != "" && (strings.TrimSpace(c.IDaaS.DisplayNameField) != c.IDaaS.DisplayNameField || len(c.IDaaS.DisplayNameField) > 128) {
 			return fmt.Errorf("idaas.display_name_field must be a trimmed top-level field name of at most 128 bytes")

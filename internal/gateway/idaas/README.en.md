@@ -9,8 +9,15 @@ provider error classification, and response bounds; callers receive only
 
 | File | Responsibility |
 | --- | --- |
-| `idaas.go` | Fixes endpoints and scope, builds redirects, exchanges codes, and minimizes profiles. |
+| `idaas.go` | Resolves deployment endpoints with legacy defaults, fixes scope, builds redirects, exchanges codes, and minimizes profiles. |
 | `idaas_test.go` | Covers client_secret_post form requests, identity mapping, fallback, error classes, cancellation, and secret redaction. |
+| `endpoints_test.go` | Covers HTTPS endpoint overrides, unchanged form requests, and unsafe URL rejection. |
+
+Operators may override each full authorize/token/userinfo HTTPS URL. Omitted values retain BaseURL
+and the original paths. Userinfo, query and fragment URL components are rejected without reflecting
+the configured value. Recreate the container after changing endpoints or rotating the mounted secret;
+no image rebuild is necessary. Browser requests cannot select endpoints. Changes must retain the same
+corporate identity authority, source, scope and UUID semantics.
 
 `uuid` is the sole identity key (corresponding to the corporate employee number rather than the raw
 employee ID or W3 account) and is trimmed of leading/trailing whitespace (the documented success

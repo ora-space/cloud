@@ -180,11 +180,21 @@ github: {client_id: id, client_secret_file: /run/secret}
 	t.Setenv("GATEWAY_IDAAS_BASE_URL", "https://uniportal-beta.huawei.com")
 	t.Setenv("GATEWAY_IDAAS_CLIENT_ID", "app")
 	t.Setenv("GATEWAY_IDAAS_CLIENT_SECRET_FILE", "/run/idaas-secret")
+	t.Setenv("GATEWAY_IDAAS_AUTHORIZE_URL", "https://sso.example.org/custom/authorize")
+	t.Setenv("GATEWAY_IDAAS_TOKEN_URL", "https://tokens.example.org/custom/token")
+	t.Setenv("GATEWAY_IDAAS_USERINFO_URL", "https://profile.example.org/custom/userinfo")
 	cfg, e = LoadConfig(path)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if cfg.Login.Provider != ProviderHuaweiIDaaS || cfg.IDaaS.ClientID != "app" || cfg.Session.TTL != 240*time.Hour {
 		t.Fatalf("environment must supply keys absent from the file: %+v %s", cfg.Login, cfg.Session.TTL)
+	}
+	if cfg.IDaaS.AuthorizeURL != "https://sso.example.org/custom/authorize" || cfg.IDaaS.TokenURL != "https://tokens.example.org/custom/token" || cfg.IDaaS.UserInfoURL != "https://profile.example.org/custom/userinfo" {
+		t.Fatal("IDaaS endpoint environment overrides were not loaded")
+	}
+	t.Setenv("GATEWAY_IDAAS_TOKEN_URL", "https://tokens.example.org/token?secret=redacted")
+	if _, e = LoadConfig(path); e == nil || strings.Contains(e.Error(), "redacted") {
+		t.Fatal("invalid endpoint must fail without exposing the value")
 	}
 }
