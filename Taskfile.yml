@@ -51,7 +51,7 @@ tasks:
       - task: test
   build:
     cmds:
-      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/git-server-preset ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
+      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/git-server-preset ./cmd/repo-executor ./cmd/git-credential-ora ./cmd/credential-store ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
   run:
     desc: Go API server on :8080
     cmds: [go run ./cmd/server]

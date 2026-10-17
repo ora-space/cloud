@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/wanglongan587/cloud/internal/cloneauth"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -21,10 +23,14 @@ type PublicRequest struct {
 	ModelConnectionID string
 	// Session filters are independent of resource IDs used by public route dispatch.
 	SessionProjectID, SessionStatus, SessionAgent, SessionFrom, SessionTo string
-	Limit                                                                 int
-	Body                                                                  Object
-	Identity                                                              *Claims
-	Person                                                                *DirectoryPerson
+	// GitCredentialID addresses a tenant's Git credential reference.
+	GitCredentialID string
+	// RepositoryOperationID addresses one sync or publish of a Project's repository.
+	RepositoryOperationID string
+	Limit                 int
+	Body                  Object
+	Identity              *Claims
+	Person                *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
@@ -113,6 +119,10 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		}
 		var out Object
 		switch {
+		case strings.Contains(r.Path, "/git-credentials"):
+			out, status = gitCredentialsPublic(t, r, uid)
+		case r.ProjectID != "" && strings.Contains(r.Path, "/repository"):
+			out, status = repositoryPublic(t, r, uid)
 		case strings.Contains(r.Path, "/invitations") || strings.Contains(r.Path, "/join-links") || strings.Contains(r.Path, "/join-requests"):
 			out, status = adminJoinWrite(t, r, uid)
 			if r.JoinRequestID != "" && strings.HasSuffix(r.Path, "/approve") {
@@ -410,6 +420,14 @@ func window(t *transaction, q string, args []any, r *PublicRequest) Object {
 }
 
 func readPublic(t *transaction, r *PublicRequest, uid string) Object {
+	if strings.Contains(r.Path, "/git-credentials") {
+		out, _ := gitCredentialsPublic(t, r, uid)
+		return out
+	}
+	if r.ProjectID != "" && strings.Contains(r.Path, "/repository") {
+		out, _ := repositoryPublic(t, r, uid)
+		return out
+	}
 	if r.SpaceID != "" {
 		switch {
 		case strings.HasSuffix(r.Path, "/projects"):
@@ -565,22 +583,27 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	}
 	name := validText(r.Body.S("name"), 200)
 	repo := validText(r.Body.S("repositoryUrl"), 2048)
+	// Phase one reaches external repositories over HTTPS only, and only through the Repo
+	// Executor; the URL carries no user information, query or fragment (sync ADR D1).
 	parsed, e := url.Parse(repo)
-	require(e == nil && (parsed.Scheme == "https" || parsed.Scheme == "ssh") && parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == "", 400, "invalid_repository_url")
-	if parsed.User != nil {
-		_, password := parsed.User.Password()
-		require(!password && parsed.Scheme == "ssh", 400, "embedded_credentials_forbidden")
-	}
-	// The Node clones only a literal branch name and Cloud reads no remote repository, so the
-	// caller names the branch; HEAD would leave the Workspace's clone step blocked for good.
+	require(e == nil && parsed.User == nil, 400, "embedded_credentials_forbidden")
+	_, e = cloneauth.NormalizeRepository(repo)
+	require(e == nil, 400, "invalid_repository_url")
+	// Cloud reads no remote repository, so the caller names the branch the Binding follows; it
+	// is the Project's default branch and the only one phase one synchronizes.
 	branch := r.Body.S("defaultBranch")
 	require(strings.TrimSpace(branch) != "", 400, "default_branch_required")
-	branch = validRef(branch)
-	require(branch != "HEAD", 400, "default_branch_required")
+	require(validBranchName(branch) && branch != "HEAD", 400, "default_branch_required")
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
-		require(t.one("SELECT id FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid) != nil, 404, "credential_ref_not_found")
+		c := t.one("SELECT * FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND name IS NOT NULL", id, r.TenantID)
+		require(c != nil, 404, "credential_ref_not_found")
+		// Binding a credential lets the Project's syncs read with it: a personal one only its
+		// owner may bind, a team one only an administrator (identity-access D5).
+		requireCredentialManager(t, c, uid)
+		code := credentialProblem(t, r.TenantID, id, repo, "")
+		require(code == "", 409, code)
 		cred = id
 	}
 	pid, wid := newID(), newID()

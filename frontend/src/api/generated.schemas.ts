@@ -316,8 +316,6 @@ export interface ControllerProject {
   lifecycle: string;
   name: string;
   ownerUserId: string;
-  /** @nullable */
-  repositoryCredentialRefId?: string | null;
   repositoryUrl: string;
   /** @nullable */
   secretRef: string | null;
@@ -496,6 +494,170 @@ export interface FormDescriptor {
   formRef: string;
   /** @nullable */
   title?: string | null;
+}
+
+export type GitCredentialAttribution = typeof GitCredentialAttribution[keyof typeof GitCredentialAttribution];
+
+
+export const GitCredentialAttribution = {
+  personal: 'personal',
+  team: 'team',
+  unknown: 'unknown',
+} as const;
+
+export type GitCredentialAvailability = typeof GitCredentialAvailability[keyof typeof GitCredentialAvailability];
+
+
+export const GitCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type GitCredentialCapabilitiesItem = typeof GitCredentialCapabilitiesItem[keyof typeof GitCredentialCapabilitiesItem];
+
+
+export const GitCredentialCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+/**
+ * Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification.
+ */
+export type GitCredentialCapabilityEvidence = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type GitCredentialLastVerificationResult = typeof GitCredentialLastVerificationResult[keyof typeof GitCredentialLastVerificationResult] | null;
+
+
+export const GitCredentialLastVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type GitCredentialLastVerificationState = typeof GitCredentialLastVerificationState[keyof typeof GitCredentialLastVerificationState];
+
+
+export const GitCredentialLastVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+/**
+ * @nullable
+ */
+export type GitCredentialLastVerification = {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: GitCredentialLastVerificationResult;
+  state: GitCredentialLastVerificationState;
+  storeVersion: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type GitCredentialPendingSubmission = {
+  expiresAt: string;
+  storeVersion: number;
+  submissionId: string;
+} | null;
+
+export type GitCredentialRequestedCapabilitiesItem = typeof GitCredentialRequestedCapabilitiesItem[keyof typeof GitCredentialRequestedCapabilitiesItem];
+
+
+export const GitCredentialRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type GitCredentialSecretState = typeof GitCredentialSecretState[keyof typeof GitCredentialSecretState];
+
+
+export const GitCredentialSecretState = {
+  awaiting_secret: 'awaiting_secret',
+  stored: 'stored',
+  revoked: 'revoked',
+} as const;
+
+export interface GitCredential {
+  attribution: GitCredentialAttribution;
+  availability: GitCredentialAvailability;
+  capabilities: GitCredentialCapabilitiesItem[];
+  /** Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification. */
+  capabilityEvidence: GitCredentialCapabilityEvidence;
+  createdAt: string;
+  id: string;
+  /** @nullable */
+  lastVerification?: GitCredentialLastVerification;
+  name: string;
+  ownerUserId: string;
+  /** @nullable */
+  pendingSubmission?: GitCredentialPendingSubmission;
+  repositoryScope: string;
+  requestedCapabilities: GitCredentialRequestedCapabilitiesItem[];
+  /** @nullable */
+  revokedAt?: string | null;
+  secretState: GitCredentialSecretState;
+  storeVersion: number;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason?: string | null;
+  version: number;
+}
+
+export interface GitCredentialSubmission {
+  expiresAt: string;
+  /** One-time submission grant, presented to the Credential Store as `Authorization: Ora-Submission <grant>`. It authorizes writing one version, expires within five minutes and is not a credential. */
+  grant: string;
+  /** The Credential Store browser entry the token is PUT to, as `{"token": "..."}`. The token never goes to Cloud. */
+  ingressUrl: string;
+  storeVersion: number;
+  submissionId: string;
+}
+
+/**
+ * @nullable
+ */
+export type GitCredentialVerificationResult = typeof GitCredentialVerificationResult[keyof typeof GitCredentialVerificationResult] | null;
+
+
+export const GitCredentialVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type GitCredentialVerificationState = typeof GitCredentialVerificationState[keyof typeof GitCredentialVerificationState];
+
+
+export const GitCredentialVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+export interface GitCredentialVerification {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: GitCredentialVerificationResult;
+  state: GitCredentialVerificationState;
+  storeVersion: number;
 }
 
 export interface GitIdentity {
@@ -1286,12 +1448,361 @@ export interface Project {
   lifecycle: string;
   name: string;
   ownerUserId: string;
-  /** @nullable */
-  repositoryCredentialRefId?: string | null;
   repositoryUrl: string;
   spaceId: string;
   tenantId: string;
   version: number;
+}
+
+export type ProjectRepositoryBinding = {
+  branch: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  id: string;
+  projectId: string;
+  repositoryUrl: string;
+  resyncRequested: boolean;
+  version: number;
+};
+
+export type ProjectRepositoryCredentialAttribution = typeof ProjectRepositoryCredentialAttribution[keyof typeof ProjectRepositoryCredentialAttribution];
+
+
+export const ProjectRepositoryCredentialAttribution = {
+  personal: 'personal',
+  team: 'team',
+  unknown: 'unknown',
+} as const;
+
+export type ProjectRepositoryCredentialAvailability = typeof ProjectRepositoryCredentialAvailability[keyof typeof ProjectRepositoryCredentialAvailability];
+
+
+export const ProjectRepositoryCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type ProjectRepositoryCredentialCapabilitiesItem = typeof ProjectRepositoryCredentialCapabilitiesItem[keyof typeof ProjectRepositoryCredentialCapabilitiesItem];
+
+
+export const ProjectRepositoryCredentialCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+/**
+ * Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification.
+ */
+export type ProjectRepositoryCredentialCapabilityEvidence = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialLastVerificationResult = typeof ProjectRepositoryCredentialLastVerificationResult[keyof typeof ProjectRepositoryCredentialLastVerificationResult] | null;
+
+
+export const ProjectRepositoryCredentialLastVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type ProjectRepositoryCredentialLastVerificationState = typeof ProjectRepositoryCredentialLastVerificationState[keyof typeof ProjectRepositoryCredentialLastVerificationState];
+
+
+export const ProjectRepositoryCredentialLastVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialLastVerification = {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: ProjectRepositoryCredentialLastVerificationResult;
+  state: ProjectRepositoryCredentialLastVerificationState;
+  storeVersion: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialPendingSubmission = {
+  expiresAt: string;
+  storeVersion: number;
+  submissionId: string;
+} | null;
+
+export type ProjectRepositoryCredentialRequestedCapabilitiesItem = typeof ProjectRepositoryCredentialRequestedCapabilitiesItem[keyof typeof ProjectRepositoryCredentialRequestedCapabilitiesItem];
+
+
+export const ProjectRepositoryCredentialRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type ProjectRepositoryCredentialSecretState = typeof ProjectRepositoryCredentialSecretState[keyof typeof ProjectRepositoryCredentialSecretState];
+
+
+export const ProjectRepositoryCredentialSecretState = {
+  awaiting_secret: 'awaiting_secret',
+  stored: 'stored',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredential = {
+  attribution: ProjectRepositoryCredentialAttribution;
+  availability: ProjectRepositoryCredentialAvailability;
+  capabilities: ProjectRepositoryCredentialCapabilitiesItem[];
+  /** Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification. */
+  capabilityEvidence: ProjectRepositoryCredentialCapabilityEvidence;
+  createdAt: string;
+  id: string;
+  /** @nullable */
+  lastVerification?: ProjectRepositoryCredentialLastVerification;
+  name: string;
+  ownerUserId: string;
+  /** @nullable */
+  pendingSubmission?: ProjectRepositoryCredentialPendingSubmission;
+  repositoryScope: string;
+  requestedCapabilities: ProjectRepositoryCredentialRequestedCapabilitiesItem[];
+  /** @nullable */
+  revokedAt?: string | null;
+  secretState: ProjectRepositoryCredentialSecretState;
+  storeVersion: number;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason?: string | null;
+  version: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryLatestSyncApproverKind = typeof ProjectRepositoryLatestSyncApproverKind[keyof typeof ProjectRepositoryLatestSyncApproverKind] | null;
+
+
+export const ProjectRepositoryLatestSyncApproverKind = {
+  credential_owner: 'credential_owner',
+  publisher: 'publisher',
+} as const;
+
+/**
+ * Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output.
+ */
+export type ProjectRepositoryLatestSyncResult = { [key: string]: unknown };
+
+export type ProjectRepositoryLatestSyncState = typeof ProjectRepositoryLatestSyncState[keyof typeof ProjectRepositoryLatestSyncState];
+
+
+export const ProjectRepositoryLatestSyncState = {
+  awaiting_approval: 'awaiting_approval',
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  uncertain: 'uncertain',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  superseded: 'superseded',
+  cancelled: 'cancelled',
+  conflict: 'conflict',
+  rejected: 'rejected',
+} as const;
+
+export type ProjectRepositoryLatestSyncType = typeof ProjectRepositoryLatestSyncType[keyof typeof ProjectRepositoryLatestSyncType];
+
+
+export const ProjectRepositoryLatestSyncType = {
+  repository_sync: 'repository_sync',
+  repository_publish: 'repository_publish',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryLatestSync = {
+  /** @nullable */
+  approvalExpiresAt?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  approvedBy?: string | null;
+  /** @nullable */
+  approverKind?: ProjectRepositoryLatestSyncApproverKind;
+  bindingId: string;
+  checkAttempts: number;
+  createdAt: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  /** @nullable */
+  credentialVersion?: number | null;
+  /** @nullable */
+  errorCode?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  expectedOldOid?: string | null;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  nextCheckAt?: string | null;
+  projectId: string;
+  replayCount: number;
+  /** @nullable */
+  requestedBy?: string | null;
+  /** Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output. */
+  result: ProjectRepositoryLatestSyncResult;
+  /** @nullable */
+  revisionId?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  sourceCommit?: string | null;
+  /** @nullable */
+  sourceOperationId?: string | null;
+  /** @nullable */
+  sourceRef?: string | null;
+  /** @nullable */
+  startedAt?: string | null;
+  state: ProjectRepositoryLatestSyncState;
+  /** @nullable */
+  targetBranch?: string | null;
+  tenantId: string;
+  trigger: string;
+  type: ProjectRepositoryLatestSyncType;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositorySnapshot = {
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  commitOid: string;
+  forced: boolean;
+  recordedAt: string;
+  snapshotRef: string;
+  syncOperationId: string;
+} | null;
+
+export interface ProjectRepository {
+  binding: ProjectRepositoryBinding;
+  /** @nullable */
+  credential?: ProjectRepositoryCredential;
+  /** @nullable */
+  latestSync?: ProjectRepositoryLatestSync;
+  /** @nullable */
+  snapshot?: ProjectRepositorySnapshot;
+}
+
+/**
+ * @nullable
+ */
+export type RepositoryOperationApproverKind = typeof RepositoryOperationApproverKind[keyof typeof RepositoryOperationApproverKind] | null;
+
+
+export const RepositoryOperationApproverKind = {
+  credential_owner: 'credential_owner',
+  publisher: 'publisher',
+} as const;
+
+/**
+ * Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output.
+ */
+export type RepositoryOperationResult = { [key: string]: unknown };
+
+export type RepositoryOperationState = typeof RepositoryOperationState[keyof typeof RepositoryOperationState];
+
+
+export const RepositoryOperationState = {
+  awaiting_approval: 'awaiting_approval',
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  uncertain: 'uncertain',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  superseded: 'superseded',
+  cancelled: 'cancelled',
+  conflict: 'conflict',
+  rejected: 'rejected',
+} as const;
+
+export type RepositoryOperationType = typeof RepositoryOperationType[keyof typeof RepositoryOperationType];
+
+
+export const RepositoryOperationType = {
+  repository_sync: 'repository_sync',
+  repository_publish: 'repository_publish',
+} as const;
+
+export interface RepositoryOperation {
+  /** @nullable */
+  approvalExpiresAt?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  approvedBy?: string | null;
+  /** @nullable */
+  approverKind?: RepositoryOperationApproverKind;
+  bindingId: string;
+  checkAttempts: number;
+  createdAt: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  /** @nullable */
+  credentialVersion?: number | null;
+  /** @nullable */
+  errorCode?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  expectedOldOid?: string | null;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  nextCheckAt?: string | null;
+  projectId: string;
+  replayCount: number;
+  /** @nullable */
+  requestedBy?: string | null;
+  /** Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output. */
+  result: RepositoryOperationResult;
+  /** @nullable */
+  revisionId?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  sourceCommit?: string | null;
+  /** @nullable */
+  sourceOperationId?: string | null;
+  /** @nullable */
+  sourceRef?: string | null;
+  /** @nullable */
+  startedAt?: string | null;
+  state: RepositoryOperationState;
+  /** @nullable */
+  targetBranch?: string | null;
+  tenantId: string;
+  trigger: string;
+  type: RepositoryOperationType;
 }
 
 export type RunPreparationStage = typeof RunPreparationStage[keyof typeof RunPreparationStage];
@@ -1550,6 +2061,7 @@ export const SpaceEventType = {
   pluginscatalog_updated: 'plugins.catalog_updated',
   issue_runthread_appended: 'issue_run.thread_appended',
   issue_runthread_changed: 'issue_run.thread_changed',
+  projectrepository_updated: 'project.repository_updated',
 } as const;
 
 export interface SpaceEvent {
@@ -1923,6 +2435,13 @@ export interface WorkflowSnapshotForm {
   title?: string | null;
 }
 
+export interface WorkspaceBranch {
+  branch: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  commit: string;
+  ref: string;
+}
+
 export type WorkspaceListItemDesiredState = typeof WorkspaceListItemDesiredState[keyof typeof WorkspaceListItemDesiredState];
 
 
@@ -2251,6 +2770,88 @@ issueId?: string;
 export type GetApiV1TenantsTidCollaborationTargets200 = {
   items: CollaborationTarget[];
   nextCursor: string;
+};
+
+export type GetApiV1TenantsTidGitCredentialsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidGitCredentials200 = {
+  items: GitCredential[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidGitCredentialsBodyAttribution = typeof PostApiV1TenantsTidGitCredentialsBodyAttribution[keyof typeof PostApiV1TenantsTidGitCredentialsBodyAttribution];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyAttribution = {
+  personal: 'personal',
+  team: 'team',
+} as const;
+
+export type PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem = typeof PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem[keyof typeof PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type PostApiV1TenantsTidGitCredentialsBody = {
+  attribution: PostApiV1TenantsTidGitCredentialsBodyAttribution;
+  name: string;
+  /**
+     * The one https repository the credential works on; normalized (lowercase host, no :443, no trailing / or .git).
+     * @maxLength 2048
+     */
+  repositoryScope: string;
+  requestedCapabilities?: PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem[];
+};
+
+export type PostApiV1TenantsTidGitCredentials201 = {
+  resource: GitCredential;
+  submission: GitCredentialSubmission;
+};
+
+export type DeleteApiV1TenantsTidGitCredentialsGcidBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1TenantsTidGitCredentialsGcid200 = {
+  resource: GitCredential;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidConfirmBody = {
+  submissionId: string;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidConfirm200 = {
+  resource: GitCredential;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidRotateBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidRotate200 = {
+  resource: GitCredential;
+  submission: GitCredentialSubmission;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidVerificationsBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidGitCredentialsGcidVerifications202 = {
+  resource: GitCredentialVerification;
 };
 
 export type GetApiV1TenantsTidInvitationsParams = {
@@ -3052,6 +3653,91 @@ export type PatchApiV1TenantsTidProjectsPidBody = {
   name: string;
   /** @minimum 0 */
   version: number;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryCredentialBody = {
+  credentialRefId: string;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryCredential202 = {
+  resource: RepositoryOperation;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryOperationsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor, ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryOperations200 = {
+  items: RepositoryOperation[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidApproveBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidApprove200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancelBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancel200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheckBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheck200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidRejectBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidReject200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryPublishesBody = {
+  credentialRefId?: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  expectedOldOid: string;
+  revisionId?: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  sourceCommit?: string;
+  /** refs/heads/workspaces/<workspaceId>/<branch> or refs/ora/deliveries/<deliveryWorkId> of this Project. */
+  sourceRef?: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  targetBranch: string;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryPublishes201 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncsBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncs200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncs202 = {
+  resource: RepositoryOperation;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryWorkspacesWidBranches200 = {
+  items: WorkspaceBranch[];
 };
 
 export type GetApiV1TenantsTidProjectsPidWorkspacesParams = {

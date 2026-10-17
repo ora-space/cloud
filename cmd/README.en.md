@@ -14,6 +14,8 @@ operating-system signal handling, and process exit codes.
 - [devsetup](devsetup/README.en.md) is the development-only one-shot setup (`task setup`): from `config.toml` it generates the Gateway private keys, the public keys Cloud trusts and the PKCE key, writes the GitHub client secret file and `.local/dev.env`, and applies migrations.
 - [git-server](git-server/README.en.md) serves Project repositories to sandboxes and the Repo Executor over smart HTTP, authorizing every request from current Cloud state, and answers Cloud's read-only ref query.
 - [git-server-preset](git-server-preset/README.en.md) prepares and checks Git Server contract fixtures for acceptance only; it ships only in the development image.
+- [git-credential-ora](git-credential-ora/README.en.md) is the Repo Executor's fixed Git credential helper; it delivers the credential only when the requested https repository equals the staged scope.
+- [credential-store](credential-store/README.en.md) runs the independent Credential Store: the redemption, management and key mTLS listeners and the browser ingress; it refuses to start without a keyring and periodically sweeps expired versions.
 - [simulator](simulator/README.en.md) provides an all-in-one local demo environment backed by in-process Substrate and Git execution doubles.
 - [openapi](openapi/README.en.md) compiles and synchronizes the canonical OpenAPI 3.0 specification (`api/openapi.json`) from Go contract definitions.
 - [checkformat](checkformat/README.en.md) enforces repository Go formatting standards as a strict failing CI gate.

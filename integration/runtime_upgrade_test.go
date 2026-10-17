@@ -73,14 +73,15 @@ func TestRuntimeUpgradeOnlyBackfillsUniqueCreationEvidenceAndKeepsUnknownReferen
 			t.Fatal("unproven creator guessed", creator, creatorOp, evidence)
 		}
 	}
-	var afterOperations, attribution, availability, secret, oldRef, owner string
-	var effective sql.NullString
+	var afterOperations, attribution, availability, secret, secretState, oldRef, owner string
 	must(t, pool.QueryRow("SELECT jsonb_agg(to_jsonb(o) ORDER BY id)::text FROM operations o").Scan(&afterOperations))
 	if afterOperations != originalOperations {
 		t.Fatal("migration rewrote operation history")
 	}
-	must(t, pool.QueryRow("SELECT c.attribution,c.availability,c.secret_ref,b.credential_ref_id::text,b.repository_credential_ref_id::text,p.owner_user_id::text FROM credential_refs c JOIN repository_bindings b ON b.credential_ref_id=c.id JOIN projects p ON p.id=b.project_id WHERE c.id=$1", ref).Scan(&attribution, &availability, &secret, &oldRef, &effective, &owner))
-	if attribution != "unknown" || availability != "available" || secret != "controlled-reference-only" || oldRef != ref || effective.Valid || owner != admin {
+	must(t, pool.QueryRow("SELECT c.attribution,c.availability,c.secret_ref,c.secret_state,b.credential_ref_id::text,p.owner_user_id::text FROM credential_refs c JOIN repository_bindings b ON b.credential_ref_id=c.id JOIN projects p ON p.id=b.project_id WHERE c.id=$1", ref).Scan(&attribution, &availability, &secret, &secretState, &oldRef, &owner))
+	// The external line's switch keeps the historical row but can never redeem it: a
+	// deployment-preset reference has no version in the Credential Store.
+	if attribution != "unknown" || availability != "available" || secret != "controlled-reference-only" || secretState != "revoked" || oldRef != ref || owner != admin {
 		t.Fatal("credential migration guessed attribution or rewrote bindings")
 	}
 	_, err = pool.Exec("UPDATE workspaces SET creator_user_id=$2 WHERE id=$1", ids[1], admin)

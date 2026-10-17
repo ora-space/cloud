@@ -113,3 +113,31 @@ object_store:
   access_key_id_file: ""
   secret_access_key_file: ""
   upload_grant_ttl: 15m
+
+repository:
+  # The external Git line (cloud/repo-executor, identity-access Credential Store, cloud/project sync
+  # and publish). Disabled, Projects are created but no sync runs and Git credentials cannot be
+  # submitted. Every value is a file or address reference; keys and certificates are mounted files.
+  # Overrides: CLOUD_REPOSITORY_<KEY>, e.g. CLOUD_REPOSITORY_ENABLED, CLOUD_REPOSITORY_EXECUTOR_URL.
+  enabled: false
+  executor_url: "https://repo-executor:8471"
+  executor_ca_file: ""
+  dispatcher_cert_file: ""
+  dispatcher_key_file: ""
+  # Ed25519 (PKCS#8) key signing execution authorizations; distinct from submission_key_file.
+  authorization_key_file: ""
+  credential_store_url: "https://credential-store:8462"
+  credential_store_ca_file: ""
+  manager_cert_file: ""
+  manager_key_file: ""
+  submission_key_file: ""
+  # The Credential Store's browser origin; tokens go there from the browser, never to Cloud.
+  credential_ingress_url: ""
+  git_refs_url: "https://git-server:8446"
+  git_refs_ca_file: ""
+  git_refs_cert_file: ""
+  git_refs_key_file: ""
+  slots: 4
+  lease: 1m
+  sync_timeout: 30m
+  publish_timeout: 5m

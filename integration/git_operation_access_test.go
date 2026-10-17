@@ -27,6 +27,14 @@ func expectDenied(t *testing.T, err error, why string) {
 	}
 }
 
+// startOperation moves a fixture Operation to running the way the worker does: under a live lease,
+// with its authorization recorded and, for a sync, the tracking ref's expected old value read.
+func startOperation(t *testing.T, f *fixture, id string) {
+	t.Helper()
+	must(t, firstErr(f.store.Pool.Exec(`UPDATE repository_operations SET state='running',lease_generation=lease_generation+1,lease_owner='test',lease_expires_at=clock_timestamp()+interval '1 minute',
+	 authorization_id=gen_random_uuid(),started_at=clock_timestamp(),expected_tracking_oid=CASE WHEN type='repository_sync' THEN repeat('0',40) END WHERE id=$1`, id)))
+}
+
 // An Operation's Git access follows its current state and its Project's lifecycle: running in a
 // provisioning, active or deleting Project grants access; anything else, a deleted Project, or a
 // mismatched tenant or Project is the same denial.
@@ -40,8 +48,8 @@ func TestGitOperationAccessFollowsOperationAndProjectLifecycle(t *testing.T) {
 
 	_, err := f.store.AuthorizeGitOperation(ctx, sync, f.tid, pid)
 	expectDenied(t, err, "a pending sync has no Git access")
-	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running' WHERE id=$1", sync)))
-	want := core.GitGrant{TenantID: f.tid, ProjectID: pid, Writable: []core.GitWritableRef{{Prefix: core.GitSnapshotRefPrefix(bid), Rule: core.GitCreateOnly}}}
+	startOperation(t, f, sync)
+	want := core.GitGrant{TenantID: f.tid, ProjectID: pid, Writable: []core.GitWritableRef{{Prefix: core.GitSnapshotRefPrefix(bid), Rule: core.GitCreateOnly}, {Ref: core.GitUpstreamHeadPrefix(bid) + "main", Rule: core.GitTrackingCAS}}}
 	for _, lifecycle := range []string{"provisioning", "active", "deleting"} {
 		must(t, firstErr(f.store.Pool.Exec("UPDATE projects SET lifecycle=$2 WHERE id=$1", pid, lifecycle)))
 		got, err := f.store.AuthorizeGitOperation(ctx, sync, f.tid, pid)
@@ -55,6 +63,11 @@ func TestGitOperationAccessFollowsOperationAndProjectLifecycle(t *testing.T) {
 	expectDenied(t, err, "another Project")
 	_, err = f.store.AuthorizeGitOperation(ctx, "not-a-uuid", f.tid, pid)
 	expectDenied(t, err, "a malformed Operation ID")
+	// The lease ends access even while the row still says running: the ID is one execution.
+	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", sync)))
+	_, err = f.store.AuthorizeGitOperation(ctx, sync, f.tid, pid)
+	expectDenied(t, err, "a running sync whose lease expired")
+	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1", sync)))
 
 	publish, err := f.repositoryOperation(pid, bid, core.RepositoryPublish, "running")
 	must(t, err)
@@ -84,7 +97,7 @@ func TestGitServerAuthorizesExecutorSyncFromCloudState(t *testing.T) {
 	bid := f.bindingOf(pid).S("id")
 	var sync string
 	must(t, f.store.Pool.QueryRow("SELECT id FROM repository_operations WHERE binding_id=$1", bid).Scan(&sync))
-	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running' WHERE id=$1", sync)))
+	startOperation(t, f, sync)
 
 	pki, executorPKI := newGitPKI(t), newGitPKI(t)
 	pki.issue(t, "server", "", x509.ExtKeyUsageServerAuth)

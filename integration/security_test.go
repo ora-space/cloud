@@ -350,9 +350,9 @@ func TestPostgresAggregateConstraints(t *testing.T) {
 	bob := f.call("GET", "/api/v1/me", nil, "", 200)
 	f.user.Subject = "alice"
 	f.addMemberID(bob.S("id"), "member")
-	ref, e := f.store.ConfigureCredential(context.Background(), f.tid, bob.S("id"), "secret://bob/git")
-	must(t, e)
-	f.call("POST", f.path("/projects"), core.Object{"name": "wrong credential", "repositoryUrl": "https://example.invalid/repo.git", "defaultBranch": "main", "credentialRefId": ref.S("id")}, "credential-owner", 404)
+	// Only the owner may bind a personal credential, even for a member who can see it.
+	ref := f.storedGitCredential(bob.S("id"), "personal", "https://example.invalid/repo")
+	f.call("POST", f.path("/projects"), core.Object{"name": "wrong credential", "repositoryUrl": "https://example.invalid/repo.git", "defaultBranch": "main", "credentialRefId": ref}, "credential-owner", 403)
 }
 
 func TestListPaginationAndErrorShape(t *testing.T) {

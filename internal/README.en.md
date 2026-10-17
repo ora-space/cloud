@@ -19,6 +19,11 @@
 - [objectstore](objectstore/README.en.md) is cloud's own S3-compatible object-store client (SigV4-presigned upload grants, HEAD verification of an object's size and SHA-256), serving the Revision path alone.
 - [gitpreset](gitpreset/README.en.md) prepares and checks Git Server contract fixtures for acceptance only, writing the repository volume and database directly; no service process imports it.
 - [gitserver](gitserver/README.en.md) serves Git access to Project repositories: the sandbox and Repo Executor repository listeners, per-request ref rule sets from Core, `git http-backend`, per-namespace pre-receive rules and Cloud's ref query.
+- [cloneauth](cloneauth/README.en.md) holds the external Git line's one-time grants: Ed25519 signing and strict verification of `sync`/`publish`/`probe` execution authorizations and browser `submit` grants, `NormalizeRepository`, and key loading.
+- [credentialmaterial](credentialmaterial/README.en.md) is the Repo Executor's per-task credential material directory (0700 directory, 0600 exclusive files, fsync, verified removal, startup sweep), the layout shared with `git-credential-ora`.
+- [processgroup](processgroup/README.en.md) puts a Git child at the head of a new process group, kills the whole group with `SIGKILL` on cancellation and sets `WaitDelay`.
+- [capture](capture/README.en.md) is a bounded buffer for child-process output: keeps the first N bytes, counts the rest, and never fails a write.
+- [credentialstore](credentialstore/README.en.md) is the independent Credential Store: KEK keyring and envelope encryption, an atomically written credential volume, one-time redemption and submission claims, one-hour version retention and revocation that destroys ciphertext; the redemption, management, key and browser-ingress listeners, plus the clients Cloud and the executor use.
 - [config](config/README.en.md) loads and validates application configuration files and environment overrides.
 - [logger](logger/README.en.md) provides structured, non-blocking JSON logging via Zap and Lumberjack.
 - [simulator](simulator/README.en.md) implements in-process doubles for the Substrate execution engine, Controller, and Workspace Node.
@@ -34,6 +39,8 @@
    - `internal/core` $\rightarrow$ standard library, `gorm.io/gorm`, `internal/core/migrations`.
    - `internal/repository` $\rightarrow$ `internal/config`, `gorm.io/gorm`.
    - `internal/gitpreset` $\rightarrow$ `internal/core` (ref vocabulary), `internal/gitserver` (repository creation); only `cmd/git-server-preset` imports it.
+   - `internal/credentialmaterial` $\rightarrow$ `internal/cloneauth` (`NormalizeRepository` only); `cmd/git-credential-ora` imports only these two. `cloneauth`, `capture` and `processgroup` depend on the standard library alone (`cloneauth` also uses `github.com/google/uuid`).
+   - `internal/credentialstore` $\rightarrow$ `internal/cloneauth`; only `cmd/credential-store`, Cloud (`ManagementClient`) and the executor (`RedemptionClient`) import it.
    - `internal/objectstore` $\rightarrow$ `internal/core` (the `UploadGrant` value type only); `internal/core` reaches it through the `RevisionObjects` interface it declares for itself and never imports this package back.
    - Lower layers (`core`, `repository`, `objectstore`) never import upper presentation layers (`api`, `router`).
 2. **PostgreSQL is authoritative**:

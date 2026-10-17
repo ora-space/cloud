@@ -25,6 +25,7 @@ type Config struct {
 	Plugins       PluginConfig        `mapstructure:"plugins"`
 	IssueRuns     IssueRunsConfig     `mapstructure:"issue_runs"`
 	ObjectStore   ObjectStoreConfig   `mapstructure:"object_store"`
+	Repository    RepositoryConfig    `mapstructure:"repository"`
 }
 
 // IssueRunsConfig holds the Thread lifecycle policy that belongs to Cloud's own dispatch loop

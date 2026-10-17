@@ -22,14 +22,11 @@ func main() {
 
 func run() error {
 	configFile := flag.String("config", "", "configuration file")
-	command := flag.String("command", "", "migrate | bootstrap | credential-ref")
+	command := flag.String("command", "", "migrate | bootstrap")
 	name := flag.String("name", "", "tenant name")
 	source := flag.String("source", "", "stable identity namespace")
 	subject := flag.String("subject", "", "identity subject")
 	display := flag.String("display-name", "", "display name")
-	tenant := flag.String("tenant", "", "tenant UUID")
-	owner := flag.String("owner", "", "owner UUID")
-	secret := flag.String("secret-ref", "", "infrastructure secret reference, never a secret value")
 	flag.Parse()
 	cfg, e := config.Load(*configFile)
 	if e != nil {
@@ -52,10 +49,8 @@ func run() error {
 		out = core.Object{"migrated": e == nil}
 	case "bootstrap":
 		out, e = s.Bootstrap(ctx, *name, *source, *subject, *display)
-	case "credential-ref":
-		out, e = s.ConfigureCredential(ctx, *tenant, *owner, *secret)
 	default:
-		return fmt.Errorf("unknown command; choose migrate, bootstrap, credential-ref")
+		return fmt.Errorf("unknown command; choose migrate, bootstrap")
 	}
 	if e != nil {
 		return e
