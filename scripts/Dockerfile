@@ -4,6 +4,8 @@
 #
 #   docker build -f scripts/Dockerfile -t ora-cloud:phase-one .
 #   docker build -f scripts/Dockerfile --target devsetup -t ora-cloud-devsetup:local .
+#   docker build -f scripts/Dockerfile --target repo-executor -t ora-repo-executor:local .
+#   docker build -f scripts/Dockerfile --target credential-store -t ora-credential-store:local .
 FROM golang:1.27.1-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -15,7 +17,10 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/server ./cmd/server && \
     CGO_ENABLED=0 go build -trimpath -o /out/git-server ./cmd/git-server && \
     CGO_ENABLED=0 go build -trimpath -o /out/cloudctl ./cmd/cloudctl && \
     CGO_ENABLED=0 go build -trimpath -o /out/devsetup ./cmd/devsetup && \
-    CGO_ENABLED=0 go build -trimpath -o /out/git-server-preset ./cmd/git-server-preset
+    CGO_ENABLED=0 go build -trimpath -o /out/git-server-preset ./cmd/git-server-preset && \
+    CGO_ENABLED=0 go build -trimpath -o /out/repo-executor ./cmd/repo-executor && \
+    CGO_ENABLED=0 go build -trimpath -o /out/git-credential-ora ./cmd/git-credential-ora && \
+    CGO_ENABLED=0 go build -trimpath -o /out/credential-store ./cmd/credential-store
 
 FROM node:24-alpine AS web-build
 WORKDIR /src/frontend
@@ -40,6 +45,25 @@ COPY --from=build /out/devsetup /out/git-server-preset /app/
 COPY configs/config.yaml /app/configs/
 USER ora
 ENTRYPOINT ["/app/devsetup"]
+
+# The Repo Executor: the only component that reaches external Git repositories (executor root ADR).
+# It keeps nothing: its task directory is a tmpfs the deployment mounts at
+# /var/lib/repo-executor/tasks, and git-credential-ora is the only credential helper Git may use.
+FROM alpine:3.22 AS repo-executor
+RUN apk add --no-cache ca-certificates git && adduser -D -u 10002 executor && \
+    install -d -o executor -g executor -m 0700 /var/lib/repo-executor /var/lib/repo-executor/tasks
+COPY --from=build /out/repo-executor /app/
+COPY --from=build /out/git-credential-ora /usr/local/bin/
+USER executor
+ENTRYPOINT ["/app/repo-executor"]
+
+# The Credential Store: independent process and volume; Cloud never reads its data.
+FROM alpine:3.22 AS credential-store
+RUN apk add --no-cache ca-certificates && adduser -D -u 10003 credentials && \
+    install -d -o credentials -g credentials -m 0700 /var/lib/ora-credentials
+COPY --from=build /out/credential-store /app/
+USER credentials
+ENTRYPOINT ["/app/credential-store"]
 
 FROM alpine:3.22
 # git serves sandbox repositories through `git http-backend` (cmd/git-server), which Alpine ships in

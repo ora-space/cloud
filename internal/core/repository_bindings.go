@@ -3,7 +3,7 @@ package core
 // projectView reads a Project together with its Binding's repository under the Project's
 // published field names, so the Project resource, the Controller snapshot and the clone step keep
 // their shape. Phase one has exactly one Binding per Project, created in the same transaction.
-const projectView = `(SELECT p.*,b.repository_url,b.branch AS default_branch,b.credential_ref_id,b.repository_credential_ref_id
+const projectView = `(SELECT p.*,b.repository_url,b.branch AS default_branch,b.credential_ref_id
  FROM projects p JOIN repository_bindings b ON b.project_id=p.id)`
 
 // Repository Operation types (contract D5 item 3).

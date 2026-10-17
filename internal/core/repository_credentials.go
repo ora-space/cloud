@@ -6,10 +6,7 @@ package core
 func requireRepositoryAccess(t *transaction, pid string) {
 	p := t.one("SELECT * FROM "+projectView+" p WHERE id=$1", pid)
 	require(p != nil, 404, "not_found")
-	id := p.S("repositoryCredentialRefId")
-	if id == "" {
-		id = p.S("credentialRefId")
-	}
+	id := p.S("credentialRefId")
 	if id == "" {
 		return
 	} // Anonymous public Git is the existing real execution path.

@@ -23,10 +23,12 @@ import (
 	"github.com/wanglongan587/cloud/internal/config"
 	"github.com/wanglongan587/cloud/internal/controlgrpc"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/credentialstore"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/modelgateway"
 	"github.com/wanglongan587/cloud/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/internal/repository"
+	"github.com/wanglongan587/cloud/internal/repoworker"
 	"github.com/wanglongan587/cloud/internal/workflowasset"
 )
 
@@ -242,6 +244,13 @@ func run() (runErr error) {
 			pluginmarket.RunSyncLoop(ctx, store.AdvanceWorkflowRunsOnce, workflowAdvanceInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
+	// The external Git line: the repository worker drives syncs, publishes and credential checks
+	// through the Repo Executor, and the Store gets the Credential Store and ref-query ports its
+	// credential and publish routes need. Owned like the loops above: ctx cancellation stops it
+	// and the WaitGroup waits for in-flight tasks to settle.
+	if err := wireRepository(ctx, &cfg.Repository, store, log, &syncGroup); err != nil {
+		return err
+	}
 	gin.SetMode(cfg.Server.Mode)
 	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router.New(store, auth, log, directory), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
 	// The control listener is bound before serving so a taken port fails startup, not a Controller.
@@ -296,4 +305,46 @@ func run() (runErr error) {
 		syncGroup.Wait()
 		return e
 	}
+}
+
+// credentialStoreManager adapts the Credential Store's management client to the port core
+// consumes, so core depends on no transport.
+type credentialStoreManager struct {
+	client *credentialstore.ManagementClient
+}
+
+func (m credentialStoreManager) CredentialVersion(ctx context.Context, id string) (core.StoredCredential, error) {
+	md, err := m.client.Get(ctx, id)
+	return core.StoredCredential{CurrentVersion: md.CurrentVersion, SubmissionID: md.SubmissionID, Revoked: md.Revoked}, err
+}
+
+func (m credentialStoreManager) RevokeCredential(ctx context.Context, id string) error {
+	return m.client.Revoke(ctx, id)
+}
+
+func wireRepository(ctx context.Context, cfg *config.RepositoryConfig, store *core.Store, log *zap.Logger, group *sync.WaitGroup) error {
+	opened, err := cfg.Open()
+	if err != nil || opened == nil {
+		if err == nil {
+			log.Warn("repository worker disabled: Projects are created but no sync runs and Git credentials cannot be submitted")
+		}
+		return err
+	}
+	store.GitSubmissions = &core.GitCredentialSubmissions{Key: opened.SubmissionKey, IngressURL: opened.IngressURL}
+	store.GitCredentialStore = credentialStoreManager{client: opened.CredentialStore}
+	store.GitRefs = opened.Refs
+	host, _ := os.Hostname()
+	worker, err := repoworker.New(&repoworker.Config{
+		Store: store, Executor: opened.Executor, Refs: opened.Refs, Key: opened.AuthorizationKey, Owner: "cloud:" + host,
+		Slots: cfg.Slots, Lease: cfg.Lease, SyncTimeout: cfg.SyncTimeout, PublishTimeout: cfg.PublishTimeout, Log: log.Named("repository"),
+	})
+	if err != nil {
+		return err
+	}
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		worker.Run(ctx)
+	}()
+	return nil
 }

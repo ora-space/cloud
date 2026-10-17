@@ -50,10 +50,12 @@ func presetDB(t *testing.T) *sql.DB {
 	return pool
 }
 
-// seedProject inserts one active Project with its Binding and main Workspace.
+// seedProject inserts one active Project with its Binding, its credential and its main Workspace.
+// The credential is stored and scoped to the Binding's repository, which is what a preset publish
+// needs to name and what keeps check from reporting a credential problem.
 func seedProject(t *testing.T, db *sql.DB) (tenant, project, binding string) {
 	t.Helper()
-	user, space := uuid.NewString(), uuid.NewString()
+	user, space, credential := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	tenant, project, binding = uuid.NewString(), uuid.NewString(), uuid.NewString()
 	tx, err := db.Begin()
 	if err != nil {
@@ -68,7 +70,8 @@ func seedProject(t *testing.T, db *sql.DB) (tenant, project, binding string) {
 		{"INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')", []any{tenant, user}},
 		{"INSERT INTO collab_workspaces(id,tenant_id,name,slug,created_by) VALUES($1,$2,'s','s',$3)", []any{space, tenant, user}},
 		{"INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'p','active')", []any{project, tenant, user, space}},
-		{"INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) VALUES($1,$2,$3,'https://example.invalid/r.git','main')", []any{binding, tenant, project}},
+		{"INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,name,repository_scope,secret_state,store_version) VALUES($1,$2,$3,'git','controlled-reference-only','preset','https://example.invalid/r.git','stored',1)", []any{credential, tenant, user}},
+		{"INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch,credential_ref_id) VALUES($1,$2,$3,'https://example.invalid/r.git','main',$4)", []any{binding, tenant, project, credential}},
 		{"INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'main','running','ready','main')", []any{uuid.NewString(), tenant, user, project}},
 	} {
 		if _, err := tx.Exec(q.query, q.args...); err != nil {

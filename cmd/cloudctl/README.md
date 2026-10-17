@@ -25,14 +25,9 @@ cloudctl -config <path> -command bootstrap -name '<tenant-name>' -source '<idp-s
 - 在 `tenant_memberships` 表中为该用户授予 `admin` 角色。
 - 返回包含 `tenantId` 和 `userId` 的 JSON 数据载荷。
 
-### `credential-ref`
-```sh
-cloudctl -config <path> -command credential-ref -tenant '<tenant-uuid>' -owner '<user-uuid>' -secret-ref 'infra-secret://git/team/account'
-```
-- 为 Git 操作注册基础设施凭据引用。
-- 强制执行外键约束：目标用户必须是指定租户的活动成员。
-- **安全不变量**：只存储 URI/引用字符串（`secret-ref`）；从不接收、记录或存储明文密码、token 或私钥。
+### 不再提供 `credential-ref`
 
+部署侧预置 Git 凭据的路径已删除：用户和管理员在网页上把 token 直接提交给独立的 Credential Store，Cloud 只保存引用元数据（identity-access 的 Credential Store 决策）。
 ## 边界与不变量
 
 - **部署边界**：`cloudctl` 不通过 HTTP 暴露，也不由 server 守护进程调用。它必须能够直接连接 PostgreSQL，并拥有 Schema 迁移权限。

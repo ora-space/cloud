@@ -53,6 +53,16 @@ const SessionStatisticsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/statis
 // SessionModelCallsPath pages content-free model HTTP attempt observations.
 const SessionModelCallsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/model-calls"
 
+// PublishPath, WorkspaceBranchesPath and CredentialConfirmPath are the public routes whose
+// answer depends on another service: the Git Server's ref query (publish source, Workspace
+// branches) or the Credential Store's metadata (confirm). They are served by dedicated Store
+// methods that read Cloud state, call out with no transaction open, and then write.
+const (
+	PublishPath           = "/api/v1/tenants/:tid/projects/:pid/repository/publishes"
+	WorkspaceBranchesPath = "/api/v1/tenants/:tid/projects/:pid/repository/workspaces/:wid/branches"
+	CredentialConfirmPath = "/api/v1/tenants/:tid/git-credentials/:gcid/confirm"
+)
+
 // defaultBodyLimit is the request cap every other route keeps.
 const defaultBodyLimit = 64 << 10
 
@@ -164,6 +174,24 @@ func Routes() []Route {
 		{"PATCH", "/api/v1/tenants/:tid/projects/:pid", "", []string{"name", "version"}},
 		{"DELETE", "/api/v1/tenants/:tid/projects/:pid", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/projects/:pid/workspaces", "", nil},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/syncs", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/credential", "", []string{"credentialRefId", "version"}},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository/operations", "", nil},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/approve", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/reject", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/cancel", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/check", "", nil},
+		{"POST", PublishPath, "", []string{"sourceRef", "sourceCommit", "revisionId", "targetBranch", "expectedOldOid", "credentialRefId"}},
+		{"GET", WorkspaceBranchesPath, "", nil},
+		{"GET", "/api/v1/tenants/:tid/git-credentials", "", nil},
+		{"POST", "/api/v1/tenants/:tid/git-credentials", "", []string{"name", "attribution", "repositoryScope", "requestedCapabilities"}},
+		{"GET", "/api/v1/tenants/:tid/git-credentials/:gcid", "", nil},
+		{"DELETE", "/api/v1/tenants/:tid/git-credentials/:gcid", "", []string{"version"}},
+		{"POST", "/api/v1/tenants/:tid/git-credentials/:gcid/rotate", "", []string{"version"}},
+		{"POST", CredentialConfirmPath, "", []string{"submissionId"}},
+		{"POST", "/api/v1/tenants/:tid/git-credentials/:gcid/verifications", "", nil},
 		{"POST", "/api/v1/tenants/:tid/projects/:pid/workspaces", "", []string{"title", "baseRef"}},
 		{"GET", "/api/v1/tenants/:tid/workspaces/:wid", "", nil},
 		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/control", "", nil},
@@ -398,7 +426,17 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				req := &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), GitCredentialID: c.Param("gcid"), RepositoryOperationID: c.Param("roid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person}
+				switch route.Path {
+				case PublishPath:
+					out, status, e = store.CreatePublish(c.Request.Context(), req)
+				case CredentialConfirmPath:
+					out, status, e = store.ConfirmGitCredential(c.Request.Context(), req)
+				case WorkspaceBranchesPath:
+					out, e = store.ListWorkspaceBranches(c.Request.Context(), req)
+				default:
+					out, status, e = store.Public(c.Request.Context(), req)
+				}
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.
@@ -526,7 +564,7 @@ func validField(name string, value any) bool {
 		}
 		_, e := n.Int64()
 		return e == nil
-	case "ids":
+	case "ids", "requestedCapabilities":
 		arr, ok := value.([]any)
 		if !ok {
 			return false

@@ -1,5 +1,12 @@
 import { http, HttpResponse } from 'msw'
-import type { Workflow } from '@/api/generated.schemas'
+import type {
+  GitCredential,
+  ProjectRepository,
+  RepositoryOperation,
+  Workflow,
+  WorkspaceBranch,
+  WorkspaceListItem,
+} from '@/api/generated.schemas'
 import { server } from '@/test/msw-server'
 import type { Issue, IssueStatusColumn, TenantMember } from '@/features/issues/types'
 
@@ -39,6 +46,15 @@ export function installSignedInSession(): void {
 export function installCloudSpaceHandlers(role: string): void {
   installSignedInSession()
   server.use(
+    http.get('/api/v1/tenants/:tid/git-credentials', () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
+    http.get('/api/v1/tenants/:tid/projects/:pid/repository', () =>
+      HttpResponse.json({ code: 'not_configured' }, { status: 503 }),
+    ),
+    http.get('/api/v1/tenants/:tid/projects/:pid/repository/operations', () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
     http.get('/api/v1/me/spaces', () =>
       HttpResponse.json({
         items: [
@@ -143,5 +159,169 @@ export function installWorkflowPublish(
       }
       return HttpResponse.json({ resource })
     }),
+  )
+}
+
+/** The Project the repository fixtures belong to. */
+export const TEST_PROJECT_ID = '55555555-5555-5555-5555-555555555555'
+/** The Binding the repository fixtures expose. */
+export const TEST_BINDING_ID = '66666666-6666-6666-6666-666666666666'
+/** The credential the repository fixtures bind and offer for publication. */
+export const TEST_CREDENTIAL_ID = '77777777-7777-7777-7777-777777777777'
+/** The commit the Binding's snapshot holds, and what a publish expects to find. */
+export const TEST_SNAPSHOT_OID = 'a'.repeat(40)
+/** The commit of a Workspace branch that is not the Binding's snapshot. */
+export const TEST_BRANCH_OID = 'b'.repeat(40)
+
+/**
+ * A stored, push-capable credential, owned by the signed-in test member unless
+ * a test says otherwise, as the tenant credential list returns it.
+ */
+export function gitCredentialFixture(overrides: Partial<GitCredential> = {}): GitCredential {
+  return {
+    id: TEST_CREDENTIAL_ID,
+    tenantId: TEST_TENANT_ID,
+    ownerUserId: TEST_USER_ID,
+    name: 'deploy key',
+    attribution: 'personal',
+    repositoryScope: 'https://example.invalid/r.git',
+    secretState: 'stored',
+    availability: 'available',
+    capabilities: ['read', 'publish'],
+    requestedCapabilities: ['read', 'publish'],
+    capabilityEvidence: {},
+    storeVersion: 1,
+    version: 1,
+    createdAt: '2026-09-20T10:00:00+08:00',
+    ...overrides,
+  }
+}
+
+/**
+ * The Project's code source: one Binding on `main` whose credential is stored
+ * and whose snapshot no publish has superseded.
+ */
+export function repositoryFixture(overrides: Partial<ProjectRepository> = {}): ProjectRepository {
+  return {
+    binding: {
+      id: TEST_BINDING_ID,
+      projectId: TEST_PROJECT_ID,
+      repositoryUrl: 'https://example.invalid/r.git',
+      branch: 'main',
+      credentialRefId: TEST_CREDENTIAL_ID,
+      resyncRequested: false,
+      version: 4,
+    },
+    credential: gitCredentialFixture(),
+    snapshot: {
+      commitOid: TEST_SNAPSHOT_OID,
+      forced: false,
+      recordedAt: '2026-10-01T09:00:00+08:00',
+      snapshotRef: 'refs/ora/snapshots/binding',
+      syncOperationId: '88888888-8888-8888-8888-888888888888',
+    },
+    latestSync: { ...operationBase(), type: 'repository_sync', state: 'succeeded' },
+    ...overrides,
+  }
+}
+
+/** One publish Operation in `awaiting_approval`, as the Operations list returns it. */
+export function repositoryOperationFixture(
+  overrides: Partial<RepositoryOperation> = {},
+): RepositoryOperation {
+  return { ...operationBase(), ...overrides }
+}
+
+function operationBase(): RepositoryOperation {
+  return {
+    id: '99999999-9999-9999-9999-999999999999',
+    tenantId: TEST_TENANT_ID,
+    projectId: TEST_PROJECT_ID,
+    bindingId: TEST_BINDING_ID,
+    type: 'repository_publish',
+    state: 'awaiting_approval',
+    trigger: 'preset',
+    requestedBy: TEST_USER_ID,
+    approvedBy: null,
+    credentialRefId: TEST_CREDENTIAL_ID,
+    credentialVersion: 1,
+    targetBranch: 'main',
+    expectedOldOid: TEST_SNAPSHOT_OID,
+    sourceRef: 'refs/ora/deliveries/one',
+    sourceCommit: TEST_SNAPSHOT_OID,
+    errorCode: null,
+    checkAttempts: 0,
+    replayCount: 0,
+    result: {},
+    createdAt: '2026-10-02T09:00:00+08:00',
+  }
+}
+
+/** One Workspace a publish may take its source branch from. */
+export function workspaceFixture(overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem {
+  return {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    tenantId: TEST_TENANT_ID,
+    projectId: TEST_PROJECT_ID,
+    ownerUserId: TEST_USER_ID,
+    creatorUserId: TEST_USER_ID,
+    creatorEvidence: 'member',
+    kind: 'main',
+    desiredState: 'running',
+    observedState: 'ready',
+    canUse: true,
+    runtimeGeneration: 1,
+    version: 1,
+    createdAt: '2026-09-20T10:00:00+08:00',
+    deletedAt: null,
+    ...overrides,
+  }
+}
+
+/** One branch of a Workspace, as the publish dialog lists it. */
+export function branchFixture(overrides: Partial<WorkspaceBranch> = {}): WorkspaceBranch {
+  return { ref: 'refs/heads/topic', branch: 'topic', commit: TEST_BRANCH_OID, ...overrides }
+}
+
+/**
+ * Installs the reads the repository panel mounts — the Binding, its Operations
+ * and the tenant credential list — for the fixture Project.
+ */
+export function installRepositoryHandlers({
+  source = repositoryFixture(),
+  operations = [],
+  credentials = [gitCredentialFixture()],
+}: {
+  source?: ProjectRepository
+  operations?: RepositoryOperation[]
+  credentials?: GitCredential[]
+} = {}): void {
+  server.use(
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${TEST_PROJECT_ID}/repository`, () =>
+      HttpResponse.json(source),
+    ),
+    http.get(
+      `/api/v1/tenants/${TEST_TENANT_ID}/projects/${TEST_PROJECT_ID}/repository/operations`,
+      () => HttpResponse.json({ items: operations, nextCursor: '' }),
+    ),
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/git-credentials`, () =>
+      HttpResponse.json({ items: credentials, nextCursor: '' }),
+    ),
+  )
+}
+
+/** Installs the two lists the publish dialog reads its source branch from. */
+export function installPublishSourceHandlers({
+  workspaces = [workspaceFixture()],
+  branches = [branchFixture()],
+}: { workspaces?: WorkspaceListItem[]; branches?: WorkspaceBranch[] } = {}): void {
+  server.use(
+    http.get(`/api/v1/tenants/${TEST_TENANT_ID}/projects/${TEST_PROJECT_ID}/workspaces`, () =>
+      HttpResponse.json({ items: workspaces, nextCursor: '' }),
+    ),
+    http.get(
+      `/api/v1/tenants/${TEST_TENANT_ID}/projects/${TEST_PROJECT_ID}/repository/workspaces/:wid/branches`,
+      () => HttpResponse.json({ items: branches, nextCursor: '' }),
+    ),
   )
 }

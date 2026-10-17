@@ -39,10 +39,7 @@ describe('CreateProjectDialog', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('名称'), 'Demo')
-    await user.type(
-      screen.getByLabelText('仓库 URL（HTTPS 或 SSH）'),
-      'https://example.com/repo.git',
-    )
+    await user.type(screen.getByLabelText('仓库 URL（HTTPS）'), 'https://example.com/repo.git')
     await user.click(screen.getByRole('button', { name: '创建' }))
 
     await waitFor(() => expect(posted).not.toBeNull())
@@ -60,8 +57,8 @@ describe('CreateProjectDialog', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('名称'), 'Demo')
-    await user.type(screen.getByLabelText('仓库 URL（HTTPS 或 SSH）'), 'ftp://example.com/repo')
-    expect(screen.getByText('仅支持 https:// 或 ssh:// 地址')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('仓库 URL（HTTPS）'), 'ftp://example.com/repo')
+    expect(screen.getByText('仅支持 https:// 地址')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '创建' })).toBeDisabled()
   })
 
@@ -71,10 +68,7 @@ describe('CreateProjectDialog', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('名称'), 'Demo')
-    await user.type(
-      screen.getByLabelText('仓库 URL（HTTPS 或 SSH）'),
-      'https://example.com/repo.git',
-    )
+    await user.type(screen.getByLabelText('仓库 URL（HTTPS）'), 'https://example.com/repo.git')
     const branch = screen.getByLabelText('默认分支')
     await user.clear(branch)
     expect(screen.getByText('请填写具体分支名，不能为空或 HEAD')).toBeInTheDocument()

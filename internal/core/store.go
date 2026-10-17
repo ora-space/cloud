@@ -161,6 +161,15 @@ type Store struct {
 	// Signals carries at-most-once work hints to the lease-holding Controller's Watch stream;
 	// clone requests stay durable in PostgreSQL whether or not a hint is delivered.
 	Signals *ControlHub
+
+	// GitSubmissions signs browser submission grants for the Credential Store; nil means the
+	// deployment has no Credential Store and creating or rotating a credential answers 503.
+	GitSubmissions *GitCredentialSubmissions
+	// GitCredentialStore is the Credential Store's management interface (metadata and revoke).
+	GitCredentialStore GitCredentialStore
+	// GitRefs is the Git Server ref query, used to validate publish sources and list Workspace
+	// branches. Repository Operations themselves are driven by the repository worker.
+	GitRefs GitRefReader
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no
@@ -565,17 +574,6 @@ func (s *Store) RegisterIdentity(ctx context.Context, tid, source, subject, name
 		t.exec("INSERT INTO user_identities(user_id,source,subject) VALUES($1,$2,$3)", id, source, subject)
 		t.exec("INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'member','active')", tid, id)
 		return t.one("SELECT * FROM users WHERE id=$1", id)
-	})
-}
-
-// ConfigureCredential is deliberately a deployment-only management path, never a public secret API.
-func (s *Store) ConfigureCredential(ctx context.Context, tid, owner, ref string) (Object, error) {
-	return s.transact(ctx, func(t *transaction) Object {
-		membership(t, tid, owner, false)
-		require(strings.TrimSpace(ref) != "" && len(ref) <= 1024, 400, "invalid_secret_ref")
-		id := newID()
-		t.exec("INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref) VALUES($1,$2,$3,'git',$4)", id, tid, owner, ref)
-		return Object{"id": id, "tenantId": tid, "ownerUserId": owner, "purpose": "git"}
 	})
 }
 

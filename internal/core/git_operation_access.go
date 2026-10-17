@@ -10,12 +10,12 @@ import (
 // certificate carries no permission: everything comes from the Operation, so canceling or ending
 // it ends Git access on the next request, including a pre-receive already in flight.
 //
-// The Operation must be running in the named tenant and Project, on that Project's Binding, and
-// the Project must not be deleted. Unlike a sandbox execution it does not require an active
-// Project: the first sync runs while the Project is provisioning, and a sync already running
-// when the Project enters deleting must still be able to settle. The external line adds the
-// lease to this predicate and the tracking-ref rule with its recorded expected old value; neither
-// may widen the grant beyond the executor's namespaces.
+// The Operation must be running under an unexpired lease in the named tenant and Project, on that
+// Project's Binding, and the Project must not be deleted. Unlike a sandbox execution it does not
+// require an active Project: the first sync runs while the Project is provisioning, and a sync
+// already running when the Project enters deleting must still be able to settle. An Operation
+// enters running once, so when its lease lapses the ID is dead for good: a lost executor cannot
+// borrow a later lease to write under the same ID (contract D5 item 3).
 func (s *Store) AuthorizeGitOperation(ctx context.Context, operationID, tenantID, projectID string) (GitGrant, error) {
 	var grant GitGrant
 	err := s.view(ctx, func(t *transaction) {
@@ -30,18 +30,27 @@ func (s *Store) AuthorizeGitOperation(ctx context.Context, operationID, tenantID
 
 func gitOperationAccess(t *transaction, operationID, tenantID, projectID string) GitGrant {
 	require(canonicalUUID(operationID) && validID(tenantID) && validID(projectID), 403, "git_access_denied")
-	o := t.one(`SELECT o.type,o.binding_id FROM repository_operations o
+	o := t.one(`SELECT o.type,o.binding_id,o.expected_tracking_oid,b.branch FROM repository_operations o
 	 JOIN repository_bindings b ON b.id=o.binding_id AND b.project_id=o.project_id AND b.tenant_id=o.tenant_id
 	 JOIN projects p ON p.id=o.project_id AND p.tenant_id=o.tenant_id
-	 WHERE o.id=$1 AND o.tenant_id=$2 AND o.project_id=$3 AND o.state='running'
+	 WHERE o.id=$1 AND o.tenant_id=$2 AND o.project_id=$3 AND o.state='running' AND o.lease_expires_at>clock_timestamp()
 	 AND p.deleted_at IS NULL AND p.lifecycle IN ('provisioning','active','deleting')`, operationID, tenantID, projectID)
 	require(o != nil, 403, "git_access_denied")
 	grant := GitGrant{TenantID: tenantID, ProjectID: projectID}
 	switch o.S("type") {
 	case RepositorySync:
 		// Cloud cannot know which commit the external repository will yield, so the snapshot
-		// grant is the Binding's prefix; create-only and "name equals target" bound it.
-		grant.Writable = []GitWritableRef{{Prefix: GitSnapshotRefPrefix(o.S("bindingId")), Rule: GitCreateOnly}}
+		// grant is the Binding's prefix; create-only and "name equals target" bound it. The
+		// tracking ref moves only from the value read before the Operation started running.
+		expected := o.S("expectedTrackingOid")
+		require(GitObjectID(expected), 403, "git_access_denied")
+		if gitZeroID(expected) {
+			expected = ""
+		}
+		grant.Writable = []GitWritableRef{
+			{Prefix: GitSnapshotRefPrefix(o.S("bindingId")), Rule: GitCreateOnly},
+			{Ref: GitUpstreamHeadPrefix(o.S("bindingId")) + o.S("branch"), Rule: GitTrackingCAS, ExpectedOld: expected},
+		}
 	case RepositoryPublish:
 		// A publish only reads its source from the Project repository.
 	default:
