@@ -45,3 +45,8 @@ Effect Scope、Desired State/Generation、插件 canonical identity、Workflow �
 ## 运行时执行围栏
 
 [多人控制](runtime-control.md) 新增页面控制绑定、独立 Node operation ID、短期许可及独立强停。派发前重新核验许可；Node 在持久接受和真实首次变更前拒绝旧绑定，未知响应仍按稳定 execution ID 核对。Controller 租约到期不能由缓存许可延长。生产旧无 scope 新 clone 准入关闭；历史查询、结果及清理责任保留。
+
+Agent/Revision 工作的 Run 进入 `releasing`、`done` 或被软删除后，其未登记工作不再由 `ClaimWork` 返回。
+新 `RecordDispatch` 在与业务结算共用的事务锁内重新核验同一条件，因此结算前领取的旧快照不能重新登记
+会话或交付。现有执行的幂等登记、查询与真实结果接管仍按原身份进行；保留工作行及执行记录用于恢复，
+不把退出领取队列当作 Node 已终止或 Workspace 已被物理删除的证据。

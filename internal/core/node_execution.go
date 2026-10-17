@@ -43,6 +43,9 @@ func dispatchPluginExecution(t *transaction, r *ControlRequest, operation, execu
 
 func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, node string, input Object) Object {
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
+	// A claim is only a snapshot. Recheck business eligibility under the same transaction lock as
+	// settlement so a pre-release claim cannot register a fresh session or delivery afterwards.
+	require(t.one(executionWorkLiveRuns+" AND id=$1", runID) != nil, 409, "dispatch_conflict")
 	work := t.one("SELECT * FROM execution_work WHERE run_id=$1 AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
 	require(work != nil, 409, "dispatch_conflict")
 	require(jsonText(work.O("input")) == jsonText(input), 409, "dispatch_conflict")

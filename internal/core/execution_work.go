@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// executionWorkLiveRuns excludes business-closed Runs without discarding their recovery evidence.
+// The execution API also serves unphased callers; only deletion or the lifecycle's release/done
+// stages revoke their ability to register new work. Claim and dispatch must use the same predicate.
+const executionWorkLiveRuns = "SELECT id FROM issue_runs WHERE deleted_at IS NULL AND (phase IS NULL OR phase NOT IN ('releasing','done'))"
+
 // EnqueueExecutionWork releases one Agent session or Revision delivery for Controllers to claim.
 // Repeating the same unregistered input returns the original item. A different input conflicts.
 func (s *Store) EnqueueExecutionWork(ctx context.Context, runID, kind string, input, target Object, availableAt time.Time) (Object, error) {
@@ -80,7 +85,7 @@ func claimWorkItem(t *transaction) Object {
 	} else if t.one("SELECT id FROM clone_requests WHERE state='queued'") != nil {
 		reject(410, "runtime_scope_required")
 	}
-	work := t.one("SELECT * FROM execution_work ew WHERE execution_id IS NULL AND available_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id) ORDER BY created_at,id LIMIT 1")
+	work := t.one("SELECT * FROM execution_work ew WHERE execution_id IS NULL AND available_at<=clock_timestamp() AND ew.run_id IN (" + executionWorkLiveRuns + ") AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id) ORDER BY created_at,id LIMIT 1")
 	if work != nil && (request == nil || work.S("createdAt") < request.S("createdAt")) {
 		return Object{"work": work}
 	}
