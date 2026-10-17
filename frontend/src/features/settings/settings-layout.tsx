@@ -10,6 +10,7 @@ export function SettingsLayout({ slug }: { slug: string }) {
     { to: p.settings, label: '通用', end: true },
     { to: p.members, label: '成员', end: false },
     { to: p.billing, label: '账单', end: false },
+    { to: p.gitCredentials, label: 'Git 凭据', end: false },
     { to: p.gitIdentity, label: 'Git 身份', end: false },
     { to: p.modelConnections, label: '模型连接', end: false },
   ]

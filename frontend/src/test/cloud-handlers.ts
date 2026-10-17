@@ -39,6 +39,15 @@ export function installSignedInSession(): void {
 export function installCloudSpaceHandlers(role: string): void {
   installSignedInSession()
   server.use(
+    http.get('/api/v1/tenants/:tid/git-credentials', () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
+    http.get('/api/v1/tenants/:tid/projects/:pid/repository', () =>
+      HttpResponse.json({ code: 'not_configured' }, { status: 503 }),
+    ),
+    http.get('/api/v1/tenants/:tid/projects/:pid/repository/operations', () =>
+      HttpResponse.json({ items: [], nextCursor: '' }),
+    ),
     http.get('/api/v1/me/spaces', () =>
       HttpResponse.json({
         items: [

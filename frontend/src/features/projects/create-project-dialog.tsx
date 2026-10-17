@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { CredentialSelect } from '@/features/repositories/credential-select'
 import { DialogFormField } from '@/components/common/dialog-form-field'
 import { CreateFormSubmit } from '@/components/common/create-form-submit'
 import {
@@ -11,11 +12,11 @@ import {
 import { useCreateProject } from '@/features/projects/api'
 
 /**
- * Accepts HTTPS or SSH repository URLs without embedded credentials; the
+ * Accepts HTTPS repository URLs without embedded credentials; the
  * backend enforces the same rule and reports 400 for anything else.
  */
 function looksLikeRepositoryUrl(value: string): boolean {
-  return /^(https:\/\/|ssh:\/\/|git@)/.test(value.trim())
+  return /^https:\/\//.test(value.trim())
 }
 
 /** Form fields for a new project in the current space. */
@@ -24,10 +25,16 @@ function CreateProjectFields({
   pending,
   errorCode,
 }: {
-  onSubmit: (input: { title: string; repositoryUrl: string; defaultBranch: string }) => void
+  onSubmit: (input: {
+    title: string
+    repositoryUrl: string
+    defaultBranch: string
+    credentialRefId?: string
+  }) => void
   pending: boolean
   errorCode: string | undefined
 }) {
+  const [credentialRefId, setCredentialRefId] = useState('')
   const [title, setTitle] = useState('')
   const [repositoryUrl, setRepositoryUrl] = useState('')
   const [defaultBranch, setDefaultBranch] = useState('main')
@@ -46,6 +53,7 @@ function CreateProjectFields({
           title: title.trim(),
           repositoryUrl: repositoryUrl.trim(),
           defaultBranch: defaultBranch.trim(),
+          ...(credentialRefId ? { credentialRefId } : {}),
         })
       }}
       className="space-y-4"
@@ -60,11 +68,11 @@ function CreateProjectFields({
       />
       <DialogFormField
         id="new-project-url"
-        label="仓库 URL（HTTPS 或 SSH）"
+        label="仓库 URL（HTTPS）"
         value={repositoryUrl}
         onChange={setRepositoryUrl}
         placeholder="https://example.com/repo.git"
-        hint={urlValid ? undefined : '仅支持 https:// 或 ssh:// 地址'}
+        hint={urlValid ? undefined : '仅支持 https:// 地址'}
         required
       />
       <DialogFormField
@@ -76,6 +84,7 @@ function CreateProjectFields({
         hint={branchValid ? undefined : '请填写具体分支名，不能为空或 HEAD'}
         required
       />
+      <CredentialSelect value={credentialRefId} onChange={setCredentialRefId} />
       <CreateFormSubmit pending={pending} submittable={submittable} errorCode={errorCode} />
     </form>
   )

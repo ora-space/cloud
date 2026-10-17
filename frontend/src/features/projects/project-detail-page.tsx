@@ -1,3 +1,4 @@
+import { RepositoryPanel } from '@/features/repositories/repository-panel'
 import { format } from 'date-fns'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -188,6 +189,7 @@ function ProjectDetailBody({ slug, project }: { slug: string; project: Project }
           )}
         </div>
       </div>
+      {cloudMode && <RepositoryPanel projectId={project.id} />}
       {cloudMode ? (
         <div>
           {cloudIssues.length === 0 && (
@@ -261,7 +263,7 @@ function ProjectActions({
             <AlertDialogHeader>
               <AlertDialogTitle>删除「{projectTitle}」？</AlertDialogTitle>
               <AlertDialogDescription>
-                删除走生命周期状态机（异步），运行时资源随之回收。
+                删除会异步回收运行资源，可能需要等待正在核验的发布结束。
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
