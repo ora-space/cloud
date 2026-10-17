@@ -19,6 +19,9 @@
 - [objectstore](objectstore/README.md)：Cloud 自己的 S3 兼容对象存储客户端（SigV4 预签上传授权、HEAD 校验对象的大小与 SHA-256），只服务 Revision 链路。
 - [gitpreset](gitpreset/README.md)：仅用于验收的 Git Server 契约预置与断言，直接写仓库卷与数据库，不被服务进程引用。
 - [gitserver](gitserver/README.md)：Project 仓库的 Git 访问：沙盒与 Repo Executor 两个仓库监听、按 Core 逐请求授权的 ref 规则集、`git http-backend`、pre-receive 按 namespace 执行规则与 Cloud 的 ref 查询。
+- [repoexec](repoexec/README.md)：Ora 中唯一访问外部 Git 仓库的程序：按一次任务新建裸仓库、执行同步/发布/探测，只报告观察到的事实，Operation 状态由 Cloud 决定。
+- [gitrefs](gitrefs/README.md)：Git Server 只读 ref 查询的客户端（契约 D6）：TLS 1.3 双向认证、有界应答，把「服务器不可用」与「ref 不存在」分开。
+- [repoworker](repoworker/README.md)：驱动仓库 Operation 的工作进程：读跟踪 ref、签发一次性授权、续租与取消、按租约世代收敛同步与发布结果。
 - [cloneauth](cloneauth/README.md)：外部 Git 线的一次性授权：`sync`/`publish`/`probe` 执行授权与浏览器 `submit` 提交授权的 Ed25519 签发与严格验证、`NormalizeRepository`、密钥加载。
 - [credentialmaterial](credentialmaterial/README.md)：Repo Executor 一次任务的凭据材料目录（0700 目录、0600 独占文件、fsync、确认删除、启动清扫），与 `git-credential-ora` 共用的布局。
 - [processgroup](processgroup/README.md)：让 Git 子进程领头新进程组，取消时 `SIGKILL` 整组并设 `WaitDelay`。
@@ -38,6 +41,7 @@
    - `internal/api/router` $\rightarrow$ `internal/core`, `internal/contract`；`internal/controlgrpc` $\rightarrow$ `internal/core`, `internal/controlpb`。
    - `internal/core` $\rightarrow$ 标准库、`gorm.io/gorm`、`internal/core/migrations`。
    - `internal/repository` $\rightarrow$ `internal/config`, `gorm.io/gorm`。
+   - `internal/repoworker` $\rightarrow$ `internal/core`（状态判定与租约）、`internal/cloneauth`（签发执行授权）、`internal/repoexec`（执行器任务契约）；`internal/gitrefs` $\rightarrow$ `internal/core`（`GitRefReader` 与 ref 词汇）；`cmd/server` 装配三者。
    - `internal/gitpreset` $\rightarrow$ `internal/core`（ref 词汇）、`internal/gitserver`（建仓）；只有 `cmd/git-server-preset` 导入它。
    - `internal/credentialmaterial` $\rightarrow$ `internal/cloneauth`（仅 `NormalizeRepository`）；`cmd/git-credential-ora` 只导入这两个包。`cloneauth`、`capture`、`processgroup` 只依赖标准库（`cloneauth` 另用 `github.com/google/uuid`）。
    - `internal/credentialstore` $\rightarrow$ `internal/cloneauth`；只有 `cmd/credential-store`、Cloud（`ManagementClient`）与执行器（`RedemptionClient`）导入它。
