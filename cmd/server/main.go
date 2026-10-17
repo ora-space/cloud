@@ -23,6 +23,7 @@ import (
 	"github.com/wanglongan587/cloud/internal/config"
 	"github.com/wanglongan587/cloud/internal/controlgrpc"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/egress"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/modelgateway"
 	"github.com/wanglongan587/cloud/internal/pluginmarket"
@@ -61,7 +62,21 @@ func configureCollaboration(store *core.Store, developmentFixtures bool, log *za
 
 func run() (runErr error) {
 	configPath := flag.String("config", "", "configuration file")
+	egressPath := flag.String("deployment-egress", os.Getenv("ORA_DEPLOYMENT_EGRESS_FILE"), "shared deployment egress JSON file")
 	flag.Parse()
+	policy, e := egress.Load(*egressPath)
+	if e != nil {
+		return e
+	}
+	if policy.Enterprise() && os.Getenv("MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS") != "" {
+		return errors.New("enterprise egress conflicts with development hosts")
+	}
+	dns := modelgateway.DeploymentDNSConfig()
+	upstream, e := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DNS: dns, Policy: policy})
+	if e != nil {
+		return e
+	}
+	defer upstream.CloseIdleConnections()
 	cfg, e := config.Load(*configPath)
 	if e != nil {
 		return e
@@ -82,6 +97,7 @@ func run() (runErr error) {
 		return e
 	}
 	defer func() { runErr = errors.Join(runErr, store.Pool.Close()) }()
+	store.ModelEgress = policy
 	store.ObjectStore, e = cfg.ObjectStore.Open()
 	if e != nil {
 		return e
@@ -129,12 +145,8 @@ func run() (runErr error) {
 	// Workflow asset import is triggered by the space's desired state, never by a Node install
 	// result: a space with no live runtime still receives its templates. Downloads run outside
 	// transactions; only results are written. The checked outbound client enforces the same
-	// public-address policy as the model gateway and never follows redirects.
+	// deployment policy as the model gateway and never follows redirects.
 	if cfg.Plugins.AssetImportEnabled {
-		upstream, clientErr := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DNS: modelgateway.DefaultDNSConfig()})
-		if clientErr != nil {
-			return clientErr
-		}
 		store.WorkflowAssets = workflowasset.NewFetcher(store.ObjectStore, upstream.Transport)
 		syncGroup.Add(1)
 		go func() {
@@ -229,7 +241,7 @@ func run() (runErr error) {
 		}()
 	}
 	gin.SetMode(cfg.Server.Mode)
-	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router.New(store, auth, log, directory), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: egress.HealthMetadata(router.New(store, auth, log, directory), policy.Digest(dns)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
 	// The control listener is bound before serving so a taken port fails startup, not a Controller.
 	control, e := net.Listen("tcp", cfg.Control.GRPCAddr)
 	if e != nil {

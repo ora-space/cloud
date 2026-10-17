@@ -60,6 +60,8 @@ go run ./cmd/cloudctl -command credential-ref -tenant '<tenant UUID>' -owner '<u
 go run ./cmd/server -config /path/to/config.yaml
 ```
 
+模型与工作流资产的企业出网配置见 [部署方共享出网配置](docs/deployment-egress.md)。
+
 server 只检查已执行迁移及 checksum，不执行 DDL；数据库、迁移、trust 或监听失败会非零退出。`GET /healthz` 检查 PG 可达性。
 
 本地联调（浏览器 → Gateway → Cloud，见 [认证 Gateway](docs/gateway.md)）不需要 GitHub 账号：Gateway 自带仅限本地的开发者登录，输入任意身份即可进入。要测真实 GitHub 登录时再新建一个 OAuth App（callback 登记为 `http://localhost:5173/auth/callback/github`）并填进 `config.toml` 的 `[github]`。

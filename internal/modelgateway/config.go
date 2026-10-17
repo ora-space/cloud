@@ -40,7 +40,7 @@ func LoadConfig() (Config, error) {
 		return v
 	}
 	c := Config{CredentialAddress: value("CREDENTIAL_ADDR", ":8083"), RuntimeAddress: value("RUNTIME_ADDR", ":8443"), GrantAddress: value("GRANT_ADDR", ":8444"), PublicOrigin: value("PUBLIC_ORIGIN", "https://ora-model-gateway:8443"), CertificateFile: value("CERTIFICATE_FILE", "/etc/ora-model-management/server-p256.pem"), PrivateKeyFile: value("PRIVATE_KEY_FILE", "/etc/ora-model-management/server-p256.key"), CAFile: value("CA_FILE", "/etc/ora-model-management/ca.pem"), MasterKeyFile: value("MASTER_KEY_FILE", "/etc/ora-model-secrets/master-key"), MasterKeyID: value("MASTER_KEY_ID", "v1")}
-	c.DNS = DNSConfig{HTTPSURL: value("DNS_HTTPS_URL", defaultDNSHTTPSURL), BootstrapIPs: strings.Split(value("DNS_BOOTSTRAP_IPS", defaultDNSBootstrapIPs), ",")}
+	c.DNS = DeploymentDNSConfig()
 	for _, address := range []string{c.CredentialAddress, c.RuntimeAddress, c.GrantAddress} {
 		if _, _, err := net.SplitHostPort(address); err != nil {
 			return Config{}, errors.New("invalid model gateway listen address")
@@ -81,4 +81,18 @@ func (c *Config) GrantTLS() (*tls.Config, error) {
 	config.ClientAuth = tls.RequireAndVerifyClientCert
 	config.ClientCAs = pool
 	return config, nil
+}
+
+// DeploymentDNSConfig is the shared public resolver selection for Cloud and model-gateway.
+// The existing environment names are retained for deployment compatibility; both processes
+// must receive the same values, which are included in the health policy digest.
+func DeploymentDNSConfig() DNSConfig {
+	config := DefaultDNSConfig()
+	if value := os.Getenv("MODEL_GATEWAY_DNS_HTTPS_URL"); value != "" {
+		config.HTTPSURL = value
+	}
+	if value := os.Getenv("MODEL_GATEWAY_DNS_BOOTSTRAP_IPS"); value != "" {
+		config.BootstrapIPs = strings.Split(value, ",")
+	}
+	return config
 }

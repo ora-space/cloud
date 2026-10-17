@@ -31,6 +31,9 @@ type PublicRequest struct {
 // Committed collaboration-space mutations are broadcast to live space subscribers
 // after the transaction succeeds, never before.
 func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, error) {
+	if err := s.admitModelWrite(ctx, r); err != nil {
+		return nil, 0, err
+	}
 	if r.Method == "GET" && r.Path == "/api/v1/tenants/"+r.TenantID+"/agent-sessions" {
 		return s.sessionList(ctx, r)
 	}
