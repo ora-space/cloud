@@ -24,7 +24,7 @@ Controller 派发前重新获取短期 effect permit（执行许可），执行�
 
 ## 插件与仓库凭据
 
-仅管理员修改空间插件期望，成员可读安全汇总。选择固定发布版本和请求者，现有目标保存 pending 与等待原因；恢复扫描自动重访。维护使用相同独占边界，停止实例不会为插件启动，不自动把以后新建实例加入旧选择。生产真实插件执行器尚未接线，保持 executor_capability_unavailable，不报告安装成功。模拟器仅为显式开发测试装配。
+仅管理员修改空间插件期望，成员可读安全汇总。选择固定发布版本和请求者，现有目标保存 pending 与等待原因（waiting_start、waiting_control、waiting_lifecycle、waiting_execution；缺少请求者的旧选择为 legacy_selection_unverified）；恢复扫描自动重访。维护使用相同独占边界，停止实例不会为插件启动，不自动把以后新建实例加入旧选择。目标空闲后 Cloud 登记 install_plugin/remove_plugin 维护操作，由 Workspace 当前 Node 以一次 install_plugins/remove_plugins execution 执行，输入是进入插件步骤时冻结的插件集合。Cloud 只在接管 Node 报告的逐项结果后写回实例：installed 必须带快照中的版本，单项失败以 failed 和原因保存在实例；Node 整体未能执行（plugins_failed）时步骤不结算，不报告安装成功。executor_capability_unavailable 只是历史状态：迁移 0022 以它阻塞未围栏的旧插件操作，旧的同名等待原因在下次恢复扫描时重新计算，新维护不再产生。
 
 凭据只保存引用、类型、范围、能力、版本及可用性。成员离开原子冻结 personal/unknown，team 不因旧 owner 离开冻结；重新加入不自动解冻。保留原 owner 外键、旧引用与任务责任。项目凭据提供方及受控团队能力验证/原子重绑未交付，所有需要引用的新的远程 Git 明确拒绝 repository_credential_executor_unavailable；不降级匿名或静态个人凭据。既有真实匿名公共 Git 路径继续受控。
 
@@ -36,4 +36,4 @@ Cloud Controller gRPC 使用双向 TLS（两端均核验证书），配置 CLOUD
 
 ## 证据边界
 
-Cloud integration/runtime_* 覆盖真实 PostgreSQL/HTTP/gRPC 权限、竞争、历史重放、迁移与强停状态机；注入 Node 确认不构成物理终止证明。integration/plugin_pending_test.go 验证生产无执行能力时持久等待。integration/repository_credentials_test.go 验证冻结及关闭静态回退。真实 Node、Git、容器、进程和卷由 desktop/cluster 分别验证。文件、终端、Agent 云端产品入口、真实插件执行器、项目凭据解析与验证重绑没有安全配套，保持关闭。完整故障恢复与升级/回滚组合仍须独立验收；六份 ADR 不因这些局部实现自动变 implemented。
+Cloud integration/runtime_* 覆盖真实 PostgreSQL/HTTP/gRPC 权限、竞争、历史重放、迁移与强停状态机；注入 Node 确认不构成物理终止证明。integration/plugin_pending_test.go 验证插件意图等到控制资格释放后才登记执行，并在接管注入的 Node 结果后变为 installed。integration/repository_credentials_test.go 验证冻结及关闭静态回退。真实 Node、Git、容器、进程和卷由 desktop/cluster 分别验证。文件、终端、Agent 云端产品入口、项目凭据解析与验证重绑没有安全配套，保持关闭。完整故障恢复与升级/回滚组合仍须独立验收；六份 ADR 不因这些局部实现自动变 implemented。
