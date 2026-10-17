@@ -23,10 +23,14 @@ export function useCredentialViewer(): CredentialViewer {
 }
 
 /**
- * Mirrors the backend's rule for who may approve, rotate or revoke a credential: a
- * personal credential belongs to its owner alone — an administrator cannot act for
- * them — and a team credential to a tenant administrator. An unknown credential,
- * and one whose attribution Cloud could not determine, grant nothing.
+ * Mirrors the backend's rule for who may publish with, rotate or verify a
+ * credential: a personal credential belongs to its owner alone — an administrator
+ * cannot act for them — and a team credential to a tenant administrator. An unknown
+ * credential, and one whose attribution Cloud could not determine, grant nothing.
+ *
+ * Revocation is deliberately outside this rule: it only tightens access, so the
+ * backend also lets a tenant administrator revoke another member's personal
+ * credential, and callers that offer a revoke control add that case themselves.
  *
  * This decides only which controls the UI offers. The backend decides what is
  * actually allowed, so a wrong answer here can hide a button but never grant one.
