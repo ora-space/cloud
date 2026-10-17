@@ -216,7 +216,10 @@ func TestAbortedProjectDeletionRestoresTheOwedSync(t *testing.T) {
 		{
 			name: "resync requested while a sync runs",
 			prepare: func(f *fixture, _, bid, initial string) string {
-				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running' WHERE id=$1", initial)))
+				// The external line's lease constraint requires the lease and authorization columns
+				// the foundation's fixture predates; a running sync without them is not a state this
+				// schema admits.
+				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running',lease_owner='test',lease_expires_at=clock_timestamp()+interval '1 hour',started_at=clock_timestamp(),authorization_id=gen_random_uuid() WHERE id=$1", initial)))
 				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_bindings SET resync_requested=true WHERE id=$1", bid)))
 				return ""
 			},
