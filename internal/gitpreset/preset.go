@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/wanglongan587/cloud/internal/core"
 	"github.com/wanglongan587/cloud/internal/gitserver"
 )
@@ -151,18 +153,47 @@ func (p *Preset) Ref(ctx context.Context, projectID, ref, commit string) (Result
 	return Result{"ok": true, "projectId": b.project, "ref": ref, "commit": commit}, nil
 }
 
-// operationStates are the states each Operation type may be preset to (contract D5 item 3).
-var operationStates = map[string]map[string]bool{
-	core.RepositorySync:    {"pending": false, "leased": false, "running": false, "succeeded": true, "failed": true, "superseded": true, "cancelled": true},
-	core.RepositoryPublish: {"awaiting_approval": false, "pending": false, "leased": false, "running": false, "uncertain": false, "succeeded": true, "conflict": true, "rejected": true, "failed": true, "cancelled": true},
+// operationTypes maps the command's --type to the Operation type it presets.
+var operationTypes = map[string]string{"sync": core.RepositorySync, "publish": core.RepositoryPublish}
+
+// operationShape is what the schema demands of a state beyond its name: whether the Operation is
+// finished, and — because a live Operation must be fenced — whether it holds a lease and the Git
+// authorization that a started one needs.
+type operationShape struct {
+	finished, leased, started bool
 }
 
+// operationStates are the states each Operation type may be preset to (contract D5 item 3).
+var operationStates = map[string]map[string]operationShape{
+	core.RepositorySync: {
+		"pending": {}, "leased": {leased: true}, "running": {leased: true, started: true},
+		"succeeded": {finished: true}, "failed": {finished: true}, "superseded": {finished: true}, "cancelled": {finished: true},
+	},
+	core.RepositoryPublish: {
+		"awaiting_approval": {}, "pending": {}, "leased": {leased: true}, "running": {leased: true, started: true}, "uncertain": {started: true},
+		"succeeded": {finished: true}, "conflict": {finished: true}, "rejected": {finished: true}, "failed": {finished: true}, "cancelled": {finished: true},
+	},
+}
+
+// presetLease is how long a preset Operation holds its lease and its approval: long enough to run
+// an acceptance scenario by hand, short enough that an abandoned fixture lapses.
+const presetLease = 3600
+
 // advanceSync moves the Binding's unfinished sync, if there is one, to the given sync state and
-// returns its ID; "" means the Binding had none. A terminal state also sets finished_at.
-func advanceSync(ctx context.Context, tx *sql.Tx, b binding, state string, errorCode any) (string, error) {
+// returns its ID; "" means the Binding had none. It leaves the row shaped exactly as a newly
+// written preset of that state would be — a terminal state sets finished_at, a live one holds a
+// lease, a started one an authorization — so moving the Project's own sync and writing a fresh row
+// mean the same thing to the caller.
+func advanceSync(ctx context.Context, tx *sql.Tx, b binding, state string, errorCode any, shape operationShape) (string, error) {
 	var id string
-	err := tx.QueryRowContext(ctx, `UPDATE repository_operations SET state=$2,error_code=$3,finished_at=CASE WHEN $4 THEN clock_timestamp() END
-	 WHERE binding_id=$1 AND type='repository_sync' AND state IN ('pending','leased','running') RETURNING id`, b.id, state, errorCode, operationStates[core.RepositorySync][state]).Scan(&id)
+	err := tx.QueryRowContext(ctx, `UPDATE repository_operations SET state=$2,error_code=$3,
+	 finished_at=CASE WHEN $4 THEN clock_timestamp() END,
+	 lease_owner=CASE WHEN $5 THEN 'preset'::text END,
+	 lease_expires_at=CASE WHEN $5 THEN clock_timestamp()+make_interval(secs=>$6) END,
+	 authorization_id=CASE WHEN $7 THEN gen_random_uuid() END,
+	 started_at=CASE WHEN $7 THEN clock_timestamp() END
+	 WHERE binding_id=$1 AND type='repository_sync' AND state IN ('pending','leased','running') RETURNING id`,
+		b.id, state, errorCode, shape.finished, shape.leased, presetLease, shape.started).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -172,17 +203,20 @@ func advanceSync(ctx context.Context, tx *sql.Tx, b binding, state string, error
 	return id, nil
 }
 
-// Operation writes an Operation in a given state, for waiting, failure and deletion scenarios.
-// Terminal states get finished_at. A sync moves the Binding's unfinished sync — every new Project
-// starts with one — to the requested state instead of adding a second row beside it, so any sync
-// state can be preset; only without one is a new sync row written. A publish is always a new row.
+// Operation writes one Operation row in a given state, for waiting, failure and deletion
+// scenarios. The row carries everything the schema demands of that state, so a live Operation is
+// leased and authorized, and a publish is shaped from the Project: its source is the current
+// snapshot, its target the Binding's branch, and its requester and approver the Project's owner. A
+// preset publish therefore needs the Binding's credential and a current snapshot, and a preset
+// lease expires rather than staying valid forever. A sync moves the Binding's unfinished sync —
+// every new Project starts with one — to the requested state instead of adding a second row beside
+// it, so any sync state can be preset; only without one is a new sync row written.
 func (p *Preset) Operation(ctx context.Context, projectID, kind, state, errorCode string) (Result, error) {
-	types := map[string]string{"sync": core.RepositorySync, "publish": core.RepositoryPublish}
-	t, ok := types[kind]
+	t, ok := operationTypes[kind]
 	if !ok {
 		return nil, usage("--type must be sync or publish")
 	}
-	terminal, ok := operationStates[t][state]
+	shape, ok := operationStates[t][state]
 	if !ok {
 		return nil, usage("%s cannot be in state %q", t, state)
 	}
@@ -194,28 +228,116 @@ func (p *Preset) Operation(ctx context.Context, projectID, kind, state, errorCod
 	if errorCode != "" {
 		code = errorCode
 	}
-	tx, err := p.DB.BeginTx(ctx, nil)
+	id, sourceRef, err := p.recordOperation(ctx, b, t, state, code, shape)
 	if err != nil {
 		return nil, err
 	}
+	result := Result{"ok": true, "projectId": b.project, "bindingId": b.id, "operationId": id, "type": t, "state": state}
+	// The caller creates the ref itself when it wants the publish's source to exist.
+	if sourceRef != "" {
+		result["sourceRef"] = sourceRef
+	}
+	return result, nil
+}
+
+// recordOperation writes the row of one state and reports the source ref a publish used.
+func (p *Preset) recordOperation(ctx context.Context, b binding, t, state string, code any, shape operationShape) (id, sourceRef string, err error) {
+	if t == core.RepositoryPublish {
+		return p.presetPublish(ctx, b, state, code, shape)
+	}
+	id, err = p.presetSync(ctx, b, state, code, shape)
+	return id, "", err
+}
+
+// presetSync records a sync. Every new Project already starts with one unfinished sync and the
+// database enforces one per Binding, so the command moves that row — the same row the Project's own
+// sync would settle — and only writes a fresh row when the Binding has none left.
+func (p *Preset) presetSync(ctx context.Context, b binding, state string, code any, shape operationShape) (string, error) {
+	tx, err := p.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
 	defer func() { _ = tx.Rollback() }()
-	var id string
-	if t == core.RepositorySync {
-		if id, err = advanceSync(ctx, tx, b, state, code); err != nil {
-			return nil, err
-		}
+	id, err := advanceSync(ctx, tx, b, state, code, shape)
+	if err != nil {
+		return "", err
 	}
 	if id == "" {
-		err = tx.QueryRowContext(ctx, `INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,error_code,finished_at)
-		 VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,'preset',$6,CASE WHEN $7 THEN clock_timestamp() END) RETURNING id`, t, b.tenant, b.project, b.id, state, code, terminal).Scan(&id)
+		err = tx.QueryRowContext(ctx, `INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,error_code,finished_at,
+		 lease_owner,lease_expires_at,authorization_id,started_at)
+		 VALUES(gen_random_uuid(),'repository_sync',$1,$2,$3,$4,'preset',$5,
+		  CASE WHEN $6 THEN clock_timestamp() END,
+		  CASE WHEN $7 THEN 'preset'::text END,
+		  CASE WHEN $7 THEN clock_timestamp()+make_interval(secs=>$8) END,
+		  CASE WHEN $9 THEN gen_random_uuid() END,
+		  CASE WHEN $9 THEN clock_timestamp() END)
+		 RETURNING id`, b.tenant, b.project, b.id, state, code, shape.finished, shape.leased, presetLease, shape.started).Scan(&id)
 		if err != nil {
-			return nil, fmt.Errorf("record operation: %w", err)
+			return "", fmt.Errorf("record operation: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return "", err
 	}
-	return Result{"ok": true, "projectId": b.project, "bindingId": b.id, "operationId": id, "type": t, "state": state}, nil
+	return id, nil
+}
+
+// presetPublish records a publish of the Project's current snapshot to the Binding's branch,
+// requested and approved by the Project's owner. It expects the all-zero oid, so the fixture reads
+// as a publish that creates the external branch and never as one that would find nothing to push.
+func (p *Preset) presetPublish(ctx context.Context, b binding, state string, code any, shape operationShape) (id, sourceRef string, err error) {
+	fixture, err := p.publishFixture(ctx, b)
+	if err != nil {
+		return "", "", err
+	}
+	if fixture.credential == "" {
+		return "", "", fmt.Errorf("project %s has no Binding credential, and a publish Operation must name one", b.project)
+	}
+	if fixture.commit == "" {
+		return "", "", fmt.Errorf("project %s has no current snapshot; run snapshot before presetting a publish", b.project)
+	}
+	sourceRef = core.GitDeliveryRefPrefix + uuid.NewString()
+	// An approval is what awaiting_approval is waiting for; every other state has one.
+	approved := state != "awaiting_approval"
+	err = p.DB.QueryRowContext(ctx, `INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,error_code,finished_at,
+	 requested_by,credential_ref_id,credential_version,source_ref,source_commit,target_branch,expected_old_oid,approver_kind,approval_expires_at,
+	 approved_by,approved_at,approved_store_version,lease_owner,lease_expires_at,authorization_id,started_at)
+	 VALUES(gen_random_uuid(),'repository_publish',$1,$2,$3,$4,'preset',$5,
+	  CASE WHEN $6 THEN clock_timestamp() END,
+	  $7,$8,$9,$10,$11,$12,$13,'publisher',clock_timestamp()+make_interval(secs=>$14),
+	  CASE WHEN $15 THEN $7::uuid END,CASE WHEN $15 THEN clock_timestamp() END,CASE WHEN $15 THEN $9::bigint END,
+	  CASE WHEN $16 THEN 'preset'::text END,
+	  CASE WHEN $16 THEN clock_timestamp()+make_interval(secs=>$14) END,
+	  CASE WHEN $17 THEN gen_random_uuid() END,
+	  CASE WHEN $17 THEN clock_timestamp() END)
+	 RETURNING id`,
+		b.tenant, b.project, b.id, state, code, shape.finished,
+		fixture.owner, fixture.credential, fixture.version, sourceRef, fixture.commit, b.branch, strings.Repeat("0", 40), presetLease,
+		approved, shape.leased, shape.started).Scan(&id)
+	if err != nil {
+		return "", "", fmt.Errorf("record operation: %w", err)
+	}
+	return id, sourceRef, nil
+}
+
+// publishFixture is what a publish Operation needs from the Project beyond its Binding: the owner
+// who requests and approves it, and the credential and snapshot it names.
+type publishFixture struct {
+	owner, credential, commit string
+	version                   int64
+}
+
+func (p *Preset) publishFixture(ctx context.Context, b binding) (publishFixture, error) {
+	var f publishFixture
+	err := p.DB.QueryRowContext(ctx, `SELECT p.owner_user_id,coalesce(b.credential_ref_id::text,''),
+	 coalesce((SELECT s.commit_oid FROM repository_snapshots s WHERE s.binding_id=b.id),''),
+	 coalesce((SELECT c.store_version FROM credential_refs c WHERE c.id=b.credential_ref_id),0)
+	 FROM projects p JOIN repository_bindings b ON b.project_id=p.id WHERE b.id=$1`, b.id).
+		Scan(&f.owner, &f.credential, &f.commit, &f.version)
+	if err != nil {
+		return publishFixture{}, fmt.Errorf("read publish fixture: %w", err)
+	}
+	return f, nil
 }
 
 // history creates n deterministic commits in the bare repository and returns the last.
