@@ -1,8 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { replaceEqualDeep, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   Error as ApiError,
+  GetApiV1TenantsTidWorkflowsWfidRuns200,
   Workflow as CloudWorkflow,
   WorkflowRun,
+  WorkflowRunNodeStates,
+  WorkflowRunStatus,
   WorkflowSnapshot,
 } from '@/api/generated.schemas'
 import {
@@ -18,6 +21,8 @@ import {
   putApiV1TenantsTidWorkflowsWfid,
   putApiV1TenantsTidWorkflowsWfidSnapshotsSnapshotIdRestore,
 } from '@/api/workflows/workflows'
+import { asJsonRecord, isJsonRecord } from '@/features/workflows/runtime/json-record'
+import { isTerminalRunStatus } from '@/features/workflows/runtime/types'
 import { mutationHeaders, useIdempotencyKeys } from '@/features/spaces/api'
 import type { ErrorType } from '@/lib/api-client'
 
@@ -309,10 +314,182 @@ export interface RestoreWorkflowSnapshotInput {
 }
 
 /**
+ * Poll interval while a run can still change.
+ *
+ * A workflow run publishes no space event, so nothing pushes its progress to an
+ * open page; a bounded poll is the honest stand-in until the backend owns one.
+ * The cadence matches the issue-run list's settling poll, which covers the same
+ * "nothing is published when a run settles" gap.
+ */
+export const WORKFLOW_RUN_POLL_MS = 5000
+
+/**
+ * How often a run read polls, given the status it last returned.
+ *
+ * A settled run stops the poll: nothing can change it again, so re-reading it
+ * would only spend requests. A status this build does not recognise keeps
+ * polling on purpose — freezing on a value the viewer cannot classify would
+ * silently stop updating a run the server is still advancing.
+ *
+ * @param status - Status of the last successful read, or `undefined` before one lands.
+ * @returns The interval in milliseconds, or `false` when there is nothing to keep up with.
+ */
+export function runPollInterval(status: WorkflowRunStatus | undefined): number | false {
+  if (status === undefined) return false
+  return isTerminalRunStatus(status) ? false : WORKFLOW_RUN_POLL_MS
+}
+
+/**
+ * How often the run history polls: while any listed run can still change.
+ *
+ * @param items - Runs of the last successful page, or `undefined` before one lands.
+ * @returns The interval in milliseconds, or `false` when every listed run is settled.
+ */
+export function runsPollInterval(items: WorkflowRun[] | undefined): number | false {
+  if (items === undefined) return false
+  return items.some((run) => !isTerminalRunStatus(run.status)) ? WORKFLOW_RUN_POLL_MS : false
+}
+
+/**
+ * Merges a run read into the copy already held, so a late or stale response
+ * cannot undo a newer one.
+ *
+ * A run row is the evidence for what happened, and a read is only a snapshot of
+ * it: a poll can overlap a write, or be answered by a replica that has not caught
+ * up, and then arrive after a newer read already landed. Two rules make that
+ * harmless — a settled run is never reopened by an unsettled read, and between
+ * reads of the same kind the newer `updatedAt` wins. Node states are then merged
+ * node by node on top of the winning record, so a node the page is already
+ * showing is never blanked by a read that raced a partial write.
+ *
+ * @param previous - The run already cached, if any.
+ * @param next - The run the latest read returned.
+ * @returns The run to keep: one of the two inputs, or a copy of the winner
+ *   carrying the merged node states.
+ */
+export function mergeRunRead(previous: WorkflowRun | undefined, next: WorkflowRun): WorkflowRun {
+  if (previous === undefined) return next
+  const keepNext = prefersNextRead(previous, next)
+  const winner = keepNext ? next : previous
+  const other = keepNext ? previous : next
+  const nodeStates = mergeNodeStates(winner.nodeStates, other.nodeStates)
+  return nodeStates === winner.nodeStates ? winner : { ...winner, nodeStates }
+}
+
+/** Whether `next` is the read the cache should keep. */
+function prefersNextRead(previous: WorkflowRun, next: WorkflowRun): boolean {
+  const settled = isTerminalRunStatus(next.status)
+  if (settled !== isTerminalRunStatus(previous.status)) return settled
+  return next.updatedAt >= previous.updatedAt
+}
+
+/**
+ * Merges two node-state maps into the winning record's, node by node.
+ *
+ * The winner keeps its own entry for every node it knows, because its node
+ * states were written with the row the comparison chose. Entries only the other
+ * read carried are kept: node ids come from the run's frozen snapshot, so a node
+ * never disappears, and a read that raced a node's write must not blank what the
+ * page is already showing. The winner's map is returned unchanged when the other
+ * read had nothing extra, so an idle poll does not churn the cache.
+ */
+function mergeNodeStates(
+  winner: WorkflowRunNodeStates,
+  other: WorkflowRunNodeStates,
+): WorkflowRunNodeStates {
+  const extra = Object.keys(other).filter((nodeId) => !(nodeId in winner))
+  if (extra.length === 0) return winner
+  const merged: WorkflowRunNodeStates = { ...winner }
+  for (const nodeId of extra) merged[nodeId] = other[nodeId]
+  return merged
+}
+
+/**
+ * Merges a run-history page into the one already held, so one run cannot read
+ * differently in the list and on its detail page.
+ *
+ * Membership follows the incoming page: the server decides which runs exist, and
+ * the page is capped, so keeping rows the server no longer returns would grow
+ * the list without bound. What each surviving run says about itself is merged
+ * with the same rule the detail page uses, which is what keeps the two surfaces
+ * agreeing.
+ *
+ * @param previous - The page already cached, if any.
+ * @param next - The page the latest read returned.
+ * @returns The page to keep.
+ */
+export function mergeRunPage(
+  previous: GetApiV1TenantsTidWorkflowsWfidRuns200 | undefined,
+  next: GetApiV1TenantsTidWorkflowsWfidRuns200,
+): GetApiV1TenantsTidWorkflowsWfidRuns200 {
+  if (previous === undefined) return next
+  const held = new Map(previous.items.map((run) => [run.id, run]))
+  return { ...next, items: next.items.map((run) => mergeRunRead(held.get(run.id), run)) }
+}
+
+/**
+ * True when a value is a run row the merge can read.
+ *
+ * TanStack types `structuralSharing` over `unknown`, so its arguments need
+ * narrowing before the merge can take them. What it passes is what this module's
+ * own `queryFn` returned — never wire data parsed somewhere else — so the check
+ * only has to cover the fields the merge reads, not the whole row.
+ */
+function isMergeableRun(value: unknown): value is WorkflowRun {
+  const record = asJsonRecord(value)
+  if (record === undefined) return false
+  return (
+    typeof record['id'] === 'string' &&
+    typeof record['status'] === 'string' &&
+    typeof record['updatedAt'] === 'string' &&
+    isJsonRecord(record['nodeStates'])
+  )
+}
+
+/** True when a value is a run-history page whose rows the merge can read. */
+function isMergeableRunPage(value: unknown): value is GetApiV1TenantsTidWorkflowsWfidRuns200 {
+  const record = asJsonRecord(value)
+  if (record === undefined) return false
+  const { items, nextCursor } = record
+  if (!Array.isArray(items) || typeof nextCursor !== 'string') return false
+  const rows: unknown[] = items
+  return rows.every(isMergeableRun)
+}
+
+/**
+ * The `structuralSharing` adapter for one run read.
+ *
+ * TanStack calls this as it writes the read into the cache, which is the only
+ * point where the comparison sees the cache's current value; merging after the
+ * fact could interleave with a concurrent read's write. A value this module did
+ * not produce is passed straight through, so an unexpected cache entry replaces
+ * itself rather than being dropped.
+ *
+ * A custom function replaces TanStack's default structural sharing rather than
+ * adding to it, so the merge is followed by `replaceEqualDeep` — the default —
+ * to keep the identity of an unchanged run. Without it every poll would hand the
+ * page a new object, and the frozen graph would be re-laid out every few seconds
+ * for a run that has not moved.
+ */
+function shareRunRead(previous: unknown, next: unknown): unknown {
+  if (!isMergeableRun(next)) return next
+  const held = isMergeableRun(previous) ? previous : undefined
+  return replaceEqualDeep(held, mergeRunRead(held, next))
+}
+
+/** The `structuralSharing` adapter for the run history, over {@link mergeRunPage}'s rule. */
+function shareRunPage(previous: unknown, next: unknown): unknown {
+  if (!isMergeableRunPage(next)) return next
+  const held = isMergeableRunPage(previous) ? previous : undefined
+  return replaceEqualDeep(held, mergeRunPage(held, next))
+}
+
+/**
  * A workflow's run history, newest first.
  *
  * The backend pages runs by row UUID, so the query fetches up to 100 rows and
- * sorts by `createdAt` client-side.
+ * sorts by `createdAt` client-side. It keeps re-reading while a listed run is
+ * still moving, so the popover shows a run settling without being reopened.
  *
  * @param tenantId - Tenant the workflow belongs to.
  * @param workflowId - Workflow whose runs to read.
@@ -331,11 +508,17 @@ export function useWorkflowRuns(tenantId: string | undefined, workflowId: string
       ),
     enabled: !!tenantId && !!workflowId,
     select: (page) => [...page.items].toSorted((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    refetchInterval: (query) => runsPollInterval(query.state.data?.items),
+    structuralSharing: shareRunPage,
   })
 }
 
 /**
  * One workflow run by id, including its frozen snapshot graph and node states.
+ *
+ * The read keeps refreshing while the run is still moving, so an open detail
+ * page follows a run from `pending` to its terminal status without a reload, and
+ * stops on its own once the run settles.
  *
  * @param tenantId - Tenant the run belongs to.
  * @param workflowId - Workflow the run belongs to.
@@ -358,6 +541,8 @@ export function useWorkflowRun(
         signal,
       ),
     enabled: !!tenantId && !!workflowId && !!runId,
+    refetchInterval: (query) => runPollInterval(query.state.data?.status),
+    structuralSharing: shareRunRead,
   })
 }
 

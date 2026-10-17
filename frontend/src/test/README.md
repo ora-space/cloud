@@ -18,11 +18,13 @@
 | `msw-server.ts` | MSW node server：mock 域 handler 加上基线 `GET /api/v1/me → 401`（任何渲染默认未登录）与 `GET /auth/providers → ['github']`（生产形态的网关；开发者登录的测试会覆盖它）。 |
 | `cloud-handlers.ts` | 云流程共享 MSW 替身：会话探测及 `/me/spaces` 返回的 `cloud-dev` 租户空间，并提供 `TEST_USER` 等 fixture。 |
 | `navigation.ts` | `installFakeNavigation()`：替换外部跳转与新标签页打开，记录 `destinations` 与 `openedTabs`；测试结束自动还原。 |
+| `polling.ts` | `settleUntil(check)`：在 `setInterval` 被伪造（轮询测试要推进查询）时重试断言——此时 Testing Library 的 `waitFor` 自己也在用 `setInterval`，无法工作。 |
+| `polling.test.ts` | 验证重试到成立、以及用尽重试后抛出最后一次失败，其它轮询测试依赖这些行为。 |
 | `render.tsx` | `renderWithProviders` / `renderAtRoute` / `renderRoutes`：包好 QueryClient、`SessionProvider`、Sidebar 与（前两者）`CurrentSpaceProvider` 的渲染入口；`renderAtRoute` 用应用的 `WORKSPACE_ROUTE_PATTERN`（`/w/:workspaceSlug`）从初始路径解析 slug。 |
 
 ## 依赖方向
 
-依赖 `@/lib/api-client`（替换其 adapter）、`@/lib/navigation`（替换外部跳转）、`@/features/auth/session` 与 `vitest`。业务代码**禁止** import 本目录。
+依赖 `@/lib/api-client`（替换其 adapter）、`@/lib/navigation`（替换外部跳转）、`@/features/auth/session`、`@testing-library/react` 与 `vitest`。业务代码**禁止** import 本目录。
 
 ## 约定
 
