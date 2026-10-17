@@ -22,6 +22,47 @@ func workspaceCloneAttempts(t *transaction, operationID string) int64 {
 	return t.one("SELECT count(*) AS attempts FROM clone_executions WHERE operation_id=$1", operationID).N("attempts")
 }
 
+// settleRefusedClone settles one unregistered deterministic repository refusal inside the claim
+// transaction (ADR settle-deterministic-dispatch-refusals D2). It reports whether the candidate
+// was settled; claim then inspects the next candidate instead of handing back an operation whose
+// clone dispatch can only be refused again. Settlement keeps the stage, request, external effects
+// and resource identities for audit, closes new execution admission on the main Workspace, and
+// settles the run Workspace in the same transaction, so a hook or cleanup failure rolls back the
+// whole settlement instead of leaving a half-failed operation behind.
+func settleRefusedClone(t *transaction, o Object) bool {
+	// Only clone steps of the two creating kinds start new remote Git work; a succeeded clone
+	// already advanced past it and must not be rewritten by a later freeze.
+	if o.S("step") != "clone" || (o.S("kind") != "create_project" && o.S("kind") != "create_workspace") {
+		return false
+	}
+	// No unsettled clone, unknown effect or unknown execution of this operation may exist: an
+	// already dispatched clone keeps its original authorization and outcome obligations, and the
+	// recovery rules for registered identities take precedence over an unregistered refusal.
+	if t.one("SELECT execution_id FROM clone_executions WHERE operation_id=$1 AND result IS NULL AND terminated_by_force_stop_id IS NULL", o.S("id")) != nil {
+		return false
+	}
+	if t.one("SELECT execution_id FROM clone_executions WHERE operation_id=$1 AND result->>'outcome'='clone_ready'", o.S("id")) != nil {
+		return false
+	}
+	if t.one("SELECT id FROM external_effects WHERE operation_id=$1 AND state IN ('planned','running') AND kind NOT IN ('storage_ensure','worktree_ensure','worktree_delete','storage_delete','plugin_ensure','plugin_delete')", o.S("id")) != nil {
+		return false
+	}
+	if t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND result IS NULL AND terminated_by_force_stop_id IS NULL", o.S("id")) != nil {
+		return false
+	}
+	code := repositoryAccessFault(t, o.S("projectId"))
+	if code == "" {
+		return false
+	}
+	t.exec("UPDATE operations SET state='failed',error_code=$2,retry_at=NULL,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), code)
+	t.exec("UPDATE workspaces SET observed_state='unavailable',admission_open=false,version=version+1 WHERE id=$1", o.S("workspaceId"))
+	finishRuntimeMaintenance(t, o.S("id"))
+	if w := t.one("SELECT issue_run_id FROM workspaces WHERE id=$1", o.S("workspaceId")); w.S("issueRunId") != "" {
+		runWorkspaceSettled(t, w.S("issueRunId"), "failed")
+	}
+	return true
+}
+
 // deferWorkspaceClone retries only settled failures, with a server-owned bounded backoff.
 // An unknown outcome retains its existing blocked policy and can never consume a new dispatch.
 func deferWorkspaceClone(t *transaction, o Object) {
