@@ -3,25 +3,23 @@ import { Play, ScrollText } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { WorkflowRunStatus } from '@/api/generated.schemas'
+import type { WorkflowRun, WorkflowRunStatus } from '@/api/generated.schemas'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  useCreateWorkflowRun,
-  useWorkflowRuns,
-  useWorkflowSnapshots,
-} from '@/features/workflows/api'
+import { useWorkflowRuns, useWorkflowSnapshots } from '@/features/workflows/api'
+import { WorkflowRunDialog } from '@/features/workflows/editor/workflow-run-dialog'
 import { RunStatusBadge } from '@/features/workflows/run/run-status-mark'
 import { workspacePaths } from '@/lib/paths'
 
 /**
- * The toolbar's run controls: kick off one run now, or browse the run history.
+ * The toolbar's run controls: start one run, or browse the run history.
  *
  * A run executes against a published snapshot, so the primary button is disabled while
- * the workflow has none — there is nothing honest to execute a draft against. Kicking off
- * a run navigates to it; browsing history opens the popover, whose rows lead to each run's
- * read-only detail page.
+ * the workflow has none — there is nothing honest to execute a draft against. Starting a
+ * run opens {@link WorkflowRunDialog}, which is where the version and the run's own input
+ * are chosen; a started run then navigates to its read-only detail page, while browsing
+ * history opens the popover whose rows lead to each run's page.
  *
  * @param props.tenantId - Tenant the workflow belongs to; scopes the API calls only, never a
  * browser path segment (the route's workspace slug is the one paths are built from).
@@ -43,34 +41,30 @@ export function WorkflowRunTools({
   const paths = workspacePaths(workspaceSlug ?? tenantId)
   const snapshots = useWorkflowSnapshots(tenantId, workflowId)
   const runs = useWorkflowRuns(tenantId, workflowId)
-  const createRun = useCreateWorkflowRun(tenantId)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [startOpen, setStartOpen] = useState(false)
 
   const noSnapshot = snapshots.data !== undefined && snapshots.data.length === 0
-  const runNowDisabled = noSnapshot || createRun.isPending
 
   return (
     <>
       <Button
         variant="default"
         size="sm"
-        disabled={runNowDisabled}
+        disabled={noSnapshot}
         title={noSnapshot ? t('workflows.run.noSnapshotHint') : t('workflows.run.runHint')}
-        onClick={() => {
-          createRun.mutate(
-            { workflowId },
-            {
-              onSuccess: (run) => {
-                setHistoryOpen(false)
-                void navigate(paths.workflowRun(run.workflowId, run.id))
-              },
-            },
-          )
-        }}
+        onClick={() => setStartOpen(true)}
       >
         <Play className="size-3.5" fill="currentColor" />
         {t('workflows.run.runNow')}
       </Button>
+      <WorkflowRunDialog
+        tenantId={tenantId}
+        workflowId={workflowId}
+        open={startOpen}
+        onOpenChange={setStartOpen}
+        onStarted={openStartedRun}
+      />
       <Popover
         open={historyOpen}
         onOpenChange={(next) => {
@@ -101,6 +95,13 @@ export function WorkflowRunTools({
       </Popover>
     </>
   )
+
+  /** Leaves the dialog for the run the server just created. */
+  function openStartedRun(run: WorkflowRun): void {
+    setStartOpen(false)
+    setHistoryOpen(false)
+    void navigate(paths.workflowRun(run.workflowId, run.id))
+  }
 
   /** Navigates to a run's read-only detail page. */
   function openRun(runId: string): void {
