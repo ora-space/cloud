@@ -9295,7 +9295,7 @@
             }
           },
           {
-            "description": "Exclusive UUID cursor, ascending stable ordering.",
+            "description": "Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.",
             "in": "query",
             "name": "after",
             "schema": {
@@ -21430,7 +21430,7 @@
             }
           },
           {
-            "description": "Exclusive UUID cursor, ascending stable ordering.",
+            "description": "Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.",
             "in": "query",
             "name": "after",
             "schema": {
