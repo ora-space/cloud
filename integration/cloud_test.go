@@ -96,6 +96,11 @@ func testSchema(t *testing.T, prefix string) (*sql.DB, *pgx.ConnConfig) {
 	return pool, config
 }
 
+// setGinTestModeOnce makes setup safe to call from parallel tests: gin.SetMode writes a
+// package global, so concurrent setups would race under the race detector. The first call
+// wins and every router is created after the mode is fixed.
+var setGinTestModeOnce sync.Once
+
 func setup(t *testing.T) *fixture {
 	t.Helper()
 	pool, config := testSchema(t, "test_")
@@ -116,7 +121,7 @@ func setup(t *testing.T) *fixture {
 	must(t, e)
 	auth, e := core.NewAuthenticator("ora-cloud", credentials.Trust)
 	must(t, e)
-	gin.SetMode(gin.TestMode)
+	setGinTestModeOnce.Do(func() { gin.SetMode(gin.TestMode) })
 	log, _ := zap.NewDevelopment()
 	cloud := httptest.NewServer(router.NewDevelopment(store, auth, log))
 	t.Cleanup(cloud.Close)
