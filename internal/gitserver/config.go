@@ -16,6 +16,9 @@ import (
 type Config struct {
 	// RepositoryAddress serves smart HTTP to sandboxes and joins only the sandbox network.
 	RepositoryAddress string
+	// ServiceRepositoryAddress serves smart HTTP to the Repo Executor and joins only the internal
+	// service network, which sandboxes cannot reach.
+	ServiceRepositoryAddress string
 	// RefAddress serves the read-only ref query to Cloud and joins only the default network.
 	RefAddress string
 	// RepositoryRoot is the persistent volume holding /{tenantId}/{projectId}.git bare repositories.
@@ -25,6 +28,9 @@ type Config struct {
 	// HealthServerName is the TLS name the local healthcheck verifies on the ref listener.
 	HealthServerName                                                    string
 	CertificateFile, PrivateKeyFile, SandboxCAFile, CloudClientCertFile string
+	// ExecutorCAFile is the CA that issues Repo Executor service certificates. It is distinct from
+	// the sandbox CA, so neither listener accepts the other's clients.
+	ExecutorCAFile string
 }
 
 // LoadConfig reads the git-server process's environment with explicit safe defaults.
@@ -36,17 +42,19 @@ func LoadConfig() (Config, error) {
 		return fallback
 	}
 	c := Config{
-		RepositoryAddress:   value("REPOSITORY_ADDR", ":8445"),
-		RefAddress:          value("REF_ADDR", ":8446"),
-		RepositoryRoot:      value("REPOSITORY_ROOT", "/var/lib/ora-git/repositories"),
-		GitProgram:          value("GIT_PROGRAM", "git"),
-		HealthServerName:    value("HEALTH_SERVER_NAME", "git-server"),
-		CertificateFile:     value("CERTIFICATE_FILE", "/etc/ora-git-management/server.pem"),
-		PrivateKeyFile:      value("PRIVATE_KEY_FILE", "/etc/ora-git-management/server.key"),
-		SandboxCAFile:       value("SANDBOX_CA_FILE", "/etc/ora-git-management/ca.pem"),
-		CloudClientCertFile: value("CLOUD_CLIENT_CERT_FILE", "/etc/ora-git-management/cloud-client.pem"),
+		RepositoryAddress:        value("REPOSITORY_ADDR", ":8445"),
+		ServiceRepositoryAddress: value("SERVICE_REPOSITORY_ADDR", ":8447"),
+		ExecutorCAFile:           value("EXECUTOR_CA_FILE", "/etc/ora-git-management/repo-executor-ca.pem"),
+		RefAddress:               value("REF_ADDR", ":8446"),
+		RepositoryRoot:           value("REPOSITORY_ROOT", "/var/lib/ora-git/repositories"),
+		GitProgram:               value("GIT_PROGRAM", "git"),
+		HealthServerName:         value("HEALTH_SERVER_NAME", "git-server"),
+		CertificateFile:          value("CERTIFICATE_FILE", "/etc/ora-git-management/server.pem"),
+		PrivateKeyFile:           value("PRIVATE_KEY_FILE", "/etc/ora-git-management/server.key"),
+		SandboxCAFile:            value("SANDBOX_CA_FILE", "/etc/ora-git-management/ca.pem"),
+		CloudClientCertFile:      value("CLOUD_CLIENT_CERT_FILE", "/etc/ora-git-management/cloud-client.pem"),
 	}
-	for _, address := range []string{c.RepositoryAddress, c.RefAddress} {
+	for _, address := range []string{c.RepositoryAddress, c.ServiceRepositoryAddress, c.RefAddress} {
 		if _, _, err := net.SplitHostPort(address); err != nil {
 			return Config{}, errors.New("invalid git server listen address")
 		}
@@ -65,6 +73,22 @@ func (c *Config) RepositoryTLS() (*tls.Config, error) {
 		return nil, err
 	}
 	pool, err := c.sandboxTrust()
+	if err != nil {
+		return nil, err
+	}
+	config.ClientAuth = tls.RequireAndVerifyClientCert
+	config.ClientCAs = pool
+	return config, nil
+}
+
+// ServiceRepositoryTLS requires a client certificate chained to the executor CA only.
+// RequireExecutor then enforces the executor identity.
+func (c *Config) ServiceRepositoryTLS() (*tls.Config, error) {
+	config, err := c.serverTLS()
+	if err != nil {
+		return nil, err
+	}
+	pool, err := trust(c.ExecutorCAFile)
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +137,10 @@ func (c *Config) serverTLS() (*tls.Config, error) {
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair}}, nil
 }
 
-func (c *Config) sandboxTrust() (*x509.CertPool, error) {
-	trust, err := os.ReadFile(c.SandboxCAFile)
+func (c *Config) sandboxTrust() (*x509.CertPool, error) { return trust(c.SandboxCAFile) }
+
+func trust(file string) (*x509.CertPool, error) {
+	trust, err := os.ReadFile(file)
 	if err != nil {
 		return nil, errors.New("git server trust unavailable")
 	}

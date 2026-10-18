@@ -1,6 +1,6 @@
 package integration
 
-// Phase 4C S4 acceptance for the public Thread POST (Thread D3, plan §4C.4/§4C.5/§4C.6/§4C.15).
+// Acceptance for the public Thread POST (Thread D3).
 // Every case here goes through real HTTP (Gin router → credentials → Store.Public) and real
 // PostgreSQL, because the obligations being proven are exactly the ones a unit test cannot hold:
 // the accept matrix against stored Thread state, the seven idempotency cases against the real
@@ -8,7 +8,7 @@ package integration
 // control-plane command and the caller's idempotency record commit together or not at all.
 //
 // The scene is seeded at the storage boundary (issue + agent run + its run Workspace), because run
-// creation and CreateRunWorkspace are still G-001 placeholders; everything the POST itself does is
+// creation and CreateRunWorkspace are still placeholders here; everything the POST itself does is
 // production code, including the delivery command, which the control plane's own in-transaction seam
 // writes (`enqueueThreadCommand`) rather than a second writer on the Cloud side.
 
@@ -88,7 +88,7 @@ func (f *fixture) threadRequest(method, path, body, key string) (int, core.Objec
 
 // threadRequestAs is threadRequest for an explicit caller. The Thread read's authorization cases need
 // it: the read must reject exactly the callers the comments read rejects, and proving that means
-// issuing both requests as the same verified non-member (Thread D3/D5, plan §4C.3).
+// issuing both requests as the same verified non-member (Thread D3/D5).
 func (f *fixture) threadRequestAs(user core.Claims, method, path, body, key string) (int, core.Object, error) {
 	req, e := http.NewRequestWithContext(context.Background(), method, f.cloud.URL+path, strings.NewReader(body))
 	if e != nil {
@@ -211,7 +211,7 @@ func (f *fixture) commandTurns(runID string) []string {
 	return out
 }
 
-// T4C-13 (plan) / plan §4C.4 — the accept matrix and the success shape. `pending`, `active` and
+// The accept matrix and the success shape. `pending`, `active` and
 // `idle` all accept a new user turn; the write is one `queued` user entry, the Thread moves to
 // `active` with `idle_since` cleared, the response carries exactly the seven contract fields, and
 // the run's command backlog grows by exactly one command whose turn_id is the entry's.
@@ -234,7 +234,7 @@ func TestThreadMessagePostAcceptsPendingActiveAndIdle(t *testing.T) {
 				t.Fatalf("stored content = %q, want the text the caller sent", got)
 			}
 
-			// The turn identity is Cloud's (D-4C-06) and it is one identity: the response, the entry
+			// The turn identity is Cloud's and it is one identity: the response, the entry
 			// and the command body all name the same turn_id.
 			turnIDs := f.queuedTurns(scene.runID)
 			if len(turnIDs) != 1 || turnIDs[0] != resource.S("turnId") {
@@ -254,7 +254,7 @@ func TestThreadMessagePostAcceptsPendingActiveAndIdle(t *testing.T) {
 			}
 
 			// The Thread state change: `active` from every accepting state, and no idle window left
-			// open (D-4C-04: a new user turn is what makes the Thread active again).
+			// open (Thread D4: a new user turn is what makes the Thread active again).
 			var threadState string
 			var idleSince *string
 			must(t, f.store.Pool.QueryRow(`SELECT thread_state, idle_since::text FROM issue_runs WHERE id=$1`, scene.runID).Scan(&threadState, &idleSince))
@@ -266,8 +266,8 @@ func TestThreadMessagePostAcceptsPendingActiveAndIdle(t *testing.T) {
 }
 
 // seedForeignThreadScene seeds one more tenant with an issue and a live agent run of its own, and no
-// membership for the fixture's user. It exists so the two different answers the plan separates can be
-// told apart (plan §4C.15, T4C-11): a run that belongs to another tenant while the caller *is* an
+// membership for the fixture's user. It exists so the two different answers can be
+// told apart: a run that belongs to another tenant while the caller *is* an
 // authorized member of the tenant in the path is a plain not-found — the caller must not be able to
 // probe for the existence of other tenants' runs — whereas a caller with no membership at all is
 // refused by the shared membership check, exactly as the comment path refuses them.
@@ -292,7 +292,7 @@ func seedForeignThreadScene(t *testing.T, f *fixture) threadScene {
 	return threadScene{tenantID: tenantID, issueID: issueID, runID: runID}
 }
 
-// T4C-13 (plan) / plan §4C.15 — the rows Cloud refuses with a client-actionable status: a closed
+// The rows Cloud refuses with a client-actionable status: a closed
 // Thread is 409, and a run the caller cannot name is 404 rather than a distinguishable "exists but
 // not yours". No refusal writes anything.
 func TestThreadMessagePostRejectsClosedAndUnknownRuns(t *testing.T) {
@@ -342,7 +342,7 @@ func TestThreadMessagePostRejectsClosedAndUnknownRuns(t *testing.T) {
 	}
 }
 
-// plan §4C.4/§4C.15 — the two state rows Cloud itself guarantees cannot happen are answered as
+// The two state rows Cloud itself guarantees cannot happen are answered as
 // internal invariant failures, never as 409: a 409 would tell a client "the Thread is closed" about
 // Cloud's own broken state. The transaction aborts, so nothing is written either way.
 func TestThreadMessagePostInvariantBreakIsInternal(t *testing.T) {
@@ -350,7 +350,7 @@ func TestThreadMessagePostInvariantBreakIsInternal(t *testing.T) {
 	f.bindBusinessHooks()
 	scene := seedThreadScene(t, f)
 
-	// D-4C-01 materializes `pending` inside StartSession, so an activated session with no Thread
+	// StartSession materializes `pending`, so an activated session with no Thread
 	// state at all has lost its Thread.
 	must(t, f.setThreadState(scene.runID, "starting", nil))
 	f.postThread(scene, "key-no-thread", threadBody("orphan"), 500, "internal_error")
@@ -373,7 +373,7 @@ func TestThreadMessagePostInvariantBreakIsInternal(t *testing.T) {
 	}
 }
 
-// T4C-14 (mandate) / §4C.5 case 1–2 — the first POST creates, and a replay under the same key with
+// The first POST creates, and a replay under the same key with
 // the same body returns the original response without creating a second turn, a second command or a
 // second state change. The replay is the same logical response, not a re-render of current state.
 func TestThreadMessagePostReplaysUnderTheSameKey(t *testing.T) {
@@ -397,7 +397,7 @@ func TestThreadMessagePostReplaysUnderTheSameKey(t *testing.T) {
 	}
 }
 
-// T4C-16 (mandate) / §4C.5 cases 4 and 6 — one key names one request. A different body under the
+// One key names one request. A different body under the
 // same key and the same key against a different run are both conflicts, because the recorded request
 // hash covers the method, the path and the body.
 func TestThreadMessagePostRejectsIdempotencyConflicts(t *testing.T) {
@@ -423,7 +423,7 @@ func TestThreadMessagePostRejectsIdempotencyConflicts(t *testing.T) {
 	}
 }
 
-// T4C-17 (mandate) / §4C.5 case 5 — a different key with an identical body is a new request: two
+// A different key with an identical body is a new request: two
 // independent user turns, two commands, two Cloud-generated turn_ids, contiguous Thread seq.
 func TestThreadMessageDistinctKeysCreateIndependentTurns(t *testing.T) {
 	f := setup(t)
@@ -446,7 +446,7 @@ func TestThreadMessageDistinctKeysCreateIndependentTurns(t *testing.T) {
 	}
 }
 
-// T4C-15 (mandate) / §4C.5 case 3 — two concurrent requests sharing one key and one body. The
+// Two concurrent requests sharing one key and one body. The
 // barrier releases both at once and the assertion is on the complete permitted outcome set: exactly
 // one turn is created and both callers see the same logical response (the winner's 201, replayed).
 // No sleeps: the outcome is read after both goroutines have returned.
@@ -492,7 +492,7 @@ func TestThreadMessageConcurrentSameKeyCreatesOneTurn(t *testing.T) {
 	}
 }
 
-// T4C-18 (mandate) / plan §4C.4 — all-or-nothing. The POST writes the user entry, both hint events,
+// All-or-nothing. The POST writes the user entry, both hint events,
 // the Thread-state CAS and the delivery command in one transaction; when a statement of that
 // transaction is refused, the whole request rolls back: no entry, no state change, no command and no
 // idempotency record. The retry under the same key after the cause is gone is then a clean first
@@ -545,7 +545,7 @@ func TestThreadMessageWriteFailureRollsBackEverything(t *testing.T) {
 	}
 }
 
-// T4C-18 (mandate) / plan §4C.15 — the boundary refusals the router owns, at the public contract:
+// The boundary refusals the router owns, at the public contract:
 // a missing Idempotency-Key, malformed JSON, a second JSON value, an unknown field, a wrong field
 // type, an unsupported content block and content over Thread D3's 64 KiB bound. Every one of them is
 // a stable 400 code and none of them reaches the database.
@@ -588,7 +588,7 @@ func TestThreadMessageRejectsMalformedAndOversizedRequests(t *testing.T) {
 	}
 }
 
-// A2 (approved, G-024) / plan §4C.4 — a recorded cancellation request closes the Thread to new user
+// Thread D3 — a recorded cancellation request closes the Thread to new user
 // turns. Cancel is a *request* (IssueRun D6), not a terminal state, so the run is still live, its
 // Thread is still `pending`/`active`/`idle`, and the caller's only signal that this conversation is
 // winding down is this refusal. Accepting a turn here would persist a message nothing will ever
@@ -598,7 +598,7 @@ func TestThreadMessageRejectsMalformedAndOversizedRequests(t *testing.T) {
 // the client's side the two are one fact — this Thread no longer takes turns — and inventing a second
 // code would make clients branch on a distinction they cannot act on differently.
 //
-// The check lives in two places on purpose (plan §7). The predicate refuses before anything is
+// The check lives in two places on purpose. The predicate refuses before anything is
 // written; the CAS repeats `cancel_requested_at IS NULL` so the guard a client is refused by and the
 // guard the write is fenced by can never drift apart. This test proves the first half directly and
 // the second by consequence: nothing was written at all, so the row version — which only the CAS

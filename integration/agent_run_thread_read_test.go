@@ -1,7 +1,6 @@
 package integration
 
-// Phase 4C S2a acceptance for the public Thread read (Thread D5, plan §4C.3/§4C.16, T4C-7/9/10/11/12),
-// covering the whole surface the approved A3/G-017 amendment names.
+// Acceptance for the public Thread read (Thread D5), covering its whole read surface.
 //
 // That surface is the route, the three window forms — no cursor (the tail), `after={seq}`,
 // `before={seq}` — their mutual exclusion as `invalid_pagination`, `limit` defaulting to 200 and
@@ -141,7 +140,7 @@ func (f *fixture) moreTenant() string {
 	return id
 }
 
-// T4C-7 / T4C-10 (plan §4C.3) — the forward window and the snapshot fields. `after=N` is strictly
+// The forward window and the snapshot fields. `after=N` is strictly
 // `seq > N` and the window is ascending; `after=0` is from the start; no cursor at all is the tail,
 // which for a Thread shorter than the limit is the same whole history. `threadState` comes from the
 // run in the same transaction, a user turn carries its lifecycle and no other source does, and the
@@ -183,8 +182,8 @@ func TestThreadReadReturnsAnAscendingWindowAfterTheCursor(t *testing.T) {
 		if it.N("seq") != seqs[i] {
 			t.Fatalf("entry %d: want seq %d got %d", i, seqs[i], it.N("seq"))
 		}
-		// The record is the verbatim line the writer stored, and the Node's identity — Cloud-internal
-		// per D-022 — is not part of the public entry.
+		// The record is the verbatim line the writer stored, and the Node's identity is
+		// Cloud-internal and not part of the public entry.
 		for _, leaked := range []string{"nodeExecutionId", "nodeSequence", "runId"} {
 			if _, ok := it[leaked]; ok {
 				t.Fatalf("entry %v leaks internal field %q", it, leaked)
@@ -235,7 +234,7 @@ func TestThreadReadOfAThreadWithNoEntriesIsEmpty(t *testing.T) {
 	}
 }
 
-// T4C-9 (plan §4C.3) — the window and cursor contract at the boundary. `limit` defaults to 200 and is
+// The window and cursor contract at the boundary. `limit` defaults to 200 and is
 // capped at D5's 500; a limit outside 1..500 is `invalid_pagination` and a cursor that is not a
 // non-negative decimal integer is `invalid_cursor`. The two fault names are the existing list errors,
 // reused so the Thread read adds no new vocabulary.
@@ -332,7 +331,7 @@ func TestThreadReadLimitAndCursorBounds(t *testing.T) {
 	}
 }
 
-// T4C-9 (plan §4C.3, A3/G-017) — the backward window and the two-cursor conflict. `before=N` is the
+// The backward window and the two-cursor conflict. `before=N` is the
 // `limit` entries closest to N from below, returned ascending; it is the exact inverse of `after` at
 // the same point, so a client that pages backwards and forwards over one Thread sees the same entries.
 // Asking for both directions at once is a client error rather than a third reading, and it is reported
@@ -408,7 +407,7 @@ func seqRange(from, to int64) []int64 {
 	return out
 }
 
-// T4C-7 (plan §4C.3, A3/G-017) — the window's own descriptors. `idleSince` is the D4 instant the idle
+// The window's own descriptors. `idleSince` is the D4 instant the idle
 // window is measured from and is null in every other state; `nextCursor` and `prevCursor` are the
 // window's two ends, which is what lets a panel page in both directions without inventing a cursor of
 // its own. An empty window has neither, rather than carrying the cursor the caller just sent: a cursor
@@ -467,7 +466,7 @@ func TestThreadReadReportsIdleSinceAndWindowCursors(t *testing.T) {
 }
 
 // runResourceFields is the public IssueRun field set: every `issue_runs` column except the six the
-// 0018 B-skeleton strips (plan §4C.3), plus the `revision` metadata projection Cloud Revision D5
+// 0018 B-skeleton strips, plus the `revision` metadata projection Cloud Revision D5
 // adds to every run read (null until a Revision is registered), and the `resume_revision_id` column the
 // resume decision exposes (null unless the run resumed a Revision).
 var runResourceFields = []string{
@@ -478,7 +477,7 @@ var runResourceFields = []string{
 	"triggerEvidenceRefId", "triggerSummary", "updatedAt", "version", "workflowInvocationRef",
 }
 
-// T4C-10 (plan §4C.3) — the Thread read exposes `threadState` and the run resource does not. The
+// The Thread read exposes `threadState` and the run resource does not. The
 // reader projects the column itself; the alternative shortcut (un-stripping it from the run resource)
 // would be a separate contract change, so it is pinned: the run's field set is asserted literally,
 // with a run whose `thread_state` and `idle_since` are both set, so a leak cannot hide behind nulls.
@@ -507,7 +506,7 @@ func TestThreadReadKeepsTheRunResourceShapeUnchanged(t *testing.T) {
 	}
 }
 
-// T4C-11 (plan §4C.3) — authorization is the Issue read permission the comments path uses, and the
+// Authorization is the Issue read permission the comments path uses, and the
 // scope is the triple tenant + Issue + live run. A caller who cannot see the Issue is refused the
 // same way on both paths; a caller who can see the Issue but names a foreign, wrong-Issue, soft
 // deleted or otherwise Thread-less run gets a plain not-found, so the read cannot be used to probe
@@ -573,9 +572,9 @@ func TestThreadReadAuthorizationMatchesComments(t *testing.T) {
 	})
 
 	t.Run("a run with no declared session has no Thread", func(t *testing.T) {
-		// D-4C-01 materializes `pending` inside StartSession; before that there is genuinely no
+		// StartSession materializes `pending`; before that there is genuinely no
 		// Thread to read, and an empty `threadState` would put a value outside D4's closed set on the
-		// wire. The answer is the same not-found a missing Thread gets (G-017).
+		// wire. The answer is the same not-found a missing Thread gets.
 		runID := seedDeclaredAgentRun(t, f.store.Pool, scene.seed, "provisioning", "queued", false, false)
 		status, out, e := f.threadRequest("GET", threadReadPath(scene.tenantID, scene.issueID, runID), "", "")
 		must(t, e)
@@ -598,7 +597,7 @@ func TestThreadReadAuthorizationMatchesComments(t *testing.T) {
 	})
 }
 
-// T4C-12 (plan §4C.3) — a walk that interleaves with real committed appends never skips and never
+// A walk that interleaves with real committed appends never skips and never
 // repeats. The reader has exactly one tool (after = its highest seen seq, which is why the cursor
 // must stay a raw `seq` rather than becoming opaque), and the writers are the production Thread POST.
 // The reader stops only when it has read the whole Thread, so a hole in its walk is a failure rather
@@ -716,7 +715,7 @@ func TestThreadReadPagingIsGapFreeUnderConcurrentAppend(t *testing.T) {
 	}
 }
 
-// The Thread read is read-only (plan §4R.5: "单次 Store.transact 只读，无写"). The evidence is the
+// The Thread read is read-only: one read-only Store.transact, no writes. The evidence is the
 // durable state itself: the entries, the run's Thread state, its row version and `updated_at`, the
 // command backlog, the receipt count, the idempotency records and the Issue's activity all have to be
 // exactly what they were, because a read that allocated a seq or bumped a version would show up here

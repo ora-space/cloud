@@ -79,7 +79,7 @@ func TestRuntimeUpgradeOnlyBackfillsUniqueCreationEvidenceAndKeepsUnknownReferen
 	if afterOperations != originalOperations {
 		t.Fatal("migration rewrote operation history")
 	}
-	must(t, pool.QueryRow("SELECT c.attribution,c.availability,c.secret_ref,p.credential_ref_id::text,p.repository_credential_ref_id::text,p.owner_user_id::text FROM credential_refs c JOIN projects p ON p.credential_ref_id=c.id WHERE c.id=$1", ref).Scan(&attribution, &availability, &secret, &oldRef, &effective, &owner))
+	must(t, pool.QueryRow("SELECT c.attribution,c.availability,c.secret_ref,b.credential_ref_id::text,b.repository_credential_ref_id::text,p.owner_user_id::text FROM credential_refs c JOIN repository_bindings b ON b.credential_ref_id=c.id JOIN projects p ON p.id=b.project_id WHERE c.id=$1", ref).Scan(&attribution, &availability, &secret, &oldRef, &effective, &owner))
 	if attribution != "unknown" || availability != "available" || secret != "controlled-reference-only" || oldRef != ref || effective.Valid || owner != admin {
 		t.Fatal("credential migration guessed attribution or rewrote bindings")
 	}

@@ -28,13 +28,17 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 )
 
-// ExecutionHeader names the execution a repository request serves. It selects which current
-// permission applies; it can never choose the authenticated runtime target.
+// ExecutionHeader names the execution a sandbox repository request serves. It selects which
+// current permission applies; it can never choose the authenticated runtime target.
 const ExecutionHeader = "Ora-Execution-Id"
+
+// OperationHeader names the repository Operation a Repo Executor request serves.
+const OperationHeader = "Ora-Git-Operation-Id"
 
 // Store is the authoritative policy the repository boundary consumes.
 type Store interface {
-	AuthorizeGitAccess(ctx context.Context, scope core.GitRuntimeScope, executionID, projectID string) (core.GitAccess, error)
+	AuthorizeGitAccess(ctx context.Context, scope core.GitRuntimeScope, executionID, projectID string) (core.GitGrant, error)
+	AuthorizeGitOperation(ctx context.Context, operationID, tenantID, projectID string) (core.GitGrant, error)
 }
 
 // Options injects policy, storage and process wiring.
@@ -144,41 +148,86 @@ func (s *Service) Close() error {
 	return errors.Join(err, os.RemoveAll(s.runtime))
 }
 
+// listener is the network boundary a repository request arrived on. Each accepts one identity and
+// one context header, and runs Git with its own repository policy.
+type listener int
+
+const (
+	// sandboxListener serves sandbox executions holding git-access certificates.
+	sandboxListener listener = iota + 1
+	// serviceListener serves the Repo Executor holding its service certificate.
+	serviceListener
+)
+
+// header is the one context header requests on this listener must carry.
+func (l listener) header() string {
+	if l == serviceListener {
+		return OperationHeader
+	}
+	return ExecutionHeader
+}
+
 // RepositoryHandler serves the smart HTTP surface to sandboxes on the repository listener.
 func (s *Service) RepositoryHandler(w http.ResponseWriter, r *http.Request) {
+	s.serveRepository(w, r, sandboxListener)
+}
+
+// ServiceRepositoryHandler serves the smart HTTP surface to the Repo Executor on the service
+// repository listener.
+func (s *Service) ServiceRepositoryHandler(w http.ResponseWriter, r *http.Request) {
+	s.serveRepository(w, r, serviceListener)
+}
+
+func (s *Service) serveRepository(w http.ResponseWriter, r *http.Request, on listener) {
 	request, ok := parseRepositoryRequest(r.Method, r.URL.Path, r.URL.RawQuery)
 	if !ok {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	scope, err := RuntimeScope(r)
+	p := push{listener: on, tenant: request.tenantID, project: request.projectID}
+	var err error
+	if on == serviceListener {
+		err = RequireExecutor(r)
+	} else {
+		p.scope, err = RuntimeScope(r)
+	}
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "git_certificate_required")
 		return
 	}
-	executions := r.Header.Values(ExecutionHeader)
-	if len(executions) != 1 || !validExecutionID(executions[0]) {
-		writeError(w, http.StatusBadRequest, "git_execution_required")
+	// Exactly one context header, and the one this listener serves: a request that names both,
+	// or another listener's context, is malformed whatever its certificate.
+	contexts, foreign := r.Header.Values(on.header()), r.Header.Values(ExecutionHeader)
+	if on == sandboxListener {
+		foreign = r.Header.Values(OperationHeader)
+	}
+	if len(contexts) != 1 || len(foreign) != 0 || on == sandboxListener && !validExecutionID(contexts[0]) || on == serviceListener && !canonicalID(contexts[0]) {
+		code := "git_execution_required"
+		if on == serviceListener {
+			code = "git_operation_required"
+		}
+		writeError(w, http.StatusBadRequest, code)
 		return
 	}
+	p.context = contexts[0]
 	// A path naming another tenant is answered exactly like an unauthorized repository.
-	if request.tenantID != scope.TenantID {
+	if on == sandboxListener && request.tenantID != p.scope.TenantID {
 		writeError(w, http.StatusForbidden, "git_access_denied")
 		return
 	}
-	access, err := s.options.Store.AuthorizeGitAccess(r.Context(), scope, executions[0], request.projectID)
+	grant, err := s.authorize(r.Context(), &p)
 	if err != nil {
 		var fault *core.Fault
 		if errors.As(err, &fault) {
 			writeError(w, http.StatusForbidden, "git_access_denied")
 			return
 		}
-		s.options.Logger.Warn("git authorization unavailable", zap.String("workspaceId", scope.WorkspaceID), zap.Error(err))
+		s.options.Logger.Warn("git authorization unavailable", zap.String("projectId", request.projectID), zap.Error(err))
 		writeError(w, http.StatusServiceUnavailable, "git_service_unavailable")
 		return
 	}
 	if request.endpoint.writes() {
-		if access.Mode != core.GitWrite {
+		if !grant.Writes() {
 			writeError(w, http.StatusForbidden, "git_access_denied")
 			return
 		}
@@ -196,9 +245,9 @@ func (s *Service) RepositoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := append(gitEnvironment(), "GIT_PROJECT_ROOT="+s.options.RepositoryRoot, "GIT_HTTP_EXPORT_ALL=1")
-	env = append(env, policyEnvironment(s.hooks)...)
+	env = append(env, policyEnvironment(s.hooks, on)...)
 	if request.endpoint == receivePack {
-		token, release := s.pushes.register(push{scope: scope, execution: executions[0], project: request.projectID})
+		token, release := s.pushes.register(&p)
 		defer release()
 		env = append(env, hookSocketEnv+"="+s.listener.Addr().String(), pushTokenEnv+"="+token)
 	}
@@ -206,6 +255,22 @@ func (s *Service) RepositoryHandler(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path, forwarded.URL.RawPath = request.relativePath()+suffix(request.endpoint), ""
 	backend.ServeHTTP(w, forwarded)
+}
+
+// authorize resolves the request's current grant from Cloud state by the listener's identity.
+// The grant must be for exactly the repository the request addresses.
+func (s *Service) authorize(ctx context.Context, p *push) (core.GitGrant, error) {
+	var grant core.GitGrant
+	var err error
+	if p.listener == serviceListener {
+		grant, err = s.options.Store.AuthorizeGitOperation(ctx, p.context, p.tenant, p.project)
+	} else {
+		grant, err = s.options.Store.AuthorizeGitAccess(ctx, p.scope, p.context, p.project)
+	}
+	if err == nil && (grant.TenantID != p.tenant || grant.ProjectID != p.project) {
+		return core.GitGrant{}, &core.Fault{Code: "git_access_denied", Status: http.StatusForbidden}
+	}
+	return grant, err
 }
 
 func suffix(e endpoint) string {
@@ -225,8 +290,15 @@ func suffix(e endpoint) string {
 // in a repository, so a restart cannot leave a repository pointing at a missing hook; and a
 // repository created by an older release cannot weaken the policy. These variables come from the
 // server, never from the client.
-func policyEnvironment(hooks string) []string {
+//
+// The sandbox listener keeps Git's own non-fast-forward refusal as a second line behind the hook.
+// The service listener turns it off so a tracking ref can follow an external force-push; the hook
+// still refuses non-fast-forwards in every other namespace.
+func policyEnvironment(hooks string, on listener) []string {
 	config := append(repositoryConfig(), [2]string{"core.hooksPath", hooks})
+	if on == serviceListener {
+		config = append(config, [2]string{"receive.denyNonFastForwards", "false"})
+	}
 	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(len(config))}
 	for i, kv := range config {
 		env = append(env, "GIT_CONFIG_KEY_"+strconv.Itoa(i)+"="+kv[0], "GIT_CONFIG_VALUE_"+strconv.Itoa(i)+"="+kv[1])
@@ -247,8 +319,10 @@ func validExecutionID(s string) bool {
 	return true
 }
 
-// RefHandler answers Cloud's read-only delivery-ref query and the unauthenticated health route on
-// the ref listener. The query is the only operation and only Cloud's pinned leaf may use it.
+// RefHandler answers Cloud's read-only ref query and the unauthenticated health route on the ref
+// listener. Only Cloud's pinned leaf may query. A query names either one ref of a contract
+// namespace (?ref=) or a prefix inside one namespace instance (?prefix=), whose refs it lists. The
+// answer is the repository's state at query time; the server records nothing.
 func (s *Service) RefHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		s.health(w, r)
@@ -269,8 +343,26 @@ func (s *Service) RefHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return ""
 	}
-	tenant, project, ref := single("tenantId"), single("projectId"), single("ref")
-	if len(query) != 3 || !canonicalID(tenant) || !canonicalID(project) || !deliveryRef.MatchString(ref) {
+	tenant, project, ref, prefix := single("tenantId"), single("projectId"), single("ref"), single("prefix")
+	if len(query) != 3 || !canonicalID(tenant) || !canonicalID(project) {
+		writeError(w, http.StatusBadRequest, "invalid_ref_query")
+		return
+	}
+	if prefix != "" {
+		if !core.ValidGitRefPrefix(prefix) {
+			writeError(w, http.StatusBadRequest, "invalid_ref_query")
+			return
+		}
+		refs, err := s.repos.list(r.Context(), tenant, project, prefix)
+		if err != nil {
+			s.options.Logger.Warn("git ref query unavailable", zap.String("projectId", project), zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable, "git_service_unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"refs": refs})
+		return
+	}
+	if _, ok := core.ParseGitRef(ref); !ok {
 		writeError(w, http.StatusBadRequest, "invalid_ref_query")
 		return
 	}

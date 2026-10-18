@@ -69,7 +69,7 @@ func patchSpace(t *transaction, r *PublicRequest, uid string) Object {
 // the project itself; client-supplied space identifiers are never trusted.
 func projectInSpace(t *transaction, tid, uid, pid string) (project, membership Object) {
 	require(validID(pid), 404, "not_found")
-	p := t.one("SELECT * FROM projects WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", pid, tid)
+	p := t.one("SELECT * FROM "+projectView+" p WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", pid, tid)
 	require(p != nil, 404, "not_found")
 	return p, spaceMember(t, p.S("spaceId"), uid)
 }

@@ -68,7 +68,7 @@ func (d WorkflowDirectory) ResolveTarget(ctx context.Context, tenantID, targetTy
 	return workflowTarget(targetID, name, description), true, nil
 }
 
-// workflowTarget is the frozen projection of one workflow (§37.2): Form Mode, no task required, and
+// workflowTarget is the frozen projection of one workflow (Issue collaboration D3): Form Mode, no task required, and
 // the workflow id as the opaque formRef. Deriving the ref from the id rather than storing one keeps
 // the advertised ref and the resolvable workflow from ever drifting apart, and keeps it a valid
 // opaque token without a second identifier to constrain.
@@ -87,7 +87,7 @@ func workflowTarget(id, name, description string) CollaborationTargetSummary {
 }
 
 // WorkflowFormDescriptors resolves the Form Mode descriptor of one workflow: the input form its Start
-// node declares, projected onto the rendering controls Issues can draw (§38.5). It is deliberately
+// node declares, projected onto the rendering controls Issues can draw (Issue collaboration D7). It is deliberately
 // not the workflow's canonical schema — the graph stays the authority and this is one projection of it.
 type WorkflowFormDescriptors struct{ Pool *sql.DB }
 
@@ -317,7 +317,7 @@ func workflowFieldDivergence(rendered, version FormDescriptor) []string {
 	return diverged
 }
 
-// Reserved keys of the fields the platform injects into every workflow form (§38.37b, §38.37c). They
+// Reserved keys of the fields the platform injects into every workflow form (Issue collaboration D8). They
 // are reserved in the sense that a workflow declaring a variable under one of these names keeps its own
 // declaration — see injectPlatformFields. `context_refs` is reserved in a second sense: the Issues
 // surface reads it back out of the values and turns it into the run's context references, so a
@@ -332,7 +332,7 @@ const (
 
 // legacyFieldKeyVersion is the name the version selector used to be injected under. Its value was
 // always a snapshot id, so the rename to fieldKeySnapshotID is a naming correction and not a change of
-// meaning (§38.37f, specs#99) — but the rename cannot reach data that is already immutable: the `input`
+// meaning (Issue collaboration D8, specs#99) — but the rename cannot reach data that is already immutable: the `input`
 // of an interaction confirmed before the deploy, and the graph of a snapshot published before it. Both
 // are read through this key, and nothing is ever written under it.
 const legacyFieldKeyVersion = "version"
@@ -343,7 +343,7 @@ const legacyFieldKeyVersion = "version"
 // the catalog below, where each field is actually built.
 var launchFieldKeys = []string{fieldKeyRepository, fieldKeyBranch, fieldKeySnapshotID, fieldKeyPrompt, fieldKeyContextRefs}
 
-// launchFieldOverride is one entry of a workflow's `launchFields` declaration (§38.37d): whether the
+// launchFieldOverride is one entry of a workflow's `launchFields` declaration (Issue collaboration D8): whether the
 // form asks for that field, and whether it insists on an answer.
 type launchFieldOverride struct {
 	Enabled bool
@@ -437,11 +437,11 @@ func launchFieldRequired(declaration map[string]launchFieldOverride, key string,
 //
 // Each entry also carries whether the platform can *offer* that field at all: a field with nothing to
 // offer is dropped even when the author asked for it, because the contract has no way to express a
-// select with no choices (§38.37c).
+// select with no choices (Issue collaboration D8).
 //
 // This is the catalog rather than the form. A workflow's declaration narrows it in
 // injectPlatformFields, and only there, because a key the author declared in their own Start node is
-// not the platform's to withdraw (§38.37d).
+// not the platform's to withdraw (Issue collaboration D8).
 func platformFormFields(issue *IssueFormContext, startPrompt string, snapshots []Object) []FormField {
 	version, hasVersion := versionField(snapshots)
 	refs, hasRefs := contextRefsField(issue)
@@ -496,7 +496,7 @@ func platformFormFields(issue *IssueFormContext, startPrompt string, snapshots [
 // is the snapshot id rather than the version number: the id is what a run is created from, and it
 // keeps pointing at the same frozen document. The version number rides in the label, where it is read
 // rather than consumed — which is why the field is keyed `snapshotId` and not `version`, the name that
-// said the opposite of what the value is (§38.37f).
+// said the opposite of what the value is (Issue collaboration D8).
 //
 // A workflow that has never been published has nothing to offer, and an option-less select would fail
 // descriptor validation, so the field is dropped rather than injected empty.
@@ -585,7 +585,7 @@ func platformDefault(value string) any {
 // snapshot id as the variable's value. The author's field is left exactly as they declared it, and the
 // cursor stays the platform's — see workflowVersionCursor.
 //
-// The workflow's declaration (§38.37d) is applied here, and only to the fields the platform is
+// The workflow's declaration (Issue collaboration D8) is applied here, and only to the fields the platform is
 // *adding*. A field the author asked for in their own Start node is asked for because they asked for
 // it, so no declaration withdraws it: for that key the declaration is inert, control and requiredness
 // alike, and the platform contributes nothing but the default.
@@ -699,13 +699,13 @@ func fillDefault(field, platform *FormField) {
 // key can be — the platform's cursor or an author's variable — is a decision that must be made the same
 // way wherever it is read.
 //
-// A key is the platform's own only when the graph's own input fields do not declare it (§38.37d): an
+// A key is the platform's own only when the graph's own input fields do not declare it (Issue collaboration D8): an
 // author who declares a variable under that name keeps it, no version selector is injected into their
 // form, and the value the user typed is theirs to give the workflow. Reading it as a snapshot id would
 // either 404 on a value that is not an id or, when the value is one, run the version the user asked for
 // while feeding the workflow that same id as its parameter.
 //
-// There are two keys to try because the field was renamed (§38.37f) and a rename cannot reach a form
+// There are two keys to try because the field was renamed (Issue collaboration D8) and a rename cannot reach a form
 // that was rendered before it: `snapshotId` is the name this build's form asks under, and `version` is
 // what the same field was called until then. The new key is tried first, so a submission carrying both
 // is answered by the one this build wrote; the old key is the answer for the submissions that carry

@@ -103,7 +103,7 @@ export const WORKFLOW_LAUNCH_FIELD_DEFAULTS: readonly {
 ]
 
 /**
- * One entry of a workflow's launch-field declaration (§38.37d): a per-key override of the platform
+ * One entry of a workflow's launch-field declaration (Issue collaboration D8): a per-key override of the platform
  * catalogue. A key the declaration does not name keeps the platform's own answer, so a field the
  * platform adds later reaches every workflow without one being re-saved.
  */

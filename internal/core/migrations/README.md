@@ -40,13 +40,15 @@
 - **`0010_issue_collaboration.sql`**：`issues` ALTER（`assignee_type`/`assignee_id`/`project_ref` + 回填）、`issue_comments` ALTER（`parent_id`/`author_type`/`author_id`/`seq` + 回填 + `UNIQUE(issue_id,seq)`）、新表 `issue_runs`、`issue_activities`、`issue_context_refs`。（原 `0008_issue_collaboration.sql`）
 - **`0011_issue_interactions.sql`**：新表 `issue_interactions`（`@` 交互脊）——每个选中的协作目标一行：`id, tenant_id, issue_id, comment_id, target_type, target_id, mode, task, run_id, created_at`。（原 `0009_issue_interactions.sql`）
 - **`0012_issue_interaction_input.sql`**：一个通用增量列：`ALTER TABLE issue_interactions ADD COLUMN input jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(input)='object')` —— 已确认的表单值。刻意排除 `version`、`status` 枚举、`confirmed_at` 与独立 inputs 表；`0011` 不被修改。（原 `0010_issue_interaction_input.sql`）
-- **`0013_project_space_optional.sql`**（append-only 兼容迁移）：`projects.space_id` 恢复为**可空**——upstream `0007` 施加了 `NOT NULL` 并对既有项目做了全量绑定；产品决策（PS3 / D2=C）要求 Space 保持**可选**分组。`0013` 仅放开约束；刻意**不解绑** `0007` 已分配给默认 Space 的项目（无数据改动、无作用域收缩）。
+- **`0013_project_space_optional.sql`**（append-only 兼容迁移）：`projects.space_id` 恢复为**可空**——upstream `0007` 施加了 `NOT NULL` 并对既有项目做了全量绑定；当时的产品设计要求 Space 保持**可选**分组。`0013` 仅放开约束；刻意**不解绑** `0007` 已分配给默认 Space 的项目（无数据改动、无作用域收缩）。该设计已被 `0017` 取代：项目重新必须归属空间。
 - **`0014_clone_coordination.sql`**（append-only，排在 upstream `0008–0013` 之后）：经内部控制契约的 clone 协调（与 Effect 级 `operations` 模型独立）：
   - `clone_requests`：Cloud 在业务事务中接受的工作项，`(tenant, user, request_id)` 幂等，状态 `queued→dispatched→succeeded/failed`。
   - `clone_executions`：Controller 派发前登记的执行（每个请求恰一个执行，身份为 Controller 选择的 opaque 字符串）、输入与终态结果、登记时的租约 epoch。
   - `clone_event_receipts`：Node 原事件的精确收据 `(execution, sequence, event)`，是确认 Node 的唯一依据。
   - `control_submissions`：每个状态变更提交的身份、请求摘要与记录的响应；同身份同内容回放响应，不重新应用。
-- **`0015_plugins.sql`**：增加插件目录、空间级选择和运行时安装记录。
+- **`0015_plugins.sql`**：插件市场三张表与枚举放宽：
+  - `plugin_sources`（部署全局源，默认 `official` 命名空间）、`plugin_catalog_entries`（目录快照，读取永远不出网）、`space_plugins`（工作区选择状态权威，`UNIQUE(space_id, source_namespace, identifier)`）、`workspace_plugin_instances`（fan-out 执行事实，复合外键继承 tenant/owner/project/workspace）。
+  - 放宽 `operations.kind`（+install_plugin/remove_plugin）、`operations.step`（+plugin）、`external_effects.kind`（+plugin_ensure/plugin_delete）；原 CHECK 在 0001 定义，PG 命名为 `表_列_check`，0015 DROP 后以扩展集合重建。
 - **`0016_workspace_runtime_follows_node.sql`**：停用旧存储卷与工作树创建流程，采用独立 Workspace 数据、Node 和仓库克隆初始化，保留历史记录供读取。
 - **`0017_tenant_membership_and_join.sql`**：收敛为一租户一空间，租户成员身份成为唯一权限来源；恢复项目必须归属空间的约束，空间 slug 在全平台唯一且归档后不复用；为 IDaaS 关联身份、邀请和加入申请增加持久化表。历史多空间、无空间项目、重复 slug 或租户与空间名称不一致的测试数据必须重建；迁移不会静默拆分或改名。
 - **`0027_workflows.sql`**（append-only，工作流编辑器移植）：工作流图文档 `workflows`——租户拥有的整份图（`graph jsonb`：nodes / edges / viewport / annotations / global variables），刻意只有一张表和一个图列：图是文档而不是关系聚合，没有逐节点/逐边表，也没有 draft/published 拆分。
@@ -65,10 +67,7 @@
   如果发现任何校验和不匹配或未应用的迁移，服务器会立即终止。
 - **不使用 AutoMigrate**：生产服务器守护进程启动时**从不**执行 DDL 或修改表结构。迁移必须使用专用数据库管理员凭据通过 `cloudctl migrate` 应用。
 
-参见 [core 总览](../README.md)、[cloudctl CLI 工具](../../../cmd/cloudctl/README.md) 与 [核心不变量与契约](../../../docs/core-contract.md)。
-- **`0015_plugins.sql`**（append-only）：插件市场三张表与枚举放宽：
-  - `plugin_sources`（部署全局源，默认 `official` 命名空间）、`plugin_catalog_entries`（目录快照，读取永远不出网）、`space_plugins`（工作区选择状态权威，`UNIQUE(space_id, source_namespace, identifier)`）、`workspace_plugin_instances`（fan-out 执行事实，复合外键继承 tenant/owner/project/workspace）。
-  - 放宽 `operations.kind`（+install_plugin/remove_plugin）、`operations.step`（+plugin）、`external_effects.kind`（+plugin_ensure/plugin_delete）；原 CHECK 在 0001 定义，PG 命名为 `表_列_check`，0015 DROP 后以扩展集合重建。
+参见 [core 总览](../README.md)、[cloudctl CLI 工具](../../../cmd/cloudctl/README.md) 与 [权威持久化与事务模型](../../../docs/core/persistence.md)。
 
 ## 多人运行时控制的追加迁移
 
@@ -90,7 +89,7 @@
 
 0033 追加用户私有模型连接、默认模型、不可变密文凭据、用户作用域幂等记录、运行快照和
 临时授权摘要表。历史运行不会新增绑定；跨表复合外键保存用户归属。原始密钥从不进入迁移或
-Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs/model-connections.md)。
+Cloud 领域方法。冻结与撤销规则见 [个人模型连接](../../../docs/models/model-access.md)。
 ## 0033：Revision 续接
 
 0033 在 0032 之后支持新运行续接同一 Issue 的最近一次 Revision（issue-run 续接决策）：`revisions` 增加 `prior_revision_id`（续接自哪个 Revision）、`bundle_revision_id`（续接后没有新提交时不存 bundle，指向实际持有 bundle 的那一行，永远一跳）、`resume_refused_at` 与 `resume_refused_reason`（恢复时发现基础提交已从远端消失，只允许 `prior_revision_base_unavailable`）；`issue_runs` 增加 `resume_revision_id`（会话启动时固定的前序 Revision）。原匿名约束 `revisions_check` 换成具名的 `revisions_bundle_shape`：既有行仍满足原来的两种形状，新增的第三种形状只允许“沿用 bundle 且有前序”。纯前向、可重复执行，既有行的新列均为 NULL。新库、升级与重复迁移证据见 `integration/migration_upgrade_path_test.go` 的 `TestMigration0033RevisionResumeAppliesFreshAndUpgrades`，约束对真实行的拒绝见 `integration/agent_run_resume_test.go`。
@@ -100,3 +99,17 @@ Cloud 领域方法。冻结与撤销规则见 [模型连接契约](../../../docs
 ## 0034：Agent 启动窗口与残留责任
 
 新增 startup_ready_at、startup_deadline_at、startup_resume、startup_ending_deadline_at 及 agent_run_residuals。迁移不改历史结果；活动存量由串行策略扫描一次固定窗口。残留账本与 failed/done 同事务提交，迟到真实终态仅补证据，不代替清理授权。新库/升级/重复执行见 TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade。
+
+
+`0035_model_attempt_statistics.sql` 增加无正文的模型 HTTP 请求台账及按租户/Run/时间排序索引。
+复合外键绑定 Run→租户、binding→Run、grant→binding/execution；CHECK 约束限制状态、可空计数、时间及
+完成形状。只新增，不回填旧日志；`cloudctl migrate` 应用，服务启动仍只验证 schema。
+`TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackfill` 验证空库、从 0034 升级及重复迁移。
+
+## 0036：工作流插件资产导入
+
+`0036_workflow_asset_imports.sql` 记录 `kind='workflow'` 插件的资产导入：`workflow_asset_imports` 每个（空间，插件）一行，保存管理员每次安装/重装递增的 `requested_revision`、导入进度与租约；`workflow_asset_documents` 每个文档路径一行，只有 `outcome='imported'` 的行永久占用（空间，命名空间，标识，文档路径），失败的文档下次触发重试。导入出的工作流和已发布快照是普通用户数据，这两张表只记录来源、幂等和逐文档结果。纯前向新增，不改动既有表。
+
+## 0038：运行 Workspace 创建 blocked 的有界放弃
+
+新增 issue_runs.workspace_blocked_at、workspace_deadline_at、workspace_blocked_source（blocked_write / first_observed）与 provisioning 期部分索引，并把 agent_run_residuals 的 reason 约束扩为 agent_start_failed / workspace_unavailable。首次持久写入 blocked 的同事务锚定绝对截止；存量 blocked 无不可变首次证据，不回填，由首次策略扫描以 first_observed 给一次默认窗口。defer、人工 retry、重新领取、重启与配置调整不续期；只有原创建真实终态结束窗口。纯前向、可重复执行，不改历史执行结果。新库/升级/重复执行见 TestMigration0038WorkspaceBlockedDeadlineAppliesFreshAndUpgrades。

@@ -14,10 +14,11 @@ provider error classification, and response bounds; callers receive only
 | `endpoints_test.go` | Covers HTTPS endpoint overrides, unchanged form requests, and unsafe URL rejection. |
 
 Operators may override each full authorize/token/userinfo HTTPS URL. Omitted values retain BaseURL
-and the original paths. Userinfo, query and fragment URL components are rejected without reflecting
-the configured value. Recreate the container after changing endpoints or rotating the mounted secret;
-no image rebuild is necessary. Browser requests cannot select endpoints. Changes must retain the same
-corporate identity authority, source, scope and UUID semantics.
+and the original paths. URL credentials, query and fragment components are rejected without reflecting
+the configured value. Credentials still come from files. Browser requests cannot select endpoints.
+Changes must retain the same corporate identity authority, source, scope and UUID semantics. See
+[Deployment and operations](../../../docs/operations/deployment.en.md#huawei-idaas-site-configuration)
+for applying configuration and rotating secrets.
 
 `uuid` is the sole identity key (corresponding to the corporate employee number rather than the raw
 employee ID or W3 account) and is trimmed of leading/trailing whitespace (the documented success
@@ -30,5 +31,5 @@ required fields: no PKCE and no `display`. Token exchange posts `grant_type`, `c
 no credentials on the query string, no PKCE-NULL `code_verifier`); userinfo posts only
 `access_token` in the body. Token and userinfo calls require a total timeout, refuse redirects, and
 must not run inside database transactions. Oversized or malformed JSON is `ErrProviderRejected`,
-matching an explicit provider refusal. See the [Gateway authentication module](../README.en.md) and
-[deployment guide](../../../docs/gateway.md).
+matching an explicit provider refusal. See the [Gateway authentication module](../README.en.md) and the
+[Gateway document](../../../docs/identity/gateway.en.md).

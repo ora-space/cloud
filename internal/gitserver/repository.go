@@ -8,12 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/wanglongan587/cloud/internal/core"
 )
 
 // endpoint is one of the three smart HTTP operations; nothing else is ever handed to git.
@@ -71,9 +68,6 @@ func canonicalID(s string) bool {
 	id, err := uuid.Parse(s)
 	return err == nil && id.String() == s
 }
-
-// deliveryRef is the only ref shape the ref query answers; it matches what core authorizes.
-var deliveryRef = regexp.MustCompile("^" + regexp.QuoteMeta(core.GitDeliveryRefPrefix) + `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // repositoryConfig is fixed by the server; clients cannot change it. Deletions and
 // non-fast-forwards are refused by Git itself as a second line behind the hook, objects are
@@ -145,29 +139,79 @@ func (r *repositories) ensure(ctx context.Context, tenantID, projectID string) e
 	return nil
 }
 
-// resolve returns the commit a delivery ref names, or "" when the repository or ref is absent.
+// RefCommit is one ref of a Project repository and the commit it names.
+type RefCommit struct {
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+}
+
+// EnsureRepository creates a Project repository under root exactly as the server's first
+// authorized write does, and returns its path. Only development tooling that prepares contract
+// fixtures calls it; in a running stack the server creates repositories itself.
+func EnsureRepository(ctx context.Context, root, git, tenantID, projectID string) (string, error) {
+	if !canonicalID(tenantID) || !canonicalID(projectID) || !filepath.IsAbs(root) {
+		return "", errors.New("canonical tenant and project IDs and an absolute root are required")
+	}
+	r := &repositories{root: root, git: git}
+	return r.path(tenantID, projectID), r.ensure(ctx, tenantID, projectID)
+}
+
+// RepositoryPath is where a Project repository lives under root.
+func RepositoryPath(root, tenantID, projectID string) string {
+	return (&repositories{root: root}).path(tenantID, projectID)
+}
+
+// resolve returns the commit a contract ref names, or "" when the repository or ref is absent.
 func (r *repositories) resolve(ctx context.Context, tenantID, projectID, ref string) (string, error) {
+	refs, err := r.forEachRef(ctx, tenantID, projectID, ref)
+	for _, found := range refs {
+		// for-each-ref matches path prefixes, so only an exact refname counts.
+		if found.Ref == ref {
+			return found.Commit, err
+		}
+	}
+	return "", err
+}
+
+// list returns every ref under a validated namespace prefix, sorted by name; an absent repository
+// has none.
+func (r *repositories) list(ctx context.Context, tenantID, projectID, prefix string) ([]RefCommit, error) {
+	refs, err := r.forEachRef(ctx, tenantID, projectID, prefix)
+	out := []RefCommit{}
+	for _, found := range refs {
+		if strings.HasPrefix(found.Ref, prefix) {
+			out = append(out, found)
+		}
+	}
+	return out, err
+}
+
+// forEachRef reads refs matching a pattern. Every contract namespace names commits only, so any
+// other object type means the repository was changed outside the server and is reported as an
+// error rather than answered.
+func (r *repositories) forEachRef(ctx context.Context, tenantID, projectID, pattern string) ([]RefCommit, error) {
 	ok, err := r.exists(tenantID, projectID)
 	if err != nil || !ok {
-		return "", err
+		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, r.git, "--git-dir", r.path(tenantID, projectID), "for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", ref) //nolint:gosec // G204: IDs are canonical UUIDs and ref matched deliveryRef.
+	cmd := exec.CommandContext(ctx, r.git, "--git-dir", r.path(tenantID, projectID), "for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", pattern) //nolint:gosec // G204: IDs are canonical UUIDs and pattern is a parsed contract ref or prefix.
 	cmd.Env = gitEnvironment()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("read ref: %w", err)
+		return nil, fmt.Errorf("read refs: %w", err)
 	}
-	// for-each-ref matches path prefixes, so only an exact refname counts.
+	var refs []RefCommit
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 3 && fields[0] == ref {
-			if fields[2] != "commit" {
-				return "", errors.New("delivery ref does not name a commit")
-			}
-			return fields[1], nil
+		if len(fields) != 3 {
+			continue
 		}
+		if fields[2] != "commit" {
+			return nil, fmt.Errorf("ref %s does not name a commit", fields[0])
+		}
+		refs = append(refs, RefCommit{Ref: fields[0], Commit: fields[1]})
 	}
-	return "", nil
+	return refs, nil
 }
 
 // run executes git with a minimal environment; repository administration never reads user or

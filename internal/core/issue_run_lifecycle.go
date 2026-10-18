@@ -9,11 +9,11 @@ import (
 const maxRecentComments = 10
 
 // buildRunContext assembles the execution context snapshot for an executable interaction. One seam
-// serves every mode (§38.10): Task Mode supplies `task`, Form Mode supplies `values`; both share the
+// serves every mode (Issue collaboration D5): Task Mode supplies `task`, Form Mode supplies `values`; both share the
 // bounded issue context. Reads are bounded — recent comments are limited to maxRecentComments (ordered
 // by timeline seq) and the issue's explicit context refs are returned as-is, followed by any
 // `extraRefs` applied at confirm time (applied AI suggestions, which are deliberately not persisted as
-// issue context — §38.14). When a ContextBuilder is wired it produces the deterministic bundle;
+// issue context — Issue collaboration D5). When a ContextBuilder is wired it produces the deterministic bundle;
 // otherwise the raw material is passed through (Unavailable fallback).
 func buildRunContext(t *transaction, i Object, task, targetType, targetID string, values Object, extraRefs []Object) Object {
 	if values == nil {
@@ -48,8 +48,8 @@ func buildRunContext(t *transaction, i Object, task, targetType, targetID string
 }
 
 // activityActor maps a run's executor type to the Timeline actor that may author its activities. A
-// Workflow is not an ActorRef (§8), so a workflow run's activities are authored by `system` and carry
-// the workflow identity in `details` instead of impersonating an actor (§38.26).
+// Workflow is not an ActorRef (Issue collaboration D2), so a workflow run's activities are authored by `system` and carry
+// the workflow identity in `details` instead of impersonating an actor (Issue collaboration D2).
 func activityActor(executorType string) string {
 	if executorType == "workflow" {
 		return "system"
@@ -171,8 +171,8 @@ func (s *Store) ObserveStarted(ctx context.Context, tenantID, runID string) (Obj
 
 // ObserveMessage persists an executor reply. An agent/team reply is an IssueComment authored by the
 // executor ActorRef (internal core path only — no public impersonation surface). A *workflow* is not an
-// Actor (§8), so its human-readable output lands as a `system` IssueActivity carrying the workflow
-// provenance in `details` instead — never a comment with author_type='workflow' (§38.26).
+// Actor (Issue collaboration D2), so its human-readable output lands as a `system` IssueActivity carrying the workflow
+// provenance in `details` instead — never a comment with author_type='workflow' (Issue collaboration D2).
 // ExecutionObserver member.
 func (s *Store) ObserveMessage(ctx context.Context, tenantID, runID, message string) (Object, error) {
 	return s.transact(ctx, func(t *transaction) Object {
@@ -189,7 +189,7 @@ func (s *Store) ObserveMessage(ctx context.Context, tenantID, runID, message str
 }
 
 // ObserveProgress records a high-level, human-readable progress signal as a Timeline activity. It
-// deliberately does NOT move the run's status (§38.24): progress is narrative, not a lifecycle edge.
+// deliberately does NOT move the run's status (Issue collaboration D6): progress is narrative, not a lifecycle edge.
 // ExecutionObserver member.
 func (s *Store) ObserveProgress(ctx context.Context, tenantID, runID, message string) (Object, error) {
 	return s.transact(ctx, func(t *transaction) Object {

@@ -277,7 +277,7 @@ func TestSecurityCannotImpersonateActorAndFailureLifecycle(t *testing.T) {
 	}
 }
 
-// TestPendingRunDedup covers the frozen pending-run rule (§13): at most one queued/dispatched run
+// TestPendingRunDedup covers the frozen pending-run rule (Issue collaboration D4): at most one queued/dispatched run
 // per (issue, executor_type, executor_id); a terminal run frees the slot. This constraint must not
 // change this wave.
 func TestPendingRunDedup(t *testing.T) {

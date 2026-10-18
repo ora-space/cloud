@@ -51,12 +51,12 @@ tasks:
       - task: test
   build:
     cmds:
-      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
+      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/git-server-preset ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
   run:
     desc: Go API server on :8080
     cmds: [go run ./cmd/server]
   run:gateway:
-    desc: Authentication gateway on :8081, proxying /api/v1 to the Go server; see docs/gateway.md
+    desc: Authentication gateway on :8081, proxying /api/v1 to the Go server; see docs/identity/gateway.md
     preconditions:
       - sh: test -f .local/dev.env
         msg: 'No .local/dev.env yet: copy config.toml.template to config.toml, fill it in, then run `task setup`'

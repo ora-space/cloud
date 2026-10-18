@@ -5,9 +5,32 @@ package core
 func withAgentRunDetails(t *transaction, run Object) Object {
 	run["preparation"] = nil
 	if run.S("executorType") == "agent" {
-		run["preparation"] = agentRunPreparation(t, run)
+		if p := agentRunPreparation(t, run); p != nil {
+			p["syncErrorCode"] = preparationSyncErrorCode(t, run, p)
+			run["preparation"] = p
+		}
 	}
 	return withRevision(t, stripAgentRunSkeleton(run))
+}
+
+// repositorySyncFailed is the preparation error code of a clone step that ended because its
+// Binding's latest sync failed; syncErrorCode then names why.
+const repositorySyncFailed = "repository_sync_failed"
+
+// preparationSyncErrorCode is the failed sync's error code when the clone step ended with
+// repository_sync_failed, and nil otherwise. Sync error codes are the external line's safe,
+// bounded vocabulary (the database admits only short snake_case codes); no executor detail is
+// ever stored there.
+func preparationSyncErrorCode(t *transaction, run, progress Object) any {
+	if progress.S("errorCode") != repositorySyncFailed || run.S("workspaceId") == "" {
+		return nil
+	}
+	o := t.one(`SELECT o.error_code FROM repository_operations o JOIN workspaces w ON w.project_id=o.project_id
+	 WHERE w.id=$1 AND o.type='repository_sync' AND o.state='failed' ORDER BY o.finished_at DESC,o.id DESC LIMIT 1`, run.S("workspaceId"))
+	if o == nil || o.S("errorCode") == "" {
+		return nil
+	}
+	return o.S("errorCode")
 }
 
 // agentRunPreparation reads progress and durable attempt counts in the run read's transaction.

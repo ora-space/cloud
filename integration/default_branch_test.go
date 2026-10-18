@@ -37,7 +37,7 @@ func TestProjectsNameAConcreteDefaultBranch(t *testing.T) {
 	}
 
 	f.drain()
-	_, e := f.store.Pool.Exec("UPDATE projects SET default_branch='HEAD' WHERE id=$1", pid)
+	_, e := f.store.Pool.Exec("UPDATE repository_bindings SET branch='HEAD' WHERE project_id=$1", pid)
 	must(t, e)
 	if out := f.call("POST", f.path("/projects/"+pid+"/workspaces"), core.Object{"title": "Legacy", "baseRef": "HEAD"}, "isolated-legacy", 400); out.S("code") != "default_branch_required" {
 		t.Fatalf("a legacy HEAD Project must refuse baseRef HEAD, got %v", out)

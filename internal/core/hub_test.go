@@ -84,7 +84,7 @@ func TestSpaceEventSerialization(t *testing.T) {
 	}
 }
 
-// TestThreadAppendedEventSerialization pins Thread D5's notification shape (plan §4C.7) and the
+// TestThreadAppendedEventSerialization pins Thread D5's notification shape and the
 // compatibility boundary that came with it: the three added payload fields are omitted when empty, so
 // every event that predates them still serializes to exactly the bytes it did before — a subscriber
 // that only knows the old four fields cannot be broken by this addition.

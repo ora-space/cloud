@@ -4,7 +4,7 @@ import "strings"
 
 // issueFormContext resolves the issue context a form descriptor may be tailored with: the repository
 // and default branch of the project the issue belongs to, and the references the issue can name for
-// itself (§38.37b, §38.37c).
+// itself (Issue collaboration D8).
 //
 // An empty issue id means the caller has no issue in hand — that is the plain
 // `GET /collaboration/forms/{formRef}` — and yields the zero value, so no platform field is injected. A
@@ -29,7 +29,7 @@ func formContextForIssue(t *transaction, tid string, i Object) IssueFormContext 
 	// project that has since been deleted is a missing default, never an error. Reading the branch
 	// alongside the repository costs nothing: it is the same row, and `default_branch` is NOT NULL, so
 	// a project that exists always yields one.
-	if project := t.one("SELECT repository_url, default_branch FROM projects WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", ref, tid); project != nil {
+	if project := t.one("SELECT repository_url, default_branch FROM "+projectView+" p WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", ref, tid); project != nil {
 		out.ProjectID = ref
 		out.RepositoryURL = project.S("repositoryUrl")
 		out.DefaultBranch = project.S("defaultBranch")
@@ -56,7 +56,7 @@ func interactionList(t *transaction, r *PublicRequest) Object {
 // applyCommentTargets persists the typed @ targets attached to a newly created comment. Human Mention
 // stores the typed target with no run; Task Mode (agent/team) enqueues the initial issue-owned run plus
 // its context snapshot; Form Mode (workflow) records a *configured-but-unconfirmed* interaction with no
-// run — Workflow execution happens only on an explicit Confirm (§38.1, §38.7). Each selected target
+// run — Workflow execution happens only on an explicit Confirm (Issue collaboration D9). Each selected target
 // becomes one issue_interactions row. Task runs are appended to *dispatches so the caller dispatches
 // them after the comment transaction commits (the global advisory lock must not span external/observer
 // writes).
@@ -108,10 +108,10 @@ func applyCommentTargets(t *transaction, i Object, r *PublicRequest, uid, commen
 }
 
 // confirmInteraction is the ONLY transition that turns a Workflow interaction into an execution intent
-// (§38.7). It re-resolves the target server-side, re-validates the submitted values, persists them as
+// (Issue collaboration D9). It re-resolves the target server-side, re-validates the submitted values, persists them as
 // the interaction's Issue-owned input, creates the initial run, and claims the interaction with a
 // compare-and-set on `run_id IS NULL`. Dispatch is the caller's post-commit responsibility, so no
-// external effect happens inside this transaction (§38.22).
+// external effect happens inside this transaction (Issue collaboration D9).
 //
 // The values are validated against the schema of the *version being confirmed* rather than the live
 // document the form was rendered from, and against the same admission gate the other two entries use.
@@ -164,7 +164,14 @@ func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches
 // draft until the user confirms it — selecting a workflow must leave no trace in the Timeline — so
 // assist is deliberately stateless here: it resolves the target and its current descriptor, reads the
 // issue context, and returns suggestions. It writes nothing: no comment, no interaction, no run, no
-// context ref, no issue mutation (§38.12, §38.14).
+// context ref, no issue mutation (Issue collaboration D5/D9).
+//
+// Assist validates the same submission the confirm will, against the same descriptor, so it has to
+// accept the same keys: a form rendered before the rename answers under the old `version` key, and the
+// live descriptor no longer declares it. The fold is the confirm's own, taken from the one place the
+// rule is defined (see foldLegacyVersionAnswer), rather than a second compatibility rule that could
+// drift from it. Assist reads no version cursor: it resolves no version, and the graph is read only to
+// decide what the old key means for this workflow.
 func assistWorkflow(t *transaction, r *PublicRequest) Object {
 	i := issue(t, r.TenantID, r.IssueID)
 	targetID := r.Body.S("targetId")
@@ -174,6 +181,7 @@ func assistWorkflow(t *transaction, r *PublicRequest) Object {
 	// Assist is requested while the form is still being filled, so shape is validated but requiredness
 	// is not — an incomplete form is exactly when a suggestion is useful.
 	current := interactionValues(r.Body)
+	foldLegacyVersionAnswer(workflow(t, r.TenantID, targetID).O("graph"), current)
 	validateFormValues(descriptor, current, false)
 
 	in := AssistInput{

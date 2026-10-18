@@ -83,6 +83,21 @@ func graphSlot(name, description string) Object {
 	return Object{"name": name, "description": description}
 }
 
+// graphCondition builds a condition node whose cases the test authors directly.
+func graphCondition(id string, cases any) Object {
+	return Object{"id": id, "type": "workflow", "data": Object{"kind": "condition", "cases": cases}}
+}
+
+// graphConditionCase is one branch: its id, its logic and its comparison rules.
+func graphConditionCase(id, logic string, rules []any) Object {
+	return Object{"id": id, "logic": logic, "conditions": rules}
+}
+
+// graphRule is one comparison inside a case.
+func graphRule(selector []any, operator string, value any) Object {
+	return Object{"variableSelector": selector, "operator": operator, "value": value}
+}
+
 // workflowGraph assembles a document. A nil `slots` leaves `executorSlots` off entirely, the way a
 // graph authored before slots existed is stored.
 func workflowGraph(nodes, edges, slots []any) Object {
@@ -345,6 +360,131 @@ func TestValidateWorkflowGraph(t *testing.T) {
 				t.Fatalf("problems = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The publish gate refuses every condition configuration Cloud cannot evaluate the way desktop's
+// condition.rs does (circus#202 A 条件 2). Each one is a place the evaluator would otherwise answer
+// silently — a no-match, an `and`, an else branch, a whole node output, a literal where desktop
+// resolves — so a graph would publish and then take a branch nothing in the document asked for.
+//
+// The cases and workflowUnsupportedConditionConfigs are checked against each other in both
+// directions: a declared code with no case here fails, and a case producing a code the list does not
+// declare fails too. That is what keeps the ADR's list, the PR's list and the gate's behavior the
+// same list, and what makes circus#210's job — deleting one entry at a time as each difference
+// is closed — a change this test refuses to let pass unnoticed.
+func TestWorkflowPublishRefusesUnsupportedConditionConfigs(t *testing.T) {
+	selector := []any{"s", "input", "flag"}
+	filled := []any{graphRule(selector, "equals", true)}
+	cases := []struct {
+		name string
+		node Object
+		want []any
+	}{
+		{
+			name: "cases of the wrong shape",
+			node: graphCondition("c", "not a list"),
+			want: []any{Object{"code": "condition_cases_not_a_list", "nodeId": "c", "field": "cases"}},
+		},
+		{
+			name: "a case that is not an object",
+			node: graphCondition("c", []any{"nope"}),
+			want: []any{Object{"code": "condition_case_not_an_object", "nodeId": "c", "field": "cases"}},
+		},
+		{
+			name: "a case with no id",
+			node: graphCondition("c", []any{graphConditionCase("", "and", filled)}),
+			want: []any{Object{"code": "condition_case_id_missing", "nodeId": "c", "field": "cases.id"}},
+		},
+		{
+			name: "a logic neither side knows",
+			node: graphCondition("c", []any{graphConditionCase("yes", "xor", filled)}),
+			want: []any{Object{"code": "condition_logic_unsupported", "nodeId": "c", "field": "cases.logic"}},
+		},
+		{
+			name: "rules of the wrong shape",
+			node: graphCondition("c", []any{Object{"id": "yes", "logic": "and", "conditions": "nope"}}),
+			want: []any{Object{"code": "condition_rules_not_a_list", "nodeId": "c", "field": "cases.conditions"}},
+		},
+		{
+			name: "a rule that is not an object",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{"nope"})}),
+			want: []any{Object{"code": "condition_rule_not_an_object", "nodeId": "c", "field": "cases.conditions"}},
+		},
+		{
+			name: "a selector that is not a list",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{Object{"variableSelector": "s.input.flag", "operator": "equals"}})}),
+			want: []any{Object{"code": "condition_selector_unsupported", "nodeId": "c", "field": "cases.conditions.variableSelector"}},
+		},
+		{
+			// The editor hands a new comparison an empty selector; this is that state reaching publish.
+			name: "a selector with no path",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule([]any{}, "equals", true)})}),
+			want: []any{Object{"code": "condition_selector_unsupported", "nodeId": "c", "field": "cases.conditions.variableSelector"}},
+		},
+		{
+			// One element names the whole node output on Cloud and is refused by desktop, so the two
+			// sides disagree about what the rule even reads.
+			name: "a single-segment selector",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule([]any{"s"}, "equals", true)})}),
+			want: []any{Object{"code": "condition_selector_unsupported", "nodeId": "c", "field": "cases.conditions.variableSelector"}},
+		},
+		{
+			name: "a path element that is not a name",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule([]any{"s", 0}, "equals", true)})}),
+			want: []any{Object{"code": "condition_selector_unsupported", "nodeId": "c", "field": "cases.conditions.variableSelector"}},
+		},
+		{
+			name: "an operator neither side knows",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule(selector, "matches", true)})}),
+			want: []any{Object{"code": "condition_operator_unsupported", "nodeId": "c", "field": "cases.conditions.operator"}},
+		},
+		{
+			name: "an operator the editor has not filled in yet",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule(selector, "", true)})}),
+			want: []any{Object{"code": "condition_operator_unsupported", "nodeId": "c", "field": "cases.conditions.operator"}},
+		},
+		{
+			// desktop resolves this and keeps the bound type; Cloud would compare the literal text.
+			name: "an expected value carrying a selector template",
+			node: graphCondition("c", []any{graphConditionCase("yes", "and", []any{graphRule(selector, "equals", "{{#s.input.name#}}")})}),
+			want: []any{Object{"code": "condition_value_template_unsupported", "nodeId": "c", "field": "cases.conditions.value"}},
+		},
+	}
+
+	exercised := map[string]bool{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := workflowGraph([]any{graphStart("s"), tc.node}, []any{graphEdge("s", "c")}, nil)
+			got := problemObjects(validateWorkflowGraph(decodeGraph(t, graph)))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("problems = %v, want %v", got, tc.want)
+			}
+			for _, problem := range got {
+				exercised[problem.(Object)["code"].(string)] = true
+			}
+		})
+	}
+	declared := map[string]bool{}
+	for _, code := range workflowUnsupportedConditionConfigs {
+		declared[code] = true
+	}
+	if !reflect.DeepEqual(exercised, declared) {
+		t.Fatalf("these cases exercise %v; the declared list is %v — the two must name the same set", exercised, declared)
+	}
+
+	// Refusing is not the same as refusing everything. The two documents the editor legitimately
+	// publishes — a filled-in node, and one the author has added but not configured yet, which falls
+	// through to else — must both pass.
+	for name, node := range map[string]Object{
+		"a filled-in condition node":               graphCondition("c", []any{graphConditionCase("yes", "and", filled)}),
+		"a condition node with no cases yet":       graphCondition("c", []any{}),
+		"a condition node with an unfinished case": graphCondition("c", []any{graphConditionCase("yes", "and", []any{})}),
+	} {
+		got := problemObjects(validateWorkflowGraph(decodeGraph(t, workflowGraph([]any{graphStart("s"), node}, []any{graphEdge("s", "c")}, nil))))
+		if len(got) != 0 {
+			t.Fatalf("%s was refused: %v", name, got)
+		}
 	}
 }
 

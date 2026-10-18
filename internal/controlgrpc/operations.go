@@ -105,6 +105,62 @@ func (s *operationService) DeferOperation(ctx context.Context, req *controlpb.De
 	return &controlpb.DeferOperationResponse{Operation: operation(out)}, nil
 }
 
+// RecordProvisioningFact is the D5 late-fact takeover: one real result about a creation Cloud
+// abandoned, submitted under the caller's current lease instead of a re-claim. The core action
+// validates the identity, stores the fact through the live paths' own appliers and receipts it
+// onto the residual ledger before this response acknowledges it.
+func (s *operationService) RecordProvisioningFact(ctx context.Context, req *controlpb.RecordProvisioningFactRequest) (*controlpb.RecordProvisioningFactResponse, error) {
+	kind := name(req.GetKind().String(), "PROVISIONING_FACT_KIND_")
+	body := core.Object{"epoch": req.GetEpoch(), "kind": kind}
+	var effectID string
+	switch kind {
+	case "effect":
+		result := core.Object{}
+		switch req.GetState() {
+		case controlpb.EffectState_EFFECT_STATE_SUCCEEDED:
+			evidence, ok := evidenceObject(req.GetEvidence())
+			if !ok {
+				return nil, status.Error(codes.InvalidArgument, "evidence_required")
+			}
+			result = evidence
+		case controlpb.EffectState_EFFECT_STATE_FAILED:
+			if req.GetFailure() != "" {
+				result["error"] = req.GetFailure()
+			}
+		case controlpb.EffectState_EFFECT_STATE_RUNNING, controlpb.EffectState_EFFECT_STATE_ABSENT:
+		default:
+			return nil, status.Error(codes.InvalidArgument, "invalid_effect_state")
+		}
+		effectID = req.GetEffectId()
+		body["state"], body["externalId"], body["result"] = name(req.GetState().String(), "EFFECT_STATE_"), req.GetExternalId(), result
+	case "clone", "plugin":
+		res, e := resultObject(req.GetExecutionResult())
+		if e != nil {
+			return nil, e
+		}
+		body["executionId"], body["result"] = req.GetExecutionId(), res
+	case "creation":
+		body["outcome"], body["detail"] = name(req.GetOutcome().String(), "PROVISIONING_OUTCOME_"), req.GetDetail()
+	default:
+		return nil, status.Error(codes.InvalidArgument, "invalid_fact_kind")
+	}
+	out, e := s.store.Control(ctx, &core.ControlRequest{
+		Action: "provisioning_fact", OperationID: req.GetOperationId(), EffectID: effectID,
+		SubmissionID: req.GetSubmissionId(), Body: body, Service: principal(ctx),
+	})
+	if e != nil {
+		return nil, toStatus(e)
+	}
+	response := &controlpb.RecordProvisioningFactResponse{Operation: operation(out.O("operation"))}
+	if eff := out.O("effect"); len(eff) > 0 {
+		response.Effect = effect(eff)
+	}
+	if exec := out.O("execution"); len(exec) > 0 {
+		response.Execution = record(exec)
+	}
+	return response, nil
+}
+
 // control runs one action for the verified principal and maps its Fault.
 func control(ctx context.Context, store *core.Store, action, operationID, submission string, body core.Object) (core.Object, error) {
 	out, e := store.Control(ctx, &core.ControlRequest{Action: action, OperationID: operationID, SubmissionID: submission, Body: body, Service: principal(ctx)})

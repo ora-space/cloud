@@ -17,4 +17,4 @@
 - The GitHub access token, the full user document, and the email never reach the database, logs, errors, JWTs, or the browser.
 - `login`, `name`, and email are never identity keys; a renamed account still maps to the same `(github.com, id)`.
 
-See the [authentication boundary (`internal/gateway`)](../README.en.md) and the [Gateway document](../../../docs/gateway.md).
+See the [authentication boundary (`internal/gateway`)](../README.en.md) and the [Gateway document](../../../docs/identity/gateway.en.md).

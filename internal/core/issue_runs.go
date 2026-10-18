@@ -10,6 +10,7 @@ package core
 var agentRunSkeletonFields = []string{
 	"phase", "workspaceId", "cancelRequestedAt", "threadState", "idleSince", "issueRunId",
 	"startupReadyAt", "startupDeadlineAt", "startupResume", "startupEndingDeadlineAt",
+	"workspaceBlockedAt", "workspaceDeadlineAt", "workspaceBlockedSource",
 }
 
 // stripAgentRunSkeleton removes the migration-0018 agent columns from a resource in

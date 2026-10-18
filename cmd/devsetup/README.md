@@ -23,4 +23,4 @@
 - **只写 `.local/`**：该目录与 `config.toml` 都被 Git 忽略；所有文件权限为 `0600`，任何生成物都不进入仓库、日志或数据库。
 - **禁止部署**：没有任何轮换、托管或分发机制。
 
-参见 [cmd 入口总览](../README.md) 与 [Gateway 文档](../../docs/gateway.md)。
+参见 [cmd 入口总览](../README.md) 与 [Gateway 文档](../../docs/identity/gateway.md)。

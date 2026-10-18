@@ -12,7 +12,8 @@ operating-system signal handling, and process exit codes.
 - [gateway](gateway/README.en.md) is the browser-facing authentication and reverse-proxy boundary: GitHub OAuth login, PostgreSQL sessions, and internal credential issuance.
 - [cloudctl](cloudctl/README.en.md) is the restricted deployment and operations CLI for migrations, tenant bootstrap, and credential reference management.
 - [devsetup](devsetup/README.en.md) is the development-only one-shot setup (`task setup`): from `config.toml` it generates the Gateway private keys, the public keys Cloud trusts and the PKCE key, writes the GitHub client secret file and `.local/dev.env`, and applies migrations.
-- [git-server](git-server/README.en.md) serves Project repositories to sandboxes over smart HTTP, authorizing every request from current Cloud state, and answers Cloud's read-only delivery-ref query.
+- [git-server](git-server/README.en.md) serves Project repositories to sandboxes and the Repo Executor over smart HTTP, authorizing every request from current Cloud state, and answers Cloud's read-only ref query.
+- [git-server-preset](git-server-preset/README.en.md) prepares and checks Git Server contract fixtures for acceptance only; it ships only in the development image.
 - [simulator](simulator/README.en.md) provides an all-in-one local demo environment backed by in-process Substrate and Git execution doubles.
 - [openapi](openapi/README.en.md) compiles and synchronizes the canonical OpenAPI 3.0 specification (`api/openapi.json`) from Go contract definitions.
 - [checkformat](checkformat/README.en.md) enforces repository Go formatting standards as a strict failing CI gate.

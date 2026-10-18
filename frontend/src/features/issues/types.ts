@@ -157,7 +157,7 @@ export interface Tenant {
 }
 
 /**
- * Collaboration target modes, the frozen §4 wire contract. The mode is derived
+ * Collaboration target modes, the frozen wire contract (Issue collaboration D3). The mode is derived
  * server-side from the target type: user -> mention, agent/team -> task, workflow -> form.
  */
 export type InteractionMode = 'mention' | 'task' | 'form'
@@ -200,7 +200,7 @@ export interface IssueInteraction {
 
 /**
  * Field types the Issues frontend can render. The set is closed: an unknown type is a descriptor bug
- * and is surfaced as an error state, never guessed at (§38.4).
+ * and is surfaced as an error state, never guessed at (Issue collaboration D7).
  */
 export type FormFieldType = 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'multi_select'
 
@@ -224,7 +224,7 @@ export interface FormField {
 
 /**
  * The Issues-facing rendering descriptor for a Workflow interaction. It is NOT the Workflow schema —
- * the frontend renders exactly what this declares and never branches on a workflow id (§38.2, §38.27).
+ * the frontend renders exactly what this declares and never branches on a workflow id (Issue collaboration D7).
  */
 export interface FormDescriptor {
   formRef: string

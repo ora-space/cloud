@@ -30,6 +30,8 @@ import { useCurrentSpace } from '@/features/spaces/current-space'
 import { WorkflowRunDetailPage } from '@/features/workflows/run/run-detail-page'
 import { WorkflowEditorPage } from '@/features/workflows/workflow-editor-page'
 import { WorkflowsPage } from '@/features/workflows/workflows-page'
+import { SessionListPage } from '@/features/sessions/session-list-page'
+import { SessionDetailPage } from '@/features/sessions/session-detail-page'
 import { db } from '@/mocks/data/store'
 import { WORKSPACE_ROUTE_PATTERN } from '@/lib/paths'
 
@@ -114,6 +116,11 @@ export const routes: RouteObject[] = [
       { index: true, element: <Navigate to="issues" replace /> },
       { path: 'issues', element: <CloudScope component={IssuesPage} /> },
       { path: 'issues/:issueId', element: <CloudScope component={IssueDetailPage} /> },
+      { path: 'sessions', element: <CloudScope component={SessionListPage} /> },
+      {
+        path: 'sessions/agent/:issueId/:runId',
+        element: <CloudScope component={SessionDetailPage} />,
+      },
       { path: 'my-issues', element: <CloudScope component={MyIssuesPage} /> },
       { path: 'projects', element: <WithSlug component={ProjectsPage} /> },
       { path: 'projects/:projectId', element: <WithSlug component={ProjectDetailPage} /> },

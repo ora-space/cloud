@@ -77,7 +77,7 @@ func forceStopCommand(t *transaction, r *ControlRequest) Object {
 			}
 			// Canceling initialization preserves the shared project and the incomplete runtime.
 			// A member can create a new independent runtime; start never silently re-clones this one.
-			t.exec("UPDATE projects p SET lifecycle='active',version=version+1 WHERE p.lifecycle='provisioning' AND p.id=(SELECT project_id FROM workspaces WHERE id=$1)", f.S("workspaceId"))
+			settleFailedProjectCreation(t, t.one("SELECT project_id FROM workspaces WHERE id=$1", f.S("workspaceId")).S("projectId"))
 			t.exec("UPDATE workspaces SET desired_state='stopped',observed_state='stopped',admission_open=false,version=version+1 WHERE id=$1", f.S("workspaceId"))
 			t.exec("UPDATE runtime_force_stops SET state='succeeded',confirmed_at=clock_timestamp() WHERE id=$1", f.S("id"))
 			reconcileRuntimeControls(t)

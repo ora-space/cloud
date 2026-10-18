@@ -2,7 +2,7 @@ package integration
 
 // Phase 5 Batch 2 + Cloud Revision acceptance: Delivery → Revision → Release → Done, the second half
 // of the Agent IssueRun lifecycle (IssueRun D3/D4/D5, Cloud Revision D1–D4, controller-integration
-// D2/D6, operation D4; plan §5 Batch 2).
+// D2/D6, operation D4).
 //
 // The chain under test is the production one end to end:
 //
@@ -371,9 +371,9 @@ func (f *fixture) deliveryRows(execution string) (executionRow, workInput string
 func (f *fixture) runPlacement(runID string) (projectID, repositoryURL string) {
 	f.t.Helper()
 	must(f.t, f.store.Pool.QueryRow(`
-		SELECT p.id, p.repository_url FROM issue_runs r
+		SELECT b.project_id, b.repository_url FROM issue_runs r
 		JOIN workspaces w ON w.id = r.workspace_id
-		JOIN projects p ON p.id = w.project_id
+		JOIN repository_bindings b ON b.project_id = w.project_id
 		WHERE r.id=$1`, runID).Scan(&projectID, &repositoryURL))
 	return projectID, repositoryURL
 }
@@ -717,7 +717,7 @@ func indexOf(list []string, want string) int {
 	return -1
 }
 
-// P5-7, §3/§4 — the released delivery work item is claimable and registrable, its input is the fixed
+// The released delivery work item is claimable and registrable, its input is the fixed
 // DeliverRevision snapshot D2 defines (read from durable Cloud state, never from a Thread identity),
 // and registering it moves nothing: registration is not starting the delivery.
 func TestDeliveryExecutionClaimCarriesTheFixedSpecAndMovesNothing(t *testing.T) {
@@ -792,7 +792,7 @@ func TestDeliveryExecutionClaimCarriesTheFixedSpecAndMovesNothing(t *testing.T) 
 	}
 }
 
-// P5-8, §10/§11 — a failed delivery keeps the run `delivering` (the sandbox holds the work the
+// A failed delivery keeps the run `delivering` (the sandbox holds the work the
 // Revision needs) and releases exactly one new attempt with D5's backoff. The retry is the same
 // logical delivery: same run, same session, same baseline and same Revision ref — only the per-attempt
 // object keys differ, so the failed attempt's objects can never be overwritten.
@@ -865,7 +865,7 @@ func TestFailedDeliveryKeepsDeliveringAndReleasesOneBackoffRetry(t *testing.T) {
 	}
 }
 
-// P5-9, §9/§15 — D5's two give-up limits release the run: `delivering → releasing` with
+// D5's two give-up limits release the run: `delivering → releasing` with
 // `deliveryState=failed`, D4's status derived from the session's own end reason, and a Timeline
 // activity that reports the two outcomes independently. `done` is never reached here, and the status
 // is never read off the delivery outcome.
@@ -970,7 +970,7 @@ func (f *fixture) ageRunWorkspaceNode(runID string) error {
 	return f.ageRunWorkspaceNodeBy(runID, time.Hour)
 }
 
-// P5-9 continued, §10 — the same give-up is reached by Cloud's own clock when no Node ever reports
+// The same give-up is reached by Cloud's own clock when no Node ever reports
 // again: the background pass applies D5's limits to a run the delivery path already left delivering,
 // so a lost or endlessly failing Node cannot hold a Workspace forever.
 func TestGiveUpStaleDeliveriesPassReleasesOnItsOwnClock(t *testing.T) {
@@ -1027,7 +1027,7 @@ func (f *fixture) runVersion(runID string) int64 {
 	return version
 }
 
-// givingUpScene is P5-8's end state promoted to a starting point: the run released (`releasing`),
+// givingUpScene is the failed-delivery end state promoted to a starting point: the run released (`releasing`),
 // `deliveryState=failed`, with its delete intent declared. It is the D5 settlement with the ordinary
 // session ending; the D8 suite's driveToReleasing builds the same state for any outcome.
 func givingUpScene(t *testing.T, f *fixture) (liveThreadScene, string) {
@@ -1036,7 +1036,7 @@ func givingUpScene(t *testing.T, f *fixture) (liveThreadScene, string) {
 	return run.liveThreadScene, run.execution
 }
 
-// P5-10, §12 — the releasing transition declares the run Workspace's delete through the approved
+// The releasing transition declares the run Workspace's delete through the approved
 // seam, in the same commit, with the identity and actor the operation contract fixes. The delete is
 // declared, never executed: no transaction reaches a workspace provider.
 func TestReleasingDeclaresExactlyOneDeleteOperation(t *testing.T) {
@@ -1121,7 +1121,7 @@ func TestReleasingDeclaresExactlyOneDeleteOperation(t *testing.T) {
 	}
 }
 
-// P5-11, §13/§14 — the delete operation's terminal state is what settles the run, in the same
+// The delete operation's terminal state is what settles the run, in the same
 // transaction: a *succeeded* delete with the run still releasing is the state the whole hook exists
 // to prevent. `done` then carries the status D4 derived, never a status of its own.
 func TestDeleteTerminalStateSettlesTheRunToDone(t *testing.T) {
@@ -1163,7 +1163,7 @@ func TestDeleteTerminalStateSettlesTheRunToDone(t *testing.T) {
 	}
 }
 
-// P5-12, §3/§6/§16 — the whole mainline in one run: session end → delivery claim/registration →
+// The whole mainline in one run: session end → delivery claim/registration →
 // delivery settlement → release → delete → done, with every phase observed in order and none
 // skipped. This is the batch's end-to-end acceptance: the phases the approved ADRs define are all
 // reachable through production code, in one uninterrupted trace.
@@ -1179,7 +1179,7 @@ func TestFullLifecycleSessionEndToDoneSkipsNoPhase(t *testing.T) {
 
 	scene.start(t, f)
 	// The session declaration alone does not run the session: the first taken-over Node record is
-	// what moves the run (D-017/D-019), and that is the stage boundary asserted here.
+	// what moves the run, and that is the stage boundary asserted here.
 	if got := f.runPhase(scene.runID); got != "starting" {
 		t.Fatalf("declaring a session must not run it, got phase %q", got)
 	}
@@ -1236,7 +1236,7 @@ func TestFullLifecycleSessionEndToDoneSkipsNoPhase(t *testing.T) {
 	}
 }
 
-// P5-13, §8/§11/§16 — the delivery mainline of Cloud Revision D4: a Node reports a Revision and Cloud
+// The delivery mainline of Cloud Revision D4: a Node reports a Revision and Cloud
 // confirms the objects it declared, registers the row, releases the run and declares the delete — all
 // in the one takeover transaction, with the two object checks that precede it.
 //
@@ -1401,7 +1401,7 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 			if got := len(f.deliveryAttempts(scene.runID)); got != 1 {
 				t.Fatalf("a settled delivery must release no retry, got %d attempts", got)
 			}
-			// §12/§17: the delete is declared in the releasing transition's own transaction, and D4's
+			// The delete is declared in the releasing transition's own transaction, and D4's
 			// timeline activity reports the two independent outcomes.
 			ops := deleteOperations(f.runOperations(scene.runID))
 			if len(ops) != 1 || ops[0].S("state") != "queued" || ops[0].S("step") != "quiesce" {
@@ -1418,7 +1418,7 @@ func TestRevisionDeliveredIsVerifiedRegisteredAndReleasesTheRun(t *testing.T) {
 	}
 }
 
-// P5-14, §8/§16/§31 — when Cloud cannot confirm the declared objects it records its OWN verdict, never
+// When Cloud cannot confirm the declared objects it records its OWN verdict, never
 // the Node's claim (D4 step 4): the delivery is settled as `failed{verification_failed}`, no Revision
 // row exists, and the run stays `delivering` under D5's retry policy. That is the whole reason
 // `verification_failed` is outside the wire's closed set — a Node may not assert a verdict about
@@ -1503,7 +1503,7 @@ func TestRevisionVerificationFailureIsCloudsOwnVerdict(t *testing.T) {
 	}
 }
 
-// P5-14b, §4/§8 — a store Cloud cannot reach is a different verdict from a store that disagrees. The
+// A store Cloud cannot reach is a different verdict from a store that disagrees. The
 // endpoint is contacted between two transactions, so a delivery result that arrives while the store is
 // down must be refused as transient: nothing is settled, nothing is receipted, and the Node's next
 // attempt with the very same submission is a clean first request. Recording a failure instead would
@@ -1561,7 +1561,7 @@ func TestDeliveryWithAnUnreachableObjectStoreIsRefusedTransiently(t *testing.T) 
 	}
 }
 
-// P5-17, §8/§16 — the local input comparison is I/O-free and it precedes the object-store probes, so a
+// The local input comparison is I/O-free and it precedes the object-store probes, so a
 // result Cloud can already tell contradicts its own frozen input never reaches the object store: the
 // HEADs would be requests against a store holding objects Cloud has already decided it will not
 // register.
@@ -1682,7 +1682,7 @@ func TestRevisionResultContradictingItsInputNeverReachesTheObjectStore(t *testin
 	}
 }
 
-// P5-19, D4 step 4 — the verdict on a delivery's declared objects is Cloud's alone: the Node declares
+// Cloud Revision D4 step 4 — the verdict on a delivery's declared objects is Cloud's alone: the Node declares
 // what it uploaded, Cloud decides whether the store agrees. The wire enum has to name
 // `VERIFICATION_FAILED` because Cloud stores and renders that verdict, so the enum cannot be the
 // enforcement point — the merged control plane enforces the rule in `revisionFailureReasons`, and a
@@ -1740,7 +1740,7 @@ func TestNodeMayNotReportCloudsOwnVerificationVerdict(t *testing.T) {
 	expectStatus(t, refusal(), codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
 }
 
-// P5-18, §20 — D4's last clause and invariant 9 at the integration boundary: a delivery result that
+// D4's last clause and invariant 9 at the integration boundary: a delivery result that
 // arrives after the run left `delivering` decides nothing. The delivered shape is the one that
 // matters, because it is the only one that would otherwise register a Revision.
 //
@@ -1872,7 +1872,7 @@ func (f *fixture) seedRevision(t *testing.T, scene liveThreadScene, in core.Obje
 	return id
 }
 
-// P5-15, §19/§21 — invariant 7 ("at most one Revision row per run") has one writer and two guards.
+// Invariant 7 ("at most one Revision row per run") has one writer and two guards.
 // The control plane's own guard is what a Controller meets in practice: once a run has a Revision no
 // further delivery attempt is declared for it at all (`delivery_already_settled`), which is the first
 // block below. `UNIQUE (run_id)` is the database backstop behind it, and this case is a backstop test:
@@ -2006,7 +2006,7 @@ func TestRevisionRegistrationIsUniquePerRunAndRollsBackAConflictingAttempt(t *te
 	})
 }
 
-// P5-16, §18/§22 — D2/D3's upload grants over the contract the Controller actually speaks. Cloud signs
+// D2/D3's upload grants over the contract the Controller actually speaks. Cloud signs
 // one presigned PUT per object key of that attempt's frozen input, and each grant names exactly one
 // key and one method: the URL carries the capability, so nothing the Node does can widen it to another
 // object, and nothing is persisted — the grants exist only in the reply.
@@ -2090,10 +2090,12 @@ func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
 	if got := f.scalar(`SELECT count(*) FROM revisions WHERE run_id=$1`, scene.runID); got != 0 {
 		t.Fatalf("granting must register nothing, got %d Revisions", got)
 	}
-	// And nothing in the schema could hold one: a grant is minted per request and never stored, so no
-	// table may have a column an upload URL or a credential could live in.
+	// Upload capabilities remain transient. The model ledger's UUID foreign key references a
+	// model_access_grants row; it cannot hold an upload URL, bearer token or presigned credential.
+	// Keep rejecting every other grant/presign column rather than exempting the whole model table.
 	if got := f.scalar(`SELECT count(*) FROM information_schema.columns
-		WHERE table_schema=current_schema() AND (column_name ILIKE '%grant%' OR column_name ILIKE '%presign%')`); got != 0 {
+		WHERE table_schema=current_schema() AND (column_name ILIKE '%grant%' OR column_name ILIKE '%presign%')
+		AND NOT (table_name='model_request_attempts' AND column_name='grant_id' AND data_type='uuid')`); got != 0 {
 		t.Fatalf("the schema must have nowhere to persist an upload grant, got %d column(s)", got)
 	}
 
@@ -2156,7 +2158,7 @@ func TestGrantRevisionUploadSignsOneGrantPerObjectKey(t *testing.T) {
 	}
 }
 
-// P5-14, §19 — the replay matrix. Every shape a Controller's retry can take is one effect: a
+// The replay matrix. Every shape a Controller's retry can take is one effect: a
 // submission replay, a byte-identical re-send, and a re-send whose payload disagrees. The conflict
 // cases are asserted alongside because they are the same identity: the receipt is what makes a
 // re-send a no-op or a conflict, never a second settlement.
@@ -2209,7 +2211,7 @@ func TestDeliveryReplayMatrix(t *testing.T) {
 	}
 }
 
-// P5-15, §20 — the serialization matrix. Each case starts every writer from one barrier and asserts
+// The serialization matrix. Each case starts every writer from one barrier and asserts
 // the complete set of legal outcomes rather than the most common one; the invariant under all of them
 // is that one release is one release: one delete intent, one retry, one receipt.
 func TestDeliverySerializesWithConcurrentWriters(t *testing.T) {
@@ -2364,7 +2366,7 @@ func TestDeliverySerializesWithConcurrentWriters(t *testing.T) {
 	})
 }
 
-// P5-16, §12/§13 — a Node that refuses to quiesce fails the operation and restores the Workspace
+// A Node that refuses to quiesce fails the operation and restores the Workspace
 // (operation D4's "quiesce 失败并按原规则重试"), and for a run Workspace the party that retries is
 // Cloud: the run has no public API and no user. Without the reconciliation pass such a run would sit
 // in `releasing` forever with no operation and no hook.

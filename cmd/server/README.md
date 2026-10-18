@@ -20,4 +20,4 @@
 - **无状态守护进程**：服务器进程不会在请求之间保留可变的内存业务状态。权威状态完全位于 PostgreSQL 中，并通过数据库级咨询锁协调并发访问。
 - **零凭据泄漏**：服务器不处理或记录原始的外部部署密钥、云提供商机密信息或基础设施密码。
 
-参见 [cmd 入口总览](../README.md)、[HTTP 路由网关](../../internal/api/router/README.md)、[认证配置与凭据](../../docs/authentication.md) 与 [核心不变量与契约](../../docs/core-contract.md)。
+参见 [cmd 入口总览](../README.md)、[HTTP 路由网关](../../internal/api/router/README.md)、[内部凭据与服务信任](../../docs/identity/authentication.md) 与 [权威持久化与事务模型](../../docs/core/persistence.md)。

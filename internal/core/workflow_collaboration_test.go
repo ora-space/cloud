@@ -712,7 +712,7 @@ func TestLaunchKeysCollideLikeTheOlderOnes(t *testing.T) {
 // a cursor it would 404 on any value that is not a snapshot id, and on one that is, it would run the
 // version the user picked while handing the workflow that same id as its parameter.
 //
-// The second half covers the pre-rename key (§38.37f). It is still read as a cursor, because a form
+// The second half covers the pre-rename key (Issue collaboration D8). It is still read as a cursor, because a form
 // rendered before the rename is confirmed after it and the selection it carries is the user's; the new
 // key is read first so a submission carrying both is answered by the one this build wrote.
 func TestWorkflowVersionCursorBelongsToTheAuthorWhenTheyDeclareIt(t *testing.T) {

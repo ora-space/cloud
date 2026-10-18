@@ -38,4 +38,4 @@ cloudctl -config <path> -command credential-ref -tenant '<tenant-uuid>' -owner '
 - **部署边界**：`cloudctl` 不通过 HTTP 暴露，也不由 server 守护进程调用。它必须能够直接连接 PostgreSQL，并拥有 Schema 迁移权限。
 - **结构化输出**：所有命令执行结果均以结构化 JSON 格式输出到 `stdout`，错误信息输出到 `stderr`，便于与 CI/CD 自动化部署流水线集成。
 
-参见 [cmd 入口总览](../README.md)、[数据库迁移目录](../../internal/core/migrations/README.md) 与 [认证配置与凭据](../../docs/authentication.md)。
+参见 [cmd 入口总览](../README.md)、[数据库迁移目录](../../internal/core/migrations/README.md) 与 [内部凭据与服务信任](../../docs/identity/authentication.md)。

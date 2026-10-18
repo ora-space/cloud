@@ -30,7 +30,7 @@ func snapshotGraph(marker string) core.Object {
 
 func snapshotItems(o core.Object) []core.Object { return issueItems(o) }
 
-// TestWorkflowSnapshotPublishServices covers §34.x publish: each POST freezes the live graph under the
+// TestWorkflowSnapshotPublishServices covers publish: each POST freezes the live graph under the
 // next per-workflow version, the name defaults to the workflow name, and the row is immutable (a
 // second publish is a new row, not an overwrite).
 func TestWorkflowSnapshotPublishServices(t *testing.T) {

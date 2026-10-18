@@ -17,4 +17,4 @@
 - GitHub access token、完整用户文档与 email 不写入数据库、日志、错误、JWT 或浏览器。
 - `login`、`name`、email 永不作为身份键；改名后仍映射到同一 `(github.com, id)`。
 
-参见 [认证边界 (`internal/gateway`)](../README.md) 与 [Gateway 文档](../../../docs/gateway.md)。
+参见 [认证边界 (`internal/gateway`)](../README.md) 与 [Gateway 文档](../../../docs/identity/gateway.md)。

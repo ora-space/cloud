@@ -1,6 +1,11 @@
-import { Puzzle, Search } from 'lucide-react'
+import { Puzzle, Search, Workflow } from 'lucide-react'
 import { useState } from 'react'
-import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
+import type {
+  PluginCatalogEntry,
+  SpacePlugin,
+  WorkflowAssetDocument,
+  WorkflowAssetImport,
+} from '@/api/generated.schemas'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { PageHeader } from '@/components/layout/page-header'
 import {
@@ -18,7 +23,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useInstallPlugin, usePluginCatalog, useRemovePlugin, useSpacePlugins } from './api'
+import {
+  useInstallPlugin,
+  usePluginCatalog,
+  useRemovePlugin,
+  useSpacePlugins,
+  useWorkflowAssetImports,
+} from './api'
 
 /** Display labels for the eight resolver-1 plugin kinds. */
 const KIND_LABELS: Record<string, string> = {
@@ -46,6 +57,93 @@ const OBSERVED_BADGES: Record<
   failed: { label: '失败', variant: 'destructive' },
   removing: { label: '移除中', variant: 'outline' },
   removed: { label: '已移除', variant: 'outline' },
+}
+
+/** Import-state badge per workflow asset import row. */
+const ASSET_IMPORT_BADGES: Record<
+  WorkflowAssetImport['state'],
+  { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }
+> = {
+  pending: { label: '等待导入', variant: 'secondary' },
+  importing: { label: '导入中', variant: 'secondary' },
+  completed: { label: '导入完成', variant: 'default' },
+  failed: { label: '导入失败', variant: 'destructive' },
+}
+
+/**
+ * Human labels for the bounded package and document failure codes. The codes
+ * are the stable contract; this table is presentation only, and an unmapped
+ * code falls back to the raw value so a new server code stays readable.
+ */
+const ASSET_FAILURE_LABELS: Record<string, string> = {
+  asset_package_unavailable: '包不可用',
+  asset_package_too_large: '包超出大小上限',
+  asset_package_digest_mismatch: '包摘要不匹配',
+  asset_package_invalid: '包格式无效',
+  asset_package_expansion_too_large: '包展开后超出大小上限',
+  asset_package_too_many_entries: '包内条目过多',
+  asset_package_without_documents: '包内没有工作流文档',
+  asset_package_too_many_documents: '包内工作流文档过多',
+  document_invalid_json: 'JSON 无效',
+  document_without_name: '缺少名称',
+  document_not_executable_graph: '不是可执行工作流图',
+  name_conflict: '工作流名称已被占用',
+}
+
+/** Resolves a bounded failure code to a label without hiding unknown codes. */
+function failureLabel(code: string): string {
+  return ASSET_FAILURE_LABELS[code] ?? code
+}
+
+/** One imported or failed document inside a workflow asset import. */
+function AssetDocumentRow({ document }: { document: WorkflowAssetDocument }) {
+  const imported = document.outcome === 'imported'
+  return (
+    <li className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate font-mono">{document.documentPath}</span>
+      {imported ? (
+        <span>
+          已导入 · 快照 v{document.snapshotVersion ?? '?'}
+          {document.workflowId ? ` · ${document.workflowId}` : ''}
+        </span>
+      ) : (
+        <span className="text-destructive">失败：{failureLabel(document.failureCode ?? '')}</span>
+      )}
+    </li>
+  )
+}
+
+/**
+ * One workflow plugin's asset import: package provenance, per-document
+ * outcomes and the package-level failure. It never shares a badge with the
+ * install row: a completed install and a failed import are both true at once.
+ */
+function WorkflowAssetImportRow({ item }: { item: WorkflowAssetImport }) {
+  const badge = ASSET_IMPORT_BADGES[item.state]
+  return (
+    <div className="border-b px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Workflow className="size-4 shrink-0 text-muted-foreground" />
+        <p className="min-w-0 flex-1 truncate text-sm font-medium">{item.pluginId}</p>
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+      </div>
+      <p className="truncate text-xs text-muted-foreground">
+        {item.sourceNamespace}/{item.identifier} · 包版本 {item.packageVersion || '未知'}
+      </p>
+      {item.failureCode && (
+        <p role="alert" className="text-xs text-destructive">
+          导入失败：{failureLabel(item.failureCode)}
+        </p>
+      )}
+      {item.documents.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {item.documents.map((document) => (
+            <AssetDocumentRow key={document.documentPath} document={document} />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 /** One selected plugin row: state badge, pinned version, and removal. */
@@ -153,9 +251,10 @@ function CatalogCard({
 
 /**
  * The workspace's plugin screen: the selected-plugin list with fan-out state
- * badges on top, and the marketplace catalog (search + kind filter) below.
- * Activation/stop/configuration stay out of scope — they belong to the Node
- * runtime plane, not the cloud selection state.
+ * badges on top, the separately readable workflow asset imports below it, and
+ * the marketplace catalog (search + kind filter) last. Activation/stop/
+ * configuration stay out of scope — they belong to the Node runtime plane,
+ * not the cloud selection state.
  */
 function KindFilters({
   selected,
@@ -187,11 +286,77 @@ function KindFilters({
   )
 }
 
+/** The selected-plugin list with removal, its conflict notice and empty state. */
+function SelectedPluginsSection({
+  plugins,
+  canManage,
+  removeCode,
+  onRemove,
+}: {
+  plugins: SpacePlugin[]
+  canManage: boolean
+  removeCode: string | undefined
+  onRemove: (plugin: SpacePlugin) => void
+}) {
+  return (
+    <section aria-label="已选插件">
+      <h2 className="px-4 pb-1 pt-4 text-xs font-medium text-muted-foreground">已选插件</h2>
+      {removeCode && (
+        <p role="alert" className="px-4 py-1 text-sm text-destructive">
+          {removeCode === 'version_conflict'
+            ? '移除失败:版本冲突,已刷新最新状态,请重试。'
+            : '移除失败,请稍后重试。'}
+        </p>
+      )}
+      {plugins.length === 0 && (
+        <p className="px-4 py-2 text-sm text-muted-foreground">尚未安装插件。</p>
+      )}
+      {plugins.map((plugin) => (
+        <SelectedPluginRow
+          key={plugin.id}
+          plugin={plugin}
+          canManage={canManage}
+          onRemove={onRemove}
+        />
+      ))}
+    </section>
+  )
+}
+
+/** The workflow asset import results; never merged into the install badges. */
+function WorkflowAssetsSection({
+  imports,
+  isError,
+}: {
+  imports: WorkflowAssetImport[]
+  isError: boolean
+}) {
+  return (
+    <section aria-label="工作流资产导入">
+      <h2 className="px-4 pb-1 pt-4 text-xs font-medium text-muted-foreground">工作流资产</h2>
+      {isError && (
+        <p role="alert" className="px-4 py-1 text-sm text-destructive">
+          工作流资产导入结果读取失败，请稍后重试。
+        </p>
+      )}
+      {!isError && imports.length === 0 && (
+        <p className="px-4 py-2 text-sm text-muted-foreground">
+          选择工作流插件后，包内的 assets/workflows/*.json 会导入当前租户的工作流库。
+        </p>
+      )}
+      {imports.map((item) => (
+        <WorkflowAssetImportRow key={`${item.sourceNamespace}/${item.identifier}`} item={item} />
+      ))}
+    </section>
+  )
+}
+
 export function PluginsPage({ slug: _slug }: { slug: string }) {
   const { space } = useCurrentSpace()
   const canManage = space?.role === 'admin'
   const { entries, isPending: catalogPending } = usePluginCatalog()
   const { plugins } = useSpacePlugins()
+  const { imports, isError: importsError } = useWorkflowAssetImports()
   const install = useInstallPlugin()
   const remove = useRemovePlugin()
   const [query, setQuery] = useState('')
@@ -219,27 +384,13 @@ export function PluginsPage({ slug: _slug }: { slug: string }) {
           : '成员可查看空间插件，由管理员修改选择。'}
       </p>
       <div className="flex-1 overflow-y-auto">
-        <section aria-label="已选插件">
-          <h2 className="px-4 pb-1 pt-4 text-xs font-medium text-muted-foreground">已选插件</h2>
-          {removeCode && (
-            <p role="alert" className="px-4 py-1 text-sm text-destructive">
-              {removeCode === 'version_conflict'
-                ? '移除失败:版本冲突,已刷新最新状态,请重试。'
-                : '移除失败,请稍后重试。'}
-            </p>
-          )}
-          {selected.length === 0 && (
-            <p className="px-4 py-2 text-sm text-muted-foreground">尚未安装插件。</p>
-          )}
-          {selected.map((plugin) => (
-            <SelectedPluginRow
-              key={plugin.id}
-              plugin={plugin}
-              canManage={canManage}
-              onRemove={(p) => remove.mutate({ identifier: p.id, version: p.version })}
-            />
-          ))}
-        </section>
+        <SelectedPluginsSection
+          plugins={selected}
+          canManage={canManage}
+          removeCode={removeCode}
+          onRemove={(plugin) => remove.mutate({ identifier: plugin.id, version: plugin.version })}
+        />
+        <WorkflowAssetsSection imports={imports} isError={importsError} />
 
         <section aria-label="插件市场" className="pb-6">
           <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-6">

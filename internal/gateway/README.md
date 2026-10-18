@@ -15,6 +15,7 @@
 | `security.go` | `NormalizeReturnTo`（拒绝绝对、`//`、`/\`、反斜杠、控制字符）、`SameOrigin`（`Origin` 精确匹配或 `Sec-Fetch-Site: same-origin`）、`CookiePolicy`（`__Host-` session Cookie、限定 callback 路径的 `SameSite=Lax` attempt Cookie）。 |
 | `handler.go` | Gin 路由：`GET /auth/providers`、`POST /auth/login`、`GET /auth/callback/:provider`、`POST /auth/logout`、`ANY /api/v1/*`、`GET /healthz`；稳定错误形状 `{code, params, requestId}`。 |
 | `proxy.go` | 到固定 upstream 的 `httputil.ReverseProxy`：连接/响应头超时、响应体 8 MiB 上限、错误回调经 context 传递。upstream 以 `text/event-stream` 应答时跳过体积上限并触发流回调，由 handler 解除该连接的 upstream 超时与写超时，事件流才能长期存活。 |
+| `query.go` | 会话分析 GET 接口的查询语法保护：在认证后、代理转发前拒绝不能由 `url.ParseQuery` 解析的原始查询串，避免 `ReverseProxy.Rewrite` 清洗后改变请求含义。 |
 | `ratelimit.go` | 按客户端地址的令牌桶，键表有界；start/callback 在写入任何 attempt 前限流。 |
 | `cleanup.go` | `RunCleanup`：生命周期拥有的有界批量清理循环。 |
 | `web.go` | `Web`/`OpenWeb`：可选地从 `web.dist_dir` 提供前端构建产物。启动时要求 `index.html` 存在；只处理无路由命中的 `GET`/`HEAD`，文件经 `os.Root` 打开（`..` 与符号链接无法逃出目录），未命中的客户端路由返回 `index.html`（`Cache-Control: no-cache`）；`/api/`、`/auth/`、`/internal/` 与 `/healthz` 仍是 JSON 404。 |
@@ -31,9 +32,15 @@
 - 每个 attempt 最多创建一个 session；两个并发 callback 只有一个能通过 `FOR UPDATE` 后的未消费检查。
 - `Resolve` 不续期；未知、过期、吊销统一为 `ErrNotFound`/`401 unauthenticated`。
 - 有效 session 不能绕过 Cloud 对 disabled user、membership 与 owner 的判定；Cloud 的 401/403 原样透传。
+- `GET /api/v1/tenants/:tid/agent-sessions` 与 `GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history` 的非法分号或百分号转义查询在转发前返回 `400 invalid_session_filter`。合法编码的字面值保持原样；参数名、重复值、筛选值与业务权限仍由 Cloud 校验。其他路由和方法保留原有代理查询行为。
 
 ## 测试
 
 单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界、限流与前端静态文件（文件、SPA 回退、越界与保留路径）；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障、数据库约束，以及前端与 `/auth`、`/api` 同源提供。
 
-参见 [内部子系统总览](../README.md)、[华为 IDaaS 适配器](idaas/README.md)、[GitHub 适配器](github/README.md)、[本地开发 provider](devlogin/README.md) 与 [Gateway 文档](../../docs/gateway.md)。
+`query_test.go` 覆盖会话查询保护的路径、方法与编码边界；`query_db_test.go` 使用独立 PostgreSQL schema、真实 Gateway 和 Cloud router，验证异常查询在代理清洗前被拒绝、认证顺序、正常查询原样转发、Cloud 的业务参数拒绝，以及其他路由的兼容行为。运行时设置 `TEST_DATABASE_URL`；`REQUIRE_POSTGRES=1` 禁止缺少数据库时跳过。
+
+参见 [内部子系统总览](../README.md)、[华为 IDaaS 适配器](idaas/README.md)、[GitHub 适配器](github/README.md)、[本地开发 provider](devlogin/README.md) 与 [Gateway 文档](../../docs/identity/gateway.md)。
+
+会话查询语法保护同样覆盖 `.../runs/:rid/statistics` 与 `.../runs/:rid/model-calls`，防止代理移除
+非法查询后绕过 Cloud 严格参数校验。语法单测与真实 Gateway→Cloud 测试覆盖这两个新路径。

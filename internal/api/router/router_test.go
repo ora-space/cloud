@@ -25,6 +25,7 @@ func TestPluginRouteRegistration(t *testing.T) {
 	}
 	want := map[string][]string{
 		"GET /api/v1/tenants/:tid/spaces/:spaceId/plugins/catalog": nil,
+		"GET /api/v1/tenants/:tid/spaces/:spaceId/plugins/assets":  nil,
 		"GET /api/v1/tenants/:tid/spaces/:spaceId/plugins":         nil,
 		"POST /api/v1/tenants/:tid/spaces/:spaceId/plugins":        {"identifier", "pluginVersion", "version"},
 		"DELETE /api/v1/tenants/:tid/spaces/:spaceId/plugins":      {"identifier", "version"},

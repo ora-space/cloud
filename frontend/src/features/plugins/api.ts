@@ -5,11 +5,14 @@ import type {
   PluginCatalogEntry,
   PostApiV1TenantsTidSpacesSpaceIdPluginsBody,
   SpacePlugin,
+  WorkflowAssetImport,
 } from '@/api/generated.schemas'
 import {
   deleteApiV1TenantsTidSpacesSpaceIdPlugins,
   getApiV1TenantsTidSpacesSpaceIdPlugins,
+  getApiV1TenantsTidSpacesSpaceIdPluginsAssets,
   getApiV1TenantsTidSpacesSpaceIdPluginsCatalog,
+  getGetApiV1TenantsTidSpacesSpaceIdPluginsAssetsQueryKey,
   getGetApiV1TenantsTidSpacesSpaceIdPluginsCatalogQueryKey,
   getGetApiV1TenantsTidSpacesSpaceIdPluginsQueryKey,
   postApiV1TenantsTidSpacesSpaceIdPlugins,
@@ -80,7 +83,54 @@ export function useSpacePlugins(): {
 }
 
 /**
- * Invalidates the two plugin queries the current space renders; shared by the
+ * Poll cadence while a workflow asset import is still running. The server's
+ * import loop runs every 30 seconds and publishes no SSE notice of its own, so
+ * the screen re-reads the separate import query until every row is terminal.
+ */
+export const ASSET_IMPORT_POLL_INTERVAL_MS = 10 * 1000
+
+/**
+ * The current space's workflow asset imports. Install state and import state
+ * are separate reads on purpose: a completed install can still have a pending
+ * or failed document import, and the two must be presented independently. The
+ * query polls only while at least one import is pending or importing.
+ */
+export function useWorkflowAssetImports(): {
+  imports: WorkflowAssetImport[]
+  isPending: boolean
+  isError: boolean
+} {
+  const { tenantId, space } = useCurrentSpace()
+  const query = useQuery({
+    queryKey: getGetApiV1TenantsTidSpacesSpaceIdPluginsAssetsQueryKey(
+      tenantId ?? '',
+      space?.id ?? '',
+    ),
+    queryFn: ({ signal }) =>
+      getApiV1TenantsTidSpacesSpaceIdPluginsAssets(
+        tenantId ?? '',
+        space?.id ?? '',
+        undefined,
+        signal,
+      ),
+    enabled: !!tenantId && !!space,
+    refetchInterval: (polled) =>
+      (polled.state.data?.items ?? []).some(
+        (item) => item.state === 'pending' || item.state === 'importing',
+      )
+        ? ASSET_IMPORT_POLL_INTERVAL_MS
+        : false,
+  })
+  return {
+    imports: query.data?.items ?? [],
+    isPending: query.isLoading,
+    isError: query.isError,
+  }
+}
+
+/**
+ * Invalidates the plugin queries the current space renders — the selection
+ * rows and the separately readable workflow asset imports; shared by the
  * install and remove mutations so their post-success behavior cannot drift.
  */
 function useInvalidateSpacePlugins() {
@@ -90,6 +140,9 @@ function useInvalidateSpacePlugins() {
     if (!tenantId || !space) return
     void queryClient.invalidateQueries({
       queryKey: getGetApiV1TenantsTidSpacesSpaceIdPluginsQueryKey(tenantId, space.id),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: getGetApiV1TenantsTidSpacesSpaceIdPluginsAssetsQueryKey(tenantId, space.id),
     })
   }
 }

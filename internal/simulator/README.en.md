@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/simulator` provides in-process and disk-backed execution doubles representing the Controller, Workspace Node, and Substrate storage systems for Ora Cloud's phase-one development and acceptance testing.
+`internal/simulator` provides in-process and disk-backed execution doubles representing the Controller, Workspace Node, and Substrate for Ora Cloud's development and integration tests.
 
 ## Responsibilities
 
@@ -15,8 +15,29 @@
   - **Node clone** (`node.go`): `PUT/GET /clones/<execution-id>` stands in for the desktop Node running a clone with the local Git CLI into `home/checkout`, journaled per execution.
 - Supports deterministic fault injection (`SetFault`) for testing error recovery and retry policies.
 
+#### HTTP interface
+
+The Substrate double listens on loopback only, for the simulator and tests; it does not define the production Substrate's interface:
+
+| Method and path | Request | Response and invariants |
+|---|---|---|
+| `GET /effects/{effectId}` | The effect UUID Cloud allocated in advance | `404` means the intent is known not to exist; otherwise the original request, `externalId`, `state` and `result`; a query never creates an effect |
+| `PUT /effects/{effectId}` | `kind`, `projectId`, `workspaceId`, plus `sandboxInstanceId` for terminate | Journaled before it runs; the same ID with the same request is idempotent and with a different request is `409`; a succeeded effect returns its original result |
+| `PUT /clones/{executionId}`, `GET /clones/{executionId}` | `workspaceId`, `repositoryUrl`, `branch` | Stands in for a Node running a clone: one execution runs once and is journaled per execution; returns `clone_ready` with `commitId`, or `clone_failed` with a reason |
+
+| `kind` | Result |
+|---|---|
+| `sandbox_ensure` | `sandboxInstanceId`, `nodeId`; fails once the sandbox has terminated |
+| `sandbox_terminate` | `terminated`; the sandbox must belong to the request's Workspace |
+| `workspace_data_delete` | `removed` |
+
+`SetFault` modes: `fail` and `unconfirmed` journal a `running` effect and answer `503`; `lose_response` performs the effect but answers `504`, to exercise
+"query by stable identity when the outcome is unknown"; `fail` for clones returns `clone_failed`. Repositories come only from an explicit repository URL →
+local fixture mapping, never real Git credentials. Plugin installs are Node executions now and Cloud refuses to plan plugin effects, so the double's leftover `plugin_ensure` branch is never reached from Cloud.
+
 ### Controller double (`controller.go`)
-- Simulates the external control plane worker:
+- Simulates the external control plane worker. The lease, operations and Node registration use the retired `/internal/v1/...` JSON endpoints, which only
+  `router.NewDevelopment` opens and the production server answers with `410`; executions and Agent runs use gRPC:
   - Periodically acquires and renews controller leases via `/internal/v1/controller-lease/acquire`.
   - Claims pending operations via `/internal/v1/operations/claim`.
   - Plans and executes required effects against Substrate.
@@ -41,4 +62,4 @@ Before the first PUT, the Node durably freezes bundle/JSONL bytes and metadata u
 - **Development and testing only**: This package is an execution double. It is never deployed to production environments or imported by production daemon binaries.
 - **Contract fidelity**: The simulator interacts with the core cloud server strictly over standard HTTP APIs and respects all leasing, fencing, and idempotency contracts.
 
-See [cmd/simulator](../../cmd/simulator/README.en.md), [Execution contract](../../docs/execution-contract.md), and [Integration tests](../../integration/README.en.md).
+See [cmd/simulator](../../cmd/simulator/README.en.md), [Workspace lifecycle](../../docs/runtime/workspaces.en.md), and [Integration tests](../../integration/README.en.md).

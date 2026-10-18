@@ -19,4 +19,4 @@
 - **Stateless daemon**: The server process maintains no in-memory mutable business state across requests. Authoritative state resides entirely within PostgreSQL and is synchronized using database-level advisory locking.
 - **Zero credential leaks**: The server does not handle or log raw external deployment keys, cloud provider secrets, or infrastructure passwords.
 
-See [cmd overview](../README.en.md), [HTTP router](../../internal/api/router/README.en.md), [Authentication](../../docs/authentication.md), and [Core contract](../../docs/core-contract.md).
+See [cmd overview](../README.en.md), [HTTP router](../../internal/api/router/README.en.md), [Internal credentials](../../docs/identity/authentication.en.md), and [Authoritative persistence](../../docs/core/persistence.en.md).

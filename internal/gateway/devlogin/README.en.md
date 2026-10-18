@@ -19,4 +19,4 @@
 - The provider grants nothing: Cloud still creates or resolves the user by `(source, subject)`, and membership and authorization are decided by Cloud exactly as for a GitHub identity. `dev` is the default source so developer identities never collide with `github.com` ones, but any source can be typed, e.g. to sign in as the `cloudctl bootstrap` administrator.
 - The Gateway logs a warning at startup when the provider is enabled.
 
-See the [authentication boundary (`internal/gateway`)](../README.en.md) and the [Gateway document](../../../docs/gateway.md).
+See the [authentication boundary (`internal/gateway`)](../README.en.md) and the [Gateway document](../../../docs/identity/gateway.en.md).

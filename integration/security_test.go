@@ -325,7 +325,7 @@ func TestPostgresAggregateConstraints(t *testing.T) {
 		name, q string
 		args    []any
 	}{
-		{"project must have main", "INSERT INTO projects(id,tenant_id,owner_user_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,'missing main','https://x','main','active')", []any{uuid.NewString(), f.tid, f.uid}},
+		{"project must have main", "INSERT INTO projects(id,tenant_id,owner_user_id,name,lifecycle) VALUES($1,$2,$3,'missing main','active')", []any{uuid.NewString(), f.tid, f.uid}},
 		{"main cannot vanish", "UPDATE workspaces SET deleted_at=now() WHERE id=$1", []any{wid}},
 		{"main cannot change aggregate", "UPDATE workspaces SET project_id=$1 WHERE id=$2", []any{uuid.NewString(), wid}},
 		{"cross-tenant owner", "INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'isolated','running','provisioning','main')", []any{uuid.NewString(), other.S("tenantId"), other.S("userId"), pid}},

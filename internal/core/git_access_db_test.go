@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -86,7 +87,7 @@ func TestGitAccessGrantsRestoreReadAndDeliveryWriteFromCurrentState(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (GitAccess{ProjectID: g.project, Mode: GitRead}) {
+	if !reflect.DeepEqual(got, GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project}) {
 		t.Fatalf("restoring session access = %+v, want read-only", got)
 	}
 
@@ -97,7 +98,7 @@ func TestGitAccessGrantsRestoreReadAndDeliveryWriteFromCurrentState(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (GitAccess{ProjectID: g.project, Mode: GitWrite, DeliveryRef: GitDeliveryRefPrefix + work}) {
+	if want := (GitGrant{TenantID: g.scope.TenantID, ProjectID: g.project, Writable: []GitWritableRef{{Ref: GitDeliveryRefPrefix + work, Rule: GitCreateOnly}}}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("delivery access = %+v, want write to its own delivery ref", got)
 	}
 }

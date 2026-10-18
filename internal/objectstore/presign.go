@@ -1,5 +1,5 @@
-// Package objectstore signs short-lived uploads and verifies stored metadata through private S3.
-// Signing is local cryptography; verification performs HEAD outside database transactions.
+// Package objectstore signs short-lived grants and verifies metadata and bytes through private S3.
+// Signing is local cryptography; HEAD verification and bounded GET reads run outside transactions.
 // Grants are bearer credentials and must not be written to the database or to logs.
 package objectstore
 

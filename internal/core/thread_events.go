@@ -1,7 +1,6 @@
 package core
 
-// Thread append notifications — the notification half of Thread D5 (plan §4C.7/§4C.8,
-// T4C-25..T4C-27).
+// Thread append notifications — the notification half of Thread D5.
 //
 // What this is: after an entry-write transaction commits, Cloud publishes
 // `issue_run.thread_appended{issueId, runId, lastSeq}` on the tenant's Space event stream so a live
@@ -16,7 +15,7 @@ package core
 // entry-write path with one mechanism, including the A→B takeover hook, which has no
 // caller-visible event slice to append to.
 //
-// Two event types are published, and they answer different questions (Thread D5, A4/G-023):
+// Two event types are published, and they answer different questions (Thread D5):
 //
 //   - `issue_run.thread_appended` keeps its append-only meaning: this transaction appended at least
 //     one entry. Its name still says what happened.
@@ -42,9 +41,9 @@ const threadChangedEvent = "issue_run.thread_changed"
 // identity comes from the database, never from a request.
 //
 // lastSeq is read here, after the caller's entry writes, so it is the max(seq) this transaction is
-// about to commit — the value T4C-25 requires. It is a high-water mark, not a promise that every
+// about to commit — the value the publish-after-commit rule requires. It is a high-water mark, not a promise that every
 // seq at or below it was delivered to this subscriber: events may be lost, reordered or duplicated
-// (§4C.8), and only a GET answers what the log actually holds.
+// and only a GET answers what the log actually holds.
 //
 // The space is looked up rather than taken from the caller because the event is addressed to the
 // tenant's sole collaboration space, which is the stream a Thread subscriber holds. A tenant with no

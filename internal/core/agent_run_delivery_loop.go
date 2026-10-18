@@ -2,8 +2,8 @@ package core
 
 import "context"
 
-// The three background recovery passes of the delivery/release half (IssueRun D3/D5/D8, operation D4;
-// plan §5 Batch 2). All follow the repository's established bounded-pass shape — a read-only scan
+// The three background recovery passes of the delivery/release half (IssueRun D3/D5/D8, operation
+// D4). All follow the repository's established bounded-pass shape — a read-only scan
 // outside the advisory lock, then one short transaction per run, with the sleep between ticks owned
 // by the caller — exactly like the dispatch, session-start, idle-Thread and cancel passes. None of the
 // three makes a business decision the durable state has not already made:
@@ -182,7 +182,7 @@ func (s *Store) scanUndeclaredReleasingRuns(ctx context.Context, limit int) ([]s
 // the run Workspace has no public API and no user to retry it.
 //
 // A run D8 gave up on is out of this pass by its own phase: `done` is not `releasing`, so the scan
-// cannot re-enter the release, re-create a delete, or re-trigger anything for it (mandate §11). D8's
+// cannot re-enter the release, re-create a delete, or re-trigger anything for it. D8's
 // residual Workspace is intentionally left with no operation and no retry.
 func (s *Store) RedeclareRunWorkspaceDeletesOnce(ctx context.Context) error {
 	if ctx.Err() != nil {
@@ -207,7 +207,7 @@ func (s *Store) RedeclareRunWorkspaceDeletesOnce(ctx context.Context) error {
 // The whole decision is `releaseGivenUp` — the run's own Workspace and its Node heartbeat — and it is
 // never taken from the delete operation's state: an operation that has failed repeatedly, or one that
 // never existed, is not evidence about reachability, and a refusal by a reachable Node is not a
-// reason to give up (mandate §5/§6).
+// reason to give up.
 func (s *Store) giveUpStaleWorkspaceRelease(ctx context.Context, runID string) error {
 	_, err := s.transact(ctx, func(t *transaction) Object {
 		o := t.one(`

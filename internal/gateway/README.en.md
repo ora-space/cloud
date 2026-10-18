@@ -15,6 +15,7 @@
 | `security.go` | `NormalizeReturnTo` (rejects absolute, `//`, `/\`, backslash, and control characters), `SameOrigin` (exact `Origin` match or `Sec-Fetch-Site: same-origin`), `CookiePolicy` (`__Host-` session cookie, callback-scoped `SameSite=Lax` attempt cookie). |
 | `handler.go` | Gin routes: `GET /auth/providers`, `POST /auth/login`, `GET /auth/callback/:provider`, `POST /auth/logout`, `ANY /api/v1/*`, `GET /healthz`; stable error shape `{code, params, requestId}`. |
 | `proxy.go` | `httputil.ReverseProxy` to the fixed upstream: dial/response-header timeouts, 8 MiB response cap, per-request error callback carried in the context. A `text/event-stream` upstream answer skips the cap and fires the stream callback, through which the handler lifts that connection's upstream and write timeouts so event streams can live long. |
+| `query.go` | Query syntax guard for session analytics GETs: rejects raw queries that `url.ParseQuery` cannot parse after authentication and before proxying, so `ReverseProxy.Rewrite` cannot silently change their meaning by cleaning them. |
 | `ratelimit.go` | Per-client token bucket with a bounded key table; start/callback are limited before any attempt row is written. |
 | `cleanup.go` | `RunCleanup`: lifecycle-owned bounded batch cleanup loop. |
 | `web.go` | `Web`/`OpenWeb`: optionally serves the built frontend from `web.dist_dir`. Startup requires `index.html`; only `GET`/`HEAD` requests no route matches are handled, files are opened through an `os.Root` (neither `..` nor a symbolic link escapes the directory), and an unmatched client-side route gets `index.html` (`Cache-Control: no-cache`); `/api/`, `/auth/`, `/internal/` and `/healthz` stay JSON 404s. |
@@ -31,9 +32,15 @@ unavailable service. Gateway receives public trust only, not the model vault mas
 - Each attempt creates at most one session; of two concurrent callbacks only one passes the unconsumed check after `FOR UPDATE`.
 - `Resolve` never extends a lifetime; unknown, expired, and revoked sessions are uniformly `ErrNotFound`/`401 unauthenticated`.
 - A valid session cannot bypass Cloud's decisions about disabled users, membership, or ownership; Cloud's 401/403 pass through unchanged.
+- `GET /api/v1/tenants/:tid/agent-sessions` and `GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history` reject malformed semicolon or percent-escape queries before forwarding with `400 invalid_session_filter`. Correctly encoded literal values pass through unchanged; Cloud still validates parameter names, duplicates, filter values, and business authorization. Other routes and methods retain their existing proxy query behavior.
 
 ## Tests
 
 Unit tests cover `return_to`/origin/cookie policy, identity normalization, credential issuance verified by Cloud's authenticator, configuration bounds, rate limiting, and static frontend serving (files, SPA fallback, escapes, reserved paths). `integration/gateway_test.go` uses real HTTP, PostgreSQL, the real Cloud router, and a PKCE-verifying fake provider to cover login, proxying, forged headers, cross-site mutations, replay, concurrent consumption, multiple replicas, expiry, revocation, cleanup, provider/Cloud failures, database constraints, and serving the frontend on the same origin as `/auth` and `/api`.
 
-See the [internal overview](../README.en.md), the [Huawei IDaaS adapter](idaas/README.en.md), the [GitHub adapter](github/README.en.md), the [development provider](devlogin/README.en.md), and the [Gateway document](../../docs/gateway.md).
+`query_test.go` covers route, method, and encoding boundaries of the session query guard. `query_db_test.go` uses an isolated PostgreSQL schema and the real Gateway and Cloud router to verify rejection before proxy cleanup, authentication order, unchanged valid queries, Cloud-owned parameter rejection, and compatibility for other routes. Set `TEST_DATABASE_URL`; `REQUIRE_POSTGRES=1` prevents skipping when the database is missing.
+
+See the [internal overview](../README.en.md), the [Huawei IDaaS adapter](idaas/README.en.md), the [GitHub adapter](github/README.en.md), the [development provider](devlogin/README.en.md), and the [Gateway document](../../docs/identity/gateway.en.md).
+
+Strict session query syntax guards also cover `.../runs/:rid/statistics` and `.../runs/:rid/model-calls`, preventing
+proxy query cleanup from bypassing Cloud parameter validation. Unit and real Gateway-to-Cloud tests cover both paths.

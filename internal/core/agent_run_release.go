@@ -8,7 +8,7 @@ import (
 // The B-owned release half of an Agent IssueRun: `delivering → releasing` with D4's final status,
 // and `releasing → done` once the run Workspace's delete has been taken over — or once D8's single
 // give-up condition says it never will be (IssueRun D3/D4/D5/D8, controller-integration D6
-// deliverRevision/RunWorkspaceDeleted; plan §5 Batch 2).
+// deliverRevision/RunWorkspaceDeleted).
 //
 // Two transitions, one shape: each is a CAS on the phase the caller re-read, and each declares or
 // completes the run Workspace's delete in the same transaction that commits the phase write, so the
@@ -16,7 +16,7 @@ import (
 // operation. Neither transition writes anything else about the run: `releasing` sets `status` exactly
 // once from the session end reason (D4), and `done` deliberately changes no business outcome —
 // "终态不变" in D3's own words, which is why `done` carries no separate status of its own and why
-// `done` is never a synonym for `completed` (mandate §15).
+// `done` is never a synonym for `completed`.
 //
 // `done` therefore has two entry conditions (D3's table, as amended by D8), and they are not the same
 // statement: a `succeeded` delete means the Workspace is gone, while D8's expiry means Cloud stopped
@@ -26,7 +26,7 @@ import (
 // runSessionExecution resolves the run's settled agent_session execution: the execution whose durable
 // result carries the session end reason D4 derives the final status from, and the one the delivery
 // spec names as `session_execution_id`. There is at most one per run — one `agent_session` work item
-// gives at most one execution (D-021) — and `result IS NOT NULL` is what makes it "settled" rather
+// gives at most one execution — and `result IS NOT NULL` is what makes it "settled" rather
 // than in flight. nil means the run never had a session terminal fact, which no caller of this file
 // can legitimately be looking at.
 func runSessionExecution(t *transaction, runID string) Object {
@@ -74,8 +74,8 @@ func runReleaseStatus(reason string) string {
 // `SessionUpdate` record — a business payload owned by desktop `ora-history` — and Thread D2 forbids
 // Cloud from parsing business fields ("Cloud 不解析业务字段") while Thread invariant 6 forbids
 // rewriting Node record content. There is no approved field path to read the message text from, so
-// writing a comment would mean guessing a foreign schema. The conflict is registered as a gap in the
-// plan rather than resolved by a silent choice (mandate §1: ADR over plan; register, do not choose).
+// writing a comment would mean guessing a foreign schema. The conflict is left as an open
+// question for the ADR rather than resolved here by a silent choice.
 func (s *Store) releaseAfterDelivery(t *transaction, o Object, state, revisionID string) error {
 	runID := o.S("id")
 	sess := runSessionExecution(t, runID)
@@ -122,7 +122,7 @@ func (s *Store) releaseAfterDelivery(t *transaction, o Object, state, revisionID
 		runActivityDetails(runID, o.S("executorType"), o.S("executorId"),
 			Object{"sessionEndReason": reason, "deliveryState": state}))
 	// The delete declaration goes through the A seam in this transaction: a seam failure rolls the
-	// releasing transition back, so a run is never releasing without its delete intent (§12/§17).
+	// releasing transition back, so a run is never releasing without its delete intent.
 	return s.declareDelete(t, o)
 }
 
@@ -158,7 +158,7 @@ func (s *Store) deliveryGivenUp(t *transaction, o Object) bool {
 // Node state is unknown, and the only place the heartbeat evidence behind it is read: the run is
 // bound to this Workspace and no live sandbox of it carries a Node that is connected and was last
 // seen inside window. Both D5's delivery give-up and D8's delete give-up ask this one function, so the
-// two sides cannot drift into two definitions of "the Node is unreachable" (mandate §5).
+// two sides cannot drift into two definitions of "the Node is unreachable".
 //
 // The polarity is deliberately "unknown" rather than "reachable": a Workspace whose row is missing, is
 // not bound to this run, or whose id is unusable is *not* unknown. Failing the other way round would
@@ -199,7 +199,7 @@ func (s *Store) runWorkspaceNodeUnknown(t *transaction, runID, wid string, windo
 // The window is judged in the caller's transaction, on the database clock, exactly as D5 judges its
 // own, and an unconfigured window fails closed. An explicit quiesce refusal does not reach here at
 // all: refusing leaves the Node connected and freshly seen, so the heartbeat is present and the
-// condition is false — which is D8's "删除失败不是放弃条件" (mandate §6), not an extra rule.
+// condition is false — which is D8's "a failed delete is not a reason to give up", not an extra rule.
 func (s *Store) releaseGivenUp(t *transaction, o Object) bool {
 	wid := o.S("workspaceId")
 	if !validID(wid) {
@@ -224,7 +224,7 @@ func (s *Store) releaseGivenUp(t *transaction, o Object) bool {
 //   - `releasing → done`, as one CAS on the phase the caller re-read. A CAS that matches nothing is an
 //     invariant contradiction and an error, which rolls the operation's failure back with it: a
 //     terminal-failed operation without the run moving would be exactly the "operation failed, run
-//     stuck in releasing" state D8 exists to prevent (mandate §12).
+//     stuck in releasing" state D8 exists to prevent.
 //   - `failure_reason = workspace_unavailable`, the code D3 already uses for the same fact — Cloud
 //     could not make the Workspace available-to-delete, so the release did not happen.
 //
@@ -244,7 +244,7 @@ func (s *Store) giveUpRunWorkspaceRelease(t *transaction, o Object) error {
 	runID, wid := o.S("id"), o.S("workspaceId")
 	// `node_unavailable` is the published operation failure code for this fact — OperationErrorCode's
 	// own vocabulary, already carried by the OpenAPI enum — so D8 reuses it rather than minting a new
-	// public error code (mandate §9). It is also the code the Controller itself uses to park a step on
+	// public error code. It is also the code the Controller itself uses to park a step on
 	// an unreachable Node, which is the same diagnosis. The operation is left with its `step` and
 	// `request` intact: they are the record of how far the delete got.
 	t.exec(`UPDATE operations SET state='failed', error_code='node_unavailable', version=version+1, updated_at=now()
@@ -260,7 +260,7 @@ func (s *Store) giveUpRunWorkspaceRelease(t *transaction, o Object) error {
 }
 
 // settleRunWorkspaceDeleted is the B-owned core behind the A→B hook OnRunWorkspaceDeleted
-// (controller-integration D6 runWorkspaceDeleted, IssueRun D3; plan §5 Batch 2).
+// (controller-integration D6 runWorkspaceDeleted, IssueRun D3).
 //
 // It runs on the caller-owned *transaction in which the run Workspace's delete_workspace operation
 // was written `succeeded`, and it is the last transition of the run's lifecycle: `releasing → done`.
@@ -270,7 +270,7 @@ func (s *Store) giveUpRunWorkspaceRelease(t *transaction, o Object) error {
 //
 // A run already `done` is a deterministic no-op: the operation's terminal state is a fact that may be
 // replayed, and settling it twice must not bump the version or write a second business fact
-// (mandate §19). Any other phase is an invariant contradiction — the delete is declared only from
+// (IssueRun D3). Any other phase is an invariant contradiction — the delete is declared only from
 // `releasing`, so no other phase can have a succeeded delete to settle.
 //
 // `done` is also reachable through D8's give-up, and that is what makes the no-op branch load-bearing

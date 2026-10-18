@@ -19,13 +19,13 @@
 
 ## 边界与不变量
 
-启动窗口使用数据库时间，确认耗尽后业务结算并保留独立残留责任，不能以业务终态声称物理释放。配置默认值与恢复边界见 [启动结算](../../docs/agent-startup-settlement.md)。
+启动窗口使用数据库时间，确认耗尽后业务结算并保留独立残留责任，不能以业务终态声称物理释放。配置默认值与恢复边界见 [有界启动](../../docs/agent-runs/startup-settlement.md)。
 
 `object_store` 为可选的 S3 交付配置。`enabled=true` 时 server 在启动阶段读取独立挂载的 `access_key_id_file` 与 `secret_access_key_file`，只保存在进程内存，检查私网 endpoint 与 Node 可达的 public_endpoint、region、bucket、path_style 和 1 秒至 7 天的 upload_grant_ttl。每个字段可由 `CLOUD_OBJECT_STORE_*` 覆盖。短期 PUT 授权可绑定 SHA-256；Cloud 经私网 HEAD 验证存在、大小与存储摘要后登记 Revision。默认关闭：不派发交付工作，以同事务业务钩子结算 skipped/object_store_unconfigured；独立授权请求返回不可用。健康信息报告 configured/unconfigured，不检查 S3 在线状态。
 
 - **不存储机密信息**：配置文件只存储公开验证密钥和基础设施引用。明文部署机密信息和私钥绝不得出现在配置文件中。
 - **运行时不可变**：配置在命令启动时加载一次，并作为就绪可用的值传递。不存在全局可变配置单例。
 
-参见 [config.yaml](../../configs/config.yaml)、[cmd/server](../../cmd/server/README.md) 与 [认证配置与凭据](../../docs/authentication.md)。
+参见 [config.yaml](../../configs/config.yaml)、[cmd/server](../../cmd/server/README.md) 与 [内部凭据与服务信任](../../docs/identity/authentication.md)。
 
-Agent 启动、恢复和结束确认默认分别为 2m/6m/5m（agent_start_timeout、agent_restore_timeout、agent_end_confirm_timeout）；省略才选默认，显式非正/非法时长拒绝。配置只影响新进入的持久窗口，已开始的窗口不续期。
+Agent 启动、恢复和结束确认默认分别为 2m/6m/5m（agent_start_timeout、agent_restore_timeout、agent_end_confirm_timeout）；运行 Workspace 创建首次 blocked 后的有界放弃窗口默认 30m（agent_workspace_blocked_timeout）。省略才选默认，显式非正/非法时长拒绝。配置只影响新进入的持久窗口，已开始的窗口不续期。

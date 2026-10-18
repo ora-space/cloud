@@ -38,4 +38,4 @@ cloudctl -config <path> -command credential-ref -tenant '<tenant-uuid>' -owner '
 - **Deployment boundary**: `cloudctl` is not exposed via HTTP and is not invoked by the server daemon. It requires direct network access to PostgreSQL with schema migration permissions.
 - **Structured output**: All command results are output as structured JSON to `stdout`, and errors to `stderr`, enabling integration with CI/CD deployment pipelines.
 
-See [cmd overview](../README.en.md), [Database migrations](../../internal/core/migrations/README.en.md), and [Authentication and trust](../../docs/authentication.md).
+See [cmd overview](../README.en.md), [Database migrations](../../internal/core/migrations/README.en.md), and [Internal credentials](../../docs/identity/authentication.en.md).

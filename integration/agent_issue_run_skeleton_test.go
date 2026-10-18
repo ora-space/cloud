@@ -76,7 +76,14 @@ func seedOwnershipChain(t *testing.T, pool *sql.DB) skeletonSeed {
 	exec(`INSERT INTO tenants(id, name, status) VALUES($1, 'Skeleton tenant', 'active')`, s.tenantID)
 	exec(`INSERT INTO tenant_memberships(tenant_id, user_id, role, status) VALUES($1, $2, 'admin', 'active')`, s.tenantID, s.userID)
 	exec(`INSERT INTO collab_workspaces(id, tenant_id, name, slug, description, created_by) VALUES($1, $2, 'Skeleton space', 'skeleton-space', '', $3)`, s.spaceID, s.tenantID, s.userID)
-	exec(`INSERT INTO projects(id, tenant_id, owner_user_id, name, repository_url, default_branch, lifecycle, space_id) VALUES($1, $2, $3, 'Skeleton project', 'https://example.invalid/skeleton.git', 'main', 'active', $4)`, s.projectID, s.tenantID, s.userID, s.spaceID)
+	// The Project's repository moved from Project columns to its Binding in 0037.
+	var bindings bool
+	must(t, tx.QueryRow(`SELECT to_regclass('repository_bindings') IS NOT NULL`).Scan(&bindings))
+	if bindings {
+		exec(`WITH p AS (INSERT INTO projects(id,tenant_id,owner_user_id,name,lifecycle,space_id) VALUES($1,$2,$3,'Skeleton project','active',$4) RETURNING id,tenant_id) INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) SELECT gen_random_uuid(),tenant_id,id,'https://example.invalid/skeleton.git','main' FROM p`, s.projectID, s.tenantID, s.userID, s.spaceID)
+	} else {
+		exec(`INSERT INTO projects(id, tenant_id, owner_user_id, name, repository_url, default_branch, lifecycle, space_id) VALUES($1, $2, $3, 'Skeleton project', 'https://example.invalid/skeleton.git', 'main', 'active', $4)`, s.projectID, s.tenantID, s.userID, s.spaceID)
+	}
 	exec(`INSERT INTO workspaces(id, tenant_id, owner_user_id, project_id, kind, desired_state, observed_state, requested_ref) VALUES($1, $2, $3, $4, 'main', 'running', 'ready', 'main')`, s.mainWorkspaceID, s.tenantID, s.userID, s.projectID)
 	exec(`INSERT INTO issues(id, tenant_id, creator_user_id, title, number) VALUES($1, $2, $3, 'Skeleton issue', 1)`, s.issueID, s.tenantID, s.userID)
 	exec(`INSERT INTO issue_runs(id, tenant_id, issue_id, executor_type, executor_id) VALUES($1, $2, $3, 'agent', $4)`, s.runID, s.tenantID, s.issueID, s.agentID)

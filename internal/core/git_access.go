@@ -14,27 +14,26 @@ type GitRuntimeScope struct {
 	Generation  int64
 }
 
-// GitAccessMode is the repository permission one execution currently holds.
-type GitAccessMode int
-
-const (
-	// GitRead permits fetching the Project repository: a session restoring a prior Revision.
-	GitRead GitAccessMode = iota + 1
-	// GitWrite additionally permits creating the delivery execution's single remote ref.
-	GitWrite
-)
-
-// GitDeliveryRefPrefix names the remote refs delivery attempts create. Each delivery work item
-// owns exactly one ref under it, so a retry never collides with an earlier attempt.
-const GitDeliveryRefPrefix = "refs/ora/deliveries/"
-
-// GitAccess is the git-server policy result for one request. DeliveryRef is set only for
-// GitWrite and is the only ref that request may create.
-type GitAccess struct {
-	ProjectID   string
-	Mode        GitAccessMode
-	DeliveryRef string
+// GitWritableRef is one entry of a grant's write rule set: an exact ref, or every ref under a
+// prefix, and the rule its updates must satisfy. ExpectedOld is used by GitTrackingCAS only; ""
+// means the ref must not exist yet.
+type GitWritableRef struct {
+	Ref         string
+	Prefix      string
+	Rule        GitRefRule
+	ExpectedOld string
 }
+
+// GitGrant is the Git Server policy result for one request: the Project repository it may read in
+// full, and the refs it may write. An empty Writable is a read-only grant. The repository is the
+// isolation boundary, so a grant never hides refs inside it.
+type GitGrant struct {
+	TenantID, ProjectID string
+	Writable            []GitWritableRef
+}
+
+// Writes reports whether the grant admits any ref update at all.
+func (g *GitGrant) Writes() bool { return len(g.Writable) > 0 }
 
 // AuthorizeGitAccess decides from current PostgreSQL state whether the execution a sandbox
 // declares may read or write the Project repository. The certificate only names the runtime
@@ -42,8 +41,8 @@ type GitAccess struct {
 // sandbox, canceling the run or disabling the trigger's account takes effect on the next request.
 // It runs in a read-only snapshot without the control-plane advisory lock: Git traffic must not
 // serialize with control-plane writes, and the decision mutates nothing.
-func (s *Store) AuthorizeGitAccess(ctx context.Context, scope GitRuntimeScope, executionID, projectID string) (GitAccess, error) {
-	var access GitAccess
+func (s *Store) AuthorizeGitAccess(ctx context.Context, scope GitRuntimeScope, executionID, projectID string) (GitGrant, error) {
+	var access GitGrant
 	err := s.view(ctx, func(t *transaction) {
 		access = gitAccess(t, scope, executionID, projectID)
 	})
@@ -52,12 +51,12 @@ func (s *Store) AuthorizeGitAccess(ctx context.Context, scope GitRuntimeScope, e
 	// as unavailable instead of reporting a permanent denial.
 	var fault *Fault
 	if errors.As(err, &fault) {
-		return GitAccess{}, &Fault{Code: "git_access_denied", Status: 403, Params: Object{}}
+		return GitGrant{}, &Fault{Code: "git_access_denied", Status: 403, Params: Object{}}
 	}
 	return access, err
 }
 
-func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID string) GitAccess {
+func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID string) GitGrant {
 	require(validID(scope.TenantID) && validID(scope.WorkspaceID) && scope.Generation > 0 && validID(projectID) && executionID != "" && len(executionID) <= 200, 403, "git_access_denied")
 	e := t.one(`SELECT e.kind,e.node_id,e.work_id,e.input,e.operation_id AS run_id,w.creator_user_id,w.tenant_id,w.id AS workspace_id,
 	 r.phase,r.thread_state,r.cancel_requested_at
@@ -71,17 +70,16 @@ func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID str
 	 AND r.deleted_at IS NULL AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
 	 AND p.deleted_at IS NULL AND p.lifecycle='active'`, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation, projectID)
 	require(e != nil, 403, "git_access_denied")
-	access := GitAccess{ProjectID: projectID}
+	access := GitGrant{TenantID: scope.TenantID, ProjectID: projectID}
 	switch e.S("kind") {
 	case "deliver_revision":
 		require(e.S("phase") == "delivering", 403, "git_access_denied")
-		access.Mode, access.DeliveryRef = GitWrite, GitDeliveryRefPrefix+e.S("workId")
+		access.Writable = []GitWritableRef{{Ref: GitDeliveryRefPrefix + e.S("workId"), Rule: GitCreateOnly}}
 	case "agent_session":
 		// Only a session restoring a prior Revision reads the repository; other sessions start
 		// from the upstream clone and have no reason to reach the Git Server.
 		live := e.S("phase") == "starting" || e.S("phase") == "running"
 		require(live && e.S("cancelRequestedAt") == "" && e.S("threadState") != "ending" && e.S("threadState") != "ended" && len(e.O("input").O("priorRevision")) > 0, 403, "git_access_denied")
-		access.Mode = GitRead
 	default:
 		reject(403, "git_access_denied")
 	}

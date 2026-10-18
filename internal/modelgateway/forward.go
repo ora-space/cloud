@@ -61,15 +61,22 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancelCause(r.Context())
+	var attempt *modelAttempt
 	responseIO := newResponseIO(ctx, w)
 	w = &guardedWriter{ResponseWriter: w, io: responseIO}
 	finished := make(chan struct{})
 	go s.watchAuthorization(ctx, digest, cancel, responseIO, finished)
 	defer func() {
+		if attempt != nil {
+			attempt.result.DurationMS = attempt.elapsed()
+		}
 		cancel(errModelRequestComplete)
 		<-finished
 		if errors.Is(context.Cause(ctx), errModelRequestComplete) {
 			responseIO.complete()
+		}
+		if attempt != nil {
+			s.finishAttempt(ctx, attempt)
 		}
 	}()
 	if err = responseIO.readDeadline(); err != nil {
@@ -132,14 +139,23 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 		reject(w, 503, "model_credential_unavailable")
 		return
 	}
+	var streamed bool
+	_ = json.Unmarshal(request["stream"], &streamed)
+	attempt, err = s.beginAttempt(ctx, &grant, streamed)
+	if err != nil {
+		reject(w, 503, "model_metrics_unavailable")
+		return
+	}
 	response, err := s.options.Upstream.Do(out)
 	if err != nil {
 		code := upstreamFailureCode(err)
+		attempt.end("failed", code)
 		s.options.Logger.Warn("model upstream request rejected", zap.String("code", code))
 		reject(w, 502, code)
 		return
 	}
 	defer response.Body.Close()
+	attempt.result.HTTPStatus = &response.StatusCode
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		code := "model_upstream_failed"
 		if response.StatusCode == 401 || response.StatusCode == 403 {
@@ -148,25 +164,34 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 		if response.StatusCode == 429 {
 			code = "model_rate_limited"
 		}
+		attempt.end("failed", code)
 		reject(w, 502, code)
 		return
 	}
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaErr != nil || (mediaType != "application/json" && mediaType != "text/event-stream") {
+		attempt.end("failed", "model_upstream_invalid_response")
 		reject(w, 502, "model_upstream_invalid_response")
 		return
 	}
 	if mediaType == "application/json" {
 		data, readErr := io.ReadAll(io.LimitReader(response.Body, maxModelRequestBytes+1))
 		if readErr != nil || len(data) > maxModelRequestBytes || !json.Valid(data) {
+			attempt.end("failed", "model_upstream_invalid_response")
+			if readErr != nil {
+				attempt.end("interrupted", "model_upstream_unavailable")
+			}
 			reject(w, 502, "model_upstream_invalid_response")
 			return
 		}
 		if responseHasError(data) || !validProtocolJSON(data, protocol) {
+			attempt.end("failed", "model_upstream_failed")
 			reject(w, 502, "model_upstream_failed")
 			return
 		}
+		attempt.output(attempt.observer.observeJSON(data))
 		if err = responseIO.prepareWrite(); err != nil {
+			attempt.end("interrupted", "model_downstream_unavailable")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -174,8 +199,11 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(response.StatusCode)
 		_, err = w.Write(data)
 		if err != nil {
+			attempt.end("interrupted", "model_downstream_unavailable")
 			cancel(err)
 			responseIO.interrupt()
+		} else {
+			attempt.end("succeeded", "")
 		}
 		return
 	}
@@ -183,12 +211,23 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
 	if err = responseIO.prepareWrite(); err != nil {
+		attempt.end("interrupted", "model_downstream_unavailable")
 		return
 	}
 	w.WriteHeader(response.StatusCode)
-	if err = forwardEvents(w, response.Body, protocol, responseIO); err != nil {
+	if err = forwardObservedEvents(w, response.Body, protocol, responseIO, attempt.observeEvent); err != nil {
+		var streamError *streamFailure
+		if errors.As(err, &streamError) {
+			attempt.end(streamError.outcome, streamError.code)
+		} else {
+			attempt.end("interrupted", "model_stream_unavailable")
+		}
 		cancel(err)
 		responseIO.interrupt()
+	} else if attempt.observer.terminal {
+		attempt.end("succeeded", "")
+	} else {
+		attempt.end("incomplete", "model_stream_incomplete")
 	}
 }
 
@@ -207,7 +246,7 @@ func (s *Service) watchAuthorization(ctx context.Context, digest string, cancel 
 			return
 		case <-ticker.C:
 			if _, err := s.options.Store.ResolveModelGrant(ctx, digest); err != nil {
-				cancel(err)
+				cancel(errors.Join(errAuthorizationWatch, err))
 				if !errors.Is(context.Cause(ctx), errModelRequestComplete) {
 					responseIO.interrupt()
 				}

@@ -181,8 +181,7 @@ func TestMigrationFullSequenceFreshDB(t *testing.T) {
 	fspace := uuid.NewString()
 	_, e = tx.Exec(`INSERT INTO collab_workspaces(id,tenant_id,name,slug,description,created_by) VALUES($1,$2,'Fresh tenant','fresh-tenant','',$3)`, fspace, ftid, fuid)
 	must(t, e)
-	_, e = tx.Exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,lifecycle)
-		VALUES($1,$2,$3,$4,'Fresh','https://example.invalid/fresh.git','main','active')`, fpid, ftid, fuid, fspace)
+	_, e = tx.Exec(`WITH p AS (INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'Fresh','active') RETURNING id,tenant_id) INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) SELECT gen_random_uuid(),tenant_id,id,'https://example.invalid/fresh.git','main' FROM p`, fpid, ftid, fuid, fspace)
 	must(t, e)
 	// A live project requires exactly one main workspace (deferred one_main trigger in 0001).
 	_, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref)

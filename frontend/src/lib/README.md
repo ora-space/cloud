@@ -33,3 +33,5 @@
 - 本目录任何文件都不得持有、读取或生成凭证：会话是 Gateway 的 HttpOnly Cookie，前端代码无法也不应触及。
 - `safeReturnTo` 只接受单个 `/` 开头且第二个字符不是 `/` 或 `\` 的路径，与 Gateway 的 `returnTo` 规则一致。
 - `PENDING_JOIN_PATH_KEY` 是当前标签暂存私有加入路径的键；登录往返只向 Gateway 提交无令牌的 `/join/continue`。
+
+`workspacePaths` 还负责会话列表（`sessions`）和 Agent 详情（`agentSession`）路径；`paths.test.ts` 验证它们始终位于选定工作区前缀之下。

@@ -26,6 +26,15 @@ service WorkspaceOperationService {
   rpc AdvanceOperation(AdvanceOperationRequest) returns (AdvanceOperationResponse);
   // Parks the operation in RETRY_WAIT or BLOCKED with a finite reason.
   rpc DeferOperation(DeferOperationRequest) returns (DeferOperationResponse);
+  // Records one late fact about a run-Workspace creation Cloud abandoned after its blocked
+  // deadline (bounded-agent-startup D5): an effect's real Substrate result, the clone or plugin
+  // execution the creation dispatched, or the creation's own real outcome. The caller submits
+  // with its current lease instead of re-claiming the failed operation. Cloud validates the fact
+  // against the original operation, effect and execution identities, stores it through the same
+  // appliers the live paths use and receipts it onto the residual ledger before acknowledging.
+  // Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
+  // the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
+  rpc RecordProvisioningFact(RecordProvisioningFactRequest) returns (RecordProvisioningFactResponse);
   // Lists every sandbox a lease holder should hold a Node session with: not terminating or
   // terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
   // it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -351,6 +360,56 @@ message DeferOperationRequest {
 
 message DeferOperationResponse {
   Operation operation = 1;
+}
+
+enum ProvisioningFactKind {
+  PROVISIONING_FACT_KIND_UNSPECIFIED = 0;
+  // A Substrate effect of the creation, identified by effect_id; carries the same state,
+  // external identity and evidence RecordEffectResultRequest carries.
+  PROVISIONING_FACT_KIND_EFFECT = 1;
+  // The clone execution the creation dispatched, identified by execution_id.
+  PROVISIONING_FACT_KIND_CLONE = 2;
+  // A plugin execution of the creation's plugin step, identified by execution_id.
+  PROVISIONING_FACT_KIND_PLUGIN = 3;
+  // The creation's own real outcome, carried by outcome.
+  PROVISIONING_FACT_KIND_CREATION = 4;
+}
+
+enum ProvisioningOutcome {
+  PROVISIONING_OUTCOME_UNSPECIFIED = 0;
+  // The Workspace really came up.
+  PROVISIONING_OUTCOME_READY = 1;
+  // The creation really failed.
+  PROVISIONING_OUTCOME_FAILED = 2;
+}
+
+message RecordProvisioningFactRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  // The abandoned create_workspace operation the fact belongs to.
+  string operation_id = 3;
+  ProvisioningFactKind kind = 4;
+  // EFFECT facts: the effect's id, state, Substrate identity and evidence.
+  string effect_id = 5;
+  EffectState state = 6;
+  string external_id = 7;
+  optional EffectEvidence evidence = 8;
+  // Optional reason when an EFFECT fact's state is FAILED.
+  optional string failure = 9;
+  // CLONE and PLUGIN facts: the execution's identity and terminal result.
+  string execution_id = 13;
+  optional ExecutionResult execution_result = 10;
+  // CREATION facts: the creation's real outcome and an optional bounded detail.
+  ProvisioningOutcome outcome = 11;
+  string detail = 12;
+}
+
+message RecordProvisioningFactResponse {
+  Operation operation = 1;
+  // The stored effect, for EFFECT facts.
+  optional Effect effect = 2;
+  // The stored execution, for CLONE and PLUGIN facts.
+  optional ExecutionRecord execution = 3;
 }
 
 message ListLiveSandboxesRequest {

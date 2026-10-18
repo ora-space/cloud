@@ -24,6 +24,6 @@
 - **Testing and demonstration only**: The simulator is an engineering double. It does not interface with Kubernetes, deploy real container sandboxes, or launch live Deno or agent runtimes.
 - **Real boundaries preserved**: Uses real HTTP framing, real PostgreSQL schema constraints, and real local Git CLI operations; it does not bypass the domain state machine.
 
-See [cmd overview](../README.en.md), [Simulator internals](../../internal/simulator/README.en.md), and [Execution contract](../../docs/execution-contract.md).
+See [cmd overview](../README.en.md), [Simulator internals](../../internal/simulator/README.en.md), and [Workspace lifecycle](../../docs/runtime/workspaces.en.md).
 
 The in-process simulator explicitly uses the development-only retired clone fixture. Its plugin selection remains durable pending because no real plugin executor is available. It is not evidence of runtime control, management authentication or workload isolation; use cluster Compose and the real acceptance script.

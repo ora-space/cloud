@@ -287,7 +287,7 @@ export function useInteractions(tid: string, issueId: string) {
 }
 
 /**
- * Loads the Issues-facing FormDescriptor for a `formRef` (§38.17). The descriptor is a rendering
+ * Loads the Issues-facing FormDescriptor for a `formRef` (Issue collaboration D7). The descriptor is a rendering
  * projection — it is fetched per selection, never embedded in the picker payload.
  *
  * `issueId` is the issue the form is being configured for. It is what makes the descriptor carry the

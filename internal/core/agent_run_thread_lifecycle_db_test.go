@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Phase 4C S5 DB tests (T4C-19, T4C-20, T4C-28, T4C-29, T4C-30): the Thread delivery lifecycle the
+// DB tests for the Thread delivery lifecycle the
 // takeover owns — a Cloud-written user turn echoed by the Node, and the `active ⇄ idle` oscillation
 // of Thread D4.
 //
@@ -99,7 +99,7 @@ func replayHook(t *testing.T, store *Store, scene takeoverScene, events []Object
 	return err
 }
 
-// TestThreadTakeoverUserTurnEchoMarksDelivered (T4C-19, D-4C-08/D-4C-13-1): a Node record carrying
+// TestThreadTakeoverUserTurnEchoMarksDelivered (Thread D3): a Node record carrying
 // the turn_id of an existing Cloud-written user turn takes that turn over — the row becomes
 // `delivered` and nothing else happens: no new entry, no new seq, no rewrite of the stored record,
 // no new command, no re-enqueue.
@@ -161,7 +161,7 @@ func TestThreadTakeoverUserTurnEchoMarksDelivered(t *testing.T) {
 	}
 }
 
-// TestThreadTakeoverUserTurnLifecycleIsOneWay (T4C-20, D-4C-06/invariant 4): a queued turn stays
+// TestThreadTakeoverUserTurnLifecycleIsOneWay (Thread D1 invariant 4): a queued turn stays
 // `queued` until its echo arrives, and once `delivered` it is never written again — neither by a
 // replay of the same batch nor by anything else in the takeover path.
 func TestThreadTakeoverUserTurnLifecycleIsOneWay(t *testing.T) {
@@ -210,7 +210,7 @@ func TestThreadTakeoverUserTurnLifecycleIsOneWay(t *testing.T) {
 	}
 }
 
-// TestThreadTakeoverIdleWhenTurnEndedAndNoQueuedTurn (T4C-28, D-4C-04/D-4C-09): a batch whose last
+// TestThreadTakeoverIdleWhenTurnEndedAndNoQueuedTurn (Thread D4): a batch whose last
 // effective record is `TurnEnded` and which leaves no queued user turn moves an active Thread to
 // `idle` with `idle_since` from the database clock; a queued user turn blocks it.
 func TestThreadTakeoverIdleWhenTurnEndedAndNoQueuedTurn(t *testing.T) {
@@ -273,7 +273,7 @@ func TestCancelledTurnNeverMarksTheThreadIdle(t *testing.T) {
 	}
 }
 
-// TestThreadTakeoverIdleNeedsTheLastRecordToBeTurnEnded (T4C-29, D-4C-09): idle is decided by the
+// TestThreadTakeoverIdleNeedsTheLastRecordToBeTurnEnded (Thread D4): idle is decided by the
 // batch's *last* taken-over record, never by "a TurnEnded appeared somewhere in the batch" — any
 // record the agent produced afterwards means the conversation is still going.
 func TestThreadTakeoverIdleNeedsTheLastRecordToBeTurnEnded(t *testing.T) {
@@ -314,7 +314,7 @@ func TestThreadTakeoverIdleNeedsTheLastRecordToBeTurnEnded(t *testing.T) {
 	}
 }
 
-// TestThreadTakeoverReturnsIdleThreadToActive (T4C-30, D-4C-09): taking over a continuation record on
+// TestThreadTakeoverReturnsIdleThreadToActive (Thread D4): taking over a continuation record on
 // an idle Thread clears `idle_since` with the state, so a stale instant can never be read as an
 // expired idle window; and a run the running gate refused — cancelled, or no longer starting —
 // receives no lifecycle write at all.
@@ -371,7 +371,7 @@ func TestThreadTakeoverReturnsIdleThreadToActive(t *testing.T) {
 	}
 }
 
-// TestThreadTakeoverInitialEchoLeavesLifecycleAlone (S5 regression, T4B-13/D-4C-13-1): the echo of
+// TestThreadTakeoverInitialEchoLeavesLifecycleAlone (regression): the echo of
 // the *first prompt* stays what Phase 4B made it — a receipt and nothing else — even now that echoes
 // of user turns have a lifecycle meaning. It must not deliver anything, must not allocate a seq and
 // must not move a Thread state, so the Cloud-authored seq=1 stays the immutable first prompt.

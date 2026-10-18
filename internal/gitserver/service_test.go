@@ -47,28 +47,44 @@ func TestMain(m *testing.M) {
 // fakeStore answers from mutable test state; denials use core's Fault, outages a plain error.
 type fakeStore struct {
 	mu     sync.Mutex
-	grants map[string]core.GitAccess
-	down   bool
-	calls  int
+	grants map[string]core.GitGrant
+	// operations are the current grants of repository Operations, keyed by Operation ID.
+	operations map[string]core.GitGrant
+	down       bool
+	calls      int
 	// denyAfter, when positive, denies every call after that many calls: it models the execution
 	// ending between a push's ref advertisement and its pre-receive check.
 	denyAfter int
 	seen      []core.GitRuntimeScope
 }
 
-func (f *fakeStore) AuthorizeGitAccess(_ context.Context, scope core.GitRuntimeScope, execution, project string) (core.GitAccess, error) {
+func (f *fakeStore) AuthorizeGitAccess(_ context.Context, scope core.GitRuntimeScope, execution, project string) (core.GitGrant, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.seen = append(f.seen, scope)
 	if f.down {
-		return core.GitAccess{}, errors.New("database unavailable")
+		return core.GitGrant{}, errors.New("database unavailable")
 	}
 	access, ok := f.grants[execution]
 	if !ok || access.ProjectID != project || (f.denyAfter > 0 && f.calls > f.denyAfter) {
-		return core.GitAccess{}, &core.Fault{Code: "git_access_denied", Status: 403}
+		return core.GitGrant{}, &core.Fault{Code: "git_access_denied", Status: 403}
 	}
 	return access, nil
+}
+
+func (f *fakeStore) AuthorizeGitOperation(_ context.Context, operation, tenant, project string) (core.GitGrant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.down {
+		return core.GitGrant{}, errors.New("database unavailable")
+	}
+	grant, ok := f.operations[operation]
+	if !ok || grant.TenantID != tenant || grant.ProjectID != project || (f.denyAfter > 0 && f.calls > f.denyAfter) {
+		return core.GitGrant{}, &core.Fault{Code: "git_access_denied", Status: 403}
+	}
+	return grant, nil
 }
 
 func (f *fakeStore) set(fn func(*fakeStore)) {
@@ -161,7 +177,9 @@ type harness struct {
 	store             *fakeStore
 	pki               *pki
 	service           *Service
-	repo, ref         *httptest.Server
+	repo, ref, svc    *httptest.Server
+	executorPKI       *pki
+	executor          identity
 	root              string
 	tenant, workspace string
 	project           string
@@ -175,11 +193,12 @@ func newHarness(t *testing.T) *harness {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Fatal("git is required: the repository boundary is tested with the real client and http-backend")
 	}
-	h := &harness{t: t, store: &fakeStore{grants: map[string]core.GitAccess{}}, pki: newPKI(t), root: filepath.Join(t.TempDir(), "repositories"), tenant: uuid.NewString(), workspace: uuid.NewString(), project: uuid.NewString()}
+	h := &harness{t: t, store: &fakeStore{grants: map[string]core.GitGrant{}, operations: map[string]core.GitGrant{}}, pki: newPKI(t), executorPKI: newPKI(t), root: filepath.Join(t.TempDir(), "repositories"), tenant: uuid.NewString(), workspace: uuid.NewString(), project: uuid.NewString()}
 	server := h.pki.issue("server", "", x509.ExtKeyUsageServerAuth)
 	h.sandbox = h.pki.issue("sandbox", "spiffe://ora.local/git-access/tenant/"+h.tenant+"/runtime/"+h.workspace+"/generation/3", x509.ExtKeyUsageClientAuth)
 	h.cloud = h.pki.issue("cloud", "spiffe://ora.local/cloud/git-ref-query", x509.ExtKeyUsageClientAuth)
-	h.config = Config{CertificateFile: server.cert, PrivateKeyFile: server.key, SandboxCAFile: filepath.Join(h.pki.dir, "ca.pem"), CloudClientCertFile: h.cloud.cert}
+	h.executor = h.executorPKI.issue("executor", ExecutorIdentity, x509.ExtKeyUsageClientAuth)
+	h.config = Config{CertificateFile: server.cert, PrivateKeyFile: server.key, SandboxCAFile: filepath.Join(h.pki.dir, "ca.pem"), CloudClientCertFile: h.cloud.cert, ExecutorCAFile: filepath.Join(h.executorPKI.dir, "ca.pem")}
 	env, err := exec.LookPath("env")
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +227,15 @@ func (h *harness) start() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	serviceTLS, err := h.config.ServiceRepositoryTLS()
+	if err != nil {
+		h.t.Fatal(err)
+	}
 	h.service = service
+	h.svc = httptest.NewUnstartedServer(http.HandlerFunc(service.ServiceRepositoryHandler))
+	h.svc.TLS = serviceTLS
+	h.svc.Config.ErrorLog = log.New(io.Discard, "", 0)
+	h.svc.StartTLS()
 	h.repo = httptest.NewUnstartedServer(http.HandlerFunc(service.RepositoryHandler))
 	h.repo.TLS = repoTLS
 	h.repo.Config.ErrorLog = log.New(io.Discard, "", 0)
@@ -224,6 +251,7 @@ func (h *harness) stop() {
 		return
 	}
 	h.repo.Close()
+	h.svc.Close()
 	h.ref.Close()
 	if err := h.service.Close(); err != nil {
 		h.t.Error(err)
@@ -233,16 +261,47 @@ func (h *harness) stop() {
 
 func (h *harness) url() string { return h.repo.URL + "/" + h.tenant + "/" + h.project + ".git" }
 
-// grant registers an execution's current permission in the fake policy.
-func (h *harness) grant(execution string, mode core.GitAccessMode) string {
-	ref := ""
-	if mode == core.GitWrite {
-		ref = core.GitDeliveryRefPrefix + uuid.NewString()
-	}
+// serviceURL is the same Project repository on the Repo Executor's listener.
+func (h *harness) serviceURL() string {
+	return h.svc.URL + "/" + h.tenant + "/" + h.project + ".git"
+}
+
+// operation registers a repository Operation's current grant and returns its ID.
+func (h *harness) operation(writable ...core.GitWritableRef) string {
+	id := uuid.NewString()
 	h.store.set(func(f *fakeStore) {
-		f.grants[execution] = core.GitAccess{ProjectID: h.project, Mode: mode, DeliveryRef: ref}
+		f.operations[id] = core.GitGrant{TenantID: h.tenant, ProjectID: h.project, Writable: writable}
 	})
+	return id
+}
+
+// executorGit runs the real client as the Repo Executor on the service listener.
+func (h *harness) executorGit(dir, operation string, args ...string) (string, error) {
+	h.t.Helper()
+	base := []string{"-c", "http.sslCert=" + h.executor.cert, "-c", "http.sslKey=" + h.executor.key, "-c", "http.sslCAInfo=" + h.config.SandboxCAFile}
+	if operation != "" {
+		base = append(base, "-c", "http.extraHeader="+OperationHeader+": "+operation)
+	}
+	cmd := exec.Command("git", append(base, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(gitEnvironment(), "GIT_TERMINAL_PROMPT=0", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// grant registers a delivery execution's current permission in the fake policy and returns the
+// one delivery ref it may create.
+func (h *harness) grant(execution string) string {
+	ref := core.GitDeliveryRefPrefix + uuid.NewString()
+	h.allow(execution, core.GitWritableRef{Ref: ref, Rule: core.GitCreateOnly})
 	return ref
+}
+
+// allow registers an execution whose grant is exactly the given rule set; none is read-only.
+func (h *harness) allow(execution string, writable ...core.GitWritableRef) {
+	h.store.set(func(f *fakeStore) {
+		f.grants[execution] = core.GitGrant{TenantID: h.tenant, ProjectID: h.project, Writable: writable}
+	})
 }
 
 // git runs the real client exactly as the Node will: identity, CA and execution passed per
@@ -320,7 +379,7 @@ func (h *harness) queryRef(who *identity, tenant, project, ref string) (int, map
 
 func TestDeliveryPushCreatesOnlyItsRefAndReplayIsUpToDate(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, head := h.checkout(2)
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:"+ref); err != nil {
 		t.Fatalf("first delivery push failed: %s", out)
@@ -344,7 +403,7 @@ func TestDeliveryPushCreatesOnlyItsRefAndReplayIsUpToDate(t *testing.T) {
 // Every push that is not "create exactly my delivery ref" is refused whole, and nothing is written.
 func TestPushRulesRejectEveryOtherUpdate(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, first := h.checkout(1)
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:"+ref); err != nil {
 		t.Fatalf("delivery push failed: %s", out)
@@ -354,7 +413,7 @@ func TestPushRulesRejectEveryOtherUpdate(t *testing.T) {
 	}
 	other := core.GitDeliveryRefPrefix + uuid.NewString()
 	h.store.set(func(f *fakeStore) {
-		f.grants["deliver-2"] = core.GitAccess{ProjectID: h.project, Mode: core.GitWrite, DeliveryRef: other}
+		f.grants["deliver-2"] = core.GitGrant{TenantID: h.tenant, ProjectID: h.project, Writable: []core.GitWritableRef{{Ref: other, Rule: core.GitCreateOnly}}}
 	})
 	tree, _ := h.git(dir, h.sandbox, "", "rev-parse", "HEAD^{tree}")
 	for _, c := range []struct {
@@ -389,12 +448,12 @@ func TestPushRulesRejectEveryOtherUpdate(t *testing.T) {
 
 func TestReadOnlyExecutionFetchesButCannotPush(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, head := h.checkout(1)
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:"+ref); err != nil {
 		t.Fatalf("delivery push failed: %s", out)
 	}
-	h.grant("restore-1", core.GitRead)
+	h.allow("restore-1")
 	fresh, _ := h.checkout(0)
 	if out, err := h.git(fresh, h.sandbox, "restore-1", "fetch", h.url(), ref); err != nil {
 		t.Fatalf("restore fetch failed: %s", out)
@@ -411,7 +470,7 @@ func TestReadOnlyExecutionFetchesButCannotPush(t *testing.T) {
 // execution that ends while the pack is in flight writes nothing.
 func TestPreReceiveRechecksCurrentState(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, _ := h.checkout(1)
 	// info/refs and the receive-pack POST are authorized; the hook's check is the third call.
 	h.store.set(func(f *fakeStore) { f.calls, f.denyAfter = 0, 2 })
@@ -429,7 +488,7 @@ func TestPreReceiveRechecksCurrentState(t *testing.T) {
 // A restart replaces the hook directory; existing repositories keep enforcing the rules.
 func TestRestartKeepsRepositoriesAndRules(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, head := h.checkout(1)
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:"+ref); err != nil {
 		t.Fatalf("delivery push failed: %s", out)
@@ -442,7 +501,7 @@ func TestRestartKeepsRepositoriesAndRules(t *testing.T) {
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:refs/heads/main"); err == nil {
 		t.Fatalf("push after restart bypassed pre-receive: %s", out)
 	}
-	ref2 := h.grant("deliver-2", core.GitWrite)
+	ref2 := h.grant("deliver-2")
 	if out, err := h.git(dir, h.sandbox, "deliver-2", "push", h.url(), "HEAD:"+ref2); err != nil {
 		t.Fatalf("delivery push after restart failed: %s", out)
 	}
@@ -451,7 +510,7 @@ func TestRestartKeepsRepositoriesAndRules(t *testing.T) {
 // Raw requests pin status codes the Git client does not surface.
 func TestRepositoryBoundaryResponses(t *testing.T) {
 	h := newHarness(t)
-	ref := h.grant("deliver-1", core.GitWrite)
+	ref := h.grant("deliver-1")
 	dir, _ := h.checkout(1)
 	if out, err := h.git(dir, h.sandbox, "deliver-1", "push", h.url(), "HEAD:"+ref); err != nil {
 		t.Fatalf("delivery push failed: %s", out)
@@ -502,7 +561,7 @@ func TestRepositoryBoundaryResponses(t *testing.T) {
 		})
 	}
 	// A read of a Project with no repository yet looks exactly like an unauthorized read.
-	h.store.set(func(f *fakeStore) { f.grants["restore-2"] = core.GitAccess{ProjectID: other, Mode: core.GitRead} })
+	h.store.set(func(f *fakeStore) { f.grants["restore-2"] = core.GitGrant{TenantID: h.tenant, ProjectID: other} })
 	if got := get(&h.sandbox, "/"+h.tenant+"/"+other+".git/info/refs?service=git-upload-pack", "restore-2"); got != http.StatusForbidden {
 		t.Fatalf("absent repository read = %d, want 403", got)
 	}

@@ -74,6 +74,7 @@ func resource(names, nullableNames string) obj {
 // Document returns complete schemas and operations. cmd/openapi writes its reviewable JSON artifact.
 func Document() map[string]any {
 	s := obj{}
+	modelStatisticsSchemas(s)
 	s["Error"] = object(obj{"code": str(), "params": obj{"type": "object", "additionalProperties": true}, "requestId": uuid()}, "code", "params", "requestId")
 	s["User"] = resource("id displayName status version createdAt deletedAt", "deletedAt")
 	s["Tenant"] = resource("id name status role", "")
@@ -99,6 +100,14 @@ func Document() map[string]any {
 	s["ModelDefinition"] = object(obj{"id": str(), "name": str(), "contextWindow": number(), "maxTokens": number()}, "id", "name", "contextWindow", "maxTokens")
 	s["ModelConnection"] = object(obj{"id": uuid(), "name": str(), "protocol": enumeration("openai-completions", "anthropic-messages"), "baseUrl": str(), "authMode": enumeration("bearer", "x-api-key"), "models": array(ref("ModelDefinition")), "enabled": boolean(), "credentialConfigured": boolean(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "id", "name", "protocol", "baseUrl", "authMode", "models", "enabled", "credentialConfigured", "version", "createdAt", "updatedAt")
 	s["ModelDefault"] = object(obj{"connectionId": str(), "modelId": str(), "version": number()}, "connectionId", "modelId", "version")
+	s["AgentSessionSummary"] = object(obj{
+		"id": uuid(), "issueId": uuid(), "issueNumber": number(), "issueTitle": str(),
+		"projectId": optional(uuid()), "projectName": optional(str()), "agentPluginId": optional(str()),
+		"status":      enumeration("queued", "dispatched", "running", "completed", "failed", "cancelled", "deferred"),
+		"threadState": optional(str()), "createdAt": timestamp(), "startedAt": optional(timestamp()), "completedAt": optional(timestamp()),
+		"historyAvailable": boolean(), "model": optional(object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")),
+	}, "id", "issueId", "issueNumber", "issueTitle", "projectId", "projectName", "agentPluginId", "status", "threadState", "createdAt", "startedAt", "completedAt", "historyAvailable", "model")
+	s["SessionHistory"] = object(obj{"source": enumeration("archive"), "records": array(obj{"type": "object", "additionalProperties": true}), "sizeBytes": number(), "sha256": str()}, "source", "records", "sizeBytes", "sha256")
 	s["ThreadModel"] = object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
 	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
@@ -159,8 +168,10 @@ func Document() map[string]any {
 		"stage":         enumeration("waiting", "environment", "clone", "plugin", "start", "failed", "cancelled"),
 		"cloneAttempts": number(), "maxCloneAttempts": number(),
 		"retryAt": optional(timestamp()), "errorCode": optional(str()),
+		// syncErrorCode names why the Binding's sync failed when errorCode is repository_sync_failed.
+		"syncErrorCode": optional(str()),
 	}
-	preparationFields := []string{"stage", "cloneAttempts", "maxCloneAttempts", "retryAt", "errorCode"}
+	preparationFields := []string{"stage", "cloneAttempts", "maxCloneAttempts", "retryAt", "errorCode", "syncErrorCode"}
 	s["RunPreparation"] = object(preparationProps, preparationFields...)
 	// OpenAPI 3.0 ignores nullable beside $ref; keep this nullable projection inline.
 	runProps["preparation"] = optional(object(preparationProps, preparationFields...))
@@ -250,10 +261,33 @@ func Document() map[string]any {
 	spacePluginProps["observedVersion"] = optional(str())
 	spacePluginProps["installError"] = optional(str())
 	s["SpacePluginList"] = object(obj{"items": array(ref("SpacePlugin"))}, "items")
+	// Workflow asset import is read separately from installation evidence: a space with no live
+	// runtime still imports templates, and an install failure says nothing about them. The document
+	// codes are bounded, and failureDetail carries only safe structured parameters.
+	s["WorkflowAssetDocument"] = object(obj{
+		"documentPath": str(), "packageVersion": str(), "packageSha256": str(),
+		"outcome":         enumeration("imported", "failed"),
+		"workflowId":      optional(uuid()),
+		"snapshotVersion": optional(number()),
+		"failureCode":     optional(str()),
+		"failureDetail":   optional(obj{"type": "object", "additionalProperties": true}),
+		"updatedAt":       timestamp(),
+	}, "documentPath", "packageVersion", "packageSha256", "outcome", "updatedAt")
+	s["WorkflowAssetImport"] = object(obj{
+		"pluginId": str(), "sourceNamespace": str(), "identifier": str(),
+		"packageVersion": str(), "packageSha256": str(),
+		"state":             enumeration("pending", "importing", "completed", "failed"),
+		"failureCode":       optional(str()),
+		"requestedRevision": number(),
+		"attemptedAt":       optional(timestamp()),
+		"completedAt":       optional(timestamp()),
+		"documents":         array(ref("WorkflowAssetDocument")),
+	}, "pluginId", "sourceNamespace", "identifier", "packageVersion", "packageSha256", "state", "requestedRevision", "documents")
+	s["WorkflowAssetImportList"] = object(obj{"items": array(ref("WorkflowAssetImport"))}, "items")
 	s["PluginUniversalRelease"] = object(obj{"url": str(), "sha256": str()}, "url", "sha256")
 	s["PluginReleaseTarget"] = object(obj{"target": str(), "url": str(), "sha256": str()}, "target", "url", "sha256")
 	s["PluginLogoCandidate"] = object(obj{"role": enumeration("universal", "light", "dark"), "extension": enumeration("svg", "png", "webp", "jpg", "jpeg")}, "role", "extension")
-	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}, "pluginId": str(), "version": str(), "desiredRevision": number(), "release": ref("PluginCatalogEntry"), "plugins": array(obj{"type": "object", "additionalProperties": true}), "pluginMeta": array(object(obj{"pluginId": str(), "desiredRevision": number()}, "pluginId", "desiredRevision"))})
+	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}, "syncOwed": boolean(), "pluginId": str(), "version": str(), "desiredRevision": number(), "release": ref("PluginCatalogEntry"), "plugins": array(obj{"type": "object", "additionalProperties": true}), "pluginMeta": array(object(obj{"pluginId": str(), "desiredRevision": number()}, "pluginId", "desiredRevision"))})
 	s["OperationResult"] = object(obj{"resourceId": uuid(), "forceStopId": uuid()})
 	s["Operation"] = resource("id tenantId actorUserId projectId workspaceId kind state step request result errorCode idempotencyKey requestHash controllerEpoch retryAt version createdAt updatedAt", "workspaceId errorCode controllerEpoch retryAt")
 	opProps := properties(s, "Operation")
@@ -366,7 +400,24 @@ func Document() map[string]any {
 			parameters = append(parameters, obj{"name": "Idempotency-Key", "in": "header", "required": true, "schema": obj{"type": "string", "minLength": 1, "maxLength": 200}, "description": keyScope + " Same key and canonical method/path/body returns the original response before version validation; changed request is 409."})
 		}
 		if isList(r) {
-			parameters = append(parameters, obj{"name": "limit", "in": "query", "schema": obj{"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, obj{"name": "after", "in": "query", "schema": uuid(), "description": "Exclusive UUID cursor, ascending stable ordering."})
+			parameters = append(parameters, obj{"name": "limit", "in": "query", "schema": obj{"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, obj{"name": "after", "in": "query", "schema": uuid(), "description": "Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering."})
+		}
+		if r.Path == router.AgentSessionsPath {
+			for _, name := range []string{"projectId", "status", "agent", "from", "to"} {
+				schema := str()
+				if name == "projectId" {
+					schema = uuid()
+				}
+				if name == "from" || name == "to" {
+					schema = timestamp()
+				}
+				parameters = append(parameters, obj{"name": name, "in": "query", "schema": schema})
+			}
+		}
+		if r.Path == router.SessionHistoryPath {
+			for _, code := range []string{"413", "502"} {
+				responses[code] = obj{"description": "Archive exceeds limits or cannot be verified/read", "content": obj{"application/json": obj{"schema": ref("Error")}}}
+			}
 		}
 		if r.Method == "GET" && r.Path == router.ThreadPath {
 			// The Thread read has its own cursor vocabulary and window: `seq` is a decimal
@@ -430,7 +481,7 @@ func Document() map[string]any {
 }
 
 // pathParamSchema types a path parameter. `formRef` is deliberately NOT a UUID: it is an opaque
-// provider-scoped token that Issues never parses (§38.17), constrained only by the grammar that keeps
+// provider-scoped token that Issues never parses (Issue collaboration D7), constrained only by the grammar that keeps
 // it safe in a path segment.
 func pathParamSchema(name string) obj {
 	if name == "formRef" {
@@ -473,13 +524,25 @@ func snapshotFormPath(path string) bool {
 }
 
 func isList(r router.Route) bool {
-	if r.Path == "/api/v1/me/model-connections" {
+	if r.Path == "/api/v1/me/model-connections" || r.Path == router.AgentSessionsPath || r.Path == router.SessionModelCallsPath {
 		return r.Method == "GET"
 	}
 	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
+	if r.Path == router.SessionStatisticsPath {
+		return ref("SessionModelStatistics"), "200"
+	}
+	if r.Path == router.SessionModelCallsPath {
+		return object(obj{"items": array(ref("SessionModelAttempt")), "nextCursor": str()}, "items", "nextCursor"), "200"
+	}
+	if r.Path == router.AgentSessionsPath {
+		return object(obj{"items": array(ref("AgentSessionSummary")), "nextCursor": str()}, "items", "nextCursor"), "200"
+	}
+	if r.Path == router.SessionHistoryPath {
+		return ref("SessionHistory"), "200"
+	}
 	if r.Path == "/api/v1/me/model-default" {
 		return ref("ModelDefault"), "200"
 	}
@@ -566,6 +629,9 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		case strings.Contains(r.Path, "/plugins"):
 			if r.Method == "GET" && strings.HasSuffix(r.Path, "/plugins/catalog") {
 				return ref("PluginCatalog"), "200"
+			}
+			if r.Method == "GET" && strings.HasSuffix(r.Path, "/plugins/assets") {
+				return ref("WorkflowAssetImportList"), "200"
 			}
 			if r.Method == "GET" {
 				return ref("SpacePluginList"), "200"
@@ -692,13 +758,13 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		// Reading a Thread returns one ascending-by-seq window of entries plus the run's Thread
 		// state and idle instant, all from one snapshot. `threadState` and `idleSince` are projected
 		// here rather than read off the run resource, which keeps stripping these columns from
-		// IssueRun (T4C-10). The window's cursors are nullable because an empty Thread has neither.
+		// IssueRun. The window's cursors are nullable because an empty Thread has neither.
 		return object(obj{
 			"items":           array(ref("ThreadEntry")),
 			"threadState":     enumeration("pending", "active", "idle", "ending", "ended"),
 			"idleSince":       obj{"type": "string", "format": "date-time", "nullable": true, "description": "When the Thread became idle; null in every other state."},
 			"initiatorUserId": optional(uuid()),
-			"model":           optional(ref("ThreadModel")),
+			"model":           optional(object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")),
 			"canAppend":       boolean(),
 			"canEnd":          boolean(),
 			"failureCode":     optional(str()),
@@ -926,6 +992,18 @@ func summary(r router.Route) string {
 }
 
 func description(r router.Route) string {
+	if r.Path == router.SessionStatisticsPath {
+		return "Read-only active-member model statistics for an Agent run. Covers all recorded model-gateway HTTP attempts, independently of archive availability or request-page pagination. This is not a historical request backfill or billing ledger. Each metric exposes its own known/total coverage; absent values remain null, including a run with no observations. Input/cache semantics follow the source protocol; reasoning is an output subset. No query parameters accepted; private, no-store."
+	}
+	if r.Path == router.SessionModelCallsPath {
+		return "Read-only active-member content-free model HTTP attempts for an Agent run, ascending (startedAt, id). after must identify an attempt in this run. Only singleton nonempty limit and after parameters accepted. Request/response bodies, credentials, headers, provider messages and storage paths are never returned. firstOutputMs measures the gateway-observed first effective output, not model TTFT. A started attempt may represent an ongoing request or missing final observation. private, no-store."
+	}
+	if r.Path == router.AgentSessionsPath {
+		return "Read-only active-member session index. Agent IssueRuns only, newest (createdAt, id) first. Filters: projectId, exact agent plugin identifier, status, inclusive from and exclusive to RFC3339 instants. after must identify an accessible Agent run in this tenant. No log bodies or model credentials are included. Unknown, empty or repeated query parameters are rejected."
+	}
+	if r.Path == router.SessionHistoryPath {
+		return "Read-only active-member access to a run's registered Revision history. Tenant, issue and run are checked before and after private storage I/O. Verifies exact byte size and SHA-256, parses JSONL objects retaining order and duplicate sequence updates. Maximum 32 MiB and 100000 records; no URLs or paths accepted. 404 history_unavailable for absent/expired registration, 413 history_too_large, 502 history_invalid or history_unavailable. Never scans user filesystems."
+	}
 	if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") {
 		if strings.HasSuffix(r.Path, "/credential") {
 			return "Gateway-owned credential operation. Gateway routes this request directly to model-gateway using independent service and caller-bound final-user credentials; Cloud HTTP rejects the route without reading its body. The API key is write-only and never returned. version is required and a stale version is 409 version_conflict. Deleting a credential revokes active model grants; replacement retains immutable references for existing runs."

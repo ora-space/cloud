@@ -109,7 +109,7 @@ func TestPluginMigrationAndCatalogPersistence(t *testing.T) {
 	pid, wid := uuid.NewString(), uuid.NewString()
 	tx, e := f.store.Pool.Begin()
 	must(t, e)
-	if _, e = tx.Exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,$4,'Constraint test','https://example.invalid/r.git','main','active')`, pid, f.tid, f.uid, sid); e != nil {
+	if _, e = tx.Exec(`WITH p AS (INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'Constraint test','active') RETURNING id,tenant_id) INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) SELECT gen_random_uuid(),tenant_id,id,'https://example.invalid/r.git','main' FROM p`, pid, f.tid, f.uid, sid); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'main','running','ready','main')`, wid, f.tid, f.uid, pid); e != nil {

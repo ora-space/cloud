@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,13 +27,15 @@ const (
 
 const hookTimeout = 30 * time.Second
 
-// refUpdate is one pre-receive line plus the type of its new object, which only the hook can read
-// because the pushed objects are still in Git's quarantine directory.
+// refUpdate is one pre-receive line plus facts about its new object that only the hook can read,
+// because the pushed objects are still in Git's quarantine directory: the object's type, and
+// whether the old value is its ancestor.
 type refUpdate struct {
-	Old     string `json:"old"`
-	New     string `json:"new"`
-	Ref     string `json:"ref"`
-	NewType string `json:"newType"`
+	Old         string `json:"old"`
+	New         string `json:"new"`
+	Ref         string `json:"ref"`
+	NewType     string `json:"newType"`
+	FastForward bool   `json:"fastForward"`
 }
 
 type hookRequest struct {
@@ -47,10 +48,13 @@ type hookResponse struct {
 	Allow bool `json:"allow"`
 }
 
-// push is the authenticated context of one receive-pack request awaiting its pre-receive decision.
+// push is the authenticated context of one receive-pack request awaiting its pre-receive decision:
+// the listener it arrived on, the sandbox scope (sandbox listener only), the execution or
+// Operation it names, and the repository it addresses.
 type push struct {
-	scope              core.GitRuntimeScope
-	execution, project string
+	listener                 listener
+	scope                    core.GitRuntimeScope
+	context, tenant, project string
 }
 
 // pushes maps one-time tokens to in-flight receive-pack requests. The token only links the hook
@@ -60,10 +64,10 @@ type pushes struct {
 	active map[string]push
 }
 
-func (p *pushes) register(value push) (token string, release func()) {
+func (p *pushes) register(value *push) (token string, release func()) {
 	token = rand.Text()
 	p.mu.Lock()
-	p.active[token] = value
+	p.active[token] = *value
 	p.mu.Unlock()
 	return token, func() {
 		p.mu.Lock()
@@ -80,35 +84,23 @@ func (p *pushes) lookup(token string) (push, bool) {
 }
 
 // decide re-runs the full Cloud authorization immediately before any ref is written, then admits
-// the push only if every update creates exactly the delivery ref the execution owns. One bad
-// update rejects the whole push, so nothing is partially written.
+// the push only if the resulting rule set admits every update.
 func (s *Service) decide(ctx context.Context, request hookRequest) bool {
 	p, ok := s.pushes.lookup(request.Token)
 	if !ok || request.PushOptions != 0 || len(request.Updates) == 0 {
 		return false
 	}
-	access, err := s.options.Store.AuthorizeGitAccess(ctx, p.scope, p.execution, p.project)
-	if err != nil || access.Mode != core.GitWrite || access.DeliveryRef == "" {
+	grant, err := s.authorize(ctx, &p)
+	if err != nil {
 		return false
 	}
-	for _, u := range request.Updates {
-		if u.Ref != access.DeliveryRef || !zeroID(u.Old) || !objectID(u.New) || zeroID(u.New) || u.NewType != "commit" {
-			return false
-		}
-	}
-	return true
+	return admit(&grant, request.Updates, func(ref, commit string) (bool, error) {
+		got, err := s.repos.resolve(ctx, p.tenant, p.project, ref)
+		return got == commit, err
+	})
 }
 
-func zeroID(s string) bool { return objectID(s) && strings.Trim(s, "0") == "" }
-
-// objectID accepts SHA-1 and SHA-256 hexadecimal object names.
-func objectID(s string) bool {
-	if len(s) != 40 && len(s) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(s)
-	return err == nil && strings.ToLower(s) == s
-}
+func zeroID(s string) bool { return core.GitObjectID(s) && strings.Trim(s, "0") == "" }
 
 // serveHooks answers pre-receive hooks over a Unix socket in the server's private runtime
 // directory. Only processes running as this server's user can reach it.
@@ -156,12 +148,17 @@ func RunPreReceive(stdin io.Reader, stderr io.Writer, git string) error {
 			return reject()
 		}
 		u := refUpdate{Old: fields[0], New: fields[1], Ref: fields[2]}
-		if objectID(u.New) && !zeroID(u.New) {
+		if core.GitObjectID(u.New) && !zeroID(u.New) {
 			out, err := exec.Command(git, "cat-file", "-t", u.New).Output() //nolint:gosec // G204: u.New was validated as a hex object name; git is the deployment program.
 			if err != nil {
 				return reject()
 			}
 			u.NewType = strings.TrimSpace(string(out))
+			if u.NewType == "commit" && core.GitObjectID(u.Old) && !zeroID(u.Old) {
+				if u.FastForward, err = isAncestor(git, u.Old, u.New); err != nil {
+					return reject()
+				}
+			}
 		}
 		request.Updates = append(request.Updates, u)
 	}
@@ -179,6 +176,22 @@ func RunPreReceive(stdin io.Reader, stderr io.Writer, git string) error {
 		return reject()
 	}
 	return nil
+}
+
+// isAncestor reports whether old is an ancestor of next. An old value the repository does not
+// hold is not an ancestor: the server's ref would not match it anyway.
+func isAncestor(git, old, next string) (bool, error) {
+	err := exec.Command(git, "merge-base", "--is-ancestor", old, next).Run() //nolint:gosec // G204: both are validated hex object names; git is the deployment program.
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exit):
+		// 1: not an ancestor; 128: old is unknown or not a commit, so it cannot be the server's
+		// current value either.
+		return false, nil
+	}
+	return false, err
 }
 
 // hookScript execs the configured command; each argument is single-quoted for the shell.

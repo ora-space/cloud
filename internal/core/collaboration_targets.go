@@ -4,7 +4,7 @@ import "strings"
 
 // targetSummaryObject converts a typed CollaborationTargetSummary into the wire Object shape. The
 // interface returns plain strings, so the fields survive Object.S(); the descriptor is collapsed to
-// {mode, requiresTask} as the frozen wire contract (§4).
+// {mode, requiresTask} as the frozen wire contract (Issue collaboration D3).
 func targetSummaryObject(s *CollaborationTargetSummary) Object {
 	return Object{
 		"type":        s.Type,
@@ -27,7 +27,7 @@ func formRefOrNil(ref string) any {
 	return ref
 }
 
-// collaborationTargetList is the read-only Issues-facing target projection (§7). Humans come from
+// collaborationTargetList is the read-only Issues-facing target projection (Issue collaboration D3). Humans come from
 // active tenant members (reused, not re-invented); agent/team/workflow come from the directory when
 // wired. It is NOT an Agent/Team/Workflow CRUD surface.
 func collaborationTargetList(t *transaction, r *PublicRequest) Object {

@@ -26,6 +26,24 @@ type fakePolicy struct {
 	issuedDigest string
 	sealed       []byte
 	credentialID string
+	attempts     map[string]core.ModelAttemptFinish
+}
+
+func (f *fakePolicy) BeginModelAttempt(_ context.Context, _ *core.ModelGrant, id string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attempts == nil {
+		f.attempts = make(map[string]core.ModelAttemptFinish)
+	}
+	f.attempts[id] = core.ModelAttemptFinish{Outcome: "started"}
+	return nil
+}
+
+func (f *fakePolicy) FinishModelAttempt(_ context.Context, id string, result *core.ModelAttemptFinish) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts[id] = *result
+	return nil
 }
 
 func (f *fakePolicy) ModelCredential(context.Context, *core.Claims, string) (core.Object, error) {

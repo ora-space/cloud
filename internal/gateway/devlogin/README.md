@@ -19,4 +19,4 @@
 - provider 不授予任何权限：Cloud 仍按 `(source, subject)` 创建或解析用户，membership 与授权与 GitHub 身份完全相同。默认 source 为 `dev`，避免与 `github.com` 身份混淆，但可以输入任意 source，例如以 `cloudctl bootstrap` 创建的管理员身份登录。
 - 开启该 provider 时 Gateway 在启动日志中给出 warning。
 
-参见 [认证边界（`internal/gateway`）](../README.md) 与 [Gateway 文档](../../../docs/gateway.md)。
+参见 [认证边界（`internal/gateway`）](../README.md) 与 [Gateway 文档](../../../docs/identity/gateway.md)。

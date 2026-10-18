@@ -1,5 +1,10 @@
 import { http, HttpResponse } from 'msw'
-import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
+import type {
+  PluginCatalogEntry,
+  SpacePlugin,
+  WorkflowAssetDocument,
+  WorkflowAssetImport,
+} from '@/api/generated.schemas'
 import { jsonObject, stringField } from './shared'
 
 /**
@@ -63,6 +68,64 @@ export function spacePlugin(id: string, overrides: Partial<SpacePlugin> = {}): S
   }
 }
 
+/** One imported/failed workflow document fixture with a stable package digest. */
+export function assetDocument(
+  documentPath: string,
+  overrides: Partial<WorkflowAssetDocument> = {},
+): WorkflowAssetDocument {
+  return {
+    documentPath,
+    packageVersion: '1.0.0',
+    packageSha256: 'b'.repeat(64),
+    outcome: 'imported',
+    workflowId: '33333333-3333-3333-3333-333333333333',
+    snapshotVersion: 1,
+    failureCode: null,
+    failureDetail: null,
+    updatedAt: PLUGIN_FIXTURE_SYNCED_AT,
+    ...overrides,
+  }
+}
+
+/** One workflow asset import fixture in the completed state with no documents. */
+export function assetImport(
+  pluginId: string,
+  overrides: Partial<WorkflowAssetImport> = {},
+): WorkflowAssetImport {
+  return {
+    pluginId,
+    sourceNamespace: 'official',
+    identifier: pluginId.split('/')[1] ?? pluginId,
+    packageVersion: '1.0.0',
+    packageSha256: 'b'.repeat(64),
+    state: 'completed',
+    failureCode: null,
+    requestedRevision: 1,
+    attemptedAt: PLUGIN_FIXTURE_SYNCED_AT,
+    completedAt: PLUGIN_FIXTURE_SYNCED_AT,
+    documents: [],
+    ...overrides,
+  }
+}
+
+/**
+ * A completed import carrying one imported document and one bounded name
+ * conflict, shared by the hook and page tests so both assert the same fixture.
+ */
+export function importWithNameConflict(pluginId: string): WorkflowAssetImport {
+  return assetImport(pluginId, {
+    documents: [
+      assetDocument('assets/workflows/release.json'),
+      assetDocument('assets/workflows/deploy.json', {
+        outcome: 'failed',
+        workflowId: null,
+        snapshotVersion: null,
+        failureCode: 'name_conflict',
+      }),
+    ],
+  })
+}
+
 /** Fault body of the backend error contract. */
 function fault(code: string, status: number, params: Record<string, unknown> = {}) {
   return HttpResponse.json({ code, params, requestId: 'fixture' }, { status })
@@ -74,6 +137,8 @@ export interface PluginCloudFixtureOptions {
   catalog: PluginCatalogEntry[]
   /** Initial space-plugin rows; the fixture mutates its own copy. */
   plugins?: SpacePlugin[]
+  /** Separately served workflow asset import rows. */
+  assetImports?: WorkflowAssetImport[]
   /** Failure mode for DELETE: stale optimistic version or missing version. */
   removeConflict?: 'version_conflict' | 'version_required'
   /** Failure mode for POST: 404 for identifiers absent from the catalog. */
@@ -95,6 +160,9 @@ export function pluginCloudHandlers(options: PluginCloudFixtureOptions) {
     ),
     http.get('/api/v1/tenants/:tid/spaces/:spaceId/plugins', () =>
       HttpResponse.json({ items: plugins }),
+    ),
+    http.get('/api/v1/tenants/:tid/spaces/:spaceId/plugins/assets', () =>
+      HttpResponse.json({ items: options.assetImports ?? [] }),
     ),
     http.post('/api/v1/tenants/:tid/spaces/:spaceId/plugins', async ({ request }) => {
       const body = jsonObject(await request.json())

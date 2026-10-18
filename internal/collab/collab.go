@@ -47,11 +47,11 @@ var fixtureTargets = []core.CollaborationTargetSummary{
 
 // MockInputAssistProvider produces deterministic AI Assist suggestions: the same issue text and the
 // same current values always yield the same patch. It performs no LLM call, uses no randomness, and
-// only ever *suggests* — applying and confirming stay user actions (§38.12).
+// only ever *suggests* — applying and confirming stay user actions (Issue collaboration D9).
 //
 // It recognizes a small set of well-known demo field names and emits a suggestion only for a key the
 // *current* descriptor declares, so it is a no-op for a workflow that names its inputs differently
-// and can never widen a form (§38.13).
+// and can never widen a form (Issue collaboration D9).
 type MockInputAssistProvider struct{}
 
 //nolint:gocritic // value-typed assist input mirrors the provider interface signature this mock satisfies
@@ -177,7 +177,7 @@ func (MockExecutionDispatcher) Dispatch(_ context.Context, req core.DispatchRequ
 
 // Execute drives one run to completion. Agent/team runs reply as a comment (queued -> dispatched ->
 // running -> reply -> completed); a workflow run reports coarse progress and a human-readable result,
-// which the Store projects as `system` activities rather than comments (§38.26).
+// which the Store projects as `system` activities rather than comments (Issue collaboration D2).
 //
 //nolint:gocritic // value-typed dispatch request mirrors the ExecutionDispatcher port; the mock drives the observer synchronously
 func (MockExecutionDispatcher) Execute(ctx context.Context, req core.DispatchRequest, obs core.ExecutionObserver) {

@@ -53,7 +53,7 @@ func TestCredentialedCloneRefusesMissingExecutorAndAnonymousFallback(t *testing.
 	if f.scalar("SELECT count(*) FROM clone_executions WHERE workspace_id=$1", wid) != 0 {
 		t.Fatal("credentialed project fell back to anonymous/static Git")
 	}
-	if f.scalar("SELECT count(*) FROM projects WHERE id=$1 AND owner_user_id=$2 AND credential_ref_id=$3", created.O("resource").S("id"), f.uid, ref.S("id")) != 1 {
+	if f.scalar("SELECT count(*) FROM projects p JOIN repository_bindings b ON b.project_id=p.id WHERE p.id=$1 AND p.owner_user_id=$2 AND b.credential_ref_id=$3", created.O("resource").S("id"), f.uid, ref.S("id")) != 1 {
 		t.Fatal("refusal rewrote durable ownership or reference")
 	}
 }

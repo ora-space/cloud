@@ -4,7 +4,7 @@ package core
 // querying results, local code access, ordinary restart and cleanup do not call this guard.
 // An available reference alone cannot enable a missing scoped credential provider.
 func requireRepositoryAccess(t *transaction, pid string) {
-	p := t.one("SELECT * FROM projects WHERE id=$1", pid)
+	p := t.one("SELECT * FROM "+projectView+" p WHERE id=$1", pid)
 	require(p != nil, 404, "not_found")
 	id := p.S("repositoryCredentialRefId")
 	if id == "" {

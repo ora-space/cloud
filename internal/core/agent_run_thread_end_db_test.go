@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-// Phase 4C S7 DB tests (T4C-31, T4C-32, T4C-33, T4C-34): the two ending triggers Cloud can reach
+// DB tests for the two ending triggers Cloud can reach
 // without a new public API, and the Phase 5 boundary they must stop at.
 //
-// T4C-35 (the user-end endpoint) does not exist: G-018 is still an unapproved ADR supplement, so no
-// endpoint implements `user_ended` and this file tests only `idle_timeout` and `cancelled`.
+// The user-initiated end (`user_ended`) is a public endpoint covered over HTTP by
+// integration/agent_run_thread_end_test.go; this file tests only `idle_timeout` and `cancelled`.
 //
 // The tests drive the shipped loops (EndIdleAgentThreadsOnce / ReactToCancelledAgentRunsOnce) and the
 // real control-plane seam on a real isolated PostgreSQL schema, exactly as cmd/server wires them. The
@@ -44,7 +44,7 @@ func stageIdleThread(t *testing.T, store *Store, runID string, age time.Duration
 }
 
 // requestCancel records the cancellation request the ending reaction consumes. No Cloud API writes
-// this column yet (G-026), so a test states the request directly; the reaction under test is the
+// this column yet, so a test states the request directly; the reaction under test is the
 // shipped one either way.
 func requestCancel(t *testing.T, store *Store, runID string) {
 	t.Helper()
@@ -140,7 +140,7 @@ func threadHistory(t *testing.T, store *Store, runID string) []string {
 	return out
 }
 
-// TestIdleScanEndsAnExpiredThreadOnce (T4C-31, D-4C-10): a Thread whose idle window has expired is
+// TestIdleScanEndsAnExpiredThreadOnce (Thread D4): a Thread whose idle window has expired is
 // moved to `ending` with exactly one EndSession{idle_timeout} in its own transaction, a repeated tick
 // emits no second request, and the run's own phase/status are untouched — an EndSession is a request,
 // not a terminal state (IssueRun D6).
@@ -193,7 +193,7 @@ func TestIdleScanEndsAnExpiredThreadOnce(t *testing.T) {
 	}
 }
 
-// TestIdleScanLeavesUnconfiguredAndUnfinishedWindowsAlone (T4C-31, D-4C-10): an unset window ends
+// TestIdleScanLeavesUnconfiguredAndUnfinishedWindowsAlone (Thread D4): an unset window ends
 // nothing at all — a zero-length window would shut down every live session the instant it went idle —
 // and a Thread the POST already returned to `active` is not ended by a scan that ran afterwards.
 func TestIdleScanLeavesUnconfiguredAndUnfinishedWindowsAlone(t *testing.T) {
@@ -220,7 +220,7 @@ func TestIdleScanLeavesUnconfiguredAndUnfinishedWindowsAlone(t *testing.T) {
 	}
 
 	// A POST that arrives inside the window returns the Thread to active and clears idle_since; the
-	// scan that runs afterwards re-reads the same predicate and finds nothing (scenario 5 of §4C.14,
+	// scan that runs afterwards re-reads the same predicate and finds nothing (
 	// POST-first order).
 	other := dispatcherDB(t)
 	other.ThreadIdleTimeout = 15 * time.Minute
@@ -244,7 +244,7 @@ func idleAgeOnly(t *testing.T, store *Store, runID string) sql.NullString {
 	return since
 }
 
-// TestCancelWithoutASessionReleasesTheRun (T4C-32, IssueRun D6): a cancel that arrives before any
+// TestCancelWithoutASessionReleasesTheRun (IssueRun D6): a cancel that arrives before any
 // session was declared takes D6's other outcome — the run releases straight from `starting` with
 // deliveryState=skipped, its Workspace delete declared — and gets no `ending` state and no EndSession,
 // because there is no session to shut down. The two cancel outcomes are distinct transitions.
@@ -287,7 +287,7 @@ func TestCancelWithoutASessionReleasesTheRun(t *testing.T) {
 	}
 }
 
-// TestCancelWithASessionEndsTheThread (T4C-32, IssueRun D6): once a session exists, the cancel ends
+// TestCancelWithASessionEndsTheThread (IssueRun D6): once a session exists, the cancel ends
 // the Thread instead — one transaction, one EndSession{cancelled} — for a Thread in any live state,
 // including a `starting` run whose Thread is still `pending`.
 //
@@ -354,7 +354,7 @@ func TestCancelWithASessionEndsTheThread(t *testing.T) {
 	}
 }
 
-// TestCancelAfterEndingEmitsNoSecondRequest (T4C-32, plan §4C.11): a cancel that arrives after the
+// TestCancelAfterEndingEmitsNoSecondRequest (IssueRun D6): a cancel that arrives after the
 // Thread is already `ending` records the request and nothing else — no second EndSession, no second
 // reaction, no terminal state. The Thread ending path has exactly one request in it.
 func TestCancelAfterEndingEmitsNoSecondRequest(t *testing.T) {
@@ -384,7 +384,7 @@ func TestCancelAfterEndingEmitsNoSecondRequest(t *testing.T) {
 	}
 }
 
-// TestCancelDuringProvisioningIsLeftToSettlement (T4C-32, IssueRun D3/D6): a cancel while the run is
+// TestCancelDuringProvisioningIsLeftToSettlement (IssueRun D3/D6): a cancel while the run is
 // still `provisioning` belongs to the create_workspace operation's own terminal transaction, which
 // already releases it. The Thread ending scan must not touch it — reacting here would declare a
 // Workspace delete while the operation is still building that Workspace.
@@ -421,7 +421,7 @@ func TestCancelDuringProvisioningIsLeftToSettlement(t *testing.T) {
 	}
 }
 
-// TestPendingCancelWinsOverIdleTimeout (T4C-31/T4C-32, §4C.14 #5): a Thread that is both idle and
+// TestPendingCancelWinsOverIdleTimeout (Thread D4, IssueRun D6): a Thread that is both idle and
 // carrying a cancellation request ends with `cancelled` and never with `idle_timeout` — the idle
 // scan's predicate excludes a requested cancel, so the reason on the wire always identifies the
 // trigger that actually fired.
@@ -446,7 +446,7 @@ func TestPendingCancelWinsOverIdleTimeout(t *testing.T) {
 	}
 }
 
-// TestThreadEndingConcurrencyMatrix (T4C-33, §4C.14): the ending triggers raced against each other
+// TestThreadEndingConcurrencyMatrix (Thread D4): the ending triggers raced against each other
 // and against the takeover, driven concurrently on one real PostgreSQL schema with a channel barrier
 // — no sleeps, no timing assumptions. Every scenario asserts the complete set of permitted serial
 // outcomes, which is what the global advisory lock plus each exact CAS is supposed to produce: the
@@ -632,10 +632,10 @@ func TestThreadEndingConcurrencyMatrix(t *testing.T) {
 	})
 }
 
-// TestThreadHistoryIsImmutableAcrossEnding (T4C-34, Thread D1 invariant 4 / plan §4C.11): from a
+// TestThreadHistoryIsImmutableAcrossEnding (Thread D1 invariant 4): from a
 // taken-over Thread through both ending triggers and every repeated tick, no Thread entry's `record`
 // is rewritten and no `seq` is renumbered — the only mutable column on the whole 4C path is `status`,
-// and it moves one way only. The GET half of T4C-34 stays deferred with S2a, which this round does
+// and it moves one way only. The GET half stays deferred with the Thread read, which this round does
 // not implement; what is provable at the storage boundary is proven here.
 //
 // The same walk also holds the Phase 5 boundary: nothing on this path writes `ended`, marks a queued

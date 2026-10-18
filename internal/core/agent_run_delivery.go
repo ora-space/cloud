@@ -6,8 +6,7 @@ import (
 )
 
 // The delivery half of an Agent IssueRun: the B-owned settlement behind the control plane's
-// OnDeliverySettled hook (controller-integration D6 deliverySettled, IssueRun D3/D4/D5; plan §5
-// Batch 2).
+// OnDeliverySettled hook (controller-integration D6 deliverySettled, IssueRun D3/D4/D5).
 //
 // The control plane owns the whole takeover this reacts to. It acknowledges the delivery execution's
 // terminal Node event with a receipt, writes the durable result, runs the object-store check that the
@@ -61,7 +60,7 @@ func deliveryRetryBackoff(attempted int) time.Duration {
 }
 
 // settleDelivery is the B-owned delivery-settlement core behind the A→B hook OnDeliverySettled
-// (controller-integration D6 deliverySettled, IssueRun D3/D4/D5; plan §5 Batch 2).
+// (controller-integration D6 deliverySettled, IssueRun D3/D4/D5).
 //
 // It runs on the caller-owned *transaction of the delivery execution's terminal event, inside which
 // everything it decides must commit or roll back with the receipt, the verification verdict, the
@@ -134,7 +133,7 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 	// refusing here would leave the Node's terminal event unacknowledged forever, the liveness hole
 	// controller-integration D2's receipt design exists to prevent. Receipted as a plain fact about a
 	// finished attempt, the same result lets the Node stop replaying once the run has moved on
-	// (mandate §19, IssueRun D3 "阶段不倒退").
+	// (IssueRun D3: phases never move backwards).
 	if o.S("phase") != "delivering" {
 		return nil
 	}

@@ -28,6 +28,8 @@ type Store interface {
 	RenewModelGrant(context.Context, core.ModelRuntimeScope, string, string) (core.ModelGrant, error)
 	RevokeModelGrant(context.Context, core.ModelRuntimeScope, string, string) error
 	ResolveModelGrant(context.Context, string) (core.ModelGrant, error)
+	BeginModelAttempt(context.Context, *core.ModelGrant, string, bool) error
+	FinishModelAttempt(context.Context, string, *core.ModelAttemptFinish) error
 }
 
 // Authenticator verifies the purpose-bound Gateway and user signatures before policy lookup.
@@ -45,6 +47,8 @@ type Options struct {
 	RecheckInterval time.Duration
 	Health          func(context.Context) error
 	Logger          *zap.Logger
+	// Now supplies wall time with its monotonic component for attempt durations.
+	Now func() time.Time
 }
 
 // Service owns the model boundary; it holds no authoritative business or token state in memory.
@@ -58,6 +62,9 @@ func New(input *Options) (*Service, error) {
 	o := *input
 	if o.Logger == nil {
 		o.Logger = zap.NewNop()
+	}
+	if o.Now == nil {
+		o.Now = time.Now
 	}
 	u, err := url.Parse(o.PublicOrigin)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {

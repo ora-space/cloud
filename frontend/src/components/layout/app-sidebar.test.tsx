@@ -76,6 +76,14 @@ describe('AppSidebar workspace switcher', () => {
     const user = userEvent.setup()
     renderDashboard('/w/cloud-dev/issues')
     await screen.findByText('Issues screen')
+    const sessions = screen.getByRole('link', { name: '会话分析' })
+    const workflows = screen.getByRole('link', { name: '工作流' })
+    const links = screen.getAllByRole('link')
+    expect(sessions).toHaveAttribute('href', '/w/cloud-dev/sessions')
+    expect(links[links.indexOf(workflows) + 1]).toBe(sessions)
+    expect(sessions.closest('[data-sidebar="group"]')).toBe(
+      workflows.closest('[data-sidebar="group"]'),
+    )
 
     await user.click(screen.getByRole('button', { name: /Cloud Dev/ }))
 

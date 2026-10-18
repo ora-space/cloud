@@ -14,7 +14,8 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/server ./cmd/server && \
     CGO_ENABLED=0 go build -trimpath -o /out/model-gateway ./cmd/model-gateway && \
     CGO_ENABLED=0 go build -trimpath -o /out/git-server ./cmd/git-server && \
     CGO_ENABLED=0 go build -trimpath -o /out/cloudctl ./cmd/cloudctl && \
-    CGO_ENABLED=0 go build -trimpath -o /out/devsetup ./cmd/devsetup
+    CGO_ENABLED=0 go build -trimpath -o /out/devsetup ./cmd/devsetup && \
+    CGO_ENABLED=0 go build -trimpath -o /out/git-server-preset ./cmd/git-server-preset
 
 FROM node:24-alpine AS web-build
 WORKDIR /src/frontend
@@ -26,11 +27,17 @@ COPY frontend/ ./
 RUN npm run build
 
 # Local-development key and migration setup (cmd/devsetup): generates the Gateway/Cloud key pairs
-# into .local/gateway and applies migrations. Never part of the service image.
+# into .local/gateway and applies migrations. It also carries cmd/git-server-preset, which writes
+# Git Server contract fixtures straight into the repository volume and database for acceptance;
+# /var/lib/ora-git matches the Git Server's volume owner. Never part of the service image.
 FROM alpine:3.22 AS devsetup
-RUN adduser -D -u 10001 ora && install -d -o ora -g ora -m 0700 /app/.local /app/.local/gateway
+RUN apk add --no-cache git && adduser -D -u 10001 ora && \
+    install -d -o ora -g ora -m 0700 /app/.local /app/.local/gateway /var/lib/ora-git
 WORKDIR /app
-COPY --from=build /out/devsetup /app/
+COPY --from=build /out/devsetup /out/git-server-preset /app/
+# git-server-preset reads the database like every Cloud command: configs/config.yaml overridden by
+# CLOUD_DATABASE_DSN.
+COPY configs/config.yaml /app/configs/
 USER ora
 ENTRYPOINT ["/app/devsetup"]
 

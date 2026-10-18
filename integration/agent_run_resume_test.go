@@ -76,7 +76,7 @@ func seedFollowUpRun(t *testing.T, f *fixture, prior liveThreadScene, otherProje
 	if otherProject {
 		moved := uuid.NewString()
 		repository = "https://example.invalid/moved.git"
-		exec("project", `INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,$4,'moved',$5,'main','active')`, moved, prior.tenantID, user, prior.spaceID, repository)
+		exec("project", `WITH p AS (INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'moved','active') RETURNING id,tenant_id) INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) SELECT gen_random_uuid(),tenant_id,id,$5,'main' FROM p`, moved, prior.tenantID, user, prior.spaceID, repository)
 		exec("main-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,runtime_generation,requested_ref) VALUES($1,$2,$3,$4,'main','running','ready',1,'HEAD')`, uuid.NewString(), prior.tenantID, user, moved)
 		exec("issue", `UPDATE issues SET project_ref=$2 WHERE id=$1`, prior.issueID, moved)
 		project = moved

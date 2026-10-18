@@ -20,7 +20,7 @@ dsn = "host=127.0.0.1 port=55432 user=ora password=ora-local dbname=ora sslmode=
 
 # The Gateway has one external login provider; fill in at most one of [github] and [idaas].
 # Leave both empty to develop with the Gateway's built-in development login only (any typed
-# identity, including a huawei-corp uuid, signs in; see docs/gateway.md).
+# identity, including a huawei-corp uuid, signs in; see docs/identity/gateway.md).
 
 [github]
 # To test real GitHub login, create an OAuth App at https://github.com/settings/developers
@@ -34,7 +34,7 @@ client_secret = ""
 [idaas]
 # Huawei IDaaS 2.0 application (client_secret_post). Its registered callback must match
 # <base_url>/auth/callback/huawei-idaas exactly and the Gateway requires an https base_url, so
-# this is for a deployed test environment rather than a laptop; see docs/gateway.md.
+# this is for a deployed test environment rather than a laptop; see docs/identity/gateway.md.
 base_url = "https://uniportal-beta.huawei.com"
 client_id = ""
 client_secret = ""

@@ -5,10 +5,10 @@ import (
 	"fmt"
 )
 
-// Thread ending (Thread D4, IssueRun D4/D6; plan §4C.10/§4C.11, §4C.14).
+// Thread ending (Thread D4, IssueRun D4/D6).
 //
 // All three of D4's ending triggers live here: the idle window expiring, a cancellation request, and
-// the user ending the conversation from the UI (`POST .../thread/end`, approved by G-018).
+// the user ending the conversation from the UI (`POST .../thread/end`).
 //
 // Everything in this file stops at `thread_state = 'ending'`. Nothing here writes `ended`, marks a
 // queued turn `discarded`, settles a Revision, moves the run to `delivering`/`releasing`/`done`, or
@@ -26,13 +26,13 @@ const agentThreadEndBatchSize = 100
 // endAgentThread moves one authoritative run from a live Thread state to `ending` and releases
 // exactly one EndSession command carrying reason, inside the caller's transaction.
 //
-// The CAS is exact rather than tolerant (plan §4C.13-2): the caller reached here only after
+// The CAS is exact rather than tolerant: the caller reached here only after
 // re-reading a row this trigger applies to, every writer shares the one advisory lock, and the CAS
 // repeats the state predicate the re-read approved — so zero affected rows contradicts the read
 // itself. That is invariant corruption, and the only honest outcome is to roll the transaction back
 // rather than to skip a transition a receipted request depends on.
 //
-// `idle_since` is cleared with the state (Thread D4, §4C.10): the instant is only meaningful while
+// `idle_since` is cleared with the state (Thread D4): the instant is only meaningful while
 // the Thread is idle, and leaving it behind would let a later reader — a second tick, or anything
 // consulting the partial index — treat an already-ending Thread as an expired idle one.
 // The command write cannot fail on anything the caller sent (its body is built and validated here),
@@ -63,13 +63,13 @@ func (s *Store) endAgentThread(t *transaction, o Object, reason string) {
 }
 
 // endIdleAgentThread ends one run whose idle window has expired, in its own short transaction
-// (Thread D4, plan §4C.10-2). The window and the comparison are entirely the database's: the caller
+// (Thread D4). The window and the comparison are entirely the database's: the caller
 // passes a duration, the SQL compares `idle_since` against `now()`, and no Go process clock — let
 // alone a Controller's or a Node's — can decide that a Thread is idle (Thread D4 invariant 5).
 //
 // The re-read repeats the scan's whole predicate, so a run that an answer, a cancel or another tick
 // already moved is a deterministic no-op and never an error — that is what makes a second tick
-// produce no second EndSession (scenario 6 of §4C.14). `cancel_requested_at IS NULL` is part of the
+// produce no second EndSession. `cancel_requested_at IS NULL` is part of the
 // predicate so a pending cancellation always wins with `cancelled` rather than racing into
 // `idle_timeout`; when both triggers do fire in the same instant, the CAS still lets exactly one of
 // them commit.
@@ -154,7 +154,7 @@ func (s *Store) EndIdleAgentThreadsOnce(ctx context.Context) error {
 	return nil
 }
 
-// endThreadByUser is the public user-initiated end (Thread D4, G-018) behind
+// endThreadByUser is the public user-initiated end (Thread D4) behind
 // `POST .../runs/{rid}/thread/end`. It runs on the caller's transaction, so the `ending` write, the
 // EndSession command and the caller's idempotency record share one commit.
 //
@@ -167,7 +167,7 @@ func (s *Store) EndIdleAgentThreadsOnce(ctx context.Context) error {
 // The lifecycle check is the same closed set the other two triggers move out of: `pending | active |
 // idle` end, `ending | ended` are already on their way and answer 409 thread_closed. A state outside
 // D4's set is Cloud's own broken invariant and aborts as a 500 rather than being reported to the
-// client as a conflict (plan §4C.15).
+// client as a conflict.
 //
 // It stops at `ending`. `ended` belongs to the session's terminal state (Thread invariant 4) and
 // nothing here writes `discarded`, settles a Revision or deletes a Workspace — that is Phase 5.
@@ -181,8 +181,8 @@ func endThreadByUser(t *transaction, s *Store, r *PublicRequest) Object {
 		member := t.one("SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='active'", r.TenantID, uid)
 		require(uid == binding.S("userId") || member != nil && member.S("role") == "admin", 403, "model_run_end_forbidden")
 	}
-	// A run whose session was never declared has no Thread to end: D-4C-01 materializes `pending`
-	// inside StartSession, so an empty state is a genuine absence, answered like every other
+	// A run whose session was never declared has no Thread to end: StartSession materializes `pending`,
+	// so an empty state is a genuine absence, answered like every other
 	// out-of-scope run rather than as a conflict.
 	state := run.S("threadState")
 	require(state != "", 404, "not_found")
@@ -197,14 +197,14 @@ func endThreadByUser(t *transaction, s *Store, r *PublicRequest) Object {
 	return Object{"threadState": "ending"}
 }
 
-// reactToAgentRunCancel is the B-owned reaction to a cancellation request (IssueRun D6, plan
-// §4C.11). It runs in the caller's transaction and stops at `ending`, exactly like the idle path:
+// reactToAgentRunCancel is the B-owned reaction to a cancellation request (IssueRun D6).
+// It runs in the caller's transaction and stops at `ending`, exactly like the idle path:
 // the request is recorded and the session is asked to shut down, and nothing here makes the run
 // terminal, releases it, or deletes its Workspace.
 //
 // Which of D6's two no-session outcomes applies is decided by `thread_state`, the durable record of
-// whether a session was ever declared (D-4C-01 materializes `pending` inside StartSession), and not
-// by `phase` alone. Plan §4C.11 names `provisioning|starting` for the releasing outcome, but
+// whether a session was ever declared (StartSession materializes `pending`), and not
+// by `phase` alone. The earlier design named `provisioning|starting` for the releasing outcome, but
 // IssueRun D6 qualifies it — "取消发生在 provisioning/starting（尚无会话）时" — and only the
 // qualifier is consistent with IssueRun invariant 3, which allows a `delete_workspace` declaration
 // for the no-session cancel and for nothing else on this path. A `starting` run whose session was
@@ -243,8 +243,8 @@ func (s *Store) reactToAgentRunCancel(ctx context.Context, runID string) error {
 }
 
 // releaseCancelledStartingRun moves a `starting` run whose cancel arrived before any session was
-// declared straight to releasing/cancelled with result.deliveryState=skipped (IssueRun D6, plan
-// §4C.11) and declares the Workspace delete in the same transaction.
+// declared straight to releasing/cancelled with result.deliveryState=skipped (IssueRun D6)
+// and declares the Workspace delete in the same transaction.
 //
 // It is the sibling of settleRunWorkspace's provisioning cancel branch rather than a reuse of it:
 // that branch runs on the create_workspace operation's terminal transaction and is gated on
@@ -309,8 +309,8 @@ func (s *Store) scanCancelledAgentRuns(ctx context.Context, limit int) ([]string
 // transaction rolled back, the run is unchanged, and the next tick retries it. Only a scan-level
 // failure cancels the pass.
 //
-// The request is written by whoever owns the cancellation API — no such writer exists in Cloud yet
-// (G-026), so today this pass reacts to requests that arrived out of band.
+// The request is written by whoever owns the cancellation API — no such writer exists in Cloud
+// yet, so today this pass reacts to requests that arrived out of band.
 func (s *Store) ReactToCancelledAgentRunsOnce(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

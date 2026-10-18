@@ -138,7 +138,7 @@ func assertGiveUpSettlement(t *testing.T, f *fixture, runID, status string) {
 		t.Fatalf("the unfinished delete must be terminally failed as node_unavailable, got %v", last)
 	}
 	// And out of every worker's reach: no ordinary claim can pick it up, so the residual Workspace is
-	// never retried by the machinery D8 just stopped (mandate §9/§10).
+	// never retried by the machinery D8 just stopped.
 	var unfinished int
 	must(t, f.store.Pool.QueryRow(`
 		SELECT count(*) FROM operations
@@ -172,7 +172,7 @@ func (f *fixture) pointLeaseAtSimulator(t *testing.T) {
 	must(t, e)
 }
 
-// G032-1, §3 — D8 changes nothing about the ordinary release. A delete that succeeds still settles
+// D8 changes nothing about the ordinary release. A delete that succeeds still settles
 // the run `done` with no failure reason at all, and the give-up pass is inert on a finished run even
 // when its window is armed: the unreachability limit is not a second, parallel completion path.
 func TestG032_1_SuccessfulDeleteIsUnchangedByTheGiveUpPass(t *testing.T) {
@@ -214,7 +214,7 @@ func TestG032_1_SuccessfulDeleteIsUnchangedByTheGiveUpPass(t *testing.T) {
 	}
 }
 
-// G032-2, §4 — the window is a limit, not an immediate verdict. A Node whose heartbeat is younger
+// The window is a limit, not an immediate verdict. A Node whose heartbeat is younger
 // than the configured window leaves the run `releasing` with everything untouched, so a Controller
 // that is merely between reports is never abandoned.
 func TestG032_2_UnreachableBelowTheWindowStaysReleasing(t *testing.T) {
@@ -244,7 +244,7 @@ func TestG032_2_UnreachableBelowTheWindowStaysReleasing(t *testing.T) {
 	}
 }
 
-// G032-3, §4/§7/§8/§9/§12 — the core case. A Node unknown for longer than the window ends the
+// The core case. A Node unknown for longer than the window ends the
 // release: the run reaches `done` with its business status untouched and failure_reason set, while
 // the Workspace it could not delete is still there, still bound, and never claimed as released.
 func TestG032_3_UnreachablePastTheWindowSettlesDoneWithoutClaimingDeletion(t *testing.T) {
@@ -291,7 +291,7 @@ func TestG032_3_UnreachablePastTheWindowSettlesDoneWithoutClaimingDeletion(t *te
 	}
 }
 
-// G032-4, §6 — D8 is an unreachability limit, not a delete-retry limit. A Node that explicitly
+// D8 is an unreachability limit, not a delete-retry limit. A Node that explicitly
 // refuses to quiesce keeps the run `releasing` no matter how long the delete has been failing, and
 // the release keeps being pursued: Cloud re-declares, and the run still finishes normally.
 func TestG032_4_RefusedQuiesceNeverTriggersGiveUpEvenPastTheWindow(t *testing.T) {
@@ -352,7 +352,7 @@ func TestG032_4_RefusedQuiesceNeverTriggersGiveUpEvenPastTheWindow(t *testing.T)
 	}
 }
 
-// G032-5, §13 case A — when the delete succeeds, D8 has nothing left to decide. The success commits
+// When the delete succeeds, D8 has nothing left to decide. The success commits
 // the run `done` with no failure reason, and a pass that runs afterwards — including one racing it
 // from the same start — is a deterministic no-op.
 func TestG032_5_SuccessfulDeleteWinsTheRaceAndThePassIsANoOp(t *testing.T) {
@@ -456,7 +456,7 @@ func TestG032_5_SuccessfulDeleteWinsTheRaceAndThePassIsANoOp(t *testing.T) {
 	})
 }
 
-// G032-6, §13 case B — when D8 wins, the delete's own result is stale and must not be able to
+// When D8 wins, the delete's own result is stale and must not be able to
 // reverse the run, rewrite the operation into a success, or report the residual Workspace as
 // deleted. The Controller's next settlement for that operation is refused by the operation's state.
 func TestG032_6_GiveUpWinsTheRaceAndAStaleDeleteSettlementIsRefused(t *testing.T) {
@@ -520,7 +520,7 @@ func TestG032_6_GiveUpWinsTheRaceAndAStaleDeleteSettlementIsRefused(t *testing.T
 	assertGiveUpSettlement(t, f, run.runID, status)
 }
 
-// G032-7, §10/§11 — a run D8 settled is out of every recovery path. The release is never re-declared,
+// A run D8 settled is out of every recovery path. The release is never re-declared,
 // the deletion is never retried, and the second give-up pass cannot write a second time.
 func TestG032_7_ADoneRunIsNeverRedeclaredOrRewritten(t *testing.T) {
 	f := setup(t)
@@ -558,7 +558,7 @@ func TestG032_7_ADoneRunIsNeverRedeclaredOrRewritten(t *testing.T) {
 	}
 }
 
-// G032-8, §7/§15 — `done` is not a business outcome. All three session outcomes D4 derives survive
+// `done` is not a business outcome. All three session outcomes D4 derives survive
 // D8 untouched: the give-up decides only that Cloud stopped waiting, never how the Agent's run ended.
 func TestG032_8_BusinessStatusMatrixSurvivesTheGiveUp(t *testing.T) {
 	cases := []struct {
@@ -592,7 +592,7 @@ func TestG032_8_BusinessStatusMatrixSurvivesTheGiveUp(t *testing.T) {
 	}
 }
 
-// G032-9, §15 — no backward lifecycle. The phases a D8 run passed through advance exactly one stage
+// No backward lifecycle. The phases a D8 run passed through advance exactly one stage
 // at a time, and every transition that would move it backwards, re-open a closed stage, or convert
 // one business outcome into another is refused or is a no-op.
 func TestG032_9_NoBackwardLifecycleAfterGiveUp(t *testing.T) {

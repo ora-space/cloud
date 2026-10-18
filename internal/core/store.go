@@ -92,6 +92,9 @@ type Store struct {
 	// ObjectStore signs upload grants and verifies stored checksums outside SQL transactions.
 	// Nil means delivery is explicitly skipped through the transaction-scoped business hook.
 	ObjectStore *objectstore.Config
+	// WorkflowAssets downloads the pinned package of a workflow plugin for asset import. Nil
+	// keeps the import loop idle, so a control-plane-only deployment never leaves the cluster.
+	WorkflowAssets WorkflowAssetSource
 	// OnThreadEvents receives only first-taken-over events and the caller's SQL transaction.
 	// Hooks must use that transaction; starting another Store transaction would deadlock.
 	OnThreadEvents func(context.Context, *sql.Tx, string, string, []Object) error
@@ -140,6 +143,11 @@ type Store struct {
 	AgentRestoreTimeout time.Duration
 	// AgentEndConfirmTimeout is frozen at the first unresolved startup ending request.
 	AgentEndConfirmTimeout time.Duration
+	// AgentWorkspaceBlockedTimeout is frozen when a run Workspace's creation first persists
+	// `blocked` (ADR D5): expiry abandons the business run, fails the creation operation, releases
+	// the Project operation slot and retains an independent residual ledger. Zero-value stores
+	// select the approved default when the deadline is first frozen.
+	AgentWorkspaceBlockedTimeout time.Duration
 
 	// DeliveryGiveUpAfter and DeliveryUnreachableAfter are IssueRun D5's two first-version give-up
 	// limits for a Revision delivery: how long delivery may fail continuously before Cloud abandons

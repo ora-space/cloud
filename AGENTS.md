@@ -16,9 +16,10 @@ service only; the shared contract rules in "HTTP, contracts, and security" apply
 
 # Go
 
-Ora Cloud is an authoritative Go service. Preserve the boundaries documented in `README.md`,
-`docs/core-contract.md`, `docs/execution-contract.md`, and `docs/authentication.md`. The Go version
-in `go.mod`, repository tasks in `Taskfile.yml`, and checks in `.golangci.yml` are authoritative.
+Ora Cloud is an authoritative Go service. Preserve the boundaries documented in
+`docs/architecture.md`, `docs/core/persistence.md`, `docs/identity/authentication.md`, and the
+document for the domain you are changing (see `docs/README.md`). The Go version in `go.mod`,
+repository tasks in `Taskfile.yml`, and checks in `.golangci.yml` are authoritative.
 
 1. **Document intent**: Exported packages, types, functions, methods, and constants must have
    idiomatic doc comments. Document non-obvious unexported code when the contract or invariant is
@@ -154,8 +155,8 @@ the frontend gate does not need PostgreSQL. See `frontend/AGENTS.md` for the fro
 
 `task check`, `task test`, `task test:integration`, and `task test:race` require a real PostgreSQL
 database through `TEST_DATABASE_URL`; they must fail rather than silently skip when
-`REQUIRE_POSTGRES=1`. Follow `README.md` for the supported local PostgreSQL setup. Race tests on
-Windows require a working C compiler.
+`REQUIRE_POSTGRES=1`. Follow `docs/development/local-development.md` for the supported local
+PostgreSQL setup. Race tests on Windows require a working C compiler.
 
 - Add or update tests with every behavior change. Prefer table-driven tests for genuine input
   matrices, compare complete values when practical, and make failure messages identify the case and
@@ -174,6 +175,21 @@ Windows require a working C compiler.
 - When a behavior maps to a core test case under `specs/test-cases`, keep its stable path/anchor and
   evidence status accurate. A lower-level test counts as evidence only when its failure directly
   shows that the stated obligation is broken.
+
+## Documentation
+
+`docs/` holds the cross-module architecture, contract, operations and development documents, and
+`docs/README.md` is its map. Package internals belong in that directory's `README.md`.
+
+- Every document has a Chinese `x.md` and an English `x.en.md` linked to each other under the title.
+  Change both in the same change; English documents link to English documents.
+- Describe behavior the current code can verify and link the governing specs ADRs instead of
+  retelling them. Never describe a `proposed` decision, or an `approved` one that is not yet
+  implemented, as implemented.
+- Endpoint fields are defined by `api/openapi.json`; documents explain semantics and do not copy
+  field tables.
+- Plans, progress, implementation logs, research notes, and acceptance records do not belong in the
+  repository; they live in the issue tracking the work.
 
 ## Change workflow
 

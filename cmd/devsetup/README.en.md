@@ -23,4 +23,4 @@ Driven by `config.toml` (copied from `config.toml.template`, ignored by Git), it
 - **Writes only under `.local/`**: that directory and `config.toml` are ignored by Git; every file is `0600`, and nothing generated reaches the repository, logs or the database.
 - **Not for deployment**: there is no rotation, custody or distribution.
 
-See the [cmd overview](../README.en.md) and the [Gateway documentation](../../docs/gateway.md).
+See the [cmd overview](../README.en.md) and the [Gateway document](../../docs/identity/gateway.en.md).

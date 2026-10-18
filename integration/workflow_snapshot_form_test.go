@@ -15,7 +15,7 @@ func versionFormPath(f *fixture, wid, sid string) string {
 	return f.path("/workflows/" + wid + "/snapshots/" + sid + "/form")
 }
 
-// TestWorkflowSnapshotFormProjectsTheChosenVersion covers the snapshot-scoped form read (§38.37g): the
+// TestWorkflowSnapshotFormProjectsTheChosenVersion covers the snapshot-scoped form read (Issue collaboration D7): the
 // descriptor is projected from the version named in the path, which is what lets a caller pick a
 // version before rendering it. The test tells the two documents apart by making them disagree — the
 // live document is edited and published again, so a projection of it and a projection of the first

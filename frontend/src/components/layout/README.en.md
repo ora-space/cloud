@@ -7,3 +7,5 @@ This module composes the sidebar, page header, and route outlet. Authentication 
 `AppSidebar` reads the current user through `useSession` and lists every tenant space returned by `/me/spaces`. After switching, resource calls use the selected space's `tenantId`; "new workspace" provisions a new tenant. It also offers sign-out and, when the gateway lists `github`, GitHub logout. Business navigation may still use simulated data, but this module must never store tokens or duplicate authentication state.
 
 Tests cover current-user display, space resolution and fallback, event-stream subscription, sign-out and the GitHub sign-out.
+
+Session analysis sits directly below Workflows in the sidebar's Work group, uses `/w/:workspaceSlug/sessions`, and links to Agent details at `/sessions/agent/:issueId/:runId`. `workspacePaths` owns these links. Layout tests and `session-routes.test.tsx` cover the sidebar order and real tenant route boundary. `features/sessions`, `session-data` and `session-timeline` implement the feature.

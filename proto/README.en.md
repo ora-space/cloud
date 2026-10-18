@@ -65,4 +65,4 @@ RuntimeControlService carries Cloud-decided target bindings, closure acknowledge
 `AgentSessionSpec.model_binding_id` is a Cloud-frozen configuration reference containing no key
 or temporary token. `RegisterNodeRequest.model_proxy` and `NodeRecord.model_proxy` preserve the
 handshake capability; older Nodes default to false. Both dispatch and authorization require this
-capability. See [model connections](../docs/model-connections.en.md).
+capability. See [personal model connections](../docs/models/model-access.en.md).

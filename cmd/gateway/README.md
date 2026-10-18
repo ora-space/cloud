@@ -20,4 +20,4 @@
 - 运行时只访问 `gateway_login_attempts`、`gateway_sessions` 与 `schema_migrations`。
 - 华为内网部署使用 IDaaS 2.0 Authorization Code（`client_secret_post` 机密客户端）；W3 登录只建立 Cloud 本地会话，退出不影响 W3/IDaaS SSO。
 
-参见 [cmd 入口总览](../README.md)、[认证边界 (`internal/gateway`)](../../internal/gateway/README.md) 与 [Gateway 文档](../../docs/gateway.md)。
+参见 [cmd 入口总览](../README.md)、[认证边界 (`internal/gateway`)](../../internal/gateway/README.md) 与 [Gateway 文档](../../docs/identity/gateway.md)。

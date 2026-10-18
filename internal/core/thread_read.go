@@ -2,10 +2,10 @@ package core
 
 import "strconv"
 
-// Thread read — the public GET .../runs/{rid}/thread (Thread D5, plan §4C.3). This is the read side
+// Thread read — the public GET .../runs/{rid}/thread (Thread D5). This is the read side
 // of the Thread and the authoritative source the panel is rebuilt from.
 //
-// The full approved read surface (Thread D5, A3/G-017): `after={seq}` and `before={seq}` are mutually
+// The full approved read surface (Thread D5): `after={seq}` and `before={seq}` are mutually
 // exclusive decimal `seq` cursors, neither means the tail window, `limit` defaults to 200 and caps at
 // 500, every response is ascending by `seq` regardless of direction, and the payload carries
 // `threadState`, `idleSince` and the window's `nextCursor`/`prevCursor`.
@@ -25,7 +25,7 @@ import "strconv"
 const ThreadPageLimit = 500
 
 // ThreadPageDefault is the window used when the caller sends no `limit`. D5 names the upper bound and
-// not the default; 200 is D-4C-02's choice, and it is applied here rather than in the router so the
+// not the default; 200 is the chosen default, and it is applied here rather than in the router so the
 // core stays the one authority for the read's own contract.
 const ThreadPageDefault = 200
 
@@ -45,12 +45,12 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 	// invent a resource rather than report that this run has none.
 	require(run != nil && run.S("executorType") == "agent", 404, "not_found")
 
-	// `thread_state` is NULL for a run whose session was never declared: D-4C-01 materializes
-	// `pending` inside StartSession, and nothing else writes the column before that. There is
+	// `thread_state` is NULL for a run whose session was never declared: StartSession materializes
+	// `pending`, and nothing else writes the column before that. There is
 	// genuinely no Thread to read yet, so this is the same not-found a run outside the caller's scope
 	// gets — never an empty `threadState`, which would put a value outside D4's closed set
 	// (pending|active|idle|ending|ended) on the wire. Which answer a not-yet-materialized Thread
-	// should give is part of the unapproved read surface, so it stays registered under G-017.
+	// should give is part of the unapproved read surface, so it stays an open question.
 	state := run.S("threadState")
 	require(state != "", 404, "not_found")
 
@@ -135,7 +135,7 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 // threadCursor decodes one Thread read cursor. The vocabulary is decimal `seq`, not the UUID
 // `page`/`window` use, so this reader must not reuse their helpers: `validID` would reject every
 // legal Thread cursor, and relaxing `window`'s UUID check would silently change every other list's
-// contract (plan §4C.3). The fault *names* are the shared ones so the error vocabulary stays uniform.
+// contract. The fault *names* are the shared ones so the error vocabulary stays uniform.
 func threadCursor(v string) int64 {
 	n, e := strconv.ParseInt(v, 10, 64)
 	if e != nil || n < 0 {
@@ -146,11 +146,11 @@ func threadCursor(v string) int64 {
 
 // threadEntryView projects one stored `thread_entries` row onto the public ThreadEntry contract
 // (Thread D1/D3). It is what keeps the entry's Node-owned columns (`node_execution_id`,
-// `node_sequence`) and its internal `run_id` off the wire: D-022's identity is Cloud-internal.
+// `node_sequence`) and its internal `run_id` off the wire: that identity is Cloud-internal.
 //
 // `turnId` and `status` describe the user-turn lifecycle and exist only for a user turn — 0022's
 // `(source = 'user') = (status IS NOT NULL)` CHECK makes that exactly `source = 'user'` — so a node
-// or system entry carries neither field rather than carrying a null (plan §4C.3).
+// or system entry carries neither field rather than carrying a null.
 func threadEntryView(row Object) Object {
 	out := Object{
 		"seq":       row["seq"],

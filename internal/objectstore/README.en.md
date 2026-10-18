@@ -4,16 +4,21 @@
 
 `internal/objectstore` serves the Revision path alone: it issues the **single-key, single-method,
 time-limited** upload grant for one delivery attempt (Cloud Revision D2/D3) and verifies an uploaded
-object's **existence, size and SHA-256** by HEAD before Cloud registers a Revision (D4 step 2). It
-decides no business semantics — who gets a grant, when, and what a failed verification means all
-belong to `internal/core`; this package gets signing and verification right.
+object's **existence, size and SHA-256** by HEAD before Cloud registers a Revision (D4 step 2).
+Registered session archives can also be read with private GET and verified against the actual byte
+size and checksum. Business authorization and failure policy belong to `internal/core`.
 
 Signing is a self-contained AWS Signature Version 4 (SigV4) implementation rather than a new
-dependency: the delivery path needs exactly two operations (presign one PUT, sign one HEAD), and the
-repository prefers the standard library over a new module for that.
+dependency: it supports PUT, HEAD and GET using the standard library.
 
 ## Files
 
+- `read.go`: `ReadVerified` signs GET against the configured private endpoint, refuses redirects,
+  requests the stored representation without automatic decompression, propagates cancellation and
+  applies a 30-second timeout. Declared, advertised and streamed size are bounded, and actual bytes
+  must match the registered size and SHA-256. Errors expose only unavailable, invalid or too-large
+  classifications, never storage URLs or transport details. `core/session_history.go` calls it
+  between two short authorization/registration transactions; it never holds a transaction over I/O.
 - `presign.go`: `Config` (endpoint, `public_endpoint`, region, bucket, path style, access key id and
   secret, grant TTL) and `Grant` (URL, method, the headers that must be sent unchanged, expiry);
   `PresignPUT` (signs one `PUT`, carrying `x-amz-sdk-checksum-algorithm: SHA256` and
@@ -32,7 +37,8 @@ repository prefers the standard library over a new module for that.
   `encoding/base64`, `encoding/hex`). The package does not import `internal/core`.
 - Called by: `internal/config` (`ObjectStoreConfig.Open` builds the `*Config` and validates it at
   startup with one `PresignPUT`); `cmd/server` (installs it as `store.ObjectStore`); `internal/core`
-  (`revision_grants.go` signs grants, `revision.go` verifies objects outside any transaction).
+  (`revision_grants.go` signs grants, `revision.go` verifies objects outside any transaction, and
+  `session_history.go` reads archives between current authorization and registration checks).
 - Credentials enter configuration as **file paths only** (`access_key_id_file`,
   `secret_access_key_file`), read and whitespace-trimmed by `internal/config` into `Config`; the
   values live only inside this process — never persisted, logged, or returned in a grant.
@@ -64,6 +70,11 @@ repository prefers the standard library over a new module for that.
   tests assert that no secret appears in the URL.
 
 ## Tests
+
+- `read_test.go` exercises private signed GET, real byte checksum and size, streamed bounds,
+  cancellation, refused redirects and safe errors against real HTTP test servers. Isolated core
+  PostgreSQL tests cover authorization and registration before/after I/O, scoped keys and read-only
+  transactions. All records in these tests are synthetic.
 
 - The unit tests are fully offline and deterministic, against a real `httptest` S3 double. They cover
   the grant's binding to the object key and its local signing, `PresignPUTChecksum`'s binding of the

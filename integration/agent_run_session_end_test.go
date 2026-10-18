@@ -13,13 +13,13 @@ package integration
 //
 // What is asserted, and why it is one assertion rather than several: receipt, durable result, Thread
 // `ended`, the queued turns' `discarded`, the run's `delivering` transition, the released delivery
-// work item and the sequence advance all live in ONE transaction (§7). Each case therefore asserts
+// work item and the sequence advance all live in ONE transaction. Each case therefore asserts
 // the whole group — a commit that produced only part of it is the failure mode these tests exist to
 // catch, and a per-field test would pass on a partial commit.
 //
 // What the tests are careful *not* to claim: nothing here asserts anything about DeliverySettled,
 // the Revision row, `releasing`, `done` or multi-instance delivery. Those are Phase 5 Batch 2 and
-// stay unimplemented (G-019 is only partially closed by this batch).
+// stay unimplemented here.
 
 import (
 	"context"
@@ -191,7 +191,7 @@ func drainSpace(hints <-chan core.SpaceEvent) []core.SpaceEvent {
 	}
 }
 
-// P5-1, P5-2, P5-3, §11, §14 — the terminal takeover ends the Thread, discards exactly the queued
+// The terminal takeover ends the Thread, discards exactly the queued
 // turns, leaves delivered turns and the rest of the log untouched, releases the delivery work item,
 // and publishes one `thread_changed` with no `thread_appended` and no new seq.
 func TestSessionEndedEndsThreadDiscardsQueuedAndReleasesDelivery(t *testing.T) {
@@ -337,7 +337,7 @@ func TestSessionEndedEndsThreadDiscardsQueuedAndReleasesDelivery(t *testing.T) {
 		t.Fatalf("the released work item must not be registered yet, got %v", work[0])
 	}
 
-	// §19: once the terminal transaction wins, the Thread is permanently closed — a later turn can
+	// Once the terminal transaction wins, the Thread is permanently closed — a later turn can
 	// never be accepted into `ended`.
 	late := f.postThread(scene.threadScene, "p5-late", threadBody("too late"), 409, "thread_closed")
 	if late.S("code") != "thread_closed" {
@@ -348,7 +348,7 @@ func TestSessionEndedEndsThreadDiscardsQueuedAndReleasesDelivery(t *testing.T) {
 	}
 }
 
-// P5-4, §8, §14 — the same terminal event, delivered twice, is one transition. Both replay shapes a
+// The same terminal event, delivered twice, is one transition. Both replay shapes a
 // Controller can produce are covered: a retry under the same submission identity (answered from the
 // recorded response) and a bare re-send of the same bytes (answered from the receipt). Neither
 // writes a second receipt, moves the lifecycle again or publishes a second notice.
@@ -406,7 +406,7 @@ func TestSessionEndedReplayIsANoOp(t *testing.T) {
 	}
 }
 
-// P5-5, §8 — a payload that disagrees with the recorded receipt is a conflict, and the recorded
+// A payload that disagrees with the recorded receipt is a conflict, and the recorded
 // receipt stays exactly as it was. The gap, the unknown execution and the malformed result are
 // asserted alongside it because they are the same class of refusal: the event is not taken over and
 // the Thread, the lifecycle and the sequence are left alone.
@@ -459,7 +459,7 @@ func TestSessionEndedRefusalsLeaveNoTrace(t *testing.T) {
 // impossible here: every call under test either faults or returns a record.
 func errOnly(_ *controlpb.TakeOverNodeEventResponse, err error) error { return err }
 
-// P5-6, §7 — a business-hook failure after the receipt is written rolls the whole takeover back:
+// A business-hook failure after the receipt is written rolls the whole takeover back:
 // no receipt, no durable terminal result, no `ended`, no `discarded`, no `delivering`, no released
 // delivery work, no advanced sequence. The failure is forced the way a real invariant violation
 // would arrive — the run Workspace the delivery input must be read from is gone — so the test
@@ -514,7 +514,7 @@ func TestSessionEndedHookFailureRollsBackTheWholeTakeover(t *testing.T) {
 	}
 }
 
-// §9, §13 — the precondition matrix. The approved row is unconditional (Thread D4's last row is
+// The precondition matrix. The approved row is unconditional (Thread D4's last row is
 // stated for the session execution's terminal event, and IssueRun D3's `delivering` entry condition
 // is "any end reason"), so every live Thread state reaches `ended`; the states the ADR does not
 // reach — an already-terminal Thread and a run that is not in a session phase at all — contradict
@@ -681,7 +681,7 @@ func TestSessionEndedPreconditionMatrix(t *testing.T) {
 	}
 }
 
-// §16 — a terminal session result addressed to a delivery execution is refused rather than projected
+// A terminal session result addressed to a delivery execution is refused rather than projected
 // onto the Thread. Delivery executions are registered by the delivery pipeline, which Batch 1 does
 // not implement, so the row is seeded directly: the refusal being pinned here is the A layer's own
 // kind guard, not the mechanism that creates such a row.
@@ -723,7 +723,7 @@ func TestSessionEndedRefusesADeliveryExecution(t *testing.T) {
 	}
 }
 
-// §15 — `discarded` is written by exactly one transition. Ending a Thread by request leaves the
+// `discarded` is written by exactly one transition. Ending a Thread by request leaves the
 // unexecuted turn `queued`, because `ending` is a request to the session (IssueRun D6) and not a
 // statement that the turn will never run; only the terminal takeover, which knows the session is
 // over, may dispose of it.
@@ -760,7 +760,7 @@ func TestDiscardedAppearsOnlyOnTheSessionTerminalTakeover(t *testing.T) {
 	}
 }
 
-// §19 — the terminal transaction against the concurrent writers that could otherwise reopen the
+// The terminal transaction against the concurrent writers that could otherwise reopen the
 // Thread. Every outcome asserted is a legal serialization, and the invariant the whole batch exists
 // for is asserted on all of them: once the terminal transaction wins, no user turn is left `queued`
 // and the Thread never leaves `ended`.

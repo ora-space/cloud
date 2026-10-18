@@ -23,7 +23,7 @@ func createRunWorkspace(t *transaction, runID string) Object {
 		op := t.one("SELECT * FROM operations WHERE workspace_id=$1 AND kind='create_workspace' ORDER BY created_at,id LIMIT 1", existing.S("id"))
 		return Object{"busy": false, "workspace": existing, "operation": op}
 	}
-	p := t.one("SELECT * FROM projects WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", run.S("projectRef"), run.S("tenantId"))
+	p := t.one("SELECT * FROM "+projectView+" p WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", run.S("projectRef"), run.S("tenantId"))
 	require(p != nil, 404, "not_found")
 	if p.S("lifecycle") != "active" || t.one("SELECT id FROM operations WHERE project_id=$1 AND state IN ('queued','running','retry_wait','blocked')", p.S("id")) != nil {
 		return Object{"busy": true}

@@ -4,11 +4,11 @@
 
 `internal/objectstore` 只服务 Revision 这一条链路:为一次交付尝试签发**单对象键、单方法、限时**的上传
 授权(Cloud Revision D2/D3),以及在注册 Revision 之前用 HEAD 校验已上传对象的**存在性、大小与
-SHA-256**(D4 step 2)。它不决定任何业务语义——授权给谁、何时给、校验失败后怎么处置都由 `internal/core`
-持有;本包只把"签名"与"核验"这两件事做对。
+SHA-256**(D4 step 2)。已登记的会话归档还可通过私有端点 GET 读取，并核验实际字节的大小与摘要。
+它不决定任何业务语义——授权给谁、何时给、校验失败后怎么处置都由 `internal/core` 持有。
 
-签名是自带实现的 AWS Signature Version 4(SigV4),不引入新依赖:交付链路只需要两个操作(预签一个 PUT、
-签一个 HEAD),仓库约定优先标准库而非新增模块。
+签名是自带实现的 AWS Signature Version 4(SigV4),不引入新依赖:支持 PUT、HEAD 和 GET,
+仓库约定优先标准库而非新增模块。
 
 ## 文件
 
@@ -20,6 +20,9 @@ SHA-256**(D4 step 2)。它不决定任何业务语义——授权给谁、何时
   覆盖全部被签头。
 - `verify.go`:`Verify` 用私有端点发 `HEAD`(带 `x-amz-checksum-mode: ENABLED`),比对 `Content-Length`
   与 `X-Amz-Checksum-Sha256`;不跟随重定向,超时 30s,任何基础设施细节都不越过本边界。
+- `read.go`:`ReadVerified` 用配置的私有端点签名 GET；不跟随重定向，不自动解压，传播取消，超时 30s。
+  声明大小、响应长度及实际读入字节都受调用方上限约束；实际字节大小和 SHA-256 必须与登记值一致。
+  返回有限的不可用、损坏、超限分类，不返回端点、签名 URL 或底层传输错误。
 - `presign_test.go`:离线确定性单测,见"测试"。
 
 ## 依赖与调用方
@@ -28,7 +31,7 @@ SHA-256**(D4 step 2)。它不决定任何业务语义——授权给谁、何时
   `encoding/hex`)。本包不导入 `internal/core`。
 - 调用方:`internal/config`(`ObjectStoreConfig.Open` 构造 `*Config`,并用一次 `PresignPUT` 做启动期
   配置自检);`cmd/server`(把它装入 `store.ObjectStore`);`internal/core`(`revision_grants.go` 签发
-  授权、`revision.go` 在事务外核验对象)。
+  授权、`revision.go` 在事务外核验对象、`session_history.go` 在两次权限与登记检查之间读取归档)。
 - 凭据:只以**文件路径**进入配置(`access_key_id_file`/`secret_access_key_file`),由 `internal/config`
   读取并去首尾空白后填入 `Config`;值只存在于进程内——不落库、不打日志、不出现在授权返回值里。
 
@@ -51,6 +54,8 @@ SHA-256**(D4 step 2)。它不决定任何业务语义——授权给谁、何时
 
 ## 测试
 
+- `read_test.go` 覆盖真实 HTTP 双端中的私有端点、GET 签名、实际摘要和大小、流式超限、取消、
+  重定向拒绝及安全错误；core 的隔离 PostgreSQL 测试验证读取前后权限/登记、路径隔离和纯只读事务。
 - 单测全部离线且确定性:真实 `httptest` S3 双端。覆盖授权对对象键的绑定与本地签名、`PresignPUTChecksum`
   对校验和头的绑定与非法摘要的拒绝、`public_endpoint` 与按秒截断的到期时刻、以及规范化对象路径。
 - 上传授权的签发入口(交付执行、校验和映射)与对象核验在交付状态机中的位置由 `internal/core` 的单测和

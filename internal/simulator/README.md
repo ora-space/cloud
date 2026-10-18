@@ -2,7 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/simulator` 为 Ora Cloud 阶段一的开发与验收测试提供基于进程内与本地磁盘的执行替身（Execution Doubles），涵盖 Controller、Workspace Node 以及 Substrate 存储系统。
+`internal/simulator` 为 Ora Cloud 的开发与集成测试提供基于进程内与本地磁盘的执行替身（Execution Doubles），涵盖 Controller、Workspace Node 以及 Substrate。
 
 ## 职责
 
@@ -15,8 +15,29 @@
   - **Node clone**（`node.go`）：`PUT/GET /clones/<execution-id>` 模拟 desktop Node 用本地 Git CLI clone 到 `home/checkout`，按 execution 落日志。
 - 支持确定性故障注入（`SetFault`），用于验证错误恢复与重试策略。
 
+#### HTTP 接口
+
+Substrate 替身只监听 loopback，供模拟器和测试使用，不是生产 Substrate 的接口定义：
+
+| 方法与路径 | 请求 | 返回与不变量 |
+|---|---|---|
+| `GET /effects/{effectId}` | Cloud 事先分配的 effect UUID | `404` 表示确知没有这个 intent；否则返回原请求、`externalId`、`state` 与 `result`；查询从不创建 effect |
+| `PUT /effects/{effectId}` | `kind`、`projectId`、`workspaceId`，terminate 还带 `sandboxInstanceId` | 先写日志再执行；同 ID 同请求幂等，同 ID 不同请求 `409`；已成功的 effect 直接返回原结果 |
+| `PUT /clones/{executionId}`、`GET /clones/{executionId}` | `workspaceId`、`repositoryUrl`、`branch` | 模拟 Node 执行 clone：同一 execution 只执行一次并按 execution 写日志；返回 `clone_ready` 与 `commitId`，或 `clone_failed` 与原因 |
+
+| `kind` | 结果 |
+|---|---|
+| `sandbox_ensure` | `sandboxInstanceId`、`nodeId`；沙盒已终止时失败 |
+| `sandbox_terminate` | `terminated`；沙盒必须属于请求里的 Workspace |
+| `workspace_data_delete` | `removed` |
+
+`SetFault` 的模式：`fail` 与 `unconfirmed` 写下 `running` 日志后返回 `503`，`lose_response` 执行成功但返回 `504`，用于验证"结果不明时按稳定身份查询"；
+clone 的 `fail` 返回 `clone_failed`。仓库只能来自显式的 repository URL → 本地 fixture 映射，不接入真实的 Git 凭据。插件安装已改为 Node execution，
+Cloud 拒绝计划插件 effect，替身里残留的 `plugin_ensure` 分支不会被 Cloud 触发。
+
 ### Controller 执行替身 (`controller.go`)
-- 模拟外部控制平面工作进程：
+- 模拟外部控制平面工作进程。租约、操作与 Node 注册走已退役的 `/internal/v1/...` JSON 接口，只有 `router.NewDevelopment` 打开它们，生产 server 一律返回
+  `410`；execution 与 Agent 运行走 gRPC：
   - 定期通过 `/internal/v1/controller-lease/acquire` 获取并续约 Controller 独占租约。
   - 通过 `/internal/v1/operations/claim` 认领待处理的操作任务。
   - 针对 Substrate 规划并执行所需的 Effect。
@@ -41,4 +62,4 @@ Controller 每次有界 Step 都领取运行工作、投递 Thread 命令并接�
 - **仅限开发与测试**：本包属于工程执行替身。绝对禁止部署到生产环境，生产环境守护进程二进制也绝不导入此包。
 - **契约保真度**：模拟器严格通过标准 HTTP API 与 Cloud 核心服务器交互，并遵守所有租约、栅栏和幂等契约。
 
-参见 [cmd/simulator 工具](../../cmd/simulator/README.md)、[执行契约与边界](../../docs/execution-contract.md) 与 [集成测试套件](../../integration/README.md)。
+参见 [cmd/simulator 工具](../../cmd/simulator/README.md)、[Workspace 生命周期](../../docs/runtime/workspaces.md) 与 [集成测试套件](../../integration/README.md)。

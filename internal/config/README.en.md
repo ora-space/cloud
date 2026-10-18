@@ -19,13 +19,13 @@
 
 ## Boundaries and invariants
 
-Startup windows use database time. Confirmation expiry settles business state while retaining independent residual responsibility; a business terminal does not prove physical release. See [Startup settlement](../../docs/agent-startup-settlement.en.md) for defaults and recovery boundaries.
+Startup windows use database time. Confirmation expiry settles business state while retaining independent residual responsibility; a business terminal does not prove physical release. See [Bounded startup](../../docs/agent-runs/startup-settlement.en.md) for defaults and recovery boundaries.
 
 The optional `object_store` section configures S3 delivery. When enabled, the server loads separately mounted access/secret key files into memory and validates private/public endpoints, region, bucket, addressing mode and a TTL between one second and seven days. All keys support `CLOUD_OBJECT_STORE_*` overrides. Short-lived PUT grants can bind SHA-256; Cloud verifies existence, size and stored checksum through private HEAD before registering Revision. Disabled by default, delivery settles skipped/object_store_unconfigured through the caller's transaction without dispatch; standalone grant requests return unavailable. Health reports configured/unconfigured, not S3 availability.
 
 - **No secret storage**: Configuration files store only public verification keys and infrastructure references. Plaintext deployment secrets and private keys must never appear in configuration files.
 - **Immutable runtime**: Configurations are loaded once at command startup and passed as ready-to-use values. There is no global mutable configuration singleton.
 
-See [config.yaml](../../configs/config.yaml), [cmd/server](../../cmd/server/README.en.md), and [Authentication](../../docs/authentication.md).
+See [config.yaml](../../configs/config.yaml), [cmd/server](../../cmd/server/README.en.md), and [Internal credentials](../../docs/identity/authentication.en.md).
 
-Agent startup, restore and end confirmation default to 2m/6m/5m (agent_start_timeout, agent_restore_timeout, agent_end_confirm_timeout). Only omission selects defaults; explicit nonpositive or invalid durations fail. Changes affect new durable windows only, never renew active ones.
+Agent startup, restore and end confirmation default to 2m/6m/5m (agent_start_timeout, agent_restore_timeout, agent_end_confirm_timeout); the bounded abandonment window for a run Workspace creation that first blocked defaults to 30m (agent_workspace_blocked_timeout). Only omission selects defaults; explicit nonpositive or invalid durations fail. Changes affect new durable windows only, never renew active ones.

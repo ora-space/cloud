@@ -8,7 +8,7 @@ package integration
 //
 // The command row is seeded at the storage boundary rather than through EnqueueThreadCommand,
 // because the A→B seam takes an unexported transaction the business layer owns; the seam itself is
-// driven by the core DB tests (T4C-21..24). What is under test here is everything above it.
+// driven by the core DB tests. What is under test here is everything above it.
 
 import (
 	"testing"

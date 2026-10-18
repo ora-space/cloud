@@ -121,7 +121,7 @@ func (f *fixture) singleRun(t *testing.T, iid string) core.Object {
 	return runs[0]
 }
 
-// TestAgentTargetResolvesAndSnapshots covers §12 Active + Valid project + the D1 snapshot: a Task Mode
+// TestAgentTargetResolvesAndSnapshots covers IssueRun D1/D2 for an active agent on a valid project, plus the D1 snapshot: a Task Mode
 // @ of an ACTIVE space_agents agent on an issue with a valid project resolves, creates a run whose
 // executor_id IS the space_agents.id, and pins the plugin identity/version into the run input.
 func TestAgentTargetResolvesAndSnapshots(t *testing.T) {
@@ -152,7 +152,7 @@ func TestAgentTargetResolvesAndSnapshots(t *testing.T) {
 	}
 }
 
-// TestAgentTargetMissingProjectAtomicRollback covers §12 Missing project + §13: a valid ACTIVE agent on
+// TestAgentTargetMissingProjectAtomicRollback covers the IssueRun D2 project gate when the issue has no project, and its atomic rollback: a valid ACTIVE agent on
 // an issue WITHOUT a project_ref is rejected with 409 issue_project_required AND the comment, activity,
 // interaction and run all roll back together — nothing survives the aborted transaction.
 func TestAgentTargetMissingProjectAtomicRollback(t *testing.T) {
@@ -175,7 +175,7 @@ func TestAgentTargetMissingProjectAtomicRollback(t *testing.T) {
 	}
 }
 
-// TestAgentTargetNonexistentProjectRejected covers §12 Nonexistent project: a project_ref that does not
+// TestAgentTargetNonexistentProjectRejected covers the IssueRun D2 project gate for a project that does not exist: a project_ref that does not
 // exist (even though syntactically a UUID) cannot host an agent run and is rejected the same atomic way.
 func TestAgentTargetNonexistentProjectRejected(t *testing.T) {
 	f := setup(t)
@@ -195,7 +195,7 @@ func TestAgentTargetNonexistentProjectRejected(t *testing.T) {
 	}
 }
 
-// TestAgentTargetRetiredNotResolvable covers §12 Retired: only ACTIVE space_agents resolve. A retired
+// TestAgentTargetRetiredNotResolvable covers IssueRun D1 for a retired agent: only ACTIVE space_agents resolve. A retired
 // agent is not found (404 target_not_found) even with a perfectly valid project, and rolls back.
 func TestAgentTargetRetiredNotResolvable(t *testing.T) {
 	f := setup(t)
@@ -214,7 +214,7 @@ func TestAgentTargetRetiredNotResolvable(t *testing.T) {
 	}
 }
 
-// TestAgentTargetForeignTenantIsolation covers §12 Wrong tenant (and, via one-space-per-tenant, wrong
+// TestAgentTargetForeignTenantIsolation covers IssueRun D1 across tenants (and, via one-space-per-tenant, wrong
 // space): an agent that lives in another tenant's space can never be resolved from this tenant, so the
 // run is rejected 404 and nothing leaks.
 func TestAgentTargetForeignTenantIsolation(t *testing.T) {
@@ -237,7 +237,7 @@ func TestAgentTargetForeignTenantIsolation(t *testing.T) {
 	}
 }
 
-// TestAgentRunSnapshotPinsPluginVersion covers §8: the run input snapshot fixes the plugin version at
+// TestAgentRunSnapshotPinsPluginVersion covers the IssueRun D1 snapshot: the run input snapshot fixes the plugin version at
 // create time, so upgrading the same plugin after the run (1.0.0 -> 2.0.0) never rewrites the
 // historical run's input; a NEW run pins the upgraded version.
 func TestAgentRunSnapshotPinsPluginVersion(t *testing.T) {

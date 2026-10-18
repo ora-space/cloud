@@ -34,3 +34,33 @@
 `ModelDefinition`、`ModelConnection` 和 `ModelDefault` 定义个人配置。API Key 字段仅写，
 credential 接口由 Gateway/model-gateway 承接，Cloud HTTP 不读取其请求体。
 Thread 增加发起者、可空模型摘要及可追加/可结束权限；OpenAPI 和客户端必须由生成器更新。
+
+## Agent 会话与归档契约
+
+`AgentSessionSummary` 是 `GET /api/v1/tenants/:tid/agent-sessions` 的列表元素，包含 Run/Issue 标识、Issue
+标题与编号、可空项目与插件信息、运行和 Thread 状态、时间、可空模型摘要与 `historyAvailable`。
+此布尔值仅表示未过期归档登记存在，不能代替一次成功归档读取。当前数据源只覆盖 Agent IssueRun。
+
+列表允许 `projectId`、`status`、`agent`、`from`、`to`、`after`、`limit`：时间按创建时间的 `[from,to)`
+筛选，状态是单值枚举，Agent 是精确插件标识；页大小默认 50、最大 100。顺序为 `(createdAt,id)` 倒序，
+`nextCursor` 是排他 UUID 游标，与 Thread 的整数 `seq` 游标不同。未知、空、重复查询项均被拒绝。
+
+`SessionHistory` 对应 `GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history`，字段为
+`source="archive"`、`records`、`sizeBytes`、`sha256`。`records` 的每项是保留未知字段的 JSON 对象，
+维持文件顺序和原始数字，不将 provider/history 结构硬编码进 Cloud 公共 Schema。消费方负责处理同一
+history `seq` 的后续更新；Cloud Thread `seq` 不替代 history `seq`。
+
+归档路由不接受查询参数、路径或 URL；现有双层凭据与当前成员/Issue/Run 授权适用。最大 32 MiB /
+100000 条记录，下载前后核验权限和登记。公开错误为 `404 history_unavailable`（未登记/过期）、
+`413 history_too_large`、`502 history_invalid` 或 `502 history_unavailable`；错误中没有私有存储细节。
+模型、工具耗时、token、cost 和父子会话数据的可得性取决于已持久化证据，不能用默认值伪造缺失数据。
+Schema、路由、生成 OpenAPI 和前端客户端必须一并更新；真实用户日志不得成为契约测试 fixture。
+
+## 模型请求指标契约
+
+`session_statistics.go` 定义 `MetricAggregate`、`ModelAttemptUsage`、`SessionModelAttempt` 和
+`SessionModelStatistics`。`/statistics` 无查询，`/model-calls` 仅 `limit/after`；统计范围固定为
+`recorded_http_attempts`，来源为 `model_gateway`，不是历史全量补算或账单。汇总独立于请求分页。
+input/output/total/cache read/cache write/reasoning 分别可空并携带覆盖率，不将未知变成 0。
+OpenAI input 包含缓存读取，Anthropic input 不含缓存读写；reasoning 为输出子集，不重复加总。
+`firstOutputMs` 是网关首个有效输出观测，不是模型 TTFT；状态 `started` 不保证请求仍存活。

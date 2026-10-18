@@ -1,5 +1,6 @@
-// Command git-server serves Project repositories to sandboxes over smart HTTP and answers Cloud's
-// read-only delivery-ref query. Git also runs it as the pre-receive hook (-pre-receive).
+// Command git-server serves Project repositories over smart HTTP to sandboxes and, on a separate
+// listener, to the Repo Executor, and answers Cloud's read-only ref query. Git also runs it as the
+// pre-receive hook (-pre-receive).
 package main
 
 import (
@@ -30,7 +31,7 @@ func main() {
 	}
 }
 
-// run owns both listeners and the hook channel; shutdown drains HTTP before closing the channel
+// run owns the three listeners and the hook channel; shutdown drains HTTP before closing the channel
 // that in-flight pushes still need for their pre-receive decision.
 func run() (runErr error) {
 	path := flag.String("config", "", "Cloud database configuration")
@@ -88,12 +89,17 @@ func run() (runErr error) {
 	if err != nil {
 		return err
 	}
+	serviceTLS, err := deployment.ServiceRepositoryTLS()
+	if err != nil {
+		return err
+	}
 	refTLS, err := deployment.RefTLS()
 	if err != nil {
 		return err
 	}
 	servers := []*http.Server{
 		{Addr: deployment.RepositoryAddress, Handler: http.HandlerFunc(service.RepositoryHandler), TLSConfig: repositoryTLS},
+		{Addr: deployment.ServiceRepositoryAddress, Handler: http.HandlerFunc(service.ServiceRepositoryHandler), TLSConfig: serviceTLS},
 		{Addr: deployment.RefAddress, Handler: http.HandlerFunc(service.RefHandler), TLSConfig: refTLS},
 	}
 	for _, server := range servers {

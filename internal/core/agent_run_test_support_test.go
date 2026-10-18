@@ -114,7 +114,7 @@ func seedDispatchScene(t *testing.T, pool *sql.DB, busy bool) dispSeed {
 	exec("tenant", `INSERT INTO tenants(id,name,status) VALUES($1,'disp','active')`, seed.tenant)
 	exec("membership", `INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, seed.tenant, user)
 	exec("workspace", `INSERT INTO collab_workspaces(id,tenant_id,name,slug,created_by) VALUES($1,$2,'disp','disp-'||left($4::text,8),$3)`, space, seed.tenant, user, space)
-	exec("project", `INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,repository_url,default_branch,lifecycle) VALUES($1,$2,$3,$4,'disp','https://example.invalid/disp.git','main','active')`, seed.project, seed.tenant, user, space)
+	exec("project", `WITH p AS (INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'disp','active') RETURNING id,tenant_id) INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) SELECT gen_random_uuid(),tenant_id,id,'https://example.invalid/disp.git','main' FROM p`, seed.project, seed.tenant, user, space)
 	// A live project must carry exactly one main workspace (deferred project_main trigger); the run
 	// Workspace the seam creates is a separate kind='isolated' workspace later.
 	exec("main-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,runtime_generation,requested_ref) VALUES($1,$2,$3,$3,'verified_request',$4,'main','running','ready',1,'HEAD')`, uuid.NewString(), seed.tenant, user, seed.project)

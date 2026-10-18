@@ -33,3 +33,5 @@ Third-party libraries and sibling modules in this directory only. **Never** impo
 - No file in this directory may hold, read or generate credentials: the session is the gateway's HttpOnly cookie, which frontend code cannot and must not touch.
 - `safeReturnTo` accepts only paths with a single leading `/` whose second character is neither `/` nor `\`, matching the gateway's `returnTo` rule.
 - `PENDING_JOIN_PATH_KEY` identifies the tab-local private join path; the login round trip sends Gateway only tokenless `/join/continue`.
+
+`workspacePaths` also owns the session list (`sessions`) and Agent detail (`agentSession`) paths. `paths.test.ts` verifies both remain below the selected workspace prefix.

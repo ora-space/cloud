@@ -37,7 +37,7 @@ task test:integration
 task test:race
 ```
 
-See [Local setup](../README.en.md#local-validation), [Core contract](../docs/core-contract.md), and [Taskfile.yml](../Taskfile.yml).
+See [Local development](../docs/development/local-development.en.md), [Authoritative persistence](../docs/core/persistence.en.md), and [Taskfile.yml](../Taskfile.yml).
 
 Upstream reconciliation coverage: `tenant_upstream_migration_test.go` verifies 0016-to-0017 row preservation for runtimes, clones and plugins. `project_space_test.go` checks a different member can create and list ready Node-cloned runtimes. Plugin tests use separate tenants for isolation and reject reads immediately after membership revocation.
 
@@ -45,7 +45,7 @@ Upstream reconciliation coverage: `tenant_upstream_migration_test.go` verifies 0
 
 `task test:revision` requires real PostgreSQL and S3. Set `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_FILE` and `TEST_S3_SECRET_KEY_FILE` and create the `revisions` bucket; credentials are temporary file references. `REQUIRE_S3=1` makes missing storage fatal. Sandbox acceptance additionally needs `TEST_S3_PUBLIC_ENDPOINT`, `TEST_S3_SANDBOX_NETWORK` and `REQUIRE_S3_SANDBOX=1`; the cluster companion's `task agent:acceptance` configures these automatically.
 
-Revision tests directly cover real uploads, checksum/size/missing objects, expired-grant refresh, post-I/O fencing, transaction failures, replay, both doubles restarting and historical upgrades. Hook tests cover ready/failed, Thread, session end, delivery and deletion committing/rolling back with control evidence. Enable mandatory storage/network environments for full `task test` and `task test:race` too; skipped S3 is not acceptance. See the [control-plane report](../docs/agent-run-control-plane-review.en.md).
+Revision tests directly cover real uploads, checksum/size/missing objects, expired-grant refresh, post-I/O fencing, transaction failures, replay, both doubles restarting and historical upgrades. Hook tests cover ready/failed, Thread, session end, delivery and deletion committing/rolling back with control evidence. Enable mandatory storage/network environments for full `task test` and `task test:race` too; skipped S3 is not acceptance. See [Testing and gates](../docs/development/testing.en.md#s3) for the environment.
 
 ## Test-scoped contract validation
 

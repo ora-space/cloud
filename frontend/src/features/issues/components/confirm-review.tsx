@@ -16,7 +16,7 @@ function optionLabel(descriptor: FormDescriptor, key: string, value: unknown): s
 }
 
 /**
- * The Review step that must precede Confirm (§38.28). It shows the target, the effective values and
+ * The Review step that must precede Confirm (Issue collaboration D9). It shows the target, the effective values and
  * the context that will travel with the run, and offers exactly two actions: go back and edit, or
  * confirm. Nothing here executes by itself.
  */

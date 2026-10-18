@@ -1,7 +1,6 @@
 package integration
 
-// Phase 4C S6 acceptance for the Thread change notification (Thread D5, plan §4C.7/§4C.8,
-// T4C-25..T4C-27), covering both event types the approved A4/G-023 amendment defines.
+// Acceptance for the Thread change notification (Thread D5), covering both event types it defines.
 //
 // The chain under test is the production one, end to end: the session start, the public Thread POST,
 // the Controller takeover and the public end endpoint each change the Thread, and each has to release
@@ -19,7 +18,7 @@ package integration
 // What the tests are careful *not* to claim: neither notice is data, and neither is authoritative.
 // Nothing here asserts ordering across concurrent commits or an at-least-once delivery, and a lost
 // notice costs nothing because the Thread GET is the only thing that advances a client's cursor.
-// Multiple-instance delivery is out of scope (G-020), so what is pinned is the single-process hub.
+// Multiple-instance delivery is out of scope (api-boundary ADR), so what is pinned is the single-process hub.
 
 import (
 	"bufio"
@@ -349,11 +348,11 @@ func (f *fixture) turnStatus(runID, turnID string) string {
 	return status
 }
 
-// T4C-25 — the notices are published only after the entry-write transaction commits, with the
+// The notices are published only after the entry-write transaction commits, with the
 // identity of the run that wrote and the max(seq) of that commit. All three entry-write paths are
 // exercised on the wire: the session declaration (seq=1), the public POST (a user turn) and the
 // Controller takeover (Node records). Each of them both appends an entry and changes the Thread's
-// representation, so each publishes one `thread_appended` and one `thread_changed` (A4/G-023). A
+// representation, so each publishes one `thread_appended` and one `thread_changed` (Thread D5). A
 // takeover that writes entries and then fails publishes nothing, and the Thread GET still returns
 // exactly what committed.
 func TestThreadAppendedIsPublishedOnlyAfterCommit(t *testing.T) {
@@ -489,7 +488,7 @@ func (f *fixture) threadStateOf(runID string) (state string, idleSince *time.Tim
 	return state, idleSince, seq
 }
 
-// T4C-26 (plan §4C.7/§4C.8, A4/G-023) — every commit that changes the Thread's REST representation
+// Every commit that changes the Thread's REST representation
 // publishes `issue_run.thread_changed`, whether or not it appended an entry.
 //
 // The matrix drives the changes the production writers make — a user turn moving `queued →
@@ -560,7 +559,7 @@ func TestThreadChangedCoversStateOnlyCommits(t *testing.T) {
 		t.Fatalf("an echo is not takeover evidence, so the run must still be starting, got %q", phase)
 	}
 
-	// (2) The end of a turn takes the Thread to `idle` (D-4C-04). This commit both appends the
+	// (2) The end of a turn takes the Thread to `idle` (Thread D4). This commit both appends the
 	// TurnEnded record and writes `idle_since`, so it publishes one of each name — and the generalized
 	// one is the only one that describes the state half.
 	notices = published(func() {
@@ -607,7 +606,7 @@ func TestThreadChangedCoversStateOnlyCommits(t *testing.T) {
 	}
 }
 
-// A4's dedupe (plan §4C.7) — one commit changes the Thread's representation at most once as far as the
+// Thread D5's dedupe — one commit changes the Thread's representation at most once as far as the
 // notice is concerned. A batch that both delivers an echoed user turn *and* appends records changes two
 // things, and a per-change burst of partly-stale notices would tell a subscriber nothing a single hint
 // does not: the client re-reads with GET from its own cursor either way.
@@ -650,7 +649,7 @@ func TestThreadChangedIsDedupedPerCommit(t *testing.T) {
 	}
 }
 
-// T4C-25, rollback half — a notice queued by an entry write is released only if the transaction
+// Rollback half — a notice queued by an entry write is released only if the transaction
 // commits. The Thread POST queues its hint on the user-turn INSERT and then fails on a later statement
 // of that same transaction, which is exactly the shape the guarantee is about: the write happened, the
 // hint was queued right after it, and the commit never did. Nothing is durable, so nothing may be
@@ -688,7 +687,7 @@ func TestThreadAppendedRollbackReleasesNothing(t *testing.T) {
 	}
 }
 
-// T4C-25, commit half — the rollback shape the POST's own validation cannot produce: every statement
+// Commit half — the rollback shape the POST's own validation cannot produce: every statement
 // succeeds, the hint is queued, and the COMMIT itself rejects the transaction. The probe is a deferred
 // foreign key on `turn_id` (the only constraint kind PostgreSQL can defer), added to this test's own
 // schema after the session is already running, so the failing check is provably the commit's and not
@@ -730,7 +729,7 @@ func TestThreadAppendedCommitFailureReleasesNothing(t *testing.T) {
 	}
 }
 
-// T4C-27 — duplicates, reordering and loss are all harmless because the cursor is advanced only by
+// Duplicates, reordering and loss are all harmless because the cursor is advanced only by
 // the Thread GET. A re-delivered batch publishes no second notice and changes no data; a notice that
 // nobody receives (no subscriber at all, or a disconnected one) costs nothing, because the next GET
 // from the client's own cursor still returns the complete, ordered window.
@@ -787,7 +786,7 @@ func TestThreadAppendedDuplicatesAndLossAreHarmless(t *testing.T) {
 	refused.Body.Close()
 }
 
-// Mandate §6.2 — `running` has exactly one authority: the first real Node Thread record, taken over
+// `running` has exactly one authority: the first real Node Thread record, taken over
 // with its receipt in one commit. This test drives every other write path the run exposes, in the
 // order a Controller drives them, and reads the durable row after each one: the session declaration
 // (which is also ClaimWork and RecordDispatch registering the execution), the public Thread POST

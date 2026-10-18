@@ -10,7 +10,7 @@ package core
 
 // declareDelete declares the run Workspace's delete_workspace operation through the control plane's
 // own in-transaction seam, so a failure rolls the caller's `releasing` transition back with it and a
-// run can never be releasing without a durable delete intent (IssueRun D3/D6, plan §4/§6/§13).
+// run can never be releasing without a durable delete intent (IssueRun D3/D6).
 //
 // It always reports success, and that is deliberate rather than lenient. The seam answers "busy"
 // when the Project already has an operation in flight — IssueRun D3 accepts that a Project's runs

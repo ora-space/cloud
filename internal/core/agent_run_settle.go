@@ -12,7 +12,7 @@ import (
 // declaration must commit or roll back together. It never opens its own transaction,
 // spawns a goroutine, or defers a post-commit effect.
 //
-// Contract (IssueRun D3/D6, plan §18):
+// Contract (IssueRun D3/D6):
 //
 //	provisioning + no cancel + ready=true   → phase=starting, status stays dispatched
 //	provisioning + no cancel + ready=false  → phase=releasing, status=failed, failure_reason=workspace_unavailable (+ DeleteRunWorkspace)
@@ -21,14 +21,14 @@ import (
 //
 // The caller names the run and the operation's own outcome word; every business field used for the
 // transition (phase, status, cancel_requested_at, workspace_id) is re-read from authoritative
-// issue_runs state in this transaction, never taken from the caller (plan §3). The Phase 2 state
+// issue_runs state in this transaction, never taken from the caller. The Phase 2 state
 // machine is not re-designed here; only the committed matrix above is implemented.
 //
 // The plugin-specific failure (agent_plugin_unavailable) is deliberately NOT produced
 // here: the hook carries only a boolean ready and the create_workspace plugin step is
-// not wired (G-002), so there is no authoritative evidence to distinguish it. A
+// not wired, so there is no authoritative evidence to distinguish it. A
 // ready=false settlement always maps to the generic workspace_unavailable. Deferred
-// to Phase 2B (plan §18.2.6, §8).
+// to Phase 2B.
 func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 	if !validID(runID) {
 		return fmt.Errorf("runWorkspaceSettled: invalid run id %q", runID)
@@ -53,7 +53,7 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 
 	// Replay/stale: a settlement arriving after the run already left provisioning is a
 	// deterministic no-op. It must not regress phase, return a user-facing 409, create a
-	// new delete intent, or enqueue execution (plan §11, matrix "not provisioning").
+	// new delete intent, or enqueue execution.
 	if o.S("phase") != "provisioning" {
 		return nil
 	}
@@ -64,18 +64,18 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 		// status=cancelled and deliveryState=skipped, and declares the delete.
 		return s.settleCancelled(t, o)
 	case ready:
-		// Plan §2A.2 + §2.6: the run's creation succeeded at the infra level, but the run is
+		// The run's creation succeeded at the infra level, but the run is
 		// only ready when its *required pinned agent plugin* (IssueRun D1/D6 snapshot key) is
 		// installed at the pinned version on the run workspace. A failed or absent-at-version
-		// pinned-plugin instance settles agent_plugin_unavailable (plugin-marketplace D3, G-002),
+		// pinned-plugin instance settles agent_plugin_unavailable (plugin-marketplace D3),
 		// even though the operation terminal itself succeeded. Runs whose snapshot pins no agent
 		// plugin (legacy engine / other executors) and runs with no instance row yet are treated
-		// as ready, exactly as the pre-plugin-engine settle (§2.6 legacy compatibility).
+		// as ready, exactly as the pre-plugin-engine settle (legacy compatibility).
 		if inst, req := s.agentPluginInstance(t, o); req && inst != nil &&
 			(inst.S("observedState") != "installed" || inst.S("observedVersion") != o.O("input").S("agentPluginVersion")) {
 			return s.settleFailed(t, o, "agent_plugin_unavailable")
 		}
-		// Plan §2A.2: ready settles provisioning → starting, status stays dispatched.
+		// Ready settles provisioning → starting, status stays dispatched.
 		if s.settleReadyGuard(t, runID) == 0 {
 			return nil // stale under the serialized lock; see call site doc
 		}
@@ -93,7 +93,7 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 // workspace, in the caller's transaction. required=false means the run snapshot pins no agent
 // plugin (legacy engine or a non-space-agent executor), so the caller must treat the run as
 // ready rather than downgrade. The returned instance is nil when the workspace has no row for
-// the pinned plugin yet (which the pre-plugin-engine settle treats as ready; G-002 creates the
+// the pinned plugin yet (which the pre-plugin-engine settle treats as ready; the plugin step creates the
 // row on the plugin step).
 func (s *Store) agentPluginInstance(t *transaction, run Object) (inst Object, required bool) {
 	pid := run.O("input").S("agentPluginId")
@@ -114,7 +114,7 @@ func (s *Store) agentPluginInstance(t *transaction, run Object) (inst Object, re
 }
 
 // settleReadyGuard is the CAS that moves provisioning → starting. It is guarded by
-// phase='provisioning' AND status='dispatched' (plan §2A.2). Returns affected rows;
+// phase='provisioning' AND status='dispatched'. Returns affected rows;
 // under the global advisory lock the SELECT and this CAS are serialized against other
 // writers, so after re-reading provisioning an affected count of 0 can only mean the
 // caller's evidence raced a legitimate concurrent settle — treated as a stale no-op.
@@ -128,7 +128,7 @@ func (s *Store) settleReadyGuard(t *transaction, runID string) int64 {
 // settleFailed moves a provisioning run to releasing/failed with the given reason and,
 // in the same transaction, declares the run Workspace delete via the B→A seam. It is
 // shared by the generic workspace failure path; the plugin-specific code is deferred to
-// Phase 2B (G-002) because the reason is a parameter supplied by the caller of this
+// Phase 2B because the reason is a parameter supplied by the caller of this
 // helper, not guessed here.
 func (s *Store) settleFailed(t *transaction, o Object, reason string) error {
 	runID := o.S("id")

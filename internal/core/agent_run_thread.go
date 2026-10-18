@@ -2,18 +2,18 @@ package core
 
 import "fmt"
 
-// Thread takeover business core (Thread D1..D4, IssueRun D3/D6; plan §4B.4..§4B.8).
+// Thread takeover business core (Thread D1..D4, IssueRun D3/D6).
 //
 // It runs on the caller-owned *transaction of the A-side takeover, inside which the Thread entries,
 // the run's `starting → running` transition and the A-side receipts must commit or roll back
 // together. It never opens its own transaction and never defers a post-commit effect: a non-nil
 // error aborts the whole takeover, so the Controller does not ack and the Node replays.
 //
-// The hook takes identity from the caller and re-reads everything else authoritatively (§14): the
+// The hook takes identity from the caller and re-reads everything else authoritatively: the
 // caller Object carries only the run id, and the run, the execution, the work item and the Thread's
 // first entry are all re-read here, so a caller cannot assert a business fact the database does not
 // hold. Matching (execution → work → run) is what proves the execution really belongs to this run
-// and this session work (§14, §18): a wrong execution is rejected instead of being projected onto
+// and this session work: a wrong execution is rejected instead of being projected onto
 // some other run's Thread.
 
 // threadRecordKinds is the closed set of `ora-history` record type tags Thread D2 allows as a
@@ -50,7 +50,7 @@ func userTurnEcho(record Object) bool {
 }
 
 // settleThreadEvents is the B-owned core behind the A→B hook OnThreadEvents
-// (controller-integration D6, IssueRun D3, Thread D1/D4; plan §4B.7).
+// (controller-integration D6, IssueRun D3, Thread D1/D4).
 //
 //	authoritative re-read: issue_runs, node_executions and execution_work are read here, never taken
 //	                      from the caller; the execution must be an agent_session execution whose
@@ -62,22 +62,22 @@ func userTurnEcho(record Object) bool {
 //	user turn echo:       a user message record whose turn_id is an existing Cloud-written user turn
 //	                      takes that turn over: the row moves `queued → delivered` and nothing else
 //	                      changes — no entry, no seq, no rewrite of the stored content, no new
-//	                      command (Thread D3, D-4C-08).
+//	                      command (Thread D3).
 //	turn records:         every other record of a turn — the agent's replies, its tool records, the
 //	                      turn's `turnEnded` — carries the same turn_id (Node protocol D2) and is an
 //	                      ordinary entry that keeps that turn_id.
 //	seq allocation:       one gapless run-scoped seq per real record, from MAX(seq)+1 — seq=1 stays
-//	                      the immutable Cloud-authored first prompt (D-023, G-009/§21/§23).
+//	                      the immutable Cloud-authored first prompt.
 //	running authority:    the first real record commits `starting → running` in this same
 //	                      transaction, and only when the run is still a valid starting run with a
-//	                      usable workspace; nothing else about the run changes (§15, §30).
+//	                      usable workspace; nothing else about the run changes.
 //	thread lifecycle:     after the batch commits its records, an `active` Thread whose last
 //	                      effective record is `turnEnded` with no queued user turn becomes `idle`
 //	                      (idle_since from the database clock), and an `idle` Thread that took over a
 //	                      continuation record becomes `active` again with idle_since cleared
-//	                      (Thread D4, D-4C-04/D-4C-09).
+//	                      (Thread D4).
 //	stale/terminal:       a run that is no longer `starting`, a cancelled run and an unusable
-//	                      workspace are not advanced (G-011 fail-closed, §17/§20) but the taken-over
+//	                      workspace are not advanced (fail-closed) but the taken-over
 //	                      records are still appended to the Thread, so an acked event is never
 //	                      silently dropped from the conversation.
 func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, events []Object) error {
@@ -91,7 +91,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
 		// No authoritative run to accept the events: an invariant violation, not a replay, so the
-		// batch must not be acked (plan §4.10 "unknown run").
+		// batch must not be acked (unknown run).
 		return fmt.Errorf("settleThreadEvents: issue_run %s not found", runID)
 	}
 	if o.S("executorType") != "agent" {
@@ -107,11 +107,11 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	work := t.one("SELECT * FROM execution_work WHERE id=$1", e.S("workId"))
 	if work == nil || work.S("runId") != runID || work.S("kind") != "agent_session" {
 		// The execution belongs to a different run's work item: refusing here is what keeps a
-		// mis-addressed batch from being written into another run's Thread (§18).
+		// mis-addressed batch from being written into another run's Thread.
 		return fmt.Errorf("settleThreadEvents: execution %s does not belong to run %s agent_session work", executionID, runID)
 	}
 
-	// The Thread's first entry is immutable (Phase 3A, §21) and is also the authoritative echo
+	// The Thread's first entry is immutable and is also the authoritative echo
 	// identity: the first prompt's turn_id is the one the Node echoes back on the user turn it was
 	// given (Thread D3, Node protocol D2). A run with no first prompt cannot have taken a session
 	// execution over, so its absence is an invariant violation rather than a reason to allocate
@@ -125,7 +125,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	next := t.one("SELECT COALESCE(MAX(seq),0) AS m FROM thread_entries WHERE run_id=$1", runID).N("m") + 1
 	taken := 0
 	// lastKind is the kind of the batch's last *effective* Node record — the record the Thread
-	// lifecycle decision below is taken on (D-4C-04/D-4C-09). A user turn the Node echoes is
+	// lifecycle decision below is taken on (Thread D4). A user turn the Node echoes is
 	// effective even though it appends no entry: it is the Node stating it holds that turn, so a
 	// batch ending on one means the agent still has work and the Thread is not idle. The first
 	// prompt's echo is not effective at all — seq=1 already presents it and it says nothing about
@@ -143,7 +143,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		}
 		lastKind = kind
 		lastStopReason = ev.O("record").S("stopReason")
-		// A Cloud-written user turn echoed back by the Node (Thread D3, D-4C-08). The event carries
+		// A Cloud-written user turn echoed back by the Node (Thread D3). The event carries
 		// the turn_id of the entry Cloud wrote when the turn was accepted, so taking it over is a
 		// lifecycle transition on that existing row: never a new entry, a new seq, a rewrite of the
 		// original content, a new command or a re-enqueue. Only `queued → delivered` moves; a turn
@@ -188,14 +188,14 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	}
 	if taken == 0 {
 		// No Node record was taken over in this batch, so the run stays exactly where it was — not
-		// running, and its Thread state untouched (plan §4B.4/§31). A delivered user turn written
+		// running, and its Thread state untouched. A delivered user turn written
 		// above is still committed: that echo is durable Node evidence about a turn Cloud already
 		// owns, and it is not a Thread record, so it is not takeover evidence for anything else.
 		return nil
 	}
 	// At least one Node record became a Thread entry, so a live subscriber has something new to
 	// read: queue the invalidation hints here, against the authoritative run row re-read above
-	// (Thread D5, T4C-25). They are queued after this batch's entry writes, so lastSeq is the batch's
+	// (Thread D5). They are queued after this batch's entry writes, so lastSeq is the batch's
 	// max(seq), and the store releases them only if this whole batch commits. Both hints are queued:
 	// the append-specific one keeps its meaning, and A4's generalized one covers this same commit.
 	// A batch that only delivered an echoed user turn takes the early return above and publishes no
@@ -203,9 +203,9 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	threadAppended(t, o)
 	threadChanged(t, o)
 
-	// The running transition (§15/§30). The gate is re-read here rather than passed in: a run that
+	// The running transition. The gate is re-read here rather than passed in: a run that
 	// a cancel, a settlement or an earlier batch already moved must not be moved again, and an
-	// unusable workspace fails closed (G-011) instead of being recorded as a terminal state. A late
+	// unusable workspace fails closed instead of being recorded as a terminal state. A late
 	// first record proves execution occurred, but must preserve an already-accepted ending request:
 	// changing it back to active would reopen user input while the Node is being asked to terminate.
 	if o.S("phase") == "starting" && o.S("status") == "dispatched" && o.S("cancelRequestedAt") == "" && runWorkspaceLive(t, o.S("workspaceId"), runID) {
@@ -213,7 +213,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		// share one transaction snapshot while the caller's advisory lock excludes the other
 		// takeover callers, so zero affected rows means some other writer moved the run under a
 		// predicate this transaction did not observe — an invariant violation, not a race to
-		// tolerate. Returning an error rolls the whole batch back (§13): a receipted record must
+		// tolerate. Returning an error rolls the whole batch back: a receipted record must
 		// never be committed without the transition it is the authority for.
 		if moved := t.execRows(`
 			UPDATE issue_runs
@@ -225,7 +225,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		}
 	}
 
-	// Post-batch Thread lifecycle (Thread D4, D-4C-04/D-4C-08/D-4C-09). The decision is taken on the
+	// Post-batch Thread lifecycle (Thread D4). The decision is taken on the
 	// batch's own outcome — re-read here, after the writes above, so it sees exactly what this
 	// transaction committed to — and it only ever moves a Thread that a running run already owns.
 	// A run the running gate above did not move (cancelled, unusable workspace, already past
@@ -255,7 +255,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	switch {
 	case threadState == "active" && ended && !queued:
 		// idle_since is written from the database clock: the idle window is judged against the
-		// database's own time on every reader, never against a process clock (D-4C-10, §21).
+		// database's own time on every reader, never against a process clock (Thread D4).
 		if moved := t.execRows(`
 			UPDATE issue_runs SET thread_state='idle', idle_since=now(), version=version+1, updated_at=now()
 			WHERE id=$1 AND thread_state='active'`, runID); moved != 1 {
@@ -265,7 +265,7 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 	case threadState == "idle" && !ended:
 		// A continuation record taken over while the Thread sat idle: the conversation is live
 		// again, and idle_since is cleared with the state so a stale instant can never be read as
-		// an expired idle window by the ending scan (D-4C-10).
+		// an expired idle window by the ending scan (Thread D4).
 		if moved := t.execRows(`
 			UPDATE issue_runs SET thread_state='active', idle_since=NULL, version=version+1, updated_at=now()
 			WHERE id=$1 AND thread_state='idle'`, runID); moved != 1 {

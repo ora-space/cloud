@@ -37,7 +37,7 @@ task test:integration
 task test:race
 ```
 
-参见 [本地验证](../README.md#本地验证)、[核心不变量与契约](../docs/core-contract.md) 与 [Taskfile.yml](../Taskfile.yml)。
+参见 [本地开发](../docs/development/local-development.md)、[权威持久化与事务模型](../docs/core/persistence.md) 与 [Taskfile.yml](../Taskfile.yml)。
 
 合入上游后的回归覆盖：`tenant_upstream_migration_test.go` 校验 0016 升级至 0017 不改写运行时、克隆或插件记录；`project_space_test.go` 验证非创建者新建运行时后可见且完成 Node 克隆；插件测试使用不同租户验证空间隔离，停用成员后立即拒绝读取。
 
@@ -45,7 +45,7 @@ task test:race
 
 `task test:revision` 强制真实 PostgreSQL 和 S3。设置 `TEST_S3_ENDPOINT`、`TEST_S3_ACCESS_KEY_FILE`、`TEST_S3_SECRET_KEY_FILE`，预建 `revisions` 桶；凭据仅为临时文件引用。设 `REQUIRE_S3=1` 时缺少存储立即失败。sandbox 用例还需 `TEST_S3_PUBLIC_ENDPOINT`、`TEST_S3_SANDBOX_NETWORK` 及 `REQUIRE_S3_SANDBOX=1`；集群配套 `task agent:acceptance` 自动配置这些环境。
 
-Revision 测试直接覆盖真实上传、checksum/大小/缺失、授权过期刷新、外部校验后围栏、事务失败与重放、双替身重启及历史升级。业务钩子测试验证 ready/failed、Thread、会话结束、交付、删除与控制证据同提交/回滚。完整 `task test`、`task test:race` 也应启用这些强制环境，避免把跳过 S3 当作已验收。范围见[控制面报告](../docs/agent-run-control-plane-review.md)。
+Revision 测试直接覆盖真实上传、checksum/大小/缺失、授权过期刷新、外部校验后围栏、事务失败与重放、双替身重启及历史升级。业务钩子测试验证 ready/failed、Thread、会话结束、交付、删除与控制证据同提交/回滚。完整 `task test`、`task test:race` 也应启用这些强制环境，避免把跳过 S3 当作已验收。环境变量见 [测试与门禁](../docs/development/testing.md#s3)。
 
 ## 契约验证的测试作用域
 

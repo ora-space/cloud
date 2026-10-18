@@ -4,7 +4,9 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { PluginsPage } from '@/features/plugins/plugins-page'
 import {
+  assetImport,
   catalogEntry,
+  importWithNameConflict,
   pluginCloudHandlers,
   PLUGIN_FIXTURE_SYNCED_AT,
   spacePlugin,
@@ -34,6 +36,7 @@ async function confirmRemove(user: ReturnType<typeof userEvent.setup>): Promise<
 function installFixtures(
   options: {
     plugins?: ReturnType<typeof spacePlugin>[]
+    assetImports?: ReturnType<typeof assetImport>[]
     removeConflict?: 'version_conflict'
     onRemove?: (identifier: string, version: number) => void
   } = {},
@@ -115,6 +118,33 @@ describe('PluginsPage', () => {
     expect(await screen.findByText('等待执行')).toBeInTheDocument()
     expect(screen.getByText('失败')).toBeInTheDocument()
     expect(screen.getByText(/sha256 mismatch/)).toBeInTheDocument()
+  })
+
+  it('shows workflow asset imports separately from the install state', async () => {
+    installFixtures({
+      plugins: [spacePlugin('official/demo', { observedState: 'installed' })],
+      assetImports: [
+        importWithNameConflict('official/demo'),
+        assetImport('official/broken', {
+          state: 'failed',
+          failureCode: 'asset_package_digest_mismatch',
+          documents: [],
+        }),
+      ],
+    })
+    renderWithProviders(<PluginsPage slug="cloud-dev" />, { slug: 'cloud-dev' })
+
+    // The install row stays in its own section: an installed plugin and a
+    // failed asset import are independent facts, not one combined status.
+    const selected = screen.getByRole('region', { name: '已选插件' })
+    expect(await within(selected).findByText('已安装')).toBeInTheDocument()
+
+    const assets = screen.getByRole('region', { name: '工作流资产导入' })
+    expect(within(assets).getByText('导入完成')).toBeInTheDocument()
+    expect(within(assets).getByText('导入失败')).toBeInTheDocument()
+    expect(within(assets).getByText(/已导入 · 快照 v1/)).toBeInTheDocument()
+    expect(within(assets).getByText('失败：工作流名称已被占用')).toBeInTheDocument()
+    expect(within(assets).getByText('导入失败：包摘要不匹配')).toBeInTheDocument()
   })
 
   it('removes a plugin after confirmation and sends the optimistic version', async () => {

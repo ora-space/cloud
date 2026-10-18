@@ -7,12 +7,12 @@ import (
 
 // FormDescriptor is the Issues-facing *rendering* descriptor for a Workflow (Form Mode) interaction.
 // It answers exactly one question: which input controls should the Issues frontend render, and what is
-// the most basic client-side interaction/validation for them (§38.2).
+// the most basic client-side interaction/validation for them (Issue collaboration D7).
 //
 // It is deliberately NOT a Workflow canonical schema and is bound to no schema technology: a future
 // Workflow module may express its schema as JSON Schema, a DSL, protobuf, a database schema, a
 // code-defined schema or a remote service contract, and its adapter projects that into this shape
-// (§38.5). It is also not a capability DSL — conditional visibility, computed fields, cross-field
+// (Issue collaboration D7). It is also not a capability DSL — conditional visibility, computed fields, cross-field
 // expressions, repeaters and nested groups are explicitly out of scope.
 type FormDescriptor struct {
 	FormRef     string
@@ -21,7 +21,7 @@ type FormDescriptor struct {
 	Fields      []FormField
 }
 
-// FormField is one rendered control. `Key` is the machine key used in the form-value map (§38.16).
+// FormField is one rendered control. `Key` is the machine key used in the form-value map (Issue collaboration D7).
 type FormField struct {
 	Key          string
 	Label        string
@@ -39,7 +39,7 @@ type FormOption struct {
 	Label string
 }
 
-// First-version field types (§38.4). Anything else makes the descriptor invalid.
+// First-version field types (Issue collaboration D7). Anything else makes the descriptor invalid.
 const (
 	fieldText        = "text"
 	fieldTextarea    = "textarea"
@@ -87,7 +87,7 @@ func validOpaqueToken(s string) bool {
 	return true
 }
 
-// validateFormDescriptor enforces the §38.3 invariants: unique field keys, options only (and always)
+// validateFormDescriptor enforces the Issue collaboration D7 invariants: unique field keys, options only (and always)
 // for select/multi_select, supported types, and a type-consistent default value. A provider that
 // returns a malformed descriptor is a provider bug, so this fails closed as 500 invalid_form_descriptor
 // — Issues never renders a partially valid form.
@@ -172,7 +172,7 @@ func optionValue(f *FormField, value string) bool {
 }
 
 // validateFormValues re-validates submitted form values against the descriptor the form was rendered
-// from (§38.15). The frontend descriptor is a rendering hint, never an authority: unknown keys, wrong
+// from (Issue collaboration D9). The frontend descriptor is a rendering hint, never an authority: unknown keys, wrong
 // types, values outside `options` and (when requireComplete) missing required fields are all rejected
 // here.
 //
@@ -245,7 +245,7 @@ func formDescriptorObject(d FormDescriptor) Object {
 // assistSuggestionObject renders a provider suggestion for the wire, filtering it defensively: a
 // suggested key must exist on the descriptor and carry a legal value, and a suggested context ref must
 // be a known ref type with a UUID ref id. A provider can therefore never widen the form or inject a
-// malformed reference — unmentioned keys simply keep the user's current value (§38.13).
+// malformed reference — unmentioned keys simply keep the user's current value (Issue collaboration D9).
 func assistSuggestionObject(d FormDescriptor, s AssistSuggestion) Object {
 	values := Object{}
 	explanations := Object{}
@@ -287,7 +287,7 @@ func interactionValues(body Object) Object {
 
 // appliedContextRefs reads the optional `contextRefs` list from a confirm body. These are *applied
 // suggestions*, not persistent issue context: they join this run's snapshot only and never create an
-// `issue_context_ref` row (§38.14).
+// `issue_context_ref` row (Issue collaboration D5).
 func appliedContextRefs(body Object) []Object {
 	raw, ok := body["contextRefs"]
 	if !ok || raw == nil {
@@ -311,7 +311,7 @@ func appliedContextRefs(body Object) []Object {
 // workflowFormDescriptor resolves the Form Mode descriptor for a workflow target, server-side and from
 // scratch: the target is re-resolved through the directory (which owns the target -> formRef mapping),
 // then the provider resolves the descriptor, then the descriptor is validated. Every failure is a typed
-// fault, never a partially usable form (§38.19).
+// fault, never a partially usable form (Issue collaboration D7).
 //
 // `issue` is the issue context the descriptor is tailored with. GET and assist must pass the same one:
 // assist re-validates submitted values against this descriptor, so a descriptor that disagreed with

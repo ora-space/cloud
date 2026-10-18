@@ -34,3 +34,22 @@ func RuntimeScope(r *http.Request) (core.GitRuntimeScope, error) {
 	}
 	return core.GitRuntimeScope{TenantID: p[2], WorkspaceID: p[4], Generation: g}, nil
 }
+
+// ExecutorIdentity is the Repo Executor's service SPIFFE ID. It proves only which component is
+// calling; every repository permission comes from the Operation the request names.
+const ExecutorIdentity = "spiffe://ora.local/repo-executor"
+
+var errExecutor = errors.New("repo-executor certificate required")
+
+// RequireExecutor accepts only a verified certificate whose sole URI is the executor identity.
+// The service listener trusts only the executor CA, so this is the second of two checks.
+func RequireExecutor(r *http.Request) error {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+		return errExecutor
+	}
+	cert := r.TLS.PeerCertificates[0]
+	if len(cert.URIs) != 1 || cert.URIs[0].String() != ExecutorIdentity {
+		return errExecutor
+	}
+	return nil
+}

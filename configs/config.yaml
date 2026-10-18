@@ -35,11 +35,11 @@ collaboration:
 #   environment: "<deployment value>"
 #   app_key_file: "/run/ora-secrets/tianzhou-app-key"
 control:
-  grpc_addr: "127.0.0.1:8082" # Controller-facing gRPC, unauthenticated at this stage; loopback or private network only
+  grpc_addr: "127.0.0.1:8082" # Controller-facing gRPC; requires TLS 1.3 mutual authentication, see docs/runtime/controller-integration.md
 auth:
   audience: "ora-cloud"
   # Public keys of the local Gateway; generate them with `task setup` (config.toml). Production replaces
-  # these entries with the deployment's keys; see docs/authentication.md.
+  # these entries with the deployment's keys; see docs/identity/authentication.md.
   keys:
     - id: gateway-service-2026
       issuer: ora-internal-issuer
@@ -61,6 +61,14 @@ issue_runs:
   agent_start_timeout: 2m
   agent_restore_timeout: 6m
   agent_end_confirm_timeout: 5m
+  # The bounded-agent-startup ADR's D5 window: how long a run Workspace's create_workspace
+  # operation may stay in `blocked` (first persistent unknown result) before Cloud abandons the
+  # business run, fails the operation, releases the Project operation slot and retains an
+  # independent residual ledger. A deployment duration frozen per run on database time when the
+  # creation first blocks; defer, retry, re-claiming, restarts and this value never renew a frozen
+  # deadline. The approved default is 30m; only omission selects it, an explicit nonpositive or
+  # invalid duration rejects startup. Override: CLOUD_ISSUE_RUNS_AGENT_WORKSPACE_BLOCKED_TIMEOUT.
+  agent_workspace_blocked_timeout: 30m
   # IssueRun D5's two give-up limits for a Revision delivery, both deployment durations judged on
   # database time and both not per-run columns. `delivery_give_up_after` is the continuous-failure
   # window: once a run has been failing to deliver for longer than this, Cloud abandons the delivery
@@ -82,15 +90,21 @@ plugins:
   marketplace_branch: "main"
   sync_interval: 5m
   sync_enabled: true
+  # Workflow asset import downloads the selected kind='workflow' package from the catalog locator
+  # and imports its assets/workflows/*.json documents as tenant workflows. It runs independently
+  # of Node installation, so spaces without a live runtime still receive their templates.
+  # Override: CLOUD_PLUGINS_ASSET_IMPORT_ENABLED / _ASSET_IMPORT_INTERVAL.
+  asset_import_enabled: true
+  asset_import_interval: 30s
 
 object_store:
-  # Cloud's own S3-compatible object storage for Revision objects (Cloud Revision D1): optional
-  # S3-compatible upload-grant service. Credentials are mounted files, never values here.
-  # CLOUD_OBJECT_STORE_* overrides each key; this does not enable Revision verification (M3).
+  # Cloud's own S3-compatible object storage for Revision bundles and session JSONL: Cloud signs
+  # bounded upload and download grants and verifies the objects before it registers a Revision.
+  # See docs/agent-runs/revisions.md.
   #
-  # `enabled: false` (or leaving the section out) runs the server without object storage: every
-  # Revision upload grant is refused as UNAVAILABLE and each delivery fails until IssueRun D5's
-  # give-up window releases the run — the server logs the missing capability at startup.
+  # `enabled: false` (or leaving the section out) runs the server without object storage: grant
+  # requests are refused with object_store_unconfigured, and each delivery settles as `skipped` when
+  # it is declared, so the run goes straight on to release its Workspace.
   #
   # Credentials are references, never values: `access_key_id_file` and `secret_access_key_file` name
   # files that are read at startup and then live only in the Cloud process. Never put a key or secret

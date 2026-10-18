@@ -35,3 +35,39 @@ See [OpenAPI JSON artifact](../../api/openapi.json), [HTTP router](../api/router
 are write-only; Gateway/model-gateway own credential routes and Cloud never reads their bodies.
 Thread adds its initiator, nullable model summary and append/end capabilities. Regenerate OpenAPI
 and the frontend client from these authoritative Go sources.
+
+## Agent session and archive contract
+
+`AgentSessionSummary` is the item returned by `GET /api/v1/tenants/:tid/agent-sessions`: Run/Issue identity,
+Issue title/number, nullable project/plugin metadata, run/Thread state, timestamps, a nullable model
+summary and `historyAvailable`. That flag denotes an unexpired archive registration, not a successful
+storage read. This version discovers Agent IssueRuns only.
+
+List filters are `projectId`, `status`, `agent`, `from`, `to`, `after` and `limit`. Creation times use
+`[from,to)`, status is one enum value and Agent is an exact plugin identifier. Page size defaults to
+50 and caps at 100. Ordering is descending `(createdAt,id)`; `nextCursor` is an exclusive UUID cursor,
+distinct from the Thread's integer `seq` cursor. Unknown, empty and repeated query values are rejected.
+
+`SessionHistory` belongs to `GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history`, with
+`source="archive"`, `records`, `sizeBytes` and `sha256`. Each record is a JSON object retaining unknown
+fields, original numeric values and file order; provider/history schemas are not hard-coded into the
+Cloud contract. Consumers replay subsequent updates to the same history `seq`; Cloud Thread paging
+`seq` must not replace the history sequence.
+
+The history route accepts no query parameters, path or URL. Existing two-tier credentials and current
+member/Issue/Run authorization apply, rechecked with the registration after storage I/O. Limits are
+32 MiB / 100000 records. Safe errors are `404 history_unavailable` for absent/expired registration,
+`413 history_too_large`, `502 history_invalid` or `502 history_unavailable`, without private storage
+details. Model, tool timing, token/cost and parent-child data depend on persisted evidence; missing
+values must not be invented. Update schemas, routes, generated OpenAPI and frontend clients together;
+real conversation logs must never become contract test fixtures.
+
+## Model request metrics contract
+
+`session_statistics.go` defines `MetricAggregate`, `ModelAttemptUsage`, `SessionModelAttempt` and
+`SessionModelStatistics`. `/statistics` takes no query; `/model-calls` accepts only `limit/after`. Scope is
+`recorded_http_attempts` from `model_gateway`, not historical backfill or billing, independent of page size.
+Input/output/total/cache read/cache write/reasoning counters remain independently nullable with coverage.
+OpenAI input includes cache reads; Anthropic input excludes cache reads/writes; reasoning is an output subset.
+Do not add these fields indiscriminately. `firstOutputMs` observes gateway first effective output, not model TTFT.
+A `started` observation does not guarantee the request is still alive.

@@ -173,6 +173,8 @@ func validateWorkflowNodes(nodes []any) []workflowGraphProblem {
 			// and reporting its config too would ask the author to fix a field of a node they have to
 			// delete anyway.
 			problems = append(problems, validateAgentConfig(id, o.O("data"))...)
+		case kind == "condition":
+			problems = append(problems, validateConditionConfig(id, o.O("data"))...)
 		}
 	}
 	if starts != 1 {
@@ -199,6 +201,113 @@ func validateAgentConfig(nodeID string, data Object) []workflowGraphProblem {
 			continue
 		}
 		problems = append(problems, workflowGraphProblem{Code: "node_config_unsupported", NodeID: nodeID, Field: field})
+	}
+	return problems
+}
+
+// workflowUnsupportedConditionConfigs is the list of condition-node configuration Cloud cannot
+// evaluate the way desktop's condition.rs does, and which publishing therefore refuses. It is
+// written out rather than derived because it is a statement about the two implementations, not about
+// Cloud's own code: each entry is a place where the evaluator would otherwise answer silently —
+// an unknown operator is a no-match, an unknown logic falls back to `and`, a missing case id becomes
+// the else branch, a one-segment selector becomes the whole node output, and an expected value
+// carrying `{{#selector#}}` is compared as literal text where desktop resolves it and keeps the
+// bound type (circus#202 A 条件 2, #141 结论 5). Every one of them is decidable from the document
+// alone, which is what makes refusing at publish possible; the differences that depend on a
+// *resolved* value's type at run time are not, and are named in the ADR instead.
+//
+// A condition node with no cases, or a case with no rules, is deliberately NOT on this list: falling
+// through to else is what an unfinished node is meant to do, and both sides already agree on it.
+//
+// When the parity work lands (circus#210, split out by circus#202 A 条件 3) these refusals come off
+// one at a time, each with the cross-check case that proves the two sides now answer the same thing.
+var workflowUnsupportedConditionConfigs = []string{
+	"condition_cases_not_a_list",
+	"condition_case_not_an_object",
+	"condition_case_id_missing",
+	"condition_logic_unsupported",
+	"condition_rules_not_a_list",
+	"condition_rule_not_an_object",
+	"condition_selector_unsupported",
+	"condition_operator_unsupported",
+	"condition_value_template_unsupported",
+}
+
+// validateConditionConfig refuses the condition configuration the first phase does not evaluate the
+// way desktop does. Every problem names the node and the field, so the author is told which branch
+// of which node to fix rather than that the graph is invalid somewhere.
+func validateConditionConfig(nodeID string, data Object) []workflowGraphProblem {
+	problems := []workflowGraphProblem{}
+	raw, present := data["cases"]
+	if !present || raw == nil {
+		return problems
+	}
+	cases, ok := raw.([]any)
+	if !ok {
+		return append(problems, workflowGraphProblem{Code: "condition_cases_not_a_list", NodeID: nodeID, Field: "cases"})
+	}
+	for _, item := range cases {
+		c, ok := asWorkflowObject(item)
+		if !ok {
+			problems = append(problems, workflowGraphProblem{Code: "condition_case_not_an_object", NodeID: nodeID, Field: "cases"})
+			continue
+		}
+		if c.S("id") == "" {
+			problems = append(problems, workflowGraphProblem{Code: "condition_case_id_missing", NodeID: nodeID, Field: "cases.id"})
+		}
+		// An absent logic is `and`, which is what the evaluator applies and what the editor omits;
+		// only a value neither side recognizes is refused.
+		switch c.S("logic") {
+		case "", "and", "or":
+		default:
+			problems = append(problems, workflowGraphProblem{Code: "condition_logic_unsupported", NodeID: nodeID, Field: "cases.logic"})
+		}
+		rules, ok := c["conditions"].([]any)
+		if !ok {
+			// An absent or null rule list is the same unfinished case as an empty one, and is left
+			// to fall through; a list of some other type is a document this gate cannot read.
+			if value, present := c["conditions"]; present && value != nil {
+				problems = append(problems, workflowGraphProblem{Code: "condition_rules_not_a_list", NodeID: nodeID, Field: "cases.conditions"})
+			}
+			continue
+		}
+		for _, rawRule := range rules {
+			problems = append(problems, validateConditionRule(nodeID, rawRule)...)
+		}
+	}
+	return problems
+}
+
+// validateConditionRule checks one rule of one case. The operator set is read from the evaluator's
+// own table rather than restated, so the gate cannot admit an operator the evaluator would then
+// no-match — the two lists are the same list.
+func validateConditionRule(nodeID string, raw any) []workflowGraphProblem {
+	problems := []workflowGraphProblem{}
+	r, ok := asWorkflowObject(raw)
+	if !ok {
+		return append(problems, workflowGraphProblem{Code: "condition_rule_not_an_object", NodeID: nodeID, Field: "cases.conditions"})
+	}
+	selector, ok := r["variableSelector"].([]any)
+	if !ok {
+		return append(problems, workflowGraphProblem{Code: "condition_selector_unsupported", NodeID: nodeID, Field: "cases.conditions.variableSelector"})
+	}
+	// The selector needs the node AND a path into its output. The editor hands a new comparison an
+	// empty list, and one element names the whole output, which desktop refuses and Cloud would read
+	// as everything the node produced.
+	if len(selector) < 2 {
+		problems = append(problems, workflowGraphProblem{Code: "condition_selector_unsupported", NodeID: nodeID, Field: "cases.conditions.variableSelector"})
+	}
+	for _, element := range selector {
+		if text, ok := element.(string); !ok || text == "" {
+			problems = append(problems, workflowGraphProblem{Code: "condition_selector_unsupported", NodeID: nodeID, Field: "cases.conditions.variableSelector"})
+			break
+		}
+	}
+	if _, ok := workflowConditionOperators[r.S("operator")]; !ok {
+		problems = append(problems, workflowGraphProblem{Code: "condition_operator_unsupported", NodeID: nodeID, Field: "cases.conditions.operator"})
+	}
+	if text, ok := r["value"].(string); ok && strings.Contains(text, "{{#") && strings.Contains(text, "#}}") {
+		problems = append(problems, workflowGraphProblem{Code: "condition_value_template_unsupported", NodeID: nodeID, Field: "cases.conditions.value"})
 	}
 	return problems
 }

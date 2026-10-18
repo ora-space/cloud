@@ -119,7 +119,7 @@ func settleVerifiedRevision(t *transaction, r *ControlRequest, e Object) {
 	if !verification.valid {
 		settled["reason"] = reason
 	} else {
-		w := t.one("SELECT w.*,p.repository_url FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE w.id=$1", e.S("workspaceId"))
+		w := t.one("SELECT w.*,b.repository_url FROM workspaces w JOIN repository_bindings b ON b.project_id=w.project_id WHERE w.id=$1", e.S("workspaceId"))
 		bundle, history := result.O("bundle"), result.O("history")
 		var bundleKey, bundleSize, bundleDigest any
 		if len(bundle) > 0 {

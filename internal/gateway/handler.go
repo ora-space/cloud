@@ -253,6 +253,10 @@ func (h *handler) relay(c *gin.Context) {
 		h.fail(c, fault{"session_unavailable", http.StatusServiceUnavailable})
 		return
 	}
+	if malformedSessionQuery(c.Request) {
+		h.fail(c, fault{"invalid_session_filter", http.StatusBadRequest})
+		return
+	}
 	credentials, e := h.Issuer.Issue(session.Identity)
 	if e != nil {
 		h.Log.Error("issue credentials failed", zap.String("requestId", c.GetString("requestId")), zap.String("sessionId", session.ID), zap.Error(e))

@@ -27,9 +27,15 @@ func graphText(r *PublicRequest) string {
 func createWorkflow(t *transaction, r *PublicRequest) Object {
 	name := validText(r.Body.S("name"), 200)
 	require(t.one("SELECT id FROM workflows WHERE tenant_id=$1 AND name=$2 AND deleted_at IS NULL", r.TenantID, name) == nil, 409, "workflow_conflict")
+	return insertWorkflow(t, r.TenantID, name, r.Body.S("description"), graphText(r))
+}
+
+// insertWorkflow is the one workflow creation write. Callers have already applied the tenant-level
+// name rules; the asset importer uses it so an imported copy is created exactly like an editor draft.
+func insertWorkflow(t *transaction, tenantID, name, description, graph string) Object {
 	id := newID()
-	t.exec("INSERT INTO workflows(id,tenant_id,name,description,graph) VALUES($1,$2,$3,$4,$5)", id, r.TenantID, name, r.Body.S("description"), graphText(r))
-	return workflow(t, r.TenantID, id)
+	t.exec("INSERT INTO workflows(id,tenant_id,name,description,graph) VALUES($1,$2,$3,$4,$5)", id, tenantID, name, description, graph)
+	return workflow(t, tenantID, id)
 }
 
 func updateWorkflow(t *transaction, r *PublicRequest) Object {
@@ -97,14 +103,26 @@ func publishWorkflow(t *transaction, r *PublicRequest) Object {
 	w := t.one("SELECT * FROM workflows WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE", r.WorkflowID, r.TenantID)
 	require(w != nil, 404, "not_found")
 	requireValidWorkflowGraph(w.O("graph"))
-	next := t.one("SELECT COALESCE(MAX(version),0)+1 AS version FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2", r.TenantID, r.WorkflowID).N("version")
 	name := w.S("name")
 	if r.Body.S("name") != "" {
 		name = validText(r.Body.S("name"), 200)
 	}
+	return insertWorkflowSnapshot(t, w, name)
+}
+
+// insertWorkflowSnapshot freezes the workflow's live graph under the next per-workflow version.
+// The caller holds the workflow row lock, so two publishes cannot pick the same version.
+func insertWorkflowSnapshot(t *transaction, w Object, name string) Object {
+	return insertSnapshotGraph(t, w, name, jsonText(w.O("graph")))
+}
+
+// insertSnapshotGraph is the one snapshot write. The graph text is passed separately because the
+// importer stores the package document verbatim instead of re-encoding the graph it just parsed.
+func insertSnapshotGraph(t *transaction, w Object, name, graph string) Object {
+	next := t.one("SELECT COALESCE(MAX(version),0)+1 AS version FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2", w.S("tenantId"), w.S("id")).N("version")
 	id := newID()
-	t.exec("INSERT INTO workflow_snapshots(id,tenant_id,workflow_id,version,name,graph) VALUES($1,$2,$3,$4,$5,$6)", id, r.TenantID, r.WorkflowID, next, name, jsonText(w.O("graph")))
-	return t.one("SELECT * FROM workflow_snapshots WHERE id=$1 AND tenant_id=$2", id, r.TenantID)
+	t.exec("INSERT INTO workflow_snapshots(id,tenant_id,workflow_id,version,name,graph) VALUES($1,$2,$3,$4,$5,$6)", id, w.S("tenantId"), w.S("id"), next, name, graph)
+	return t.one("SELECT * FROM workflow_snapshots WHERE id=$1 AND tenant_id=$2", id, w.S("tenantId"))
 }
 
 // restoreWorkflowSnapshot replaces the live graph with a chosen snapshot's, advancing

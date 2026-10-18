@@ -13,7 +13,7 @@ const SUPPORTED: ReadonlySet<string> = new Set<FormFieldType>([
 
 /**
  * Renders a Workflow form purely from its `FormDescriptor`. It never inspects the workflow's identity
- * and never hard-codes a field: the field set lives in the provider, not here (§38.27). An unknown
+ * and never hard-codes a field: the field set lives in the provider, not here (Issue collaboration D7). An unknown
  * field type is a descriptor bug, so it is surfaced as an explicit error state instead of guessed at.
  */
 export function DynamicFormRenderer({

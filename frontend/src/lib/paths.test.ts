@@ -41,6 +41,8 @@ describe('workspacePaths', () => {
   it('keeps every workspace route under the reserved prefix', () => {
     const p = workspacePaths('acme')
     expect(p.root).toBe('/w/acme')
+    expect(p.sessions).toBe('/w/acme/sessions')
+    expect(p.agentSession('issue', 'run')).toBe('/w/acme/sessions/agent/issue/run')
     expect(p.issueDetail('42')).toBe('/w/acme/issues/42')
     expect(p.workflowDetail('42')).toBe('/w/acme/workflows/42')
     expect(p.spaces).toBe('/w/acme/spaces')

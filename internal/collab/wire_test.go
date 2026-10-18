@@ -30,7 +30,7 @@ func TestFixtureDirectoryAllNonHumanTargetTypesDiscoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets: %v", err)
 	}
-	// Frozen target-type -> interaction-mode default (§37.2): user=mention, agent/team=task (task
+	// Frozen target-type -> interaction-mode default (Issue collaboration D3): user=mention, agent/team=task (task
 	// required), workflow=form. The fixture descriptors must agree with it.
 	expected := map[string][2]any{
 		"agent": {"task", true},

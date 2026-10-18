@@ -20,4 +20,4 @@
 - At runtime it touches only `gateway_login_attempts`, `gateway_sessions`, and `schema_migrations`.
 - Huawei intranet deployments use IDaaS 2.0 Authorization Code (`client_secret_post` confidential client). W3 login creates only a local Cloud session, and logout does not end the W3/IDaaS SSO session.
 
-See the [cmd overview](../README.en.md), [authentication boundary (`internal/gateway`)](../../internal/gateway/README.en.md), and the [Gateway document](../../docs/gateway.md).
+See the [cmd overview](../README.en.md), [authentication boundary (`internal/gateway`)](../../internal/gateway/README.en.md), and the [Gateway document](../../docs/identity/gateway.en.md).

@@ -29,7 +29,7 @@ func explicitLaunchDefaults() []any {
 	return out
 }
 
-// launchGraph adds the author's launch-field declaration (§38.37d) to a Start-only graph, the way the
+// launchGraph adds the author's launch-field declaration (Issue collaboration D8) to a Start-only graph, the way the
 // editor stores it: a top-level array of the document, beside the global variables.
 func launchGraph(launchFields []any) Object {
 	graph := startGraph(nil, "")
@@ -107,7 +107,7 @@ func TestLaunchFieldsDeclarationDropsFields(t *testing.T) {
 }
 
 // TestLaunchFieldsDeclarationAcceptsThePreRenameKey covers the declaration written before the field was
-// renamed (§38.37f). A snapshot published then carries `version` where this build reads `snapshotId`,
+// renamed (Issue collaboration D8). A snapshot published then carries `version` where this build reads `snapshotId`,
 // and the graph of a published snapshot is immutable — so reading the entry strictly would hand the
 // field back to a workflow whose author had withdrawn it, which is the silent-ignore the declaration
 // exists to prevent. The rename's other half is unchanged: the entry is read as the snapshot selector

@@ -12,6 +12,11 @@ import (
 
 const maxModelEventBytes = 1 << 20
 
+// streamFailure classifies only gateway-owned failures; it never contains provider diagnostics.
+type streamFailure struct{ outcome, code string }
+
+func (e *streamFailure) Error() string { return e.code }
+
 func responseHasError(data []byte) bool {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(data, &envelope) != nil {
@@ -60,21 +65,31 @@ func sanitizeEvent(event []byte, protocol string) ([]byte, error) {
 // forwardEvents flushes each bounded protocol event. Write deadlines prevent a non-reading
 // downstream from retaining an authorized request or its watcher forever.
 func forwardEvents(w http.ResponseWriter, body io.Reader, protocol string, responseIO *responseIO) error {
+	return forwardObservedEvents(w, body, protocol, responseIO, nil)
+}
+
+func forwardObservedEvents(w http.ResponseWriter, body io.Reader, protocol string, responseIO *responseIO, observe func([]byte)) error {
 	reader := bufio.NewReaderSize(body, 32<<10)
 	var event []byte
 	write := func() error {
 		value, sanitizeErr := sanitizeEvent(event, protocol)
+		if sanitizeErr == nil && observe != nil {
+			observe(event)
+		}
 		if err := responseIO.prepareWrite(); err != nil {
-			return err
+			return &streamFailure{"interrupted", "model_downstream_unavailable"}
 		}
 		if _, err := w.Write(value); err != nil {
-			return err
+			return &streamFailure{"interrupted", "model_downstream_unavailable"}
 		}
 		if err := http.NewResponseController(w).Flush(); err != nil {
-			return err
+			return &streamFailure{"interrupted", "model_downstream_unavailable"}
 		}
 		event = event[:0]
-		return sanitizeErr
+		if sanitizeErr != nil {
+			return &streamFailure{"failed", "model_upstream_failed"}
+		}
+		return nil
 	}
 	lineLength := 0
 	afterCR := false
@@ -87,12 +102,12 @@ func forwardEvents(w http.ResponseWriter, body io.Reader, protocol string, respo
 				}
 				return nil
 			}
-			return errors.New("model stream unavailable")
+			return &streamFailure{"interrupted", "model_stream_unavailable"}
 		}
 		if len(event)+1 > maxModelEventBytes {
 			event = safeModelError(protocol)
 			_ = write()
-			return errors.New("model event limit exceeded")
+			return &streamFailure{"failed", "model_event_limit_exceeded"}
 		}
 		event = append(event, value)
 		if value == '\n' && afterCR {

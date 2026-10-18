@@ -1,8 +1,8 @@
 package core
 
-// Phase 5 Batch 2 white-box acceptance for the release half of an Agent IssueRun: the `releasing →
-// done` transition behind the RunWorkspaceDeleted hook (IssueRun D3/D4, controller-integration D6;
-// plan §5 Batch 2). Everything here is real PostgreSQL in an isolated schema; the hook is driven
+// White-box acceptance for the release half of an Agent IssueRun: the `releasing →
+// done` transition behind the RunWorkspaceDeleted hook (IssueRun D3/D4, controller-integration D6).
+// Everything here is real PostgreSQL in an isolated schema; the hook is driven
 // inside a caller-owned transaction exactly as the delete_workspace terminal transaction drives it.
 //
 // Why these live in the core package rather than only in integration: the obligation under test is a

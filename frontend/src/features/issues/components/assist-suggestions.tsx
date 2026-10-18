@@ -80,7 +80,7 @@ function refKey(ref: ContextRefRef): string {
   return `${ref.refType}:${ref.refId}`
 }
 
-/** Suggested context refs: applying one only adds it to this run's confirm payload (§38.14). */
+/** Suggested context refs: applying one only adds it to this run's confirm payload (Issue collaboration D5). */
 function SuggestedRefs({
   refs,
   appliedRefs,
@@ -124,7 +124,7 @@ function SuggestedRefs({
 /**
  * AI Assist review panel: shows each suggestion next to the user's current value and lets the user
  * Apply or Ignore it. Assist never executes anything — applying only edits local form state, and
- * confirming stays a separate explicit action (§38.12, §38.28).
+ * confirming stays a separate explicit action (Issue collaboration D9).
  */
 export function AssistSuggestions({
   descriptor,

@@ -8,7 +8,7 @@
 
 ### 路由白名单与分发
 - `Routes()` 显式声明系统支持的端点白名单：
-  - **公开 API (`/api/v1/...`)**：共 82 个端点，涵盖用户、租户、成员关系、协作空间及其成员、项目、工作区、操作、状态查询、Issue 协作（Issue、状态、标签、视图、评论、订阅、运行、上下文引用、交互与协作目标），以及工作区插件（`/tenants/:tid/spaces/:spaceId/plugins`：目录快照、选择列表、安装、移除）与作为独立工作项的 clone 请求（`/tenants/:tid/clones`、`/clones/:cloneId`：提交、列表、单条查询，与 Project/Workspace 的 operation 模型无关）。
+  - **公开 API (`/api/v1/...`)**：涵盖用户、租户、成员关系、协作空间及其成员、项目、工作区、操作、状态查询、Issue 协作（Issue、状态、标签、视图、评论、订阅、运行、上下文引用、交互与协作目标），以及工作区插件（`/tenants/:tid/spaces/:spaceId/plugins`：目录快照、选择列表、安装、移除）、Agent 会话列表与完整归档读取，以及作为独立工作项的 clone 请求（`/tenants/:tid/clones`、`/clones/:cloneId`：提交、列表、单条查询，与 Project/Workspace 的 operation 模型无关）。
   - **内部控制 API (`/internal/v1/...`)**：共 15 个端点，涵盖 Controller 租约、操作认领/推进、节点注册和 Ticket 准入。
   - **健康检查 (`/healthz`)**：通过 `store.Pool.PingContext` 检查数据库连通性；附加 `dependencies.objectStore` 的 configured/unconfigured 配置状态，不探测 S3 或公开 endpoint/凭据。
 - 任何未注册的端点均会被 `r.NoRoute` 捕获并返回 `404 not_found`。
@@ -34,10 +34,34 @@
 - **无业务状态**：路由层不持有任何业务逻辑、领域状态流转或数据库连接。它完全委托给 `core.Store.Public` 与 `core.Store.Control` 执行。
 - **契约严格同步**：路由路径、允许字段以及 HTTP 方法必须与 `internal/contract` 及 `api/openapi.json` 保持严格同步。
 
-参见 [api 总览](../README.md)、[核心领域状态机](../../core/README.md)、[OpenAPI 契约](../../contract/README.md) 与 [认证配置与凭据](../../../docs/authentication.md)。
+参见 [api 总览](../README.md)、[核心领域状态机](../../core/README.md)、[OpenAPI 契约](../../contract/README.md) 与 [内部凭据与服务信任](../../../docs/identity/authentication.md)。
 
 ## 个人模型路由
 
 `/me/model-connections` 与 `/me/model-default` 使用已验证用户作用域，严格校验模型数组和版本。
 credential 路由只用于公开契约；Cloud HTTP 在读取请求体前拒绝，Gateway 将请求直接交给
-model-gateway。Thread 返回发起者、模型摘要及可追加/可结束权限。见 [模型连接](../../../docs/model-connections.md)。
+model-gateway。Thread 返回发起者、模型摘要及可追加/可结束权限。见 [个人模型连接](../../../docs/models/model-access.md)。
+
+## Agent 会话 Dashboard 路由
+
+- `GET /api/v1/tenants/:tid/agent-sessions`：接受 `projectId`、`status`、`agent`、`from`、`to`、
+  `after`、`limit`。未知、重复或空查询参数返回 `400 invalid_session_filter`；领域层继续校验 UUID、单个状态枚举
+  与 RFC 3339 时间区间。默认每页 50，最大 100，按 `(createdAt,id)` 倒序；`after` 是当前租户内上一页
+  的 UUID 游标，时间筛选按创建时间 `[from,to)`。
+- `GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history`：不接受任何查询参数、对象键或 URL。
+  返回 `{source:"archive",records:[...],sizeBytes,sha256}`，不暴露私有存储地址。
+
+两条路由仍需有效 gateway 服务 JWT 与绑定该服务的用户 JWT；Core 使用当前用户/租户成员资格，归档还
+校验 Issue/Run 作用域，并在外部读取后再次鉴权。它们不创建身份、会话或业务状态。浏览器继续使用正常
+Gateway 会话，不持有 S3 或内部服务凭据；会话响应使用 `Cache-Control: no-store`。
+
+归档最多 32 MiB / 100000 个合法 JSONL 对象，核验真实大小与 SHA-256。未登记/已过期为
+`404 history_unavailable`，超限为 `413 history_too_large`，损坏为 `502 history_invalid`，
+存储不可用为 `502 history_unavailable`；用户/成员权限和不可见 Issue/Run 使用现有安全错误。
+归档数字、字段及文件顺序保持不变。列表只覆盖 Cloud Agent IssueRun；token、cost、父子关系等上游未持久化
+数据不会由 API 推测补齐，也不会扫描用户文件系统。实时投影仍使用原 Thread API 与空间 SSE 失效通知。
+
+模型统计另外提供 `.../runs/:rid/statistics`（不接受查询）与 `.../runs/:rid/model-calls`
+（只接受单值非空 `limit/after`）。二者同样要求当前成员与 Agent Run 作用域，使用 `private, no-store`，
+不依赖归档。模型请求默认 50 条、最多 100 条，按 `(startedAt,id)` 升序，游标必须属于同一 Run。
+汇总是全 Run 已登记 HTTP 尝试的统计，缺失指标返回 null 及覆盖信息；不返回正文、grant 或凭据。

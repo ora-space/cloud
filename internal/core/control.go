@@ -58,6 +58,13 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		if r.Action == "effect_permit" {
 			return effectPermit(t, r)
 		}
+		if r.Action == "provisioning_fact" {
+			// D5's independent fact-takeover entry: a lease holder submits real results about an
+			// abandoned creation without re-claiming the failed operation (agent_run_provisioning_fact).
+			// The fingerprint also binds the fact's target: the operation and effect identities travel
+			// in the request fields, so a replay naming a different target is a conflict, not a replay.
+			return submittedTarget(t, r, func() Object { return provisioningFact(t, r) })
+		}
 		if strings.HasPrefix(r.Action, "force_") {
 			return submitted(t, r, func() Object { return forceStopCommand(t, r) })
 		}
@@ -107,6 +114,12 @@ func operationCommand(t *transaction, r *ControlRequest) Object {
 			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 		}
 		t.exec("UPDATE operations SET state=$2,error_code=$3,retry_at=clock_timestamp()+($4 * interval '1 second'),version=version+1,updated_at=now() WHERE id=$1", o.S("id"), state, code, delay)
+		if state == "blocked" && o.S("kind") == "create_workspace" && o.S("workspaceId") != "" {
+			// ADR D5: the first persistent `blocked` of a run Workspace creation freezes its absolute
+			// abandonment deadline in this same transaction. The freeze is a no-op for public
+			// Workspace creations (no business run) and for every later blocked write (deadline set).
+			t.store.freezeWorkspaceCreationDeadline(t, o.S("workspaceId"))
+		}
 		return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 	default:
 		reject(404, "not_found")
@@ -175,7 +188,7 @@ func operation(t *transaction, r *ControlRequest) Object {
 // it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM projects p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	p := t.one("SELECT p.*,c.secret_ref FROM "+projectView+" p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
 	out := Object{
 		"operation":  o,
 		"project":    p,
@@ -362,6 +375,11 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 		advanceClone(t, o, wid)
 		next = finishPluginGate(t, o, wid)
 	case "quiesce":
+		// Repository Operations already running when the Project entered deleting may still write
+		// to its Git Server repository; deletion starts only after they have all ended.
+		if o.S("kind") == "delete_project" {
+			require(!repositoryOperationsUnfinished(t, o.S("projectId")), 409, "repository_operation_unfinished")
+		}
 		for _, w := range operationWorkspaces(t, o) {
 			checkActivities(t, w)
 			live := t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", w.S("id"))

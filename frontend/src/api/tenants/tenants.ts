@@ -41,6 +41,8 @@ import type {
   DeleteApiV1TenantsTidLabelsLidBody,
   Error,
   FormDescriptor,
+  GetApiV1TenantsTidAgentSessions200,
+  GetApiV1TenantsTidAgentSessionsParams,
   GetApiV1TenantsTidCollaborationFormsFormRefParams,
   GetApiV1TenantsTidCollaborationTargets200,
   GetApiV1TenantsTidInvitations200,
@@ -59,6 +61,8 @@ import type {
   GetApiV1TenantsTidIssuesIidLabelsParams,
   GetApiV1TenantsTidIssuesIidRuns200,
   GetApiV1TenantsTidIssuesIidRunsParams,
+  GetApiV1TenantsTidIssuesIidRunsRidModelCalls200,
+  GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams,
   GetApiV1TenantsTidIssuesIidRunsRidThread200,
   GetApiV1TenantsTidIssuesIidRunsRidThreadParams,
   GetApiV1TenantsTidIssuesIidSubscribers200,
@@ -123,6 +127,8 @@ import type {
   PutApiV1TenantsTidIssuesIidBody,
   PutApiV1TenantsTidIssuesIidCommentsCidBody,
   PutApiV1TenantsTidLabelsLidBody,
+  SessionHistory,
+  SessionModelStatistics,
   TenantCreated
 } from '../generated.schemas';
 
@@ -354,6 +360,107 @@ export const usePostApiV1Tenants = <TError = ErrorType<Error>,
       return useMutation(getPostApiV1TenantsMutationOptions(options), queryClient);
     }
     /**
+ * Read-only active-member session index. Agent IssueRuns only, newest (createdAt, id) first. Filters: projectId, exact agent plugin identifier, status, inclusive from and exclusive to RFC3339 instants. after must identify an accessible Agent run in this tenant. No log bodies or model credentials are included. Unknown, empty or repeated query parameters are rejected.
+ * @summary GET /api/v1/tenants/:tid/agent-sessions
+ */
+export const getApiV1TenantsTidAgentSessions = (
+    tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetApiV1TenantsTidAgentSessions200>(
+      {url: `/api/v1/tenants/${tid}/agent-sessions`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1TenantsTidAgentSessionsQueryKey = (tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams,) => {
+    return [
+    `/api/v1/tenants/${tid}/agent-sessions`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetApiV1TenantsTidAgentSessionsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError = ErrorType<Error>>(tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1TenantsTidAgentSessionsQueryKey(tid,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>> = ({ signal }) => getApiV1TenantsTidAgentSessions(tid,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1TenantsTidAgentSessionsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>>
+export type GetApiV1TenantsTidAgentSessionsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1TenantsTidAgentSessions<TData = Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError = ErrorType<Error>>(
+ tid: string,
+    params: undefined |  GetApiV1TenantsTidAgentSessionsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidAgentSessions<TData = Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError = ErrorType<Error>>(
+ tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidAgentSessions<TData = Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError = ErrorType<Error>>(
+ tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/tenants/:tid/agent-sessions
+ */
+
+export function useGetApiV1TenantsTidAgentSessions<TData = Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError = ErrorType<Error>>(
+ tid: string,
+    params?: GetApiV1TenantsTidAgentSessionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidAgentSessions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1TenantsTidAgentSessionsQueryOptions(tid,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
  * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
  * @summary GET /api/v1/tenants/:tid/collaboration/forms/:formRef
  */
@@ -3373,6 +3480,335 @@ export function useGetApiV1TenantsTidIssuesIidRunsRid<TData = Awaited<ReturnType
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetApiV1TenantsTidIssuesIidRunsRidQueryOptions(tid,iid,rid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Read-only active-member access to a run's registered Revision history. Tenant, issue and run are checked before and after private storage I/O. Verifies exact byte size and SHA-256, parses JSONL objects retaining order and duplicate sequence updates. Maximum 32 MiB and 100000 records; no URLs or paths accepted. 404 history_unavailable for absent/expired registration, 413 history_too_large, 502 history_invalid or history_unavailable. Never scans user filesystems.
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history
+ */
+export const getApiV1TenantsTidIssuesIidRunsRidHistory = (
+    tid: string,
+    iid: string,
+    rid: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SessionHistory>(
+      {url: `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/history`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidHistoryQueryKey = (tid: string,
+    iid: string,
+    rid: string,) => {
+    return [
+    `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/history`
+    ] as const;
+    }
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError = ErrorType<Error>>(tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1TenantsTidIssuesIidRunsRidHistoryQueryKey(tid,iid,rid);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>> = ({ signal }) => getApiV1TenantsTidIssuesIidRunsRidHistory(tid,iid,rid, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && iid !== null && iid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1TenantsTidIssuesIidRunsRidHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>>
+export type GetApiV1TenantsTidIssuesIidRunsRidHistoryQueryError = ErrorType<Error>
+
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidHistory<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidHistory<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidHistory<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history
+ */
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidHistory<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidHistory>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1TenantsTidIssuesIidRunsRidHistoryQueryOptions(tid,iid,rid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Read-only active-member content-free model HTTP attempts for an Agent run, ascending (startedAt, id). after must identify an attempt in this run. Only singleton nonempty limit and after parameters accepted. Request/response bodies, credentials, headers, provider messages and storage paths are never returned. firstOutputMs measures the gateway-observed first effective output, not model TTFT. A started attempt may represent an ongoing request or missing final observation. private, no-store.
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/model-calls
+ */
+export const getApiV1TenantsTidIssuesIidRunsRidModelCalls = (
+    tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetApiV1TenantsTidIssuesIidRunsRidModelCalls200>(
+      {url: `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/model-calls`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryKey = (tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams,) => {
+    return [
+    `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/model-calls`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError = ErrorType<Error>>(tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryKey(tid,iid,rid,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>> = ({ signal }) => getApiV1TenantsTidIssuesIidRunsRidModelCalls(tid,iid,rid,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && iid !== null && iid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>>
+export type GetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidModelCalls<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string,
+    params: undefined |  GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidModelCalls<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidModelCalls<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/model-calls
+ */
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidModelCalls<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string,
+    params?: GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidModelCalls>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1TenantsTidIssuesIidRunsRidModelCallsQueryOptions(tid,iid,rid,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Read-only active-member model statistics for an Agent run. Covers all recorded model-gateway HTTP attempts, independently of archive availability or request-page pagination. This is not a historical request backfill or billing ledger. Each metric exposes its own known/total coverage; absent values remain null, including a run with no observations. Input/cache semantics follow the source protocol; reasoning is an output subset. No query parameters accepted; private, no-store.
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/statistics
+ */
+export const getApiV1TenantsTidIssuesIidRunsRidStatistics = (
+    tid: string,
+    iid: string,
+    rid: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SessionModelStatistics>(
+      {url: `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/statistics`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryKey = (tid: string,
+    iid: string,
+    rid: string,) => {
+    return [
+    `/api/v1/tenants/${tid}/issues/${iid}/runs/${rid}/statistics`
+    ] as const;
+    }
+
+
+export const getGetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError = ErrorType<Error>>(tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryKey(tid,iid,rid);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>> = ({ signal }) => getApiV1TenantsTidIssuesIidRunsRidStatistics(tid,iid,rid, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && iid !== null && iid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>>
+export type GetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidStatistics<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidStatistics<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1TenantsTidIssuesIidRunsRidStatistics<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/statistics
+ */
+
+export function useGetApiV1TenantsTidIssuesIidRunsRidStatistics<TData = Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError = ErrorType<Error>>(
+ tid: string,
+    iid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1TenantsTidIssuesIidRunsRidStatistics>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1TenantsTidIssuesIidRunsRidStatisticsQueryOptions(tid,iid,rid,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

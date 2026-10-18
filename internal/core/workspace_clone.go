@@ -34,6 +34,9 @@ func deferWorkspaceClone(t *transaction, o Object) {
 		return
 	}
 	t.exec("UPDATE operations SET state='failed',error_code='clone_failed',retry_at=NULL,version=version+1,updated_at=now() WHERE id=$1", o.S("id"))
+	if o.S("kind") == "create_project" {
+		settleFailedProjectCreation(t, o.S("projectId"))
+	}
 	t.exec("UPDATE workspaces SET observed_state='unavailable',admission_open=false,version=version+1 WHERE id=$1", o.S("workspaceId"))
 	finishRuntimeMaintenance(t, o.S("id"))
 	if w := t.one("SELECT issue_run_id FROM workspaces WHERE id=$1", o.S("workspaceId")); w.S("issueRunId") != "" {
@@ -58,7 +61,7 @@ func workspaceCloneDispatch(t *transaction, r *ControlRequest, operation, execut
 	require(runtimeUsable(t, t.one("SELECT * FROM workspaces WHERE id=$1", wid), o.S("actorUserId")), 403, "runtime_use_forbidden")
 	requireRepositoryAccess(t, o.S("projectId"))
 	requireNoForceStop(t, wid)
-	w := t.one("SELECT w.requested_ref,p.repository_url FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE w.id=$1", wid)
+	w := t.one("SELECT w.requested_ref,b.repository_url FROM workspaces w JOIN repository_bindings b ON b.project_id=w.project_id WHERE w.id=$1", wid)
 	require(input.S("repositoryUrl") == w.S("repositoryUrl") && input.S("branch") == w.S("requestedRef"), 409, "dispatch_conflict")
 	require(currentNode(t, wid).S("nodeId") == node, 409, "dispatch_conflict")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE operation_id=$1 AND (result IS NULL OR result->>'outcome'='clone_ready')", operation) == nil, 409, "dispatch_conflict")

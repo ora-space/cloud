@@ -1,7 +1,7 @@
 // Plugin marketplace state: cloud is the sole authority for the per-space plugin
 // selection and the catalog snapshot. The Node execution plane only downloads
 // and runs what cloud fans out through the operation/effect channel; it never
-// syncs the marketplace itself. See docs/plugins.md for the full contract.
+// syncs the marketplace itself. See docs/plugins/marketplace.md for the full contract.
 package core
 
 import (
@@ -162,6 +162,10 @@ func installSpacePlugin(t *transaction, r *PublicRequest, uid string) Object {
 	if old != nil {
 		version(old, r.Body.N("version"))
 		if old.S("desiredState") == "installed" && old.S("desiredVersion") == desired {
+			// A repeated install is still an asset-import trigger: it is the administrator's
+			// retry for documents that failed (or for a package download that failed) without
+			// touching the already-imported copies.
+			requestWorkflowAssetImport(t, r.SpaceID, r.TenantID, namespace, identifier, entry)
 			schedulePluginMaintenance(t)
 			return Object{"resource": pluginSelection(t, r.SpaceID, namespace, identifier)}
 		}
@@ -170,6 +174,7 @@ func installSpacePlugin(t *transaction, r *PublicRequest, uid string) Object {
 		require(r.Body.N("version") == 0, 409, "version_conflict")
 		t.exec("INSERT INTO space_plugins(space_id,tenant_id,source_namespace,identifier,desired_state,desired_version,observed_state,requested_by_user_id,selected_release) VALUES($1,$2,$3,$4,'installed',$5,'pending',$6,$7)", r.SpaceID, r.TenantID, namespace, identifier, desired, uid, jsonText(entry))
 	}
+	requestWorkflowAssetImport(t, r.SpaceID, r.TenantID, namespace, identifier, entry)
 	recordPluginTargets(t, r, namespace, identifier)
 	schedulePluginMaintenance(t)
 	return Object{"resource": pluginSelection(t, r.SpaceID, namespace, identifier)}

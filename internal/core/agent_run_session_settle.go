@@ -11,7 +11,7 @@ import (
 const agentSessionEndedOutcome = "agent_session_ended"
 
 // settleSessionEnded is the B-owned session-terminal core behind the A→B hook OnSessionEnded
-// (controller-integration D6 sessionEnded, Thread D4, IssueRun D3/D4; plan §5 Batch 1).
+// (controller-integration D6 sessionEnded, Thread D4, IssueRun D3/D4).
 //
 // It runs on the caller-owned *transaction of the session execution's terminal-event takeover,
 // inside which all of the following must commit or roll back together:
@@ -114,7 +114,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 		  AND thread_state IN ('pending','active','idle','ending')`, runID); moved != 1 {
 		// The row was re-read in this very transaction under the caller's advisory lock, so zero
 		// affected rows contradicts that read. It is reported precisely rather than tolerated: a
-		// terminal event must never be acked for a transition that did not happen (mandate §9/§13).
+		// terminal event must never be acked for a transition that did not happen.
 		now := t.one("SELECT phase, thread_state FROM issue_runs WHERE id=$1", runID)
 		return fmt.Errorf("sessionEnded: run %s was not moved to ended/delivering (rows affected %d; phase=%q thread_state=%q)",
 			runID, moved, now.S("phase"), now.S("threadState"))

@@ -34,12 +34,15 @@ func TestAgentStartupBudgetDefaultsAndEnvironment(t *testing.T) {
 			if cfg.IssueRuns.AgentRestoreTimeout != 6*time.Minute || cfg.IssueRuns.AgentEndConfirmTimeout != 5*time.Minute {
 				t.Fatal("restore and ending defaults must be independent 6m/5m windows")
 			}
+			if cfg.IssueRuns.AgentWorkspaceBlockedTimeout != 30*time.Minute {
+				t.Fatal("the D5 creation window must default to 30m independently of the startup windows")
+			}
 		})
 	}
 }
 
 func TestInvalidAgentWindowsRejectStartup(t *testing.T) {
-	for _, key := range []string{"agent_start_timeout", "agent_restore_timeout", "agent_end_confirm_timeout"} {
+	for _, key := range []string{"agent_start_timeout", "agent_restore_timeout", "agent_end_confirm_timeout", "agent_workspace_blocked_timeout"} {
 		for _, value := range []string{"0s", "-1m", "infinite", "999999999999999999h"} {
 			t.Run(key+"/"+value, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "config.yaml")

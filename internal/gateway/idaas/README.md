@@ -13,8 +13,9 @@ authorize、表单 token 交换、userinfo 解析、provider 错误分类和响�
 | `endpoints_test.go` | 验证完整 HTTPS 端点覆盖、既有表单协议与不安全 URL 拒绝。 |
 
 部署可分别设置 authorize/token/userinfo 的完整 HTTPS URL；省略时沿用 BaseURL 与原有路径。
-端点不接受 userinfo、query 或 fragment，错误不回显配置值。地址变更只需重新创建容器，凭据仍由文件注入，
-不能由浏览器选择目标地址；更换端点必须保持同一企业身份权威。
+端点不接受 URL 用户凭据、query 或 fragment，错误不回显配置值。凭据仍由文件注入，
+不能由浏览器选择目标地址；更换端点必须保持同一企业身份权威、来源、scope 与 UUID 语义。
+配置应用与 secret 轮换见 [部署与运维](../../../docs/operations/deployment.md#华为-idaas-现场配置)。
 
 `uuid` 是唯一身份键（对应员工工号而非工号明文或 W3 账号），读取时去掉首尾空白（文档成功示例
 含尾部空格）；去掉后为空则拒绝。可配置的顶层显示字段仅用于首次 JIT 展示，缺失时回退 `uuid`
@@ -24,4 +25,4 @@ authorize 只发送 2.0 普通模式必填字段，不附加 PKCE 或 `display`�
 （不发送 Basic 头，不把凭据放进 query，也不发送 PKCE-NULL 的 `code_verifier`）；userinfo 只在请求体
 提交 `access_token`。token/userinfo 调用必须有总超时、禁止重定向且不得位于数据库事务内。超大或非法
 JSON 响应与明确拒绝一样归为 `ErrProviderRejected`。参见
-[Gateway 认证模块](../README.md) 与 [部署说明](../../../docs/gateway.md)。
+[Gateway 认证模块](../README.md) 与 [Gateway 文档](../../../docs/identity/gateway.md)。

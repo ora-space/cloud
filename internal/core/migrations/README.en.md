@@ -40,13 +40,15 @@ Migrations are executed in ascending numerical sequence. The sequence is **appen
 - **`0010_issue_collaboration.sql`**: `issues` ALTERs (`assignee_type`/`assignee_id`/`project_ref` + backfill), `issue_comments` ALTERs (`parent_id`/`author_type`/`author_id`/`seq` + backfill + `UNIQUE(issue_id,seq)`), new tables `issue_runs`, `issue_activities`, `issue_context_refs`. (formerly `0008_issue_collaboration.sql`)
 - **`0011_issue_interactions.sql`**: new table `issue_interactions` (the `@` interaction spine) — one row per selected collaboration target: `id, tenant_id, issue_id, comment_id, target_type, target_id, mode, task, run_id, created_at`. (formerly `0009_issue_interactions.sql`)
 - **`0012_issue_interaction_input.sql`**: one generic additive column: `ALTER TABLE issue_interactions ADD COLUMN input jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(input)='object')` — the confirmed form values. Deliberately excludes `version`, a `status` enum, `confirmed_at` and a separate inputs table; `0011` is not modified. (formerly `0010_issue_interaction_input.sql`)
-- **`0013_project_space_optional.sql`** (append-only compatibility migration): `projects.space_id` back to **NULLABLE** — upstream `0007` imposed `NOT NULL` + full project binding; the product decision (PS3 / D2=C) keeps a Space an *optional* grouping. `0013` only relaxes the constraint; it deliberately **does NOT unbind** the projects `0007` already assigned to their default Space (no data change, no scope shrink).
+- **`0013_project_space_optional.sql`** (append-only compatibility migration): `projects.space_id` back to **NULLABLE** — upstream `0007` imposed `NOT NULL` + full project binding; the product design at the time kept a Space an *optional* grouping. `0013` only relaxes the constraint; it deliberately **does NOT unbind** the projects `0007` already assigned to their default Space (no data change, no scope shrink). That design was superseded by `0017`, which makes the project space association mandatory again.
 - **`0014_clone_coordination.sql`** (append-only, after upstream `0008–0013`): clone coordination through the internal control contract (independent of the Effect-level `operations` model):
   - `clone_requests`: work Cloud accepted in its own business transaction, idempotent on `(tenant, user, request_id)`, state `queued→dispatched→succeeded/failed`.
   - `clone_executions`: executions a Controller registers before dispatching (exactly one per request, Controller-chosen opaque identities), their input, terminal result and the lease epoch at registration.
   - `clone_event_receipts`: exact receipts `(execution, sequence, event)` of Node events, the only basis for acknowledging a Node.
   - `control_submissions`: identity, request digest and recorded response of every state-changing submission; the same identity with the same content replays the response instead of reapplying.
-- **`0015_plugins.sql`**: Adds the plugin catalog, per-space selections and runtime installation records.
+- **`0015_plugins.sql`**: the plugin marketplace's three tables plus enum widening:
+  - `plugin_sources` (deployment-global source, default `official` namespace), `plugin_catalog_entries` (catalog snapshot; reads never leave the database), `space_plugins` (authoritative per-space selection, `UNIQUE(space_id, source_namespace, identifier)`), `workspace_plugin_instances` (fan-out execution facts with tenant/owner/project/workspace composite foreign keys).
+  - Widens `operations.kind` (+install_plugin/remove_plugin), `operations.step` (+plugin), `external_effects.kind` (+plugin_ensure/plugin_delete); the original CHECKs live in 0001 (PG names them table_column_check), dropped and rebuilt with the extended sets.
 - **`0016_workspace_runtime_follows_node.sql`**: Retires storage/worktree provisioning and uses independent Workspace data, Node and clone initialization. Historical records remain readable.
 - **`0017_tenant_membership_and_join.sql`**: Consolidates one space per tenant with tenant membership as the sole authority; restores mandatory project space association, reserves slugs globally even after archiving, and adds durable IDaaS identity association, invitation and join-request records. Incompatible test data with multiple spaces, unscoped projects, reused slugs or divergent tenant and space names must be rebuilt; the migration never silently splits or renames data.
 - **`0027_workflows.sql`** (append-only, workflow editor port): the workflow graph document `workflows` — the whole tenant-owned graph (`graph jsonb`: nodes / edges / viewport / annotations / global variables). Deliberately one table and one graph column: the graph is a document, not a relational aggregate, so there are no per-node or per-edge tables and no draft/published split.
@@ -65,10 +67,7 @@ Migrations are executed in ascending numerical sequence. The sequence is **appen
   If any mismatch or unapplied migration is found, the server terminates immediately.
 - **No AutoMigrate**: The production server daemon **never** executes DDL or modifies table structures at startup. Migrations must be applied using `cloudctl migrate` under dedicated database administrator credentials.
 
-See [core overview](../README.en.md), [cloudctl CLI](../../../cmd/cloudctl/README.en.md), and [Core contract](../../../docs/core-contract.md).
-- **`0015_plugins.sql`** (append-only): the plugin marketplace's three tables plus enum widening:
-  - `plugin_sources` (deployment-global source, default `official` namespace), `plugin_catalog_entries` (catalog snapshot; reads never leave the database), `space_plugins` (authoritative per-space selection, `UNIQUE(space_id, source_namespace, identifier)`), `workspace_plugin_instances` (fan-out execution facts with tenant/owner/project/workspace composite foreign keys).
-  - Widens `operations.kind` (+install_plugin/remove_plugin), `operations.step` (+plugin), `external_effects.kind` (+plugin_ensure/plugin_delete); the original CHECKs live in 0001 (PG names them table_column_check), dropped and rebuilt with the extended sets.
+See [core overview](../README.en.md), [cloudctl CLI](../../../cmd/cloudctl/README.en.md), and [Authoritative persistence](../../../docs/core/persistence.en.md).
 
 ## Append-only multiplayer runtime migrations
 
@@ -91,7 +90,7 @@ Merging current upstream preserves the complete filenames and original SQL of `0
 0033 adds private connection metadata, defaults, immutable ciphertext credentials, user-scoped
 idempotency records, run bindings and temporary grant digests. Historical runs remain unbound;
 composite foreign keys preserve user ownership. No plaintext key enters migrations or Cloud domain
-methods. See [model connections](../../../docs/model-connections.en.md).
+methods. See [personal model connections](../../../docs/models/model-access.en.md).
 ## 0033: Revision resume
 
 0033 follows 0032 and lets a new run resume its Issue's latest Revision (issue-run resume decision): `revisions` gains `prior_revision_id` (the Revision a run resumed), `bundle_revision_id` (a resumed run that added nothing stores no bundle and names the row holding it, always one hop), and `resume_refused_at` with `resume_refused_reason` (a restore found the base commit gone from the remote; only `prior_revision_base_unavailable`); `issue_runs` gains `resume_revision_id` (the prior Revision fixed at session start). The anonymous `revisions_check` is replaced by the named `revisions_bundle_shape`: existing rows still satisfy the two original shapes, and the new third shape only admits a reused bundle with a prior. Purely forward and retry-safe; the new columns are NULL on existing rows. Fresh-database, upgrade and repeated-migration evidence is `TestMigration0033RevisionResumeAppliesFreshAndUpgrades` in `integration/migration_upgrade_path_test.go`; the constraints' refusal of real rows is in `integration/agent_run_resume_test.go`.
@@ -101,3 +100,17 @@ Both `0033` files retain their complete filenames and original SQL. The complete
 ## 0034: Agent startup windows and residual ownership
 
 Adds startup_ready_at, startup_deadline_at, startup_resume, startup_ending_deadline_at and agent_run_residuals without rewriting historical outcomes. The serialized policy scan freezes legacy active windows once. Residual ownership commits with failed/done; late true terminal facts add evidence without granting cleanup authority. Fresh/upgrade/repeat coverage: TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade.
+
+
+`0035_model_attempt_statistics.sql` adds a content-free model HTTP attempt ledger and tenant/run/time index.
+Composite foreign keys bind run/tenant, binding/run and grant/binding/execution; CHECK constraints bound statuses,
+nullable counters, timing and completion shape. No historical backfill. Apply with `cloudctl migrate`; services still
+only validate schema. `TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackfill` covers fresh, 0034 upgrade and rerun.
+
+## 0036: workflow plugin asset imports
+
+`0036_workflow_asset_imports.sql` records asset imports for `kind='workflow'` plugins: `workflow_asset_imports` holds one row per (space, plugin) with the `requested_revision` each administrator install/reinstall advances, the import progress and its lease; `workflow_asset_documents` holds one row per document path, and only an `outcome='imported'` row permanently occupies (space, namespace, identifier, document path) — failed documents are retried on the next trigger. The imported workflows and published snapshots are ordinary user data; these two tables only record provenance, idempotency and per-document outcomes. Forward-only and additive; no existing table changes.
+
+## 0038: Bounded abandonment of a blocked run Workspace creation
+
+Adds issue_runs.workspace_blocked_at, workspace_deadline_at, workspace_blocked_source (blocked_write / first_observed) with a provisioning-phase partial index, and widens agent_run_residuals' reason constraint to agent_start_failed / workspace_unavailable. The first transaction persisting `blocked` anchors the absolute deadline; legacy blocked creations have no immutable first-blocked evidence, are not backfilled, and receive one default window from the first policy scan as first_observed. Defer, manual retry, re-claiming, restarts and configuration changes never renew; only the creation's real terminal ends the window. Purely forward and retry-safe, without rewriting historical outcomes. Fresh/upgrade/repeat coverage: TestMigration0038WorkspaceBlockedDeadlineAppliesFreshAndUpgrades.

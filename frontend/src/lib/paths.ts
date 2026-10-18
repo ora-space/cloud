@@ -26,6 +26,8 @@ export function workspacePaths(slug: string) {
     chat: `${base}/chat`,
     issues: `${base}/issues`,
     issueDetail: (id: string) => `${base}/issues/${id}`,
+    sessions: `${base}/sessions`,
+    agentSession: (issueId: string, runId: string) => `${base}/sessions/agent/${issueId}/${runId}`,
     projects: `${base}/projects`,
     projectDetail: (id: string) => `${base}/projects/${id}`,
     repositories: `${base}/repositories`,

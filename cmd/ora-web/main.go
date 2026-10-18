@@ -7,7 +7,7 @@
 //
 // It is a development convenience, not a production gateway: production deployments sign user
 // tokens in the Gateway/infrastructure adapter and hold the service private key out of reach of
-// both the browser and this process (see docs/authentication.md).
+// both the browser and this process (see docs/identity/authentication.md).
 package main
 
 import (
@@ -40,7 +40,7 @@ import (
 
 const (
 	gatewaySubject = "ora-web-gateway" // fixed service identity the browser acts under
-	identitySource = "dev"             // login namespace; see docs/authentication.md
+	identitySource = "dev"             // login namespace; see docs/identity/authentication.md
 	sessionCookie  = "ora_subject"     // holds the login subject; user token is re-signed per request
 )
 

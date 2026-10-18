@@ -6,7 +6,7 @@ import "sync"
 // Clients refetch authoritative state over REST; events never carry it.
 //
 // IssueID/RunID/LastSeq belong to the one event that addresses a single resource rather than a
-// whole space — `issue_run.thread_appended` (Thread D5, plan §4C.7/§4C.8). They are additive and
+// whole space — `issue_run.thread_appended` (Thread D5). They are additive and
 // omitted when empty, so every event that predates them serializes to the same bytes it did before
 // (`project.created`'s ProjectID is the precedent). An event still never carries business state:
 // LastSeq says only "there is data at or below this seq", never which entries exist, and it never

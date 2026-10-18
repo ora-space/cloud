@@ -1,14 +1,13 @@
 package integration
 
-// Phase 4C S7 acceptance for the public Thread end (Thread D4, approved by G-018; plan
-// §4C.10/§4C.15/§4C.16).
+// Acceptance for the public Thread end (Thread D4).
 //
 // The endpoint is the third of D4's three ending triggers and the only client-facing one. What it
 // has to hold is narrower than the other two, and the tests below are shaped by that:
 //
 //   - It ends, it does not settle. The response is `202 {"threadState": "ending"}` and the run's own
 //     phase/status are untouched: `ended`, `discarded`, Revision settlement and the Workspace delete
-//     are Phase 5 and stay out of this path (G-019).
+//     are settled elsewhere and stay out of this path.
 //   - It is exactly one transition. One `EndSession{reason: user_ended}` command, one commit, and no
 //     new Thread entry: ending is not something the conversation said, so it allocates no `seq`.
 //   - It is idempotent under the caller's key, through the same generic mechanism every other public
@@ -81,7 +80,7 @@ func (f *fixture) threadRunState(runID string) (phase, status, threadState strin
 	return phase, status, threadState
 }
 
-// T4C-28 (plan §4C.10) — the first request. One accepted end writes `ending`, releases exactly one
+// The first request. One accepted end writes `ending`, releases exactly one
 // `end_session` command with the user's reason, records the caller's idempotency response, and does
 // nothing else: no entry, no `seq`, no change to the run's own phase/status, and no `ended`.
 func TestThreadEndAcceptsTheFirstRequest(t *testing.T) {
@@ -106,7 +105,7 @@ func TestThreadEndAcceptsTheFirstRequest(t *testing.T) {
 		t.Fatalf("the Thread must be ending, got %q", threadState)
 	}
 	// Ending is a request to the session, not a terminal state for the run: the shutdown, the
-	// settlement and the Workspace delete all proceed on their own evidence (IssueRun D6, G-019).
+	// settlement and the Workspace delete all proceed on their own evidence (IssueRun D6).
 	if phase != phaseBefore || status != statusBefore {
 		t.Fatalf("ending a Thread must not move the run: %s/%s became %s/%s", phaseBefore, statusBefore, phase, status)
 	}
@@ -143,7 +142,7 @@ func (f *fixture) assertEndRecorded(scene threadScene, key string, want int) {
 	}
 }
 
-// T4C-29 (plan §4C.6) — one key, one transition. A replay is answered from the recorded response and
+// One key, one transition. A replay is answered from the recorded response and
 // must not release a second command, move the state again or write a second record; the boundary
 // cases around it are the generic idempotency mechanism's, reused rather than reimplemented.
 func TestThreadEndIsIdempotentUnderTheSameKey(t *testing.T) {
@@ -222,7 +221,7 @@ func TestThreadEndReplayOutlivesTheStateItRecorded(t *testing.T) {
 	}
 }
 
-// T4C-29 (plan §4C.6) — the concurrent replay. Two callers present the same key at the same instant;
+// The concurrent replay. Two callers present the same key at the same instant;
 // the advisory lock serializes them, so one commits the transition and the other replays it. Both see
 // the same 202 and exactly one command exists. The start is synchronized with a channel and the
 // assertion is on the complete set of permitted outcomes, never on a sleep.
@@ -264,7 +263,7 @@ func TestThreadEndConcurrentSameKeyMakesOneTransition(t *testing.T) {
 	}
 }
 
-// T4C-11 / plan §4C.15 — authorization is the Thread read/write path's own, so this endpoint adds no
+// Authorization is the Thread read/write path's own, so this endpoint adds no
 // permission model and no oracle. A caller with no membership is refused by the shared check exactly
 // as the comments path refuses them; a member who names a run outside this tenant and Issue gets the
 // same not-found they get from the Thread GET, so the endpoint cannot be used to probe which runs
@@ -298,7 +297,7 @@ func TestThreadEndAuthorizesLikeTheThreadRead(t *testing.T) {
 	}
 
 	t.Run("a run with no declared session has no Thread to end", func(t *testing.T) {
-		// Same answer the read gives: D-4C-01 materializes `pending` inside StartSession, so an empty
+		// Same answer the read gives: StartSession materializes `pending`, so an empty
 		// state is a genuine absence rather than a conflict.
 		runID := seedDeclaredAgentRun(t, f.store.Pool, scene.seed, "provisioning", "queued", false, false)
 		status, out, e := f.threadRequest("POST", threadEndPath(scene.tenantID, scene.issueID, runID), `{}`, "end-undeclared")
@@ -328,7 +327,7 @@ func TestThreadEndAuthorizesLikeTheThreadRead(t *testing.T) {
 	}
 }
 
-// T4C-18 (plan §4C.4) — the request's transaction is refused, so nothing about it survives: no
+// The request's transaction is refused, so nothing about it survives: no
 // `ending`, no command, and no idempotency record. The retry under the same key once the cause is gone
 // is therefore a clean first request rather than a replay of a half-written end — which is exactly
 // what the missing record proves.
@@ -376,7 +375,7 @@ func (f *fixture) assertEndRolledBack(scene threadScene, versionBefore int) {
 	}
 }
 
-// T4C-30 / plan §4C.14 — the ending races. Each trigger (the user's request, the idle window, a
+// The ending races. Each trigger (the user's request, the idle window, a
 // cancellation request, a new user turn) may run first, and any interleaving must end in a legal
 // serial outcome: exactly one transition to `ending` and exactly one EndSession command. The races are
 // started from a barrier and the assertions accept the complete permitted set, never the common case —

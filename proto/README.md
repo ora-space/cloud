@@ -53,4 +53,4 @@ RuntimeControlService 传递 Cloud 已裁决的目标绑定、关闭确认、即
 
 `AgentSessionSpec.model_binding_id` 是 Cloud 冻结的个人模型配置引用，不含密钥或临时令牌。
 `RegisterNodeRequest.model_proxy` 与 `NodeRecord.model_proxy` 保存 Node 握手声明的模型代理能力，
-旧 Node 默认为 false；个人模型会话派发和授权都要求具备该能力。语义见 [模型连接](../docs/model-connections.md)。
+旧 Node 默认为 false；个人模型会话派发和授权都要求具备该能力。语义见 [个人模型连接](../docs/models/model-access.md)。

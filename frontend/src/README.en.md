@@ -13,6 +13,7 @@ Browser entry point and composition root. This layer only wires things together:
 | `main.tsx` | Browser entry: starts MSW (for `/mock-api/*` only), creates the `QueryClient`, mounts `SessionProvider` and the router. No exports; not unit-tested. |
 | `routes.tsx` | Route table: `/login`, and `/onboarding` plus `/w/:workspaceSlug/*` (under the reserved prefix, so workspace slugs never collide with top-level routes) behind `RequireSession`; `/` lands on `/onboarding`. |
 | `index.css` | Tailwind entry and design tokens (colors, radius). Global theme variables only; component styles live with components. |
+| `session-routes.test.tsx` | Verifies the session list/detail routes resolve the authenticated tenant and expose the sidebar entry. |
 
 ## Submodules
 
@@ -26,6 +27,10 @@ Browser entry point and composition root. This layer only wires things together:
 | `features/model-connections/` | Private model connections, credential writes and defaults for new sessions at `settings/model-connections`. |
 | `features/spaces/` | Collaboration space adapter: tenant/space resolution, space APIs, SSE subscription. |
 | `lib/` | React-free infrastructure: HTTP client, external navigation, paths. |
+| `features/sessions/` | Agent IssueRun session screens, authorized reads and pagination. |
+| `features/session-data/` | Framework-free normalization of archive and Thread observations. |
+| `features/session-timeline/` | Three-lane timeline, tool statistics and raw event inspection. |
+| `features/session-metrics/` | Content-free model-request summaries, trends and request pages. |
 | `mocks/` | MSW demo data: `/mock-api/*` handlers and seeds for pages without a backend yet. |
 | `test/` | Test scaffolding: jsdom cleanup, the fake HTTP adapter, session and space fixtures. |
 

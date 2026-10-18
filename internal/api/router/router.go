@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -34,11 +35,23 @@ const ThreadMessagePath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/mes
 // separate on purpose — raising the shared one would silently widen every existing list's contract.
 const ThreadPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread"
 
-// ThreadEndPath is the user-initiated end route (Thread D4, G-018). It is named for the same reason
+// ThreadEndPath is the user-initiated end route (Thread D4). It is named for the same reason
 // the other two Thread routes are: the contract, the coverage test and the transport all have to
 // agree on one spelling. It carries no request fields — the body is `{}` and anything else is an
 // unknown field — so it takes the default request cap.
 const ThreadEndPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/end"
+
+// AgentSessionsPath lists tenant-scoped Agent session summaries.
+const AgentSessionsPath = "/api/v1/tenants/:tid/agent-sessions"
+
+// SessionHistoryPath reads only the verified archive registered for this run.
+const SessionHistoryPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/history"
+
+// SessionStatisticsPath aggregates all recorded model HTTP attempts for an authorized run.
+const SessionStatisticsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/statistics"
+
+// SessionModelCallsPath pages content-free model HTTP attempt observations.
+const SessionModelCallsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/model-calls"
 
 // defaultBodyLimit is the request cap every other route keeps.
 const defaultBodyLimit = 64 << 10
@@ -74,6 +87,10 @@ func Routes() []Route {
 		{"PUT", "/api/v1/tenants/:tid/members/:uid", "", []string{"role", "status", "version"}},
 		{"GET", "/api/v1/tenants/:tid/collaboration/targets", "", nil},
 		{"GET", "/api/v1/tenants/:tid/collaboration/forms/:formRef", "", nil},
+		{"GET", AgentSessionsPath, "", nil},
+		{"GET", SessionHistoryPath, "", nil},
+		{"GET", SessionStatisticsPath, "", nil},
+		{"GET", SessionModelCallsPath, "", nil},
 		{"GET", "/api/v1/tenants/:tid/issues", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issues", "", []string{"title", "description", "status", "priority", "assigneeUserId", "assigneeType", "assigneeId", "parentIssueId", "projectRef", "properties"}},
 		{"GET", "/api/v1/tenants/:tid/issues/:iid", "", nil},
@@ -171,6 +188,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/projects", "", nil},
 		{"POST", "/api/v1/tenants/:tid/spaces/:spaceId/projects", "", []string{"name", "repositoryUrl", "defaultBranch", "credentialRefId"}},
 		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/plugins/catalog", "", nil},
+		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/plugins/assets", "", nil},
 		{"GET", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", nil},
 		{"POST", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", []string{"identifier", "pluginVersion", "version"}},
 		{"DELETE", "/api/v1/tenants/:tid/spaces/:spaceId/plugins", "", []string{"identifier", "version"}},
@@ -361,6 +379,10 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
+				if !validSessionQuery(c, route.Path) {
+					failure(c, &core.Fault{Code: "invalid_session_filter", Status: 400, Params: core.Object{}})
+					return
+				}
 				limit := 0
 				if v := c.Query("limit"); v != "" {
 					limit, e = strconv.Atoi(v)
@@ -376,7 +398,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.
@@ -398,6 +420,9 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 				}
 				failure(c, f)
 				return
+			}
+			if isSessionReadPath(route.Path) {
+				c.Header("Cache-Control", "private, no-store")
 			}
 			c.JSON(status, out)
 		})
@@ -651,4 +676,33 @@ func validField(name string, value any) bool {
 
 func failure(c *gin.Context, e *core.Fault) {
 	c.AbortWithStatusJSON(e.Status, gin.H{"code": e.Code, "params": e.Params, "requestId": c.GetString("requestId")})
+}
+
+// Session reads accept only documented singleton parameters. They cannot accept storage paths.
+func validSessionQuery(c *gin.Context, path string) bool {
+	if !isSessionReadPath(path) {
+		return true
+	}
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		return false
+	}
+	for key, values := range query {
+		if path == SessionHistoryPath || path == SessionStatisticsPath || len(values) != 1 || values[0] == "" {
+			return false
+		}
+		if path == SessionModelCallsPath && key != "limit" && key != "after" {
+			return false
+		}
+		switch key {
+		case "limit", "after", "projectId", "status", "agent", "from", "to":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isSessionReadPath(path string) bool {
+	return path == AgentSessionsPath || path == SessionHistoryPath || path == SessionStatisticsPath || path == SessionModelCallsPath
 }
