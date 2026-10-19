@@ -119,6 +119,8 @@ The gRPC status code is the primary classification; `ErrorDetail{ErrorCode}` ref
 
 **`WorkspaceOperationService`** carries the operations of the [Workspace lifecycle](workspaces.en.md).
 
+`ListPendingProvisioningEffects` is a recovery read independent of ordinary operation claims. The current lease holder pages through uncleared D5 responsibilities by effect UUID, at most 100 per page, with the original operation/effect identities and request needed to query the Substrate. Missing terminal receipts remain discoverable; an absent/running ACK does not end future query responsibility. Only a real succeeded/failed fact committed through `RecordProvisioningFact` removes an item. Reading neither claims an operation, changes its business version nor authorizes another execution. Consumers must rescan every page periodically and recover original-identity queries and submissions after restarts, lease changes or unknown outcomes. The listing does not prove consumer integration, automatic reclamation or physical termination.
+
 - `ClaimOperation` claims the oldest runnable operation (`queued`, a due `retry_wait`, or one already
   `running`), sets it `running` with the current epoch and **increments its version**, which fences
   any worker still holding an old snapshot; it is a write, not a pure read. The returned snapshot holds

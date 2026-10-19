@@ -3077,6 +3077,174 @@ func (x *ListLiveSandboxesResponse) GetSandboxes() []*LiveSandbox {
 	return nil
 }
 
+type ListPendingProvisioningEffectsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Epoch int64                  `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	// Exclusive UUID cursor from the previous page; empty starts a fresh scan.
+	AfterEffectId string `protobuf:"bytes,2,opt,name=after_effect_id,json=afterEffectId,proto3" json:"after_effect_id,omitempty"`
+	// Defaults to 100; explicit values must be between 1 and 100.
+	PageSize      uint32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPendingProvisioningEffectsRequest) Reset() {
+	*x = ListPendingProvisioningEffectsRequest{}
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPendingProvisioningEffectsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPendingProvisioningEffectsRequest) ProtoMessage() {}
+
+func (x *ListPendingProvisioningEffectsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPendingProvisioningEffectsRequest.ProtoReflect.Descriptor instead.
+func (*ListPendingProvisioningEffectsRequest) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_operations_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ListPendingProvisioningEffectsRequest) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ListPendingProvisioningEffectsRequest) GetAfterEffectId() string {
+	if x != nil {
+		return x.AfterEffectId
+	}
+	return ""
+}
+
+func (x *ListPendingProvisioningEffectsRequest) GetPageSize() uint32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type PendingProvisioningEffect struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Effect        *Effect                `protobuf:"bytes,2,opt,name=effect,proto3" json:"effect,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PendingProvisioningEffect) Reset() {
+	*x = PendingProvisioningEffect{}
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingProvisioningEffect) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingProvisioningEffect) ProtoMessage() {}
+
+func (x *PendingProvisioningEffect) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingProvisioningEffect.ProtoReflect.Descriptor instead.
+func (*PendingProvisioningEffect) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_operations_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *PendingProvisioningEffect) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *PendingProvisioningEffect) GetEffect() *Effect {
+	if x != nil {
+		return x.Effect
+	}
+	return nil
+}
+
+type ListPendingProvisioningEffectsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Ordered by effect UUID. Repeated reads do not claim or remove items.
+	Items []*PendingProvisioningEffect `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	// Empty means this scan reached its last page. Begin a fresh scan on the next tick.
+	NextAfterEffectId string `protobuf:"bytes,2,opt,name=next_after_effect_id,json=nextAfterEffectId,proto3" json:"next_after_effect_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ListPendingProvisioningEffectsResponse) Reset() {
+	*x = ListPendingProvisioningEffectsResponse{}
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPendingProvisioningEffectsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPendingProvisioningEffectsResponse) ProtoMessage() {}
+
+func (x *ListPendingProvisioningEffectsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_operations_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPendingProvisioningEffectsResponse.ProtoReflect.Descriptor instead.
+func (*ListPendingProvisioningEffectsResponse) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_operations_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ListPendingProvisioningEffectsResponse) GetItems() []*PendingProvisioningEffect {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *ListPendingProvisioningEffectsResponse) GetNextAfterEffectId() string {
+	if x != nil {
+		return x.NextAfterEffectId
+	}
+	return ""
+}
+
 var File_ora_cloud_internal_v1_operations_proto protoreflect.FileDescriptor
 
 const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
@@ -3294,7 +3462,17 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x127\n" +
 	"\x05nodes\x18\x03 \x03(\v2!.ora.cloud.internal.v1.NodeRecordR\x05nodes\"]\n" +
 	"\x19ListLiveSandboxesResponse\x12@\n" +
-	"\tsandboxes\x18\x01 \x03(\v2\".ora.cloud.internal.v1.LiveSandboxR\tsandboxes*\xfb\x02\n" +
+	"\tsandboxes\x18\x01 \x03(\v2\".ora.cloud.internal.v1.LiveSandboxR\tsandboxes\"\x82\x01\n" +
+	"%ListPendingProvisioningEffectsRequest\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\x12&\n" +
+	"\x0fafter_effect_id\x18\x02 \x01(\tR\rafterEffectId\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\rR\bpageSize\"u\n" +
+	"\x19PendingProvisioningEffect\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x125\n" +
+	"\x06effect\x18\x02 \x01(\v2\x1d.ora.cloud.internal.v1.EffectR\x06effect\"\xa1\x01\n" +
+	"&ListPendingProvisioningEffectsResponse\x12F\n" +
+	"\x05items\x18\x01 \x03(\v20.ora.cloud.internal.v1.PendingProvisioningEffectR\x05items\x12/\n" +
+	"\x14next_after_effect_id\x18\x02 \x01(\tR\x11nextAfterEffectId*\xfb\x02\n" +
 	"\rOperationKind\x12\x1e\n" +
 	"\x1aOPERATION_KIND_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dOPERATION_KIND_CREATE_PROJECT\x10\x01\x12#\n" +
@@ -3369,7 +3547,7 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"\x13ProvisioningOutcome\x12$\n" +
 	" PROVISIONING_OUTCOME_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROVISIONING_OUTCOME_READY\x10\x01\x12\x1f\n" +
-	"\x1bPROVISIONING_OUTCOME_FAILED\x10\x022\xcc\x06\n" +
+	"\x1bPROVISIONING_OUTCOME_FAILED\x10\x022\xec\a\n" +
 	"\x19WorkspaceOperationService\x12m\n" +
 	"\x0eClaimOperation\x12,.ora.cloud.internal.v1.ClaimOperationRequest\x1a-.ora.cloud.internal.v1.ClaimOperationResponse\x12a\n" +
 	"\n" +
@@ -3377,7 +3555,8 @@ const file_ora_cloud_internal_v1_operations_proto_rawDesc = "" +
 	"\x12RecordEffectResult\x120.ora.cloud.internal.v1.RecordEffectResultRequest\x1a1.ora.cloud.internal.v1.RecordEffectResultResponse\x12s\n" +
 	"\x10AdvanceOperation\x12..ora.cloud.internal.v1.AdvanceOperationRequest\x1a/.ora.cloud.internal.v1.AdvanceOperationResponse\x12m\n" +
 	"\x0eDeferOperation\x12,.ora.cloud.internal.v1.DeferOperationRequest\x1a-.ora.cloud.internal.v1.DeferOperationResponse\x12\x85\x01\n" +
-	"\x16RecordProvisioningFact\x124.ora.cloud.internal.v1.RecordProvisioningFactRequest\x1a5.ora.cloud.internal.v1.RecordProvisioningFactResponse\x12v\n" +
+	"\x16RecordProvisioningFact\x124.ora.cloud.internal.v1.RecordProvisioningFactRequest\x1a5.ora.cloud.internal.v1.RecordProvisioningFactResponse\x12\x9d\x01\n" +
+	"\x1eListPendingProvisioningEffects\x12<.ora.cloud.internal.v1.ListPendingProvisioningEffectsRequest\x1a=.ora.cloud.internal.v1.ListPendingProvisioningEffectsResponse\x12v\n" +
 	"\x11ListLiveSandboxes\x12/.ora.cloud.internal.v1.ListLiveSandboxesRequest\x1a0.ora.cloud.internal.v1.ListLiveSandboxesResponseB\xe0\x01\n" +
 	"\x19com.ora.cloud.internal.v1B\x0fOperationsProtoP\x01Z;github.com/wanglongan587/cloud/internal/controlpb;controlpb\xa2\x02\x03OCI\xaa\x02\x15Ora.Cloud.Internal.V1\xca\x02\x15Ora\\Cloud\\Internal\\V1\xe2\x02!Ora\\Cloud\\Internal\\V1\\GPBMetadata\xea\x02\x18Ora::Cloud::Internal::V1b\x06proto3"
 
@@ -3394,56 +3573,59 @@ func file_ora_cloud_internal_v1_operations_proto_rawDescGZIP() []byte {
 }
 
 var file_ora_cloud_internal_v1_operations_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_ora_cloud_internal_v1_operations_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_ora_cloud_internal_v1_operations_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_ora_cloud_internal_v1_operations_proto_goTypes = []any{
-	(OperationKind)(0),                     // 0: ora.cloud.internal.v1.OperationKind
-	(OperationState)(0),                    // 1: ora.cloud.internal.v1.OperationState
-	(OperationStep)(0),                     // 2: ora.cloud.internal.v1.OperationStep
-	(WorkspaceKind)(0),                     // 3: ora.cloud.internal.v1.WorkspaceKind
-	(EffectKind)(0),                        // 4: ora.cloud.internal.v1.EffectKind
-	(EffectState)(0),                       // 5: ora.cloud.internal.v1.EffectState
-	(DeferState)(0),                        // 6: ora.cloud.internal.v1.DeferState
-	(DeferReason)(0),                       // 7: ora.cloud.internal.v1.DeferReason
-	(ProvisioningFactKind)(0),              // 8: ora.cloud.internal.v1.ProvisioningFactKind
-	(ProvisioningOutcome)(0),               // 9: ora.cloud.internal.v1.ProvisioningOutcome
-	(*Operation)(nil),                      // 10: ora.cloud.internal.v1.Operation
-	(*OperationProject)(nil),               // 11: ora.cloud.internal.v1.OperationProject
-	(*OperationWorkspace)(nil),             // 12: ora.cloud.internal.v1.OperationWorkspace
-	(*SandboxRecord)(nil),                  // 13: ora.cloud.internal.v1.SandboxRecord
-	(*SandboxEnsureRequest)(nil),           // 14: ora.cloud.internal.v1.SandboxEnsureRequest
-	(*SandboxTerminateRequest)(nil),        // 15: ora.cloud.internal.v1.SandboxTerminateRequest
-	(*WorkspaceDataDeleteRequest)(nil),     // 16: ora.cloud.internal.v1.WorkspaceDataDeleteRequest
-	(*PluginArtifact)(nil),                 // 17: ora.cloud.internal.v1.PluginArtifact
-	(*PluginEnsureRequest)(nil),            // 18: ora.cloud.internal.v1.PluginEnsureRequest
-	(*PluginDeleteRequest)(nil),            // 19: ora.cloud.internal.v1.PluginDeleteRequest
-	(*EffectRequest)(nil),                  // 20: ora.cloud.internal.v1.EffectRequest
-	(*SandboxEnsured)(nil),                 // 21: ora.cloud.internal.v1.SandboxEnsured
-	(*SandboxTerminated)(nil),              // 22: ora.cloud.internal.v1.SandboxTerminated
-	(*WorkspaceDataDeleted)(nil),           // 23: ora.cloud.internal.v1.WorkspaceDataDeleted
-	(*PluginInstalled)(nil),                // 24: ora.cloud.internal.v1.PluginInstalled
-	(*PluginRemoved)(nil),                  // 25: ora.cloud.internal.v1.PluginRemoved
-	(*EffectEvidence)(nil),                 // 26: ora.cloud.internal.v1.EffectEvidence
-	(*Effect)(nil),                         // 27: ora.cloud.internal.v1.Effect
-	(*OperationSnapshot)(nil),              // 28: ora.cloud.internal.v1.OperationSnapshot
-	(*ClaimOperationRequest)(nil),          // 29: ora.cloud.internal.v1.ClaimOperationRequest
-	(*ClaimOperationResponse)(nil),         // 30: ora.cloud.internal.v1.ClaimOperationResponse
-	(*PlanEffectRequest)(nil),              // 31: ora.cloud.internal.v1.PlanEffectRequest
-	(*PlanEffectResponse)(nil),             // 32: ora.cloud.internal.v1.PlanEffectResponse
-	(*RecordEffectResultRequest)(nil),      // 33: ora.cloud.internal.v1.RecordEffectResultRequest
-	(*RecordEffectResultResponse)(nil),     // 34: ora.cloud.internal.v1.RecordEffectResultResponse
-	(*AdvanceOperationRequest)(nil),        // 35: ora.cloud.internal.v1.AdvanceOperationRequest
-	(*AdvanceOperationResponse)(nil),       // 36: ora.cloud.internal.v1.AdvanceOperationResponse
-	(*DeferOperationRequest)(nil),          // 37: ora.cloud.internal.v1.DeferOperationRequest
-	(*DeferOperationResponse)(nil),         // 38: ora.cloud.internal.v1.DeferOperationResponse
-	(*RecordProvisioningFactRequest)(nil),  // 39: ora.cloud.internal.v1.RecordProvisioningFactRequest
-	(*RecordProvisioningFactResponse)(nil), // 40: ora.cloud.internal.v1.RecordProvisioningFactResponse
-	(*ListLiveSandboxesRequest)(nil),       // 41: ora.cloud.internal.v1.ListLiveSandboxesRequest
-	(*LiveSandbox)(nil),                    // 42: ora.cloud.internal.v1.LiveSandbox
-	(*ListLiveSandboxesResponse)(nil),      // 43: ora.cloud.internal.v1.ListLiveSandboxesResponse
-	(*NodeRecord)(nil),                     // 44: ora.cloud.internal.v1.NodeRecord
-	(*ExecutionRecord)(nil),                // 45: ora.cloud.internal.v1.ExecutionRecord
-	(*ExecutionInput)(nil),                 // 46: ora.cloud.internal.v1.ExecutionInput
-	(*ExecutionResult)(nil),                // 47: ora.cloud.internal.v1.ExecutionResult
+	(OperationKind)(0),                             // 0: ora.cloud.internal.v1.OperationKind
+	(OperationState)(0),                            // 1: ora.cloud.internal.v1.OperationState
+	(OperationStep)(0),                             // 2: ora.cloud.internal.v1.OperationStep
+	(WorkspaceKind)(0),                             // 3: ora.cloud.internal.v1.WorkspaceKind
+	(EffectKind)(0),                                // 4: ora.cloud.internal.v1.EffectKind
+	(EffectState)(0),                               // 5: ora.cloud.internal.v1.EffectState
+	(DeferState)(0),                                // 6: ora.cloud.internal.v1.DeferState
+	(DeferReason)(0),                               // 7: ora.cloud.internal.v1.DeferReason
+	(ProvisioningFactKind)(0),                      // 8: ora.cloud.internal.v1.ProvisioningFactKind
+	(ProvisioningOutcome)(0),                       // 9: ora.cloud.internal.v1.ProvisioningOutcome
+	(*Operation)(nil),                              // 10: ora.cloud.internal.v1.Operation
+	(*OperationProject)(nil),                       // 11: ora.cloud.internal.v1.OperationProject
+	(*OperationWorkspace)(nil),                     // 12: ora.cloud.internal.v1.OperationWorkspace
+	(*SandboxRecord)(nil),                          // 13: ora.cloud.internal.v1.SandboxRecord
+	(*SandboxEnsureRequest)(nil),                   // 14: ora.cloud.internal.v1.SandboxEnsureRequest
+	(*SandboxTerminateRequest)(nil),                // 15: ora.cloud.internal.v1.SandboxTerminateRequest
+	(*WorkspaceDataDeleteRequest)(nil),             // 16: ora.cloud.internal.v1.WorkspaceDataDeleteRequest
+	(*PluginArtifact)(nil),                         // 17: ora.cloud.internal.v1.PluginArtifact
+	(*PluginEnsureRequest)(nil),                    // 18: ora.cloud.internal.v1.PluginEnsureRequest
+	(*PluginDeleteRequest)(nil),                    // 19: ora.cloud.internal.v1.PluginDeleteRequest
+	(*EffectRequest)(nil),                          // 20: ora.cloud.internal.v1.EffectRequest
+	(*SandboxEnsured)(nil),                         // 21: ora.cloud.internal.v1.SandboxEnsured
+	(*SandboxTerminated)(nil),                      // 22: ora.cloud.internal.v1.SandboxTerminated
+	(*WorkspaceDataDeleted)(nil),                   // 23: ora.cloud.internal.v1.WorkspaceDataDeleted
+	(*PluginInstalled)(nil),                        // 24: ora.cloud.internal.v1.PluginInstalled
+	(*PluginRemoved)(nil),                          // 25: ora.cloud.internal.v1.PluginRemoved
+	(*EffectEvidence)(nil),                         // 26: ora.cloud.internal.v1.EffectEvidence
+	(*Effect)(nil),                                 // 27: ora.cloud.internal.v1.Effect
+	(*OperationSnapshot)(nil),                      // 28: ora.cloud.internal.v1.OperationSnapshot
+	(*ClaimOperationRequest)(nil),                  // 29: ora.cloud.internal.v1.ClaimOperationRequest
+	(*ClaimOperationResponse)(nil),                 // 30: ora.cloud.internal.v1.ClaimOperationResponse
+	(*PlanEffectRequest)(nil),                      // 31: ora.cloud.internal.v1.PlanEffectRequest
+	(*PlanEffectResponse)(nil),                     // 32: ora.cloud.internal.v1.PlanEffectResponse
+	(*RecordEffectResultRequest)(nil),              // 33: ora.cloud.internal.v1.RecordEffectResultRequest
+	(*RecordEffectResultResponse)(nil),             // 34: ora.cloud.internal.v1.RecordEffectResultResponse
+	(*AdvanceOperationRequest)(nil),                // 35: ora.cloud.internal.v1.AdvanceOperationRequest
+	(*AdvanceOperationResponse)(nil),               // 36: ora.cloud.internal.v1.AdvanceOperationResponse
+	(*DeferOperationRequest)(nil),                  // 37: ora.cloud.internal.v1.DeferOperationRequest
+	(*DeferOperationResponse)(nil),                 // 38: ora.cloud.internal.v1.DeferOperationResponse
+	(*RecordProvisioningFactRequest)(nil),          // 39: ora.cloud.internal.v1.RecordProvisioningFactRequest
+	(*RecordProvisioningFactResponse)(nil),         // 40: ora.cloud.internal.v1.RecordProvisioningFactResponse
+	(*ListLiveSandboxesRequest)(nil),               // 41: ora.cloud.internal.v1.ListLiveSandboxesRequest
+	(*LiveSandbox)(nil),                            // 42: ora.cloud.internal.v1.LiveSandbox
+	(*ListLiveSandboxesResponse)(nil),              // 43: ora.cloud.internal.v1.ListLiveSandboxesResponse
+	(*ListPendingProvisioningEffectsRequest)(nil),  // 44: ora.cloud.internal.v1.ListPendingProvisioningEffectsRequest
+	(*PendingProvisioningEffect)(nil),              // 45: ora.cloud.internal.v1.PendingProvisioningEffect
+	(*ListPendingProvisioningEffectsResponse)(nil), // 46: ora.cloud.internal.v1.ListPendingProvisioningEffectsResponse
+	(*NodeRecord)(nil),                             // 47: ora.cloud.internal.v1.NodeRecord
+	(*ExecutionRecord)(nil),                        // 48: ora.cloud.internal.v1.ExecutionRecord
+	(*ExecutionInput)(nil),                         // 49: ora.cloud.internal.v1.ExecutionInput
+	(*ExecutionResult)(nil),                        // 50: ora.cloud.internal.v1.ExecutionResult
 }
 var file_ora_cloud_internal_v1_operations_proto_depIdxs = []int32{
 	0,  // 0: ora.cloud.internal.v1.Operation.kind:type_name -> ora.cloud.internal.v1.OperationKind
@@ -3470,11 +3652,11 @@ var file_ora_cloud_internal_v1_operations_proto_depIdxs = []int32{
 	11, // 21: ora.cloud.internal.v1.OperationSnapshot.project:type_name -> ora.cloud.internal.v1.OperationProject
 	12, // 22: ora.cloud.internal.v1.OperationSnapshot.workspaces:type_name -> ora.cloud.internal.v1.OperationWorkspace
 	13, // 23: ora.cloud.internal.v1.OperationSnapshot.sandboxes:type_name -> ora.cloud.internal.v1.SandboxRecord
-	44, // 24: ora.cloud.internal.v1.OperationSnapshot.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
+	47, // 24: ora.cloud.internal.v1.OperationSnapshot.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
 	27, // 25: ora.cloud.internal.v1.OperationSnapshot.effects:type_name -> ora.cloud.internal.v1.Effect
-	45, // 26: ora.cloud.internal.v1.OperationSnapshot.clones:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	45, // 27: ora.cloud.internal.v1.OperationSnapshot.plugin_executions:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	46, // 28: ora.cloud.internal.v1.OperationSnapshot.plugin_input:type_name -> ora.cloud.internal.v1.ExecutionInput
+	48, // 26: ora.cloud.internal.v1.OperationSnapshot.clones:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	48, // 27: ora.cloud.internal.v1.OperationSnapshot.plugin_executions:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	49, // 28: ora.cloud.internal.v1.OperationSnapshot.plugin_input:type_name -> ora.cloud.internal.v1.ExecutionInput
 	28, // 29: ora.cloud.internal.v1.ClaimOperationResponse.snapshot:type_name -> ora.cloud.internal.v1.OperationSnapshot
 	4,  // 30: ora.cloud.internal.v1.PlanEffectRequest.kind:type_name -> ora.cloud.internal.v1.EffectKind
 	27, // 31: ora.cloud.internal.v1.PlanEffectResponse.effect:type_name -> ora.cloud.internal.v1.Effect
@@ -3490,33 +3672,37 @@ var file_ora_cloud_internal_v1_operations_proto_depIdxs = []int32{
 	8,  // 41: ora.cloud.internal.v1.RecordProvisioningFactRequest.kind:type_name -> ora.cloud.internal.v1.ProvisioningFactKind
 	5,  // 42: ora.cloud.internal.v1.RecordProvisioningFactRequest.state:type_name -> ora.cloud.internal.v1.EffectState
 	26, // 43: ora.cloud.internal.v1.RecordProvisioningFactRequest.evidence:type_name -> ora.cloud.internal.v1.EffectEvidence
-	47, // 44: ora.cloud.internal.v1.RecordProvisioningFactRequest.execution_result:type_name -> ora.cloud.internal.v1.ExecutionResult
+	50, // 44: ora.cloud.internal.v1.RecordProvisioningFactRequest.execution_result:type_name -> ora.cloud.internal.v1.ExecutionResult
 	9,  // 45: ora.cloud.internal.v1.RecordProvisioningFactRequest.outcome:type_name -> ora.cloud.internal.v1.ProvisioningOutcome
 	10, // 46: ora.cloud.internal.v1.RecordProvisioningFactResponse.operation:type_name -> ora.cloud.internal.v1.Operation
 	27, // 47: ora.cloud.internal.v1.RecordProvisioningFactResponse.effect:type_name -> ora.cloud.internal.v1.Effect
-	45, // 48: ora.cloud.internal.v1.RecordProvisioningFactResponse.execution:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	48, // 48: ora.cloud.internal.v1.RecordProvisioningFactResponse.execution:type_name -> ora.cloud.internal.v1.ExecutionRecord
 	13, // 49: ora.cloud.internal.v1.LiveSandbox.sandbox:type_name -> ora.cloud.internal.v1.SandboxRecord
-	44, // 50: ora.cloud.internal.v1.LiveSandbox.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
+	47, // 50: ora.cloud.internal.v1.LiveSandbox.nodes:type_name -> ora.cloud.internal.v1.NodeRecord
 	42, // 51: ora.cloud.internal.v1.ListLiveSandboxesResponse.sandboxes:type_name -> ora.cloud.internal.v1.LiveSandbox
-	29, // 52: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:input_type -> ora.cloud.internal.v1.ClaimOperationRequest
-	31, // 53: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:input_type -> ora.cloud.internal.v1.PlanEffectRequest
-	33, // 54: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:input_type -> ora.cloud.internal.v1.RecordEffectResultRequest
-	35, // 55: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:input_type -> ora.cloud.internal.v1.AdvanceOperationRequest
-	37, // 56: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:input_type -> ora.cloud.internal.v1.DeferOperationRequest
-	39, // 57: ora.cloud.internal.v1.WorkspaceOperationService.RecordProvisioningFact:input_type -> ora.cloud.internal.v1.RecordProvisioningFactRequest
-	41, // 58: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:input_type -> ora.cloud.internal.v1.ListLiveSandboxesRequest
-	30, // 59: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:output_type -> ora.cloud.internal.v1.ClaimOperationResponse
-	32, // 60: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:output_type -> ora.cloud.internal.v1.PlanEffectResponse
-	34, // 61: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:output_type -> ora.cloud.internal.v1.RecordEffectResultResponse
-	36, // 62: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:output_type -> ora.cloud.internal.v1.AdvanceOperationResponse
-	38, // 63: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:output_type -> ora.cloud.internal.v1.DeferOperationResponse
-	40, // 64: ora.cloud.internal.v1.WorkspaceOperationService.RecordProvisioningFact:output_type -> ora.cloud.internal.v1.RecordProvisioningFactResponse
-	43, // 65: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:output_type -> ora.cloud.internal.v1.ListLiveSandboxesResponse
-	59, // [59:66] is the sub-list for method output_type
-	52, // [52:59] is the sub-list for method input_type
-	52, // [52:52] is the sub-list for extension type_name
-	52, // [52:52] is the sub-list for extension extendee
-	0,  // [0:52] is the sub-list for field type_name
+	27, // 52: ora.cloud.internal.v1.PendingProvisioningEffect.effect:type_name -> ora.cloud.internal.v1.Effect
+	45, // 53: ora.cloud.internal.v1.ListPendingProvisioningEffectsResponse.items:type_name -> ora.cloud.internal.v1.PendingProvisioningEffect
+	29, // 54: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:input_type -> ora.cloud.internal.v1.ClaimOperationRequest
+	31, // 55: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:input_type -> ora.cloud.internal.v1.PlanEffectRequest
+	33, // 56: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:input_type -> ora.cloud.internal.v1.RecordEffectResultRequest
+	35, // 57: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:input_type -> ora.cloud.internal.v1.AdvanceOperationRequest
+	37, // 58: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:input_type -> ora.cloud.internal.v1.DeferOperationRequest
+	39, // 59: ora.cloud.internal.v1.WorkspaceOperationService.RecordProvisioningFact:input_type -> ora.cloud.internal.v1.RecordProvisioningFactRequest
+	44, // 60: ora.cloud.internal.v1.WorkspaceOperationService.ListPendingProvisioningEffects:input_type -> ora.cloud.internal.v1.ListPendingProvisioningEffectsRequest
+	41, // 61: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:input_type -> ora.cloud.internal.v1.ListLiveSandboxesRequest
+	30, // 62: ora.cloud.internal.v1.WorkspaceOperationService.ClaimOperation:output_type -> ora.cloud.internal.v1.ClaimOperationResponse
+	32, // 63: ora.cloud.internal.v1.WorkspaceOperationService.PlanEffect:output_type -> ora.cloud.internal.v1.PlanEffectResponse
+	34, // 64: ora.cloud.internal.v1.WorkspaceOperationService.RecordEffectResult:output_type -> ora.cloud.internal.v1.RecordEffectResultResponse
+	36, // 65: ora.cloud.internal.v1.WorkspaceOperationService.AdvanceOperation:output_type -> ora.cloud.internal.v1.AdvanceOperationResponse
+	38, // 66: ora.cloud.internal.v1.WorkspaceOperationService.DeferOperation:output_type -> ora.cloud.internal.v1.DeferOperationResponse
+	40, // 67: ora.cloud.internal.v1.WorkspaceOperationService.RecordProvisioningFact:output_type -> ora.cloud.internal.v1.RecordProvisioningFactResponse
+	46, // 68: ora.cloud.internal.v1.WorkspaceOperationService.ListPendingProvisioningEffects:output_type -> ora.cloud.internal.v1.ListPendingProvisioningEffectsResponse
+	43, // 69: ora.cloud.internal.v1.WorkspaceOperationService.ListLiveSandboxes:output_type -> ora.cloud.internal.v1.ListLiveSandboxesResponse
+	62, // [62:70] is the sub-list for method output_type
+	54, // [54:62] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_operations_proto_init() }
@@ -3558,7 +3744,7 @@ func file_ora_cloud_internal_v1_operations_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_operations_proto_rawDesc), len(file_ora_cloud_internal_v1_operations_proto_rawDesc)),
 			NumEnums:      10,
-			NumMessages:   34,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

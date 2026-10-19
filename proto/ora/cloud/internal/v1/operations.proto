@@ -35,6 +35,12 @@ service WorkspaceOperationService {
   // Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
   // the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
   rpc RecordProvisioningFact(RecordProvisioningFactRequest) returns (RecordProvisioningFactResponse);
+
+  // Reads original effects of abandoned creations that lack a durable terminal receipt. Callers
+  // only query the Substrate by these identities; no dispatch or operation claim is authorized.
+  // Poll every page on subsequent ticks, including after process or lease replacement. Running
+  // and absent receipts remain listed until a real terminal fact is durably acknowledged.
+  rpc ListPendingProvisioningEffects(ListPendingProvisioningEffectsRequest) returns (ListPendingProvisioningEffectsResponse);
   // Lists every sandbox a lease holder should hold a Node session with: not terminating or
   // terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
   // it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -430,4 +436,24 @@ message LiveSandbox {
 message ListLiveSandboxesResponse {
   // Ordered by sandbox ID.
   repeated LiveSandbox sandboxes = 1;
+}
+
+message ListPendingProvisioningEffectsRequest {
+  int64 epoch = 1;
+  // Exclusive UUID cursor from the previous page; empty starts a fresh scan.
+  string after_effect_id = 2;
+  // Defaults to 100; explicit values must be between 1 and 100.
+  uint32 page_size = 3;
+}
+
+message PendingProvisioningEffect {
+  string operation_id = 1;
+  Effect effect = 2;
+}
+
+message ListPendingProvisioningEffectsResponse {
+  // Ordered by effect UUID. Repeated reads do not claim or remove items.
+  repeated PendingProvisioningEffect items = 1;
+  // Empty means this scan reached its last page. Begin a fresh scan on the next tick.
+  string next_after_effect_id = 2;
 }
