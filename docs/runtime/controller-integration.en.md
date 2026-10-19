@@ -110,7 +110,7 @@ The gRPC status code is the primary classification; `ErrorDetail{ErrorCode}` ref
 | Service | Responsibility |
 |---|---|
 | `ControllerLeaseService` | The global lease: `AcquireLease`, `RenewLease`, `ReleaseLease` |
-| `WorkspaceOperationService` | Workspace lifecycle operations: `ClaimOperation`, `PlanEffect`, `RecordEffectResult`, `AdvanceOperation`, `DeferOperation`, `RecordProvisioningFact`, `ListLiveSandboxes` |
+| `WorkspaceOperationService` | Workspace lifecycle operations: `ClaimOperation`, `PlanEffect`, `RecordEffectResult`, `AdvanceOperation`, `DeferOperation`, `RecordProvisioningFact`, `ListPendingProvisioningEffects`, `ListLiveSandboxes` |
 | `NodeReportService` | The Controller reports the Nodes it holds sessions with: `RegisterNode`, `ReportNodeStatus`, `EndNode`, `ReportNodeIdle` |
 | `ExecutionService` | The execution registry: `ClaimWork`, `RecordDispatch`, `TakeOverNodeEvent`, `RecordQueriedResult`, `GetDispatch`, `ListPendingDispatches` |
 | `AgentRunService` | Agent runs: `TakeOverThreadEvents`, `ClaimThreadCommands`, `RecordThreadCommandDelivered`, `GrantRevisionUpload`, `GrantRevisionDownload` |

@@ -89,7 +89,7 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 | 服务 | 职责 |
 |---|---|
 | `ControllerLeaseService` | 全局租约：`AcquireLease`、`RenewLease`、`ReleaseLease` |
-| `WorkspaceOperationService` | Workspace 生命周期操作：`ClaimOperation`、`PlanEffect`、`RecordEffectResult`、`AdvanceOperation`、`DeferOperation`、`RecordProvisioningFact`、`ListLiveSandboxes` |
+| `WorkspaceOperationService` | Workspace 生命周期操作：`ClaimOperation`、`PlanEffect`、`RecordEffectResult`、`AdvanceOperation`、`DeferOperation`、`RecordProvisioningFact`、`ListPendingProvisioningEffects`、`ListLiveSandboxes` |
 | `NodeReportService` | Controller 代报它持有会话的 Node：`RegisterNode`、`ReportNodeStatus`、`EndNode`、`ReportNodeIdle` |
 | `ExecutionService` | 执行登记：`ClaimWork`、`RecordDispatch`、`TakeOverNodeEvent`、`RecordQueriedResult`、`GetDispatch`、`ListPendingDispatches` |
 | `AgentRunService` | Agent 运行：`TakeOverThreadEvents`、`ClaimThreadCommands`、`RecordThreadCommandDelivered`、`GrantRevisionUpload`、`GrantRevisionDownload` |
