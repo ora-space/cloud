@@ -83,6 +83,20 @@ Cloud 不直接调用 Substrate 或 Node。它只保存意图和证据，并按�
 在此期间返回 `409 operation_in_progress`。这个限制让同一 Project 的生命周期串行执行；它不提供多人同时编辑
 同一目录的冲突合并。
 
+### 操作领取与确定性拒绝
+
+领取在 `queued`、已到期的 `retry_wait` 和 `running` 中按
+`COALESCE(last_claimed_at, created_at), created_at, id` 升序轮转。`last_claimed_at` 只在实际返回操作时以
+数据库时间写入，属于内部调度簿记，不进入公开操作和 gRPC 快照；历史操作初始为 NULL，首次按创建时间参与轮转。
+每笔领取事务最多检查 16 个候选，结算拒绝后继续检查；预算耗尽返回空，下一轮继续领取。
+
+处于 `clone` 步的 `create_project` / `create_workspace`，若没有未结算或成功的 clone、未决外部 effect
+或执行，仓库凭据不存在、冻结、范围不匹配或执行器不可用会在领取事务内结算为 `failed`，保留对应
+`repository_credential_*` 错误码、清除 `retry_at` 并递增版本。同一事务将 Workspace 标为 `unavailable`、
+关闭执行准入、归还运行时维护控制；运行 Workspace 同时执行 `runWorkspaceSettled(failed)`。
+步骤、请求和外部资源身份保留；钩子失败则整笔事务回滚。已登记的未决执行和成功 clone 继续原恢复路径，
+不会因为后来冻结凭据而被改写；网络超时与提供方故障不在此确定性拒绝分类内。
+
 每种操作经过的步骤 `step`：
 
 | 操作 `kind` | 步骤 |

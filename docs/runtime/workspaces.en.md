@@ -97,6 +97,25 @@ row immediately, and the Controller carries it forward:
 Project's lifecycle serial; it does not provide conflict merging for several people editing the same
 directory at once.
 
+### Operation claiming and deterministic refusals
+
+Claims rotate `queued`, due `retry_wait`, and `running` operations by ascending
+`COALESCE(last_claimed_at, created_at), created_at, id`. Database time is written to `last_claimed_at`
+only when an operation is actually returned. This internal scheduling field is absent from public
+operations and gRPC snapshots; historical rows start NULL and first participate by creation time.
+Each claim transaction examines at most 16 candidates, continuing after settling a refusal. Budget
+exhaustion returns empty and the next claim continues.
+
+For `create_project` / `create_workspace` at the `clone` step, with no unsettled or successful clone,
+pending external effect or execution, a missing, frozen, scope-mismatched or executor-unavailable
+repository credential settles the operation as `failed` inside the claim transaction. It retains
+the corresponding `repository_credential_*` error, clears `retry_at`, and increments the version.
+The same transaction marks the Workspace `unavailable`, closes execution admission, returns runtime
+maintenance control, and calls `runWorkspaceSettled(failed)` for a run Workspace. Stage, request and
+external resource identities remain intact; a hook failure rolls the entire transaction back.
+Registered pending executions and successful clones keep their original recovery path despite a
+later credential freeze. Network timeouts and provider failures are not classified here.
+
 The steps each operation goes through:
 
 | `kind` | Steps |
