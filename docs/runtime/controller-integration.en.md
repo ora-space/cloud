@@ -119,8 +119,15 @@ The gRPC status code is the primary classification; `ErrorDetail{ErrorCode}` ref
 
 **`WorkspaceOperationService`** carries the operations of the [Workspace lifecycle](workspaces.en.md).
 
-- `ClaimOperation` claims the oldest runnable operation (`queued`, a due `retry_wait`, or one already
-  `running`), sets it `running` with the current epoch and **increments its version**, which fences
+- `ClaimOperation` rotates runnable operations (`queued`, a due `retry_wait`, or one already
+  `running`) by ascending `COALESCE(last_claimed_at, created_at), created_at, id`. Only an actual
+  return updates `last_claimed_at` using database time; this internal field is absent from public
+  operations and gRPC snapshots. Each claim transaction examines at most 16 candidates, settling
+  eligible deterministic repository credential refusals in that transaction and continuing. An
+  exhausted budget returns empty; the next claim continues, so an empty response does not prove
+  the queue is empty. See [operation claiming](workspaces.en.md#operation-claiming-and-deterministic-refusals)
+  for refusal scope and settlement. A returned operation is set `running` with the current epoch
+  and **increments its version**, which fences
   any worker still holding an old snapshot; it is a write, not a pure read. The returned snapshot holds
   everything the operation needs: the Project (with its credential reference), every related Workspace,
   sandbox, Node and effect, and the clone and plugin executions this operation already has, so a

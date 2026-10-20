@@ -98,7 +98,11 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 
 **`WorkspaceOperationService`** 推进 [Workspace 生命周期](workspaces.md) 里的操作。
 
-- `ClaimOperation` 领取最早的一个可执行操作（`queued`、到期的 `retry_wait`，或已经 `running` 的），把它置为 `running` 并记录
+- `ClaimOperation` 将可执行操作（`queued`、到期的 `retry_wait`，或已经 `running` 的）按
+  `COALESCE(last_claimed_at, created_at), created_at, id` 升序轮转；只在真正返回操作时以数据库时间更新
+  内部领取时间 `last_claimed_at`，该字段不进入公开操作或 gRPC 快照。单次领取事务最多检查 16 个候选，
+  遇到可结算的确定性仓库凭据拒绝时在同一事务结算并继续；耗尽预算返回空，由下一轮领取继续，不能据此推断队列为空。
+  拒绝范围和结算规则见 [操作领取](workspaces.md#操作领取与确定性拒绝)。返回的操作置为 `running` 并记录
   当前 epoch，**版本加一**，从而让还拿着旧快照的工作者失效；它是一次写入，不是纯读。返回的快照包含该操作所需的全部内容：
   Project（含凭据引用）、全部相关 Workspace、沙盒、Node、effect，以及这个操作已有的 clone 和插件执行，恢复中的 Controller
   据此找到原来的执行，而不是登记第二个。
