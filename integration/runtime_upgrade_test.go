@@ -75,7 +75,7 @@ func TestRuntimeUpgradeOnlyBackfillsUniqueCreationEvidenceAndKeepsUnknownReferen
 	}
 	var afterOperations, attribution, availability, secret, secretState, oldRef, owner string
 	// This guard owns the columns the 0017 upgrade knew. Later migrations may still add internal
-	// bookkeeping columns that carry no history — 0050's claim-rotation last_claimed_at — so they
+	// bookkeeping columns that carry no history — 0051's claim-rotation last_claimed_at — so they
 	// are stripped here: a legitimate column addition must not fail the guard, while any rewrite
 	// of historical values still does. A new operations column has to be judged history or
 	// bookkeeping, and bookkeeping columns join this list.
