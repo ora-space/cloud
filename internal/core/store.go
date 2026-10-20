@@ -303,6 +303,9 @@ func (t *transaction) list(q string, args ...any) []Object {
 		if o["workflowRunId"] == nil {
 			delete(o, "workflowRunId")
 		}
+		// last_claimed_at is Cloud-internal claim rotation (scheduling fairness only, ADR
+		// settle-deterministic-dispatch-refusals D3); no Go reader or published contract ever sees it.
+		delete(o, "lastClaimedAt")
 		out = append(out, o)
 	}
 	if e = rows.Err(); e != nil {

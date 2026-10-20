@@ -159,19 +159,33 @@ func leaseValid(t *transaction, r *ControlRequest) {
 	require(l != nil, 409, "stale_controller")
 }
 
+// claimCandidates bounds how many candidates one claim transaction may settle or hand back
+// before it returns (ADR settle-deterministic-dispatch-refusals D2). The bound limits transaction
+// time only: an exhausted budget returns an empty claim and the next claim period continues, so it
+// never means the queue is permanently empty.
+const claimCandidates = 16
+
 func claim(t *transaction, r *ControlRequest) Object {
 	schedulePluginMaintenance(t)
-	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
-	if o == nil {
-		return Object{"operation": nil}
-	}
-	t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
-	o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
-	if o.S("step") == "plugin" {
-		enterPluginStep(t, o)
+	for range claimCandidates {
+		// Rotation (ADR D3): last_claimed_at records the opportunity a candidate already consumed,
+		// so a repeatedly failing or long-running operation cannot keep occupying the queue head.
+		o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY COALESCE(last_claimed_at,created_at),created_at,id LIMIT 1")
+		if o == nil {
+			return Object{"operation": nil}
+		}
+		if settleRefusedClone(t, o) {
+			continue
+		}
+		t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,last_claimed_at=now(),updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
 		o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		if o.S("step") == "plugin" {
+			enterPluginStep(t, o)
+			o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		}
+		return snapshot(t, o)
 	}
-	return snapshot(t, o)
+	return Object{"operation": nil}
 }
 
 func operation(t *transaction, r *ControlRequest) Object {
