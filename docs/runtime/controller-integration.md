@@ -89,7 +89,7 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 | 服务 | 职责 |
 |---|---|
 | `ControllerLeaseService` | 全局租约：`AcquireLease`、`RenewLease`、`ReleaseLease` |
-| `WorkspaceOperationService` | Workspace 生命周期操作：`ClaimOperation`、`PlanEffect`、`RecordEffectResult`、`AdvanceOperation`、`DeferOperation`、`RecordProvisioningFact`、`ListLiveSandboxes` |
+| `WorkspaceOperationService` | Workspace 生命周期操作：`ClaimOperation`、`PlanEffect`、`RecordEffectResult`、`AdvanceOperation`、`DeferOperation`、`RecordProvisioningFact`、`ListPendingProvisioningEffects`、`ListLiveSandboxes` |
 | `NodeReportService` | Controller 代报它持有会话的 Node：`RegisterNode`、`ReportNodeStatus`、`EndNode`、`ReportNodeIdle` |
 | `ExecutionService` | 执行登记：`ClaimWork`、`RecordDispatch`、`TakeOverNodeEvent`、`RecordQueriedResult`、`GetDispatch`、`ListPendingDispatches` |
 | `AgentRunService` | Agent 运行：`TakeOverThreadEvents`、`ClaimThreadCommands`、`RecordThreadCommandDelivered`、`GrantRevisionUpload`、`GrantRevisionDownload` |
@@ -97,6 +97,8 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 | `ControlSignalService` | `Watch` 信号流 |
 
 **`WorkspaceOperationService`** 推进 [Workspace 生命周期](workspaces.md) 里的操作。
+
+`ListPendingProvisioningEffects` 是独立于普通 operation 领取的恢复读取：当前租约持有者按 effect UUID 分页获取未清除的 D5 残留责任，每页最多 100 项，返回原 operation、effect 身份与查询所需的原请求。缺少持久终态回执的 effect 始终可读，absent/running 的 ACK 不删除后续查询责任；真实 succeeded/failed 事实经 `RecordProvisioningFact` 提交后才退出列表。读取不领取 operation、不改变业务版本，也不授予重新执行许可。消费方应周期遍历所有页，并在重启、租约切换或结果未知后按原身份继续查询和补交；这份列表不证明消费方已经完成该接线，也不提供自动回收或物理终止。
 
 - `ClaimOperation` 领取最早的一个可执行操作（`queued`、到期的 `retry_wait`，或已经 `running` 的），把它置为 `running` 并记录
   当前 epoch，**版本加一**，从而让还拿着旧快照的工作者失效；它是一次写入，不是纯读。返回的快照包含该操作所需的全部内容：

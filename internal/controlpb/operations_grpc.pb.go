@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkspaceOperationService_ClaimOperation_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/ClaimOperation"
-	WorkspaceOperationService_PlanEffect_FullMethodName             = "/ora.cloud.internal.v1.WorkspaceOperationService/PlanEffect"
-	WorkspaceOperationService_RecordEffectResult_FullMethodName     = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordEffectResult"
-	WorkspaceOperationService_AdvanceOperation_FullMethodName       = "/ora.cloud.internal.v1.WorkspaceOperationService/AdvanceOperation"
-	WorkspaceOperationService_DeferOperation_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/DeferOperation"
-	WorkspaceOperationService_RecordProvisioningFact_FullMethodName = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordProvisioningFact"
-	WorkspaceOperationService_ListLiveSandboxes_FullMethodName      = "/ora.cloud.internal.v1.WorkspaceOperationService/ListLiveSandboxes"
+	WorkspaceOperationService_ClaimOperation_FullMethodName                 = "/ora.cloud.internal.v1.WorkspaceOperationService/ClaimOperation"
+	WorkspaceOperationService_PlanEffect_FullMethodName                     = "/ora.cloud.internal.v1.WorkspaceOperationService/PlanEffect"
+	WorkspaceOperationService_RecordEffectResult_FullMethodName             = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordEffectResult"
+	WorkspaceOperationService_AdvanceOperation_FullMethodName               = "/ora.cloud.internal.v1.WorkspaceOperationService/AdvanceOperation"
+	WorkspaceOperationService_DeferOperation_FullMethodName                 = "/ora.cloud.internal.v1.WorkspaceOperationService/DeferOperation"
+	WorkspaceOperationService_RecordProvisioningFact_FullMethodName         = "/ora.cloud.internal.v1.WorkspaceOperationService/RecordProvisioningFact"
+	WorkspaceOperationService_ListPendingProvisioningEffects_FullMethodName = "/ora.cloud.internal.v1.WorkspaceOperationService/ListPendingProvisioningEffects"
+	WorkspaceOperationService_ListLiveSandboxes_FullMethodName              = "/ora.cloud.internal.v1.WorkspaceOperationService/ListLiveSandboxes"
 )
 
 // WorkspaceOperationServiceClient is the client API for WorkspaceOperationService service.
@@ -62,6 +63,11 @@ type WorkspaceOperationServiceClient interface {
 	// Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
 	// the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
 	RecordProvisioningFact(ctx context.Context, in *RecordProvisioningFactRequest, opts ...grpc.CallOption) (*RecordProvisioningFactResponse, error)
+	// Reads original effects of abandoned creations that lack a durable terminal receipt. Callers
+	// only query the Substrate by these identities; no dispatch or operation claim is authorized.
+	// Poll every page on subsequent ticks, including after process or lease replacement. Running
+	// and absent receipts remain listed until a real terminal fact is durably acknowledged.
+	ListPendingProvisioningEffects(ctx context.Context, in *ListPendingProvisioningEffectsRequest, opts ...grpc.CallOption) (*ListPendingProvisioningEffectsResponse, error)
 	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
 	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
 	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -138,6 +144,16 @@ func (c *workspaceOperationServiceClient) RecordProvisioningFact(ctx context.Con
 	return out, nil
 }
 
+func (c *workspaceOperationServiceClient) ListPendingProvisioningEffects(ctx context.Context, in *ListPendingProvisioningEffectsRequest, opts ...grpc.CallOption) (*ListPendingProvisioningEffectsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPendingProvisioningEffectsResponse)
+	err := c.cc.Invoke(ctx, WorkspaceOperationService_ListPendingProvisioningEffects_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workspaceOperationServiceClient) ListLiveSandboxes(ctx context.Context, in *ListLiveSandboxesRequest, opts ...grpc.CallOption) (*ListLiveSandboxesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListLiveSandboxesResponse)
@@ -182,6 +198,11 @@ type WorkspaceOperationServiceServer interface {
 	// Nothing reopens: no admission, no starting, no new dispatch and no second settlement. Like
 	// the execution registry, this entry has no JSON twin: production Controllers speak gRPC.
 	RecordProvisioningFact(context.Context, *RecordProvisioningFactRequest) (*RecordProvisioningFactResponse, error)
+	// Reads original effects of abandoned creations that lack a durable terminal receipt. Callers
+	// only query the Substrate by these identities; no dispatch or operation claim is authorized.
+	// Poll every page on subsequent ticks, including after process or lease replacement. Running
+	// and absent receipts remain listed until a real terminal fact is durably acknowledged.
+	ListPendingProvisioningEffects(context.Context, *ListPendingProvisioningEffectsRequest) (*ListPendingProvisioningEffectsResponse, error)
 	// Lists every sandbox a lease holder should hold a Node session with: not terminating or
 	// terminated, of its Workspace's current generation, with a succeeded ensure effect. Read-only;
 	// it claims nothing and changes no version, so a Controller calls it after acquiring the lease to
@@ -215,6 +236,9 @@ func (UnimplementedWorkspaceOperationServiceServer) DeferOperation(context.Conte
 }
 func (UnimplementedWorkspaceOperationServiceServer) RecordProvisioningFact(context.Context, *RecordProvisioningFactRequest) (*RecordProvisioningFactResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RecordProvisioningFact not implemented")
+}
+func (UnimplementedWorkspaceOperationServiceServer) ListPendingProvisioningEffects(context.Context, *ListPendingProvisioningEffectsRequest) (*ListPendingProvisioningEffectsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPendingProvisioningEffects not implemented")
 }
 func (UnimplementedWorkspaceOperationServiceServer) ListLiveSandboxes(context.Context, *ListLiveSandboxesRequest) (*ListLiveSandboxesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListLiveSandboxes not implemented")
@@ -349,6 +373,24 @@ func _WorkspaceOperationService_RecordProvisioningFact_Handler(srv interface{}, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkspaceOperationService_ListPendingProvisioningEffects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPendingProvisioningEffectsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkspaceOperationServiceServer).ListPendingProvisioningEffects(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkspaceOperationService_ListPendingProvisioningEffects_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkspaceOperationServiceServer).ListPendingProvisioningEffects(ctx, req.(*ListPendingProvisioningEffectsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkspaceOperationService_ListLiveSandboxes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListLiveSandboxesRequest)
 	if err := dec(in); err != nil {
@@ -397,6 +439,10 @@ var WorkspaceOperationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecordProvisioningFact",
 			Handler:    _WorkspaceOperationService_RecordProvisioningFact_Handler,
+		},
+		{
+			MethodName: "ListPendingProvisioningEffects",
+			Handler:    _WorkspaceOperationService_ListPendingProvisioningEffects_Handler,
 		},
 		{
 			MethodName: "ListLiveSandboxes",

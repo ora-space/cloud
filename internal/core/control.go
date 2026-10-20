@@ -54,6 +54,9 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 			return cloneCommand(t, r)
 		}
 		leaseValid(t, r)
+		if r.Action == "provisioning_pending_effects" {
+			return pendingProvisioningEffects(t, r)
+		}
 		refreshRuntimeControls(t)
 		if r.Action == "effect_permit" {
 			return effectPermit(t, r)

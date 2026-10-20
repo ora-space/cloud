@@ -35,6 +35,12 @@ func TestRecordProvisioningFactReceiptsLateFactsOverGRPCWithoutResurrectingRun(t
 	planned, e := c.operations.PlanEffect(c.ctx, &controlpb.PlanEffectRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: operation, Version: snap.GetOperation().GetVersion(), Kind: controlpb.EffectKind_EFFECT_KIND_SANDBOX_ENSURE, WorkspaceId: workspace})
 	must(t, e)
 	effectID := planned.GetEffect().GetId()
+	// A live creation is handled by the ordinary operation driver, never by residual recovery.
+	pending, e := c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch})
+	must(t, e)
+	if len(pending.GetItems()) != 0 {
+		t.Fatalf("live operation appeared as abandoned recovery: %v", pending)
+	}
 	_, e = c.operations.DeferOperation(c.ctx, &controlpb.DeferOperationRequest{SubmissionId: c.sub(), Epoch: c.epoch, OperationId: operation, Version: planned.GetOperation().GetVersion(), State: controlpb.DeferState_DEFER_STATE_BLOCKED, Reason: controlpb.DeferReason_DEFER_REASON_NODE_UNAVAILABLE, RetrySeconds: 60})
 	must(t, e)
 
@@ -49,6 +55,26 @@ func TestRecordProvisioningFactReceiptsLateFactsOverGRPCWithoutResurrectingRun(t
 	must(t, f.store.Pool.QueryRow(`SELECT phase, status, thread_state FROM issue_runs WHERE id=$1`, run).Scan(&phase, &status, &threadState))
 	if phase.String != "done" || status.String != "failed" || threadState.Valid {
 		t.Fatalf("blocked creation was not abandoned: %s/%s/%v", phase.String, status.String, threadState.Valid)
+	}
+	pending, e = c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch, PageSize: 1})
+	must(t, e)
+	if len(pending.GetItems()) != 1 || pending.GetItems()[0].GetOperationId() != operation || pending.GetItems()[0].GetEffect().GetId() != effectID || pending.GetItems()[0].GetEffect().GetRequest().GetSandboxEnsure() == nil {
+		t.Fatalf("gRPC lost original query identity or request: %v", pending)
+	}
+	_, e = c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch + 1})
+	expectStatus(t, e, codes.FailedPrecondition, controlpb.ErrorCode_ERROR_CODE_STALE_CONTROLLER)
+	_, e = c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch, AfterEffectId: "bad"})
+	expectStatus(t, e, codes.InvalidArgument, controlpb.ErrorCode_ERROR_CODE_INVALID_INPUT)
+	_, e = c.operations.RecordProvisioningFact(c.ctx, &controlpb.RecordProvisioningFactRequest{
+		SubmissionId: "fact-running", Epoch: c.epoch, OperationId: operation,
+		Kind: controlpb.ProvisioningFactKind_PROVISIONING_FACT_KIND_EFFECT, EffectId: effectID,
+		State: controlpb.EffectState_EFFECT_STATE_RUNNING, ExternalId: "substrate-sandbox-1",
+	})
+	must(t, e)
+	pending, e = c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch})
+	must(t, e)
+	if len(pending.GetItems()) != 1 || pending.GetItems()[0].GetEffect().GetState() != controlpb.EffectState_EFFECT_STATE_RUNNING {
+		t.Fatalf("provisional ACK dropped future query responsibility: %v", pending)
 	}
 
 	// The late Substrate fact: the ensure really did create a sandbox, on a Node Cloud never saw.
@@ -72,6 +98,11 @@ func TestRecordProvisioningFactReceiptsLateFactsOverGRPCWithoutResurrectingRun(t
 	must(t, e)
 	if replayed.GetEffect().GetId() != fact.GetEffect().GetId() {
 		t.Fatal("submission replay returned a different fact")
+	}
+	pending, e = c.operations.ListPendingProvisioningEffects(c.ctx, &controlpb.ListPendingProvisioningEffectsRequest{Epoch: c.epoch})
+	must(t, e)
+	if len(pending.GetItems()) != 0 {
+		t.Fatalf("durably receipted terminal still listed: %v", pending)
 	}
 
 	// The creation's own real outcome is evidence only.
