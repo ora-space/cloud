@@ -312,7 +312,17 @@ func scheduledTaskHistory(t *transaction, r *PublicRequest) Object {
 				item["failureReason"] = "timeout"
 				break
 			}
-			item["outcome"] = status
+			// D6: project the run's own terminal state into the history vocabulary —
+			// completed→succeeded, failed/cancelled stay as they are, any non-terminal
+			// (queued/dispatched/running/deferred) shows as running.
+			switch status {
+			case "completed":
+				item["outcome"] = "succeeded"
+			case "failed", "cancelled":
+				item["outcome"] = status
+			default:
+				item["outcome"] = "running"
+			}
 			if entry["runFailureReason"] != nil {
 				item["failureReason"] = entry["runFailureReason"]
 			}
