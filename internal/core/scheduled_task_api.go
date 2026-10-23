@@ -51,6 +51,7 @@ func scheduledTaskOut(task Object) Object {
 		"name":                  task.S("name"),
 		"prompt":                task.S("prompt"),
 		"agentId":               task.S("agentId"),
+		"model":                 nilIfEmpty(task.S("model")),
 		"schedule":              task["schedule"],
 		"timezone":              task.S("timezone"),
 		"revision":              task["revision"],
@@ -73,6 +74,7 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 	agentID := r.Body.S("agentId")
 	name := r.Body.S("name")
 	prompt := r.Body.S("prompt")
+	model := r.Body.S("model")
 	timezone := r.Body.S("timezone")
 	enabled := r.Body.B("enabled")
 	require(validID(issueID) && validID(agentID) && name != "" && prompt != "" && timezone != "", 400, "invalid_request")
@@ -110,11 +112,11 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 		enabledAt = consentedAt
 	}
 	t.exec(`INSERT INTO scheduled_tasks
-		(id, tenant_id, issue_id, creator_user_id, agent_id, name, prompt, schedule, timezone,
+		(id, tenant_id, issue_id, creator_user_id, agent_id, name, prompt, model, schedule, timezone,
 		 revision, version, enabled, enabled_at, disabled_reason,
 		 unattended_policy, unattended_consented_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,1,$10,$11,NULL,$12,$13)`,
-		id, r.TenantID, issueID, uid, agentID, name, prompt, jsonText(scheduleDoc), timezone,
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,1,$11,$12,NULL,$13,$14)`,
+		id, r.TenantID, issueID, uid, agentID, name, prompt, nilIfEmpty(model), jsonText(scheduleDoc), timezone,
 		enabled, enabledAt, unattendedPolicyCloud, consentedAt)
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1", id)
 	return scheduledTaskOut(task)
@@ -140,6 +142,10 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 		prompt = body.S("prompt")
 		require(prompt != "", 400, "invalid_request")
 	}
+	model := task.S("model")
+	if body["model"] != nil {
+		model = body.S("model")
+	}
 	agentID := task.S("agentId")
 	if body["agentId"] != nil {
 		agentID = body.S("agentId")
@@ -160,7 +166,8 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 		scheduleDoc = doc
 	}
 	revision := task.N("revision")
-	contentChanged := prompt != task.S("prompt") || agentID != task.S("agentId") ||
+	contentChanged := prompt != task.S("prompt") || model != task.S("model") ||
+		agentID != task.S("agentId") ||
 		timezone != task.S("timezone") || scheduleDocJSONChanged(scheduleDoc, task["schedule"])
 	if contentChanged {
 		revision = task.N("revision") + 1
@@ -178,10 +185,10 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 	require(creatorModelReady(t, uid, agent.S("pluginId")), 409, "model_unavailable")
 
 	updated := t.execRows(`UPDATE scheduled_tasks
-		SET name=$1, prompt=$2, agent_id=$3, schedule=$4, timezone=$5,
-		    revision=$6, version=version+1, updated_at=now()
-		WHERE id=$7 AND tenant_id=$8 AND creator_user_id=$9 AND deleted_at IS NULL
-		  AND version=$10`, name, prompt, agentID, jsonText(scheduleDoc), timezone,
+		SET name=$1, prompt=$2, model=$3, agent_id=$4, schedule=$5, timezone=$6,
+		    revision=$7, version=version+1, updated_at=now()
+		WHERE id=$8 AND tenant_id=$9 AND creator_user_id=$10 AND deleted_at IS NULL
+		  AND version=$11`, name, prompt, nilIfEmpty(model), agentID, jsonText(scheduleDoc), timezone,
 		revision, task.S("id"), r.TenantID, uid, body.N("version"))
 	require(updated == 1, 409, "version_conflict")
 	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))

@@ -93,7 +93,7 @@ func Document() map[string]any {
 	// issue_run.thread_appended / issue_run.thread_changed address one agent run's Thread (Thread
 	// D5): issueId and runId name it and lastSeq is only a hint — the Thread GET alone moves a
 	// client's cursor. Every other event omits the three fields.
-	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated", "issue_run.thread_appended", "issue_run.thread_changed", "project.repository_updated", "issue.conversation_changed"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number(), "issueId": uuid(), "runId": uuid(), "lastSeq": number()}, "type", "spaceId")
+	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated", "issue_run.thread_appended", "issue_run.thread_changed", "project.repository_updated", "issue.conversation_changed", "space.scheduled_tasks_updated"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number(), "issueId": uuid(), "runId": uuid(), "lastSeq": number()}, "type", "spaceId")
 	// GitIdentity is the identity the caller's Agent runs commit as (identity-access git identity
 	// D1). version is 0 while isDefault is true: no identity is stated and the default applies.
 	s["GitIdentity"] = object(obj{"name": str(), "email": str(), "isDefault": boolean(), "version": number()}, "name", "email", "isDefault", "version")
@@ -245,6 +245,7 @@ func Document() map[string]any {
 	s["ScheduledTaskApproval"] = object(obj{"policy": enumeration("full_auto_in_cloud_workspace")}, "policy")
 	s["ScheduledTask"] = object(obj{
 		"id": uuid(), "issueId": uuid(), "creatorUserId": uuid(), "name": str(), "prompt": str(), "agentId": uuid(),
+		"model":    optional(str()),
 		"schedule": ref("ScheduledTaskSchedule"), "timezone": str(),
 		"revision":              number(),
 		"version":               number(),
