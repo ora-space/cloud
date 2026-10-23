@@ -244,7 +244,7 @@ func Document() map[string]any {
 	}, "kind")
 	s["ScheduledTaskApproval"] = object(obj{"policy": enumeration("full_auto_in_cloud_workspace")}, "policy")
 	s["ScheduledTask"] = object(obj{
-		"id": uuid(), "issueId": uuid(), "name": str(), "prompt": str(), "agentId": uuid(),
+		"id": uuid(), "issueId": uuid(), "creatorUserId": uuid(), "name": str(), "prompt": str(), "agentId": uuid(),
 		"schedule": ref("ScheduledTaskSchedule"), "timezone": str(),
 		"revision":              number(),
 		"version":               number(),
@@ -253,7 +253,7 @@ func Document() map[string]any {
 		"unattendedConsentedAt": optional(timestamp()),
 		"disabledReason":        optional(str()),
 		"createdAt":             timestamp(), "updatedAt": timestamp(),
-	}, "id", "issueId", "name", "prompt", "agentId", "schedule", "timezone", "revision", "version", "enabled", "createdAt", "updatedAt")
+	}, "id", "issueId", "creatorUserId", "name", "prompt", "agentId", "schedule", "timezone", "revision", "version", "enabled", "createdAt", "updatedAt")
 	s["ScheduledTaskList"] = object(obj{"tasks": array(ref("ScheduledTask")), "acceptanceEnabled": boolean()}, "tasks", "acceptanceEnabled")
 	s["ScheduledTaskOccurrence"] = object(obj{
 		"scheduledAt":   timestamp(),

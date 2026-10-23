@@ -45,6 +45,7 @@ func scheduledTaskOut(task Object) Object {
 	return Object{
 		"id":                    task.S("id"),
 		"issueId":               task.S("issueId"),
+		"creatorUserId":         task.S("creatorUserId"),
 		"name":                  task.S("name"),
 		"prompt":                task.S("prompt"),
 		"agentId":               task.S("agentId"),
