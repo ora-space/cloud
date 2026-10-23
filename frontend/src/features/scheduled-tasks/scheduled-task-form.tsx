@@ -219,39 +219,15 @@ function Fields({
         <Input id="st-name" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
 
-      {!isEdit && (
-        <Field label="绑定 issue" htmlFor="st-issue">
-          <select
-            id="st-issue"
-            className={selectClass}
-            value={issueId}
-            onChange={(e) => setIssueId(e.target.value)}
-          >
-            <option value="">选择 issue…</option>
-            {issues.map((issue) => (
-              <option key={issue.id} value={issue.id}>
-                #{issue.number} {issue.title}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-
-      <Field label="执行智能体" htmlFor="st-agent">
-        <select
-          id="st-agent"
-          className={selectClass}
-          value={agentId}
-          onChange={(e) => setAgentId(e.target.value)}
-        >
-          <option value="">选择智能体…</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.displayName}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <TargetSelectors
+        isEdit={isEdit}
+        issues={issues}
+        agents={agents}
+        issueId={issueId}
+        setIssueId={setIssueId}
+        agentId={agentId}
+        setAgentId={setAgentId}
+      />
 
       <Field label="提示词" htmlFor="st-prompt">
         <Textarea
@@ -280,17 +256,84 @@ function Fields({
         </label>
       )}
 
-      {enabled && (
-        <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
-          <Checkbox
-            checked={consented}
-            onCheckedChange={(checked) => setConsented(checked)}
-            aria-label="同意无人值守授权"
-          />
-          <span>{CONSENT_RISK_STATEMENT}</span>
-        </label>
-      )}
+      {enabled && <ConsentAgreement consented={consented} setConsented={setConsented} />}
     </div>
+  )
+}
+
+/** The issue and agent target selectors; the issue selector is only shown on creation. */
+function TargetSelectors({
+  isEdit,
+  issues,
+  agents,
+  issueId,
+  setIssueId,
+  agentId,
+  setAgentId,
+}: {
+  isEdit: boolean
+  issues: Issue[]
+  agents: CollaborationTarget[]
+  issueId: string
+  setIssueId: (value: string) => void
+  agentId: string
+  setAgentId: (value: string) => void
+}) {
+  return (
+    <>
+      {!isEdit && (
+        <Field label="绑定 issue" htmlFor="st-issue">
+          <select
+            id="st-issue"
+            className={selectClass}
+            value={issueId}
+            onChange={(e) => setIssueId(e.target.value)}
+          >
+            <option value="">选择 issue…</option>
+            {issues.map((issue) => (
+              <option key={issue.id} value={issue.id}>
+                #{issue.number} {issue.title}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="执行智能体" htmlFor="st-agent">
+        <select
+          id="st-agent"
+          className={selectClass}
+          value={agentId}
+          onChange={(e) => setAgentId(e.target.value)}
+        >
+          <option value="">选择智能体…</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.displayName}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </>
+  )
+}
+
+/** The D5 unattended-consent risk statement and its required agreement checkbox. */
+function ConsentAgreement({
+  consented,
+  setConsented,
+}: {
+  consented: boolean
+  setConsented: (value: boolean) => void
+}) {
+  return (
+    <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
+      <Checkbox
+        checked={consented}
+        onCheckedChange={(checked) => setConsented(checked)}
+        aria-label="同意无人值守授权"
+      />
+      <span>{CONSENT_RISK_STATEMENT}</span>
+    </label>
   )
 }
 
