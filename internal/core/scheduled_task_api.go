@@ -23,11 +23,13 @@ func managedScheduledTask(t *transaction, r *PublicRequest, uid string) Object {
 }
 
 // readableScheduledTask loads the task for a READ operation: every effective tenant member who can
-// read the bound issue may read the task and its history (D1 visibility follows the issue).
+// read the bound issue may read the task and its history (D1 visibility follows the issue). A task
+// whose bound issue has been deleted is not readable.
 func readableScheduledTask(t *transaction, r *PublicRequest) Object {
 	require(validID(r.ScheduledTaskID), 404, "not_found")
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", r.ScheduledTaskID, r.TenantID)
 	require(task != nil, 404, "not_found")
+	require(scheduledTaskIssue(t, r.TenantID, task.S("issueId")) != nil, 404, "not_found")
 	return task
 }
 
@@ -218,10 +220,20 @@ func jsonChanged(left, right Object) bool {
 
 // scheduledTaskEnable turns the task on (POST .../enable). The ADR's enable-time checks run here —
 // the same table an admission would run, minus the parts that need a due point — and a failure
-// answers with its mapped reason so the form can explain what is missing (D5).
+// answers with its mapped reason so the form can explain what is missing (D5). After a consent
+// revocation the consent fact is cleared, so enabling again must carry a fresh explicit consent.
 func scheduledTaskEnable(t *transaction, r *PublicRequest, uid string) Object {
 	task := managedScheduledTask(t, r, uid)
-	require(task.S("unattendedPolicy") == unattendedPolicyCloud, 409, "approval_policy_invalid")
+	policy := task.S("unattendedPolicy")
+	consentedAt := task["unattendedConsentedAt"]
+	if policy == "" {
+		// D5: 撤销同意后重新同意——consent 已清空，启用必须携带新的显式同意。
+		approval := r.Body.O("approval")
+		require(approval.S("policy") == unattendedPolicyCloud, 409, "approval_policy_invalid")
+		policy = unattendedPolicyCloud
+		consentedAt = dbNow(t)
+	}
+	require(policy == unattendedPolicyCloud, 409, "approval_policy_invalid")
 	creator := task.S("creatorUserId")
 	require(creatorMembershipActive(t, task.S("id"), r.TenantID, creator), 409, "target_unavailable")
 	issue := scheduledTaskIssue(t, r.TenantID, task.S("issueId"))
@@ -232,8 +244,9 @@ func scheduledTaskEnable(t *transaction, r *PublicRequest, uid string) Object {
 	require(creatorModelReady(t, creator, agent.S("pluginId")), 409, "model_unavailable")
 
 	t.exec(`UPDATE scheduled_tasks
-		SET enabled=true, enabled_at=now(), disabled_reason=NULL, updated_at=now()
-		WHERE id=$1 AND enabled=false`, task.S("id"))
+		SET enabled=true, enabled_at=now(), disabled_reason=NULL,
+		    unattended_policy=$2, unattended_consented_at=$3, updated_at=now()
+		WHERE id=$1 AND enabled=false`, task.S("id"), policy, consentedAt)
 	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
 }
 
