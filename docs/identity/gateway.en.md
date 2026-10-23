@@ -121,7 +121,7 @@ Two kinds of request are special:
 **Huawei IDaaS (`internal/gateway/idaas`).** Uses IDaaS 2.0 Authorization Code as a confidential
 client (`client_secret_post`) without PKCE.
 
-- The authorize URL is `<idaas.base_url>/saaslogin1/oauth2/v1/authorize` with only `client_id`,
+- The default authorize URL is `<idaas.base_url>/saaslogin1/oauth2/v1/authorize` with only `client_id`,
   `response_type=code`, `scope=base.profile`, `state` and the fixed callback. The callback's scheme,
   host and port must match the IDaaS application registration exactly.
 - `/saaslogin1/oauth2/v1/token` is called with a form `POST` carrying `client_id`, `client_secret` and
@@ -134,6 +134,12 @@ client (`client_secret_post`) without PKCE.
   directory.
 - The token and userinfo clients have their own total timeout and a 64 KiB response cap, propagate
   cancellation and never follow redirects.
+- Deployments can independently override the complete HTTPS authorize, token and userinfo URLs;
+  omitted endpoints retain the default paths above. Overrides cannot contain URL credentials, a
+  query or a fragment and are never read from browser requests. See the
+  [configuration reference](../operations/configuration.en.md#gateway). Overrides do not change the
+  form protocol, scope, `huawei-corp` source or UUID mapping, migrate identities, revoke existing
+  sessions or grant tenant permissions; targets must preserve the same corporate identity authority.
 
 **GitHub (`internal/gateway/github`).** OAuth App Authorization Code with PKCE S256, no scopes, and
 `allow_signup=false` plus `prompt=select_account` on the authorize request. After reading
