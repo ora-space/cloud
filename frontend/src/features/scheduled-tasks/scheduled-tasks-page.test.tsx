@@ -16,6 +16,7 @@ function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
     id: 'st1',
     issueId: 'i1',
+    creatorUserId: 'u1',
     name: '每日同步',
     prompt: '同步仓库',
     agentId: 'a1',
@@ -87,6 +88,16 @@ describe('ScheduledTasksPage', () => {
     renderPage()
     await user.click(await screen.findByRole('button', { name: '新建定时任务' }))
     expect(screen.getByRole('dialog', { name: '新建定时任务' })).toBeInTheDocument()
+  })
+
+  it('shows the risk disclosure and requires consent once the task is enabled', async () => {
+    serve([], true)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '新建定时任务' }))
+    await user.click(screen.getByRole('switch'))
+    expect(screen.getByLabelText('同意无人值守授权')).toBeInTheDocument()
+    expect(screen.getByText(/我已知悉并同意/)).toBeInTheDocument()
   })
 
   it('deletes a task only after confirmation', async () => {
