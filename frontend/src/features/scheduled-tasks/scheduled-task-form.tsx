@@ -281,9 +281,7 @@ function Fields({
       )}
 
       {enabled && (
-        <label
-          className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground"
-        >
+        <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
           <Checkbox
             checked={consented}
             onCheckedChange={(checked) => setConsented(checked)}
@@ -351,7 +349,8 @@ export function ScheduledTaskForm({
       { issueId, agentId, name, prompt, schedule, timezone, enabled },
       { onSuccess: onClose },
     )
-  const invalid = isDraftInvalid(isEdit, { name, prompt, agentId, issueId }) || (enabled && !consented)
+  const invalid =
+    isDraftInvalid(isEdit, { name, prompt, agentId, issueId }) || (enabled && !consented)
   let submitLabel = '创建'
   if (save.isPending) submitLabel = '保存中…'
   else if (isEdit) submitLabel = '保存'
