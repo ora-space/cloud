@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -185,6 +186,8 @@ function Fields({
   setSchedule,
   enabled,
   setEnabled,
+  consented,
+  setConsented,
 }: {
   isEdit: boolean
   issues: Issue[]
@@ -203,6 +206,8 @@ function Fields({
   setSchedule: (value: ScheduledTaskSchedule) => void
   enabled: boolean
   setEnabled: (value: boolean) => void
+  consented: boolean
+  setConsented: (value: boolean) => void
 }) {
   return (
     <div className="space-y-4">
@@ -270,6 +275,20 @@ function Fields({
           创建后立即启用
         </label>
       )}
+
+      {enabled && (
+        <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
+          <Checkbox
+            checked={consented}
+            onCheckedChange={(checked) => setConsented(checked)}
+            aria-label="同意无人值守授权"
+          />
+          <span>
+            我已知悉并同意：定时运行在一次性隔离 Workspace 中全自动执行（非用户可见的数据边界承诺），
+            Agent 可执行任意工具调用，消耗创建者个人模型额度，并以创建者 Git 身份提交。
+          </span>
+        </label>
+      )}
     </div>
   )
 }
@@ -322,13 +341,14 @@ export function ScheduledTaskForm({
   const [timezone, setTimezone] = useState(draft.timezone)
   const [schedule, setSchedule] = useState<ScheduledTaskSchedule>(draft.schedule)
   const [enabled, setEnabled] = useState(false)
+  const [consented, setConsented] = useState(false)
 
   const submit = () =>
     save.mutate(
       { issueId, agentId, name, prompt, schedule, timezone, enabled },
       { onSuccess: onClose },
     )
-  const invalid = isDraftInvalid(isEdit, { name, prompt, agentId, issueId })
+  const invalid = isDraftInvalid(isEdit, { name, prompt, agentId, issueId }) || (enabled && !consented)
   let submitLabel = '创建'
   if (save.isPending) submitLabel = '保存中…'
   else if (isEdit) submitLabel = '保存'
@@ -361,6 +381,8 @@ export function ScheduledTaskForm({
           setSchedule={setSchedule}
           enabled={enabled}
           setEnabled={setEnabled}
+          consented={consented}
+          setConsented={setConsented}
         />
 
         {save.isError && (
