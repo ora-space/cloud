@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -266,6 +267,48 @@ func TestScheduledTaskEvaluationProcessesMoreThanOnePage(t *testing.T) {
 	must(t, store.Pool.QueryRow(`SELECT count(*) FROM scheduled_task_occurrences`).Scan(&count))
 	if count != taskCount {
 		t.Fatalf("evaluation must visit every enabled task, got %d", count)
+	}
+}
+
+// TestScheduledTaskHistoryRetentionKeepsTheOldestActiveRun makes the active occurrence older than
+// every disposable record. A later due point must still prune the oldest *terminal-or-unbound*
+// entry, keep exactly 100 rows, and leave the active IssueRun linked as an audit fact.
+func TestScheduledTaskHistoryRetentionKeepsTheOldestActiveRun(t *testing.T) {
+	store, s, agentID := scheduledTaskStore(t)
+	taskID := seedEnabledScheduledTask(t, store, s, agentID, "History retention", 65)
+	must(t, store.EvaluateScheduledTasksOnce(context.Background()))
+
+	var activeRunID string
+	must(t, store.Pool.QueryRow(`SELECT run_id FROM scheduled_task_occurrences WHERE task_id=$1`, taskID).Scan(&activeRunID))
+	_, err := store.Pool.Exec(`UPDATE scheduled_task_occurrences
+		SET scheduled_at=now() - interval '101 hours'
+		WHERE task_id=$1 AND run_id=$2`, taskID, activeRunID)
+	must(t, err)
+	_, err = store.Pool.Exec(`INSERT INTO scheduled_task_occurrences(tenant_id,task_id,scheduled_at,outcome,observed_at)
+		SELECT $1,$2,now() - interval '100 hours' + n * interval '1 hour','missed',now()
+		FROM generate_series(0,98) AS n`, s.tenantID, taskID)
+	must(t, err)
+
+	var oldestDisposable time.Time
+	must(t, store.Pool.QueryRow(`SELECT min(scheduled_at) FROM scheduled_task_occurrences
+		WHERE task_id=$1 AND run_id IS NULL`, taskID).Scan(&oldestDisposable))
+	must(t, store.EvaluateScheduledTasksOnce(context.Background()))
+
+	var occurrences, activeLinks int
+	must(t, store.Pool.QueryRow(`SELECT count(*), count(*) FILTER (WHERE run_id=$2)
+		FROM scheduled_task_occurrences WHERE task_id=$1`, taskID, activeRunID).Scan(&occurrences, &activeLinks))
+	if occurrences != 100 || activeLinks != 1 {
+		t.Fatalf("retention must keep 100 occurrences including the active run, got occurrences=%d activeLinks=%d", occurrences, activeLinks)
+	}
+	var pruned bool
+	must(t, store.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM scheduled_task_occurrences WHERE task_id=$1 AND scheduled_at=$2)`, taskID, oldestDisposable).Scan(&pruned))
+	if pruned {
+		t.Fatalf("retention must prune the oldest disposable occurrence %s", oldestDisposable)
+	}
+	var status string
+	must(t, store.Pool.QueryRow(`SELECT status FROM issue_runs WHERE id=$1`, activeRunID).Scan(&status))
+	if status == "completed" || status == "failed" || status == "cancelled" {
+		t.Fatalf("retention must not delete or terminalize the active IssueRun, got status=%q", status)
 	}
 }
 
