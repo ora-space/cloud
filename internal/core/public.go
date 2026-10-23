@@ -241,8 +241,9 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			} else {
 				out = Object{"resource": resolved}
 			}
-			// D7：任务定义或历史随写变更，发 Space 失效事件让任务列表与历史刷新。
-			events = append(events, SpaceEvent{Type: "space.scheduled_tasks_updated", SpaceID: soleSpace(t, r.TenantID).S("id")})
+			// D7：任务定义或历史随写变更，发 Space 失效事件让任务列表与历史刷新。事件带任务标识，
+			// 客户端据此决定刷新整个列表还是单个任务详情/历史。
+			events = append(events, SpaceEvent{Type: "space.scheduled_tasks_updated", SpaceID: soleSpace(t, r.TenantID).S("id"), ScheduledTaskID: r.ScheduledTaskID})
 			if r.Method == "POST" && !strings.HasSuffix(r.Path, "/history") {
 				status = 200
 			}
