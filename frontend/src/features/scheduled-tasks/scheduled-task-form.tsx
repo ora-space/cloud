@@ -31,6 +31,10 @@ import {
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs'
 
+/** D5 无人值守授权的风险说明：必须显式同意后才能启用。 */
+const CONSENT_RISK_STATEMENT =
+  '我已知悉并同意：定时运行在一次性隔离 Workspace 中全自动执行（非用户可见的数据边界承诺），Agent 可执行任意工具调用，消耗创建者个人模型额度，并以创建者 Git 身份提交。'
+
 const KIND_OPTIONS: readonly { value: ScheduledTaskScheduleKind; label: string }[] = [
   { value: 'daily', label: '每天' },
   { value: 'weekly', label: '每周' },
@@ -277,16 +281,15 @@ function Fields({
       )}
 
       {enabled && (
-        <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
+        <label
+          className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground"
+        >
           <Checkbox
             checked={consented}
             onCheckedChange={(checked) => setConsented(checked)}
             aria-label="同意无人值守授权"
           />
-          <span>
-            我已知悉并同意：定时运行在一次性隔离 Workspace 中全自动执行（非用户可见的数据边界承诺），
-            Agent 可执行任意工具调用，消耗创建者个人模型额度，并以创建者 Git 身份提交。
-          </span>
+          <span>{CONSENT_RISK_STATEMENT}</span>
         </label>
       )}
     </div>
