@@ -284,8 +284,8 @@ func TestScheduledTaskHistoryRetentionKeepsTheOldestActiveRun(t *testing.T) {
 		SET scheduled_at=now() - interval '101 hours'
 		WHERE task_id=$1 AND run_id=$2`, taskID, activeRunID)
 	must(t, err)
-	_, err = store.Pool.Exec(`INSERT INTO scheduled_task_occurrences(tenant_id,task_id,scheduled_at,outcome,observed_at)
-		SELECT $1,$2,now() - interval '100 hours' + n * interval '1 hour','missed',now()
+	_, err = store.Pool.Exec(`INSERT INTO scheduled_task_occurrences(tenant_id,task_id,scheduled_at,outcome,task_revision,observed_at)
+		SELECT $1,$2,now() - interval '100 hours' + n * interval '1 hour','missed',1,now()
 		FROM generate_series(0,98) AS n`, s.tenantID, taskID)
 	must(t, err)
 
