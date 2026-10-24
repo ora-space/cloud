@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,10 @@ import {
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs'
+
+/** D5 无人值守授权的风险说明：必须显式同意后才能启用。 */
+const CONSENT_RISK_STATEMENT =
+  '我已知悉并同意：定时运行在一次性隔离 Workspace 中全自动执行（非用户可见的数据边界承诺），Agent 可执行任意工具调用，消耗创建者个人模型额度，并以创建者 Git 身份提交。'
 
 const KIND_OPTIONS: readonly { value: ScheduledTaskScheduleKind; label: string }[] = [
   { value: 'daily', label: '每天' },
@@ -185,6 +190,8 @@ function Fields({
   setSchedule,
   enabled,
   setEnabled,
+  consented,
+  setConsented,
 }: {
   isEdit: boolean
   issues: Issue[]
@@ -203,6 +210,8 @@ function Fields({
   setSchedule: (value: ScheduledTaskSchedule) => void
   enabled: boolean
   setEnabled: (value: boolean) => void
+  consented: boolean
+  setConsented: (value: boolean) => void
 }) {
   return (
     <div className="space-y-4">
@@ -210,39 +219,15 @@ function Fields({
         <Input id="st-name" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
 
-      {!isEdit && (
-        <Field label="绑定 issue" htmlFor="st-issue">
-          <select
-            id="st-issue"
-            className={selectClass}
-            value={issueId}
-            onChange={(e) => setIssueId(e.target.value)}
-          >
-            <option value="">选择 issue…</option>
-            {issues.map((issue) => (
-              <option key={issue.id} value={issue.id}>
-                #{issue.number} {issue.title}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-
-      <Field label="执行智能体" htmlFor="st-agent">
-        <select
-          id="st-agent"
-          className={selectClass}
-          value={agentId}
-          onChange={(e) => setAgentId(e.target.value)}
-        >
-          <option value="">选择智能体…</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.displayName}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <TargetSelectors
+        isEdit={isEdit}
+        issues={issues}
+        agents={agents}
+        issueId={issueId}
+        setIssueId={setIssueId}
+        agentId={agentId}
+        setAgentId={setAgentId}
+      />
 
       <Field label="提示词" htmlFor="st-prompt">
         <Textarea
@@ -270,7 +255,85 @@ function Fields({
           创建后立即启用
         </label>
       )}
+
+      {enabled && <ConsentAgreement consented={consented} setConsented={setConsented} />}
     </div>
+  )
+}
+
+/** The issue and agent target selectors; the issue selector is only shown on creation. */
+function TargetSelectors({
+  isEdit,
+  issues,
+  agents,
+  issueId,
+  setIssueId,
+  agentId,
+  setAgentId,
+}: {
+  isEdit: boolean
+  issues: Issue[]
+  agents: CollaborationTarget[]
+  issueId: string
+  setIssueId: (value: string) => void
+  agentId: string
+  setAgentId: (value: string) => void
+}) {
+  return (
+    <>
+      {!isEdit && (
+        <Field label="绑定 issue" htmlFor="st-issue">
+          <select
+            id="st-issue"
+            className={selectClass}
+            value={issueId}
+            onChange={(e) => setIssueId(e.target.value)}
+          >
+            <option value="">选择 issue…</option>
+            {issues.map((issue) => (
+              <option key={issue.id} value={issue.id}>
+                #{issue.number} {issue.title}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="执行智能体" htmlFor="st-agent">
+        <select
+          id="st-agent"
+          className={selectClass}
+          value={agentId}
+          onChange={(e) => setAgentId(e.target.value)}
+        >
+          <option value="">选择智能体…</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.displayName}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </>
+  )
+}
+
+/** The D5 unattended-consent risk statement and its required agreement checkbox. */
+function ConsentAgreement({
+  consented,
+  setConsented,
+}: {
+  consented: boolean
+  setConsented: (value: boolean) => void
+}) {
+  return (
+    <label className="flex items-start gap-2 rounded-md border border-muted p-3 text-xs text-muted-foreground">
+      <Checkbox
+        checked={consented}
+        onCheckedChange={(checked) => setConsented(checked)}
+        aria-label="同意无人值守授权"
+      />
+      <span>{CONSENT_RISK_STATEMENT}</span>
+    </label>
   )
 }
 
@@ -322,13 +385,15 @@ export function ScheduledTaskForm({
   const [timezone, setTimezone] = useState(draft.timezone)
   const [schedule, setSchedule] = useState<ScheduledTaskSchedule>(draft.schedule)
   const [enabled, setEnabled] = useState(false)
+  const [consented, setConsented] = useState(false)
 
   const submit = () =>
     save.mutate(
       { issueId, agentId, name, prompt, schedule, timezone, enabled },
       { onSuccess: onClose },
     )
-  const invalid = isDraftInvalid(isEdit, { name, prompt, agentId, issueId })
+  const invalid =
+    isDraftInvalid(isEdit, { name, prompt, agentId, issueId }) || (enabled && !consented)
   let submitLabel = '创建'
   if (save.isPending) submitLabel = '保存中…'
   else if (isEdit) submitLabel = '保存'
@@ -361,6 +426,8 @@ export function ScheduledTaskForm({
           setSchedule={setSchedule}
           enabled={enabled}
           setEnabled={setEnabled}
+          consented={consented}
+          setConsented={setConsented}
         />
 
         {save.isError && (

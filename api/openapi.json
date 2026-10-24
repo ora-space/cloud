@@ -4322,6 +4322,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "creatorUserId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "disabledReason": {
             "nullable": true,
             "type": "string"
@@ -4335,6 +4339,10 @@
           },
           "issueId": {
             "format": "uuid",
+            "type": "string"
+          },
+          "model": {
+            "nullable": true,
             "type": "string"
           },
           "name": {
@@ -4374,6 +4382,7 @@
         "required": [
           "id",
           "issueId",
+          "creatorUserId",
           "name",
           "prompt",
           "agentId",
@@ -5005,7 +5014,8 @@
               "issue_run.thread_appended",
               "issue_run.thread_changed",
               "project.repository_updated",
-              "issue.conversation_changed"
+              "issue.conversation_changed",
+              "space.scheduled_tasks_updated"
             ],
             "type": "string"
           },

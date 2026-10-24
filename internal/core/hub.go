@@ -12,13 +12,14 @@ import "sync"
 // LastSeq says only "there is data at or below this seq", never which entries exist, and it never
 // advances a client's cursor — only the Thread GET does that.
 type SpaceEvent struct {
-	Type      string `json:"type"`
-	SpaceID   string `json:"spaceId"`
-	ProjectID string `json:"projectId,omitempty"`
-	Version   int64  `json:"version,omitempty"`
-	IssueID   string `json:"issueId,omitempty"`
-	RunID     string `json:"runId,omitempty"`
-	LastSeq   int64  `json:"lastSeq,omitempty"`
+	Type            string `json:"type"`
+	SpaceID         string `json:"spaceId"`
+	ProjectID       string `json:"projectId,omitempty"`
+	Version         int64  `json:"version,omitempty"`
+	IssueID         string `json:"issueId,omitempty"`
+	RunID           string `json:"runId,omitempty"`
+	LastSeq         int64  `json:"lastSeq,omitempty"`
+	ScheduledTaskID string `json:"scheduledTaskId,omitempty"`
 }
 
 // SpaceHub fans committed workspace events out to live subscribers.

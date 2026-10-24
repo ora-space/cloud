@@ -1995,11 +1995,14 @@ export interface ScheduledTaskSchedule {
 export interface ScheduledTask {
   agentId: string;
   createdAt: string;
+  creatorUserId: string;
   /** @nullable */
   disabledReason?: string | null;
   enabled: boolean;
   id: string;
   issueId: string;
+  /** @nullable */
+  model?: string | null;
   name: string;
   prompt: string;
   revision: number;
@@ -2231,6 +2234,7 @@ export const SpaceEventType = {
   issue_runthread_changed: 'issue_run.thread_changed',
   projectrepository_updated: 'project.repository_updated',
   issueconversation_changed: 'issue.conversation_changed',
+  spacescheduled_tasks_updated: 'space.scheduled_tasks_updated',
 } as const;
 
 export interface SpaceEvent {

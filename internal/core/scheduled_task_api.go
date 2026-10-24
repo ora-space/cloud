@@ -23,11 +23,13 @@ func managedScheduledTask(t *transaction, r *PublicRequest, uid string) Object {
 }
 
 // readableScheduledTask loads the task for a READ operation: every effective tenant member who can
-// read the bound issue may read the task and its history (D1 visibility follows the issue).
+// read the bound issue may read the task and its history (D1 visibility follows the issue). A task
+// whose bound issue has been deleted is not readable.
 func readableScheduledTask(t *transaction, r *PublicRequest) Object {
 	require(validID(r.ScheduledTaskID), 404, "not_found")
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", r.ScheduledTaskID, r.TenantID)
 	require(task != nil, 404, "not_found")
+	require(scheduledTaskIssue(t, r.TenantID, task.S("issueId")) != nil, 404, "not_found")
 	return task
 }
 
@@ -45,9 +47,11 @@ func scheduledTaskOut(task Object) Object {
 	return Object{
 		"id":                    task.S("id"),
 		"issueId":               task.S("issueId"),
+		"creatorUserId":         task.S("creatorUserId"),
 		"name":                  task.S("name"),
 		"prompt":                task.S("prompt"),
 		"agentId":               task.S("agentId"),
+		"model":                 nilIfEmpty(task.S("model")),
 		"schedule":              task["schedule"],
 		"timezone":              task.S("timezone"),
 		"revision":              task["revision"],
@@ -70,6 +74,7 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 	agentID := r.Body.S("agentId")
 	name := r.Body.S("name")
 	prompt := r.Body.S("prompt")
+	model := r.Body.S("model")
 	timezone := r.Body.S("timezone")
 	enabled := r.Body.B("enabled")
 	require(validID(issueID) && validID(agentID) && name != "" && prompt != "" && timezone != "", 400, "invalid_request")
@@ -107,11 +112,11 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 		enabledAt = consentedAt
 	}
 	t.exec(`INSERT INTO scheduled_tasks
-		(id, tenant_id, issue_id, creator_user_id, agent_id, name, prompt, schedule, timezone,
+		(id, tenant_id, issue_id, creator_user_id, agent_id, name, prompt, model, schedule, timezone,
 		 revision, version, enabled, enabled_at, disabled_reason,
 		 unattended_policy, unattended_consented_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,1,$10,$11,NULL,$12,$13)`,
-		id, r.TenantID, issueID, uid, agentID, name, prompt, jsonText(scheduleDoc), timezone,
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,1,$11,$12,NULL,$13,$14)`,
+		id, r.TenantID, issueID, uid, agentID, name, prompt, nilIfEmpty(model), jsonText(scheduleDoc), timezone,
 		enabled, enabledAt, unattendedPolicyCloud, consentedAt)
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1", id)
 	return scheduledTaskOut(task)
@@ -137,6 +142,10 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 		prompt = body.S("prompt")
 		require(prompt != "", 400, "invalid_request")
 	}
+	model := task.S("model")
+	if body["model"] != nil {
+		model = body.S("model")
+	}
 	agentID := task.S("agentId")
 	if body["agentId"] != nil {
 		agentID = body.S("agentId")
@@ -157,7 +166,8 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 		scheduleDoc = doc
 	}
 	revision := task.N("revision")
-	contentChanged := prompt != task.S("prompt") || agentID != task.S("agentId") ||
+	contentChanged := prompt != task.S("prompt") || model != task.S("model") ||
+		agentID != task.S("agentId") ||
 		timezone != task.S("timezone") || scheduleDocJSONChanged(scheduleDoc, task["schedule"])
 	if contentChanged {
 		revision = task.N("revision") + 1
@@ -175,10 +185,10 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 	require(creatorModelReady(t, uid, agent.S("pluginId")), 409, "model_unavailable")
 
 	updated := t.execRows(`UPDATE scheduled_tasks
-		SET name=$1, prompt=$2, agent_id=$3, schedule=$4, timezone=$5,
-		    revision=$6, version=version+1, updated_at=now()
-		WHERE id=$7 AND tenant_id=$8 AND creator_user_id=$9 AND deleted_at IS NULL
-		  AND version=$10`, name, prompt, agentID, jsonText(scheduleDoc), timezone,
+		SET name=$1, prompt=$2, model=$3, agent_id=$4, schedule=$5, timezone=$6,
+		    revision=$7, version=version+1, updated_at=now()
+		WHERE id=$8 AND tenant_id=$9 AND creator_user_id=$10 AND deleted_at IS NULL
+		  AND version=$11`, name, prompt, nilIfEmpty(model), agentID, jsonText(scheduleDoc), timezone,
 		revision, task.S("id"), r.TenantID, uid, body.N("version"))
 	require(updated == 1, 409, "version_conflict")
 	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
@@ -217,10 +227,20 @@ func jsonChanged(left, right Object) bool {
 
 // scheduledTaskEnable turns the task on (POST .../enable). The ADR's enable-time checks run here —
 // the same table an admission would run, minus the parts that need a due point — and a failure
-// answers with its mapped reason so the form can explain what is missing (D5).
+// answers with its mapped reason so the form can explain what is missing (D5). After a consent
+// revocation the consent fact is cleared, so enabling again must carry a fresh explicit consent.
 func scheduledTaskEnable(t *transaction, r *PublicRequest, uid string) Object {
 	task := managedScheduledTask(t, r, uid)
-	require(task.S("unattendedPolicy") == unattendedPolicyCloud, 409, "approval_policy_invalid")
+	policy := task.S("unattendedPolicy")
+	consentedAt := task["unattendedConsentedAt"]
+	if policy == "" {
+		// D5: 撤销同意后重新同意——consent 已清空，启用必须携带新的显式同意。
+		approval := r.Body.O("approval")
+		require(approval.S("policy") == unattendedPolicyCloud, 409, "approval_policy_invalid")
+		policy = unattendedPolicyCloud
+		consentedAt = dbNow(t)
+	}
+	require(policy == unattendedPolicyCloud, 409, "approval_policy_invalid")
 	creator := task.S("creatorUserId")
 	require(creatorMembershipActive(t, task.S("id"), r.TenantID, creator), 409, "target_unavailable")
 	issue := scheduledTaskIssue(t, r.TenantID, task.S("issueId"))
@@ -231,8 +251,9 @@ func scheduledTaskEnable(t *transaction, r *PublicRequest, uid string) Object {
 	require(creatorModelReady(t, creator, agent.S("pluginId")), 409, "model_unavailable")
 
 	t.exec(`UPDATE scheduled_tasks
-		SET enabled=true, enabled_at=now(), disabled_reason=NULL, updated_at=now()
-		WHERE id=$1 AND enabled=false`, task.S("id"))
+		SET enabled=true, enabled_at=now(), disabled_reason=NULL,
+		    unattended_policy=$2, unattended_consented_at=$3, updated_at=now()
+		WHERE id=$1 AND enabled=false`, task.S("id"), policy, consentedAt)
 	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
 }
 
@@ -311,7 +332,17 @@ func scheduledTaskHistory(t *transaction, r *PublicRequest) Object {
 				item["failureReason"] = "timeout"
 				break
 			}
-			item["outcome"] = status
+			// D6: project the run's own terminal state into the history vocabulary —
+			// completed→succeeded, failed/cancelled stay as they are, any non-terminal
+			// (queued/dispatched/running/deferred) shows as running.
+			switch status {
+			case "completed":
+				item["outcome"] = "succeeded"
+			case "failed", "cancelled":
+				item["outcome"] = status
+			default:
+				item["outcome"] = "running"
+			}
 			if entry["runFailureReason"] != nil {
 				item["failureReason"] = entry["runFailureReason"]
 			}
