@@ -40,6 +40,7 @@ func parseResidual(args []string) (core.ResidualManagementRequest, error) {
 	flags.IntVar(&request.Limit, "limit", 100, "page size")
 	flags.StringVar(&request.After, "after", "", "page cursor")
 	flags.BoolVar(&request.ImpactConfirmed, "impact-confirmed", false, "confirm termination impact")
+	flags.BoolVar(&request.AllowMissingDeleteOperation, "allow-missing-delete-operation", false, "explicitly select a D8 Run with no historical delete operation")
 	flags.BoolVar(&request.DataDeleteConfirmed, "data-delete-confirmed", false, "confirm permanent data deletion")
 	flags.BoolVar(&request.ResponsibilityTransferred, "responsibility-transferred", false, "accept remaining external responsibility")
 	flags.StringVar(&request.EvidenceNote, "evidence-note", "", "external disposition explanation")
@@ -74,6 +75,9 @@ func parseResidual(args []string) (core.ResidualManagementRequest, error) {
 		if (request.RunID == "" && request.WorkspaceID == "") || !request.ImpactConfirmed {
 			return request, invalidArguments()
 		}
+		if request.AllowMissingDeleteOperation && (request.RunID == "" || request.WorkspaceID == "" || request.OperationID != "") {
+			return request, invalidArguments()
+		}
 	case "delete-data":
 		request.Action = core.ResidualDeleteData
 		if request.IntentID == "" || !request.DataDeleteConfirmed {
@@ -101,7 +105,7 @@ func residualFlags(action string) map[string]bool {
 	case "get":
 		names = []string{"project-id", "run-id", "workspace-id", "operation-id", "reclaim-id", "intent-id"}
 	case "terminate":
-		names = []string{"project-id", "run-id", "workspace-id", "operation-id", "reason", "key", "operator-label", "impact-confirmed"}
+		names = []string{"project-id", "run-id", "workspace-id", "operation-id", "reason", "key", "operator-label", "impact-confirmed", "allow-missing-delete-operation"}
 	case "delete-data":
 		names = []string{"intent-id", "reason", "key", "operator-label", "data-delete-confirmed"}
 	case "confirm-external":

@@ -6,7 +6,7 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 
 ## 文件索引
 
-当前共 71 个 SQL 文件。
+当前共 72 个 SQL 文件。
 
 | SQL 文件 | schema 变化 |
 |---|---|
@@ -81,10 +81,13 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | 产物大小下界改为零，允许空文件登记 |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | 保存未列明的拒绝数和遍历截断事实 |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | 工作流节点工作项、执行与结束请求的尝试序号 |
+| [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | D8 无原删除操作的显式来源标记与互斥约束 |
 
 0050 不复制个人连接或 Key，不回填历史运行；清除配置保留 revision，运行选项独立于共享运行输入保存。
 
 ## 不可变性与升级
+
+0070 给受控回收意图增加默认关闭的 `legacy_delete_operation_missing`。有原删除操作的 D8 和残留账本意图保持原值；仅明确选择无删除操作变体时才可记录缺失，不回填或修改 Run 历史。空库、前一版升级、重复迁移和矛盾来源拒绝由 `TestControlledD8MissingDeleteMigrationUpgradesAndRepeats` 覆盖。
 
 - 已应用 SQL 不改内容、不改文件名；更正用新的前向迁移。重复应用跳过 checksum 相同的已应用文件。
 - `CheckSchema` 只读检查缺失迁移、checksum 不符和未知数据库版本，发现不一致拒绝启动。生产服务不执行 DDL，运维用 [cloudctl](../../../cmd/cloudctl/README.md) 应用迁移。

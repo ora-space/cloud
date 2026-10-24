@@ -91,7 +91,7 @@ Workspaces continue to return 404.
 | Command | Scope and required confirmation |
 |---|---|
 | `list` / `get` | Tenant is required; intersect Project, Run, Workspace, operation or reclaim filters; details expose only operational state, targets, audit and evidence |
-| `terminate` | One exact Run/Workspace, reason, idempotency key and explicit impact confirmation; D8 also requires the original failed delete operation; retains data by default |
+| `terminate` | One exact Run/Workspace, reason, idempotency key and explicit impact confirmation; D8 requires its original failed deletion or explicit missing-delete selection; retains data by default |
 | `delete-data` | One root intent with successful physical termination and retained disposition, separate reason/key and data-deletion confirmation; no bare-Workspace deletion |
 | `confirm-external` | One existing unfinished root or dependent intent, reason/key, explanation, external fact references for every unfinished target and explicit acceptance of remaining responsibility |
 
@@ -122,10 +122,15 @@ It transfers responsibility for an existing intent and stops new permits. It doe
 permit same-volume reuse or authorize data deletion. Missing intents, succeeded intents, empty explanations and missing targets are rejected.
 Late physical facts remain evidence; they cannot silently convert external disposition into system-proven success.
 
-D8 takeover requires the original done Run, retained Workspace binding and failed/node_unavailable delete operation; it never backfills the D4/D5
+D8 with a historical deletion requires the original done Run, retained Workspace binding and failed/node_unavailable delete operation; it never backfills the D4/D5
 ledger. Without a ledger, the root owns targets, evidence, conflicts and the new delete-operation binding. The old failed operation, Run terminal
 and settlement remain unchanged. Ordinary scans do not create controlled D8 responsibility. Missing ledger rows or retained disposition cannot
 bypass admission, Project-operation or data-reuse guards.
+
+When D8 finished before a deletion was declared, the deployment operator must select the variant with exact Run/Workspace IDs and explicit
+`--allow-missing-delete-operation`. Only an original `done/workspace_unavailable` Run with a delivery conclusion, no deletion history,
+the retained binding and closed admission qualifies. Root and dependent deletion intents retain `legacyDeleteOperationMissing` provenance.
+The default command does not expand admission, invent an original operation, or rewrite the business outcome.
 
 ## Existing fact intake and conflicts
 

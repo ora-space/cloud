@@ -42,10 +42,13 @@ cloudctl -config <path> residual get --tenant-id <tenant> --intent-id <intent>
 
 Each `list` item, actual residual ledger rows from `get`, and the resource output when present expose persisted `stop_evidence` as `stopEvidence`; the resource is returned only when no intent is selected. Without evidence the field is an empty object `{}`; legacy D8 list items without a ledger also return `{}`, while a synthetic legacy D8 residual in `get` may omit the field. An existing unconfirmed-stop record retains `kind=stop_unconfirmed`, `source=cloud`, `observedAt`, and the original-identity `executionId`. This field is display-only: it grants no termination, deletion, or ledger-clearance authority and does not change reclamation responsibility.
 
-Termination and data deletion are separate commands, each requiring a reason, idempotency key, and affirmative confirmation. `terminate` requires at least a Run or Workspace; all additional IDs must identify the same original resource. D8 also requires the original failed delete `--operation-id`. Project/tenant selectors cannot authorize batch writes.
+Termination and data deletion are separate commands, each requiring a reason, idempotency key, and affirmative confirmation. `terminate` requires at least a Run or Workspace; all additional IDs must identify the same original resource. D8 with a historical deletion requires the original failed delete `--operation-id`. Project/tenant selectors cannot authorize batch writes.
+
+A D8 residual that reached `done/workspace_unavailable` before any deletion was created additionally requires explicit `--allow-missing-delete-operation`, both exact `--run-id` and `--workspace-id`, and no `--operation-id`. It cannot select a live Run, an absent delivery conclusion, any deletion history, open admission, or an existing residual ledger. The intent records `legacyDeleteOperationMissing=true` without inventing an operation; the default command still rejects this variant. Termination, fencing, and separately confirmed data deletion retain their evidence requirements.
 
 ```sh
 cloudctl -config <path> residual terminate --tenant-id <tenant> --run-id <run> --workspace-id <workspace> --reason 'operator abandoned execution' --key <terminate-key> --impact-confirmed
+cloudctl -config <path> residual terminate --tenant-id <tenant> --run-id <run> --workspace-id <workspace> --allow-missing-delete-operation --reason 'verified recovery copies retained' --key <missing-delete-key> --impact-confirmed
 cloudctl -config <path> residual delete-data --tenant-id <tenant> --intent-id <root-intent> --reason 'delete retained data' --key <new-delete-key> --data-delete-confirmed
 ```
 

@@ -42,10 +42,13 @@ cloudctl -config <path> residual get --tenant-id <tenant> --intent-id <intent>
 
 `list` 的每个条目、`get` 的实际 residual 账本行，以及存在时的资源输出都通过 `stopEvidence` 展示持久化的 `stop_evidence`；资源仅在未选择意图时返回。没有证据时输出空对象 `{}`；没有账本的历史 D8 列表条目也输出 `{}`，但 `get` 中合成的历史 D8 residual 可能省略该字段。已有停止未确认记录会保留 `kind=stop_unconfirmed`、`source=cloud`、`observedAt` 和原身份的 `executionId`。此字段仅供查看，不授予终止、删除或清账权限，也不改变回收责任。
 
-终止和删数据是两次独立命令，各自需要 reason、幂等 key 和真实确认。`terminate` 至少指定 Run 或 Workspace；提供的其他 ID 必须属于同一个原资源。D8 还必须提供原 failed delete 的 `--operation-id`。Project/tenant 不能作为批量写入范围。
+终止和删数据是两次独立命令，各自需要 reason、幂等 key 和真实确认。`terminate` 至少指定 Run 或 Workspace；提供的其他 ID 必须属于同一个原资源。D8 有历史删除操作时必须提供原 failed delete 的 `--operation-id`。Project/tenant 不能作为批量写入范围。
+
+对已按 D8 达到 `done/workspace_unavailable`、却从未创建任何删除操作的残留，必须额外显式选择 `--allow-missing-delete-operation`，同时提供精确的 `--run-id` 和 `--workspace-id`，且不提供 `--operation-id`。此选择不能用于仍在运行、没有交付结论、有删除历史、admission 开放或已有残留账本的资源。意图记录 `legacyDeleteOperationMissing=true`，不补造历史 operation；默认命令仍拒绝这一变体。后续终止、围栏和单独删数据的证据要求相同。
 
 ```sh
 cloudctl -config <path> residual terminate --tenant-id <tenant> --run-id <run> --workspace-id <workspace> --reason 'operator abandoned execution' --key <terminate-key> --impact-confirmed
+cloudctl -config <path> residual terminate --tenant-id <tenant> --run-id <run> --workspace-id <workspace> --allow-missing-delete-operation --reason 'verified recovery copies retained' --key <missing-delete-key> --impact-confirmed
 cloudctl -config <path> residual delete-data --tenant-id <tenant> --intent-id <root-intent> --reason 'delete retained data' --key <new-delete-key> --data-delete-confirmed
 ```
 

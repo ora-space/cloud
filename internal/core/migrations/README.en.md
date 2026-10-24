@@ -6,7 +6,7 @@ SQL is embedded in the binary through `embed.FS` in `core/store.go`. `Store.Migr
 
 ## File index
 
-There are currently 71 SQL files.
+There are currently 72 SQL files.
 
 | SQL file | Schema change |
 |---|---|
@@ -81,10 +81,13 @@ There are currently 71 SQL files.
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | Accept zero-length artifacts in verified registration |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | Persist omitted rejection counts and walk truncation facts |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | Per-attempt identity for workflow node work items, executions and end requests |
+| [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | Explicit D8 missing-delete provenance and mutually exclusive identity constraints |
 
 0050 copies no personal connection or key and backfills no historical run. Clearing configuration retains its revision; run options are stored separately from shared run input.
 
 ## Immutability and upgrades
+
+0070 adds the default-off `legacy_delete_operation_missing` marker to controlled reclamation intents. Existing D8 intents with original deletion identities and residual-ledger intents retain their values. Only an explicitly selected missing-delete variant records the absence; no Run history is backfilled or changed. Fresh schemas, preceding-schema upgrades, repeated migration, and rejection of contradictory provenance are covered by `TestControlledD8MissingDeleteMigrationUpgradesAndRepeats`.
 
 - Never edit or rename applied SQL; corrections use new forward migrations. Repeated application skips applied files with matching checksums.
 - `CheckSchema` only reads and rejects missing migrations, checksum mismatches and unknown database versions. Production services do not run DDL; operators migrate through [cloudctl](../../../cmd/cloudctl/README.en.md).

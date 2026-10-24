@@ -41,17 +41,21 @@ func listManagedResiduals(t *transaction, r *ResidualManagementRequest) Object {
 	items := t.list(`WITH resources AS (
  SELECT ar.tenant_id,ar.project_id,ar.run_id,ar.workspace_id,ar.reclaim_id,ar.reclaim_state AS state,
  ar.disposition,ar.reclaim_operation_id AS operation_id,NULL::uuid AS legacy_operation_id,'residual_ledger'::text AS source,
- ar.reclaim_conflicted_at AS conflicted_at,ar.reclaim_checked_at AS checked_at,ar.stop_evidence
+ ar.reclaim_conflicted_at AS conflicted_at,ar.reclaim_checked_at AS checked_at,ar.stop_evidence,false AS legacy_delete_operation_missing
  FROM agent_run_residuals ar
  UNION ALL
  SELECT w.tenant_id,w.project_id,i.id,w.id,ri.reclaim_id,COALESCE(ri.state,'reconciling'),COALESCE(child.disposition,ri.disposition),
- ri.delete_operation_id,o.id,'legacy_d8',ri.conflicted_at,ri.last_checked_at,'{}'::jsonb
+ ri.delete_operation_id,o.id,'legacy_d8',ri.conflicted_at,ri.last_checked_at,'{}'::jsonb,
+ COALESCE(ri.legacy_delete_operation_missing,o.id IS NULL)
  FROM workspaces w JOIN issue_runs i ON i.id=w.issue_run_id
- JOIN LATERAL (SELECT op.id FROM operations op WHERE op.workspace_id=w.id AND op.kind='delete_workspace'
+ LEFT JOIN LATERAL (SELECT op.id FROM operations op WHERE op.workspace_id=w.id AND op.kind='delete_workspace'
  AND op.state='failed' AND op.error_code='node_unavailable' ORDER BY op.created_at,op.id LIMIT 1) o ON true
  LEFT JOIN agent_run_reclamation_intents ri ON ri.workspace_id=w.id AND ri.root_intent_id IS NULL
  LEFT JOIN agent_run_reclamation_intents child ON child.root_intent_id=ri.id AND child.state='succeeded'
  WHERE i.phase='done' AND i.executor_type='agent' AND w.kind='isolated'
+ AND (o.id IS NOT NULL OR ri.legacy_delete_operation_missing OR
+  (i.failure_reason='workspace_unavailable' AND w.deleted_at IS NULL AND NOT EXISTS(
+   SELECT 1 FROM operations previous WHERE previous.workspace_id=w.id AND previous.kind='delete_workspace')))
  AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.workspace_id=w.id)
  ) SELECT r.*,ri.id AS intent_id FROM resources r
  LEFT JOIN agent_run_reclamation_intents ri ON ri.workspace_id=r.workspace_id AND ri.root_intent_id IS NULL

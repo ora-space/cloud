@@ -74,7 +74,7 @@ Workspace 软删除并写 `cleared/released`，不改 Run 的 phase/status/resul
 | 命令 | 范围与必要确认 |
 |---|---|
 | `list` / `get` | tenant 必填；查询可按 Project、Run、Workspace、operation 或 reclaim 相交过滤，详情只返回运维所需状态、目标、审计与证据 |
-| `terminate` | 一个精确 Run/Workspace，reason、幂等键和显式影响确认；D8 还需原 failed delete operation 身份；默认保留数据 |
+| `terminate` | 一个精确 Run/Workspace，reason、幂等键和显式影响确认；D8 需原 failed delete operation 身份或明确的无删除记录选择；默认保留数据 |
 | `delete-data` | 一个已真实终止成功且 retained 的根意图，独立 reason、幂等键和数据删除确认；不能按裸 Workspace 发起 |
 | `confirm-external` | 一个已存在且未完成的根或从属意图，reason、幂等键、说明、每个未完成目标的外部事实引用及承担剩余责任的确认 |
 
@@ -102,7 +102,10 @@ Workspace 软删除并写 `cleared/released`，不改 Run 的 phase/status/resul
 停止该责任的新许可，不伪造 `terminated`、`lateEnsureFenced` 或 `removed`，也不据此开放同卷复用或授权删卷。
 没有意图、意图已 succeeded、说明为空或漏目标均拒绝；迟到物理事实继续留存，不能静默把外部处置改成系统证明。
 
-D8 只按原 done Run、保留的 Workspace 绑定及 failed/node_unavailable delete operation 接管，不回填 D4/D5 账本。
+D8 有原删除操作时，按原 done Run、保留的 Workspace 绑定及 failed/node_unavailable delete operation 接管，不回填 D4/D5 账本。
+若 D8 在删除声明建立前结束，部署运维须以精确 Run/Workspace 和显式 `--allow-missing-delete-operation` 选择无删除操作变体。
+仅原 `done/workspace_unavailable`、已有交付结论、没有任何删除历史、保留原绑定且 admission 关闭的资源可受理；意图与从属删除保留
+`legacyDeleteOperationMissing` 来源标记。默认命令不扩展准入，不补造原 operation，原业务结论仍不变。
 无账本时根意图持有目标、证据、冲突和删除 operation 绑定；原 failed operation、Run 终态与结算保持不变。
 普通扫描不会自动为 D8 创建受控责任；无账本或已 retained 也不能绕过 admission、Project 操作和数据复用保护。
 

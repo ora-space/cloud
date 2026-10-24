@@ -49,6 +49,11 @@ func TestCloudctlResidualManagement(t *testing.T) {
 			want: core.ResidualManagementRequest{Action: core.ResidualDeleteData, TenantID: "tenant", IntentID: "root", Reason: "delete retained data", Key: "delete-key", DataDeleteConfirmed: true, Limit: 100, ExternalFacts: map[string]string{}},
 		},
 		{
+			name: "explicit D8 without a historical delete",
+			args: []string{"terminate", "--tenant-id", "tenant", "--run-id", "run", "--workspace-id", "workspace", "--allow-missing-delete-operation", "--reason", "verified recovery copies", "--key", "missing-delete", "--impact-confirmed"},
+			want: core.ResidualManagementRequest{Action: core.ResidualTerminate, TenantID: "tenant", RunID: "run", WorkspaceID: "workspace", AllowMissingDeleteOperation: true, Reason: "verified recovery copies", Key: "missing-delete", ImpactConfirmed: true, Limit: 100, ExternalFacts: map[string]string{}},
+		},
+		{
 			name: "external facts preserve exact references",
 			args: []string{"confirm-external", "--tenant-id", "tenant", "--intent-id", "unfinished", "--reason", "external disposal", "--key", "external-key", "--evidence-note", "host decommissioned", "--external-fact", "sandbox:original=ticket=123", "--external-fact", "data:workspace=ticket-456", "--responsibility-transferred"},
 			want: core.ResidualManagementRequest{Action: core.ResidualConfirmExternal, TenantID: "tenant", IntentID: "unfinished", Reason: "external disposal", Key: "external-key", EvidenceNote: "host decommissioned", ResponsibilityTransferred: true, Limit: 100, ExternalFacts: map[string]string{"sandbox:original": "ticket=123", "data:workspace": "ticket-456"}},
@@ -98,6 +103,8 @@ func TestCloudctlResidualRejectsUnsafeOrAmbiguousArguments(t *testing.T) {
 		terminate,
 		appendCopy(terminate, "--impact-confirmed=false"),
 		appendCopy(terminate, "--impact-confirmed", "--data-delete-confirmed"),
+		appendCopy(terminate, "--impact-confirmed", "--allow-missing-delete-operation"),
+		appendCopy(terminate, "--impact-confirmed", "--run-id", "run", "--allow-missing-delete-operation", "--operation-id", "old-delete"),
 		{"terminate", "--tenant-id", "tenant", "--project-id", "project", "--reason", "reason", "--key", "key", "--impact-confirmed"},
 		{"terminate", "--tenant-id", "tenant", "--run-id", "run", "--reason", " ", "--key", "key", "--impact-confirmed"},
 		{"terminate", "--tenant-id", "tenant", "--run-id", "run", "--reason", "reason", "--key", " ", "--impact-confirmed"},

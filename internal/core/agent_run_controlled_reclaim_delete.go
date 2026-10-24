@@ -16,8 +16,8 @@ func registerControlledDataDelete(t *transaction, r *ResidualManagementRequest, 
 	require(p.S("lifecycle") == "active" && w["deletedAt"] == nil && !w.B("admissionOpen"), 409, "resource_unavailable")
 	require(t.one("SELECT id FROM operations WHERE project_id=$1 AND state IN ('queued','running','retry_wait','blocked')", p.S("id")) == nil, 409, "resource_in_use")
 	id := newID()
-	t.exec(`INSERT INTO agent_run_reclamation_intents(id,root_intent_id,command_kind,source,tenant_id,project_id,run_id,workspace_id,runtime_generation,legacy_delete_operation_id,control_epoch,actor_subject,operator_label,reason,data_delete_confirmed)
- VALUES($1,$2,'delete_data',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true)`, id, root.S("id"), root.S("source"), root.S("tenantId"), root.S("projectId"), root.S("runId"), root.S("workspaceId"), root.N("runtimeGeneration"), nullable(root.S("legacyDeleteOperationId")), root.N("controlEpoch"), actor, r.OperatorLabel, r.Reason)
+	t.exec(`INSERT INTO agent_run_reclamation_intents(id,root_intent_id,command_kind,source,tenant_id,project_id,run_id,workspace_id,runtime_generation,legacy_delete_operation_id,control_epoch,actor_subject,operator_label,reason,data_delete_confirmed,legacy_delete_operation_missing)
+ VALUES($1,$2,'delete_data',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true,$14)`, id, root.S("id"), root.S("source"), root.S("tenantId"), root.S("projectId"), root.S("runId"), root.S("workspaceId"), root.N("runtimeGeneration"), nullable(root.S("legacyDeleteOperationId")), root.N("controlEpoch"), actor, r.OperatorLabel, r.Reason, root.B("legacyDeleteOperationMissing"))
 	snapshot := Object{}
 	for key, value := range w {
 		if key != "issueRunId" {

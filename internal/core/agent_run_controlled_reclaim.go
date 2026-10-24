@@ -26,8 +26,10 @@ type ResidualManagementRequest struct {
 	Key, Reason, OperatorLabel, After                                         string
 	Limit                                                                     int
 	ImpactConfirmed, DataDeleteConfirmed, ResponsibilityTransferred           bool
-	EvidenceNote                                                              string
-	ExternalFacts                                                             map[string]string
+	// AllowMissingDeleteOperation explicitly selects the D8 variant with no historical delete.
+	AllowMissingDeleteOperation bool
+	EvidenceNote                string
+	ExternalFacts               map[string]string
 }
 
 // ManageResidual uses the deployment's database credential, independently of tenant identities.
@@ -54,11 +56,18 @@ func manageResidualCommand(t *transaction, r *ResidualManagementRequest) Object 
 		return getManagedResidual(t, r)
 	}
 	require(r.Action == ResidualTerminate || r.Action == ResidualDeleteData || r.Action == ResidualConfirmExternal, 400, "invalid_residual_action")
+	if r.AllowMissingDeleteOperation {
+		require(r.Action == ResidualTerminate && r.RunID != "" && r.WorkspaceID != "" && r.OperationID == "", 400, "invalid_residual_scope")
+	}
 	require(r.Key != "" && len(r.Key) <= 200, 400, "idempotency_key_required")
 	r.Reason = validText(r.Reason, 2000)
 	require(len(r.OperatorLabel) <= 200, 400, "invalid_operator_label")
 	actor := t.one("SELECT session_user::text AS actor").S("actor")
 	input := Object{"action": string(r.Action), "tenantId": r.TenantID, "projectId": r.ProjectID, "runId": r.RunID, "workspaceId": r.WorkspaceID, "operationId": r.OperationID, "reclaimId": r.ReclaimID, "intentId": r.IntentID, "reason": r.Reason, "impactConfirmed": r.ImpactConfirmed, "dataDeleteConfirmed": r.DataDeleteConfirmed, "responsibilityTransferred": r.ResponsibilityTransferred, "evidenceNote": r.EvidenceNote, "externalFacts": r.ExternalFacts, "operatorLabel": r.OperatorLabel}
+	if r.AllowMissingDeleteOperation {
+		// Omit the default so receipts written before this option keep their canonical input.
+		input["allowMissingDeleteOperation"] = true
+	}
 	if old := t.one("SELECT * FROM agent_run_reclamation_command_receipts WHERE tenant_id=$1 AND idempotency_key=$2", r.TenantID, r.Key); old != nil {
 		if jsonText(old.O("commandInput")) != jsonText(input) {
 			event := Object{"kind": "idempotency_conflict", "actorSubject": actor, "incoming": input, "at": controlledNow(t)}
@@ -99,18 +108,29 @@ func registerControlledTermination(t *transaction, r *ResidualManagementRequest,
 	if root := controlledRootForWorkspace(t, w.S("id")); root != nil {
 		require(controlledRootRow(t, root)["reclaimConflictedAt"] == nil, 409, "residual_fact_conflict")
 		require(r.OperationID == "" || r.OperationID == root.S("legacyDeleteOperationId"), 409, "residual_identity_conflict")
+		require(r.AllowMissingDeleteOperation == root.B("legacyDeleteOperationMissing"), 409, "residual_identity_conflict")
 		return root
 	}
 	row := t.one("SELECT * FROM agent_run_residuals WHERE run_id=$1", w.S("issueRunId"))
 	source := "residual_ledger"
 	if row == nil {
 		source = "legacy_d8"
-		old := t.one(`SELECT o.* FROM operations o JOIN issue_runs i ON i.id=$2 WHERE o.id=$1 AND o.tenant_id=$3
+		if r.AllowMissingDeleteOperation {
+			// D8 may finish before any delete was declared. Only its original closed Run and
+			// exact retained Workspace can select this explicitly acknowledged variant.
+			require(t.one(`SELECT id FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3
+ AND executor_type='agent' AND phase='done' AND failure_reason='workspace_unavailable'
+ AND status IN ('completed','failed','cancelled')
+ AND result->>'deliveryState' IN ('saved','unchanged','failed','skipped')`, w.S("issueRunId"), r.TenantID, w.S("id")) != nil, 409, "legacy_residual_identity_required")
+			require(t.one("SELECT id FROM operations WHERE workspace_id=$1 AND kind='delete_workspace' LIMIT 1", w.S("id")) == nil, 409, "legacy_residual_identity_required")
+		} else {
+			old := t.one(`SELECT o.* FROM operations o JOIN issue_runs i ON i.id=$2 WHERE o.id=$1 AND o.tenant_id=$3
  AND o.workspace_id=$4 AND o.kind='delete_workspace' AND o.state='failed' AND o.error_code='node_unavailable' AND i.phase='done'`, nullable(r.OperationID), w.S("issueRunId"), r.TenantID, w.S("id"))
-		require(old != nil, 409, "legacy_residual_identity_required")
+			require(old != nil, 409, "legacy_residual_identity_required")
+		}
 		row = Object{"runId": w.S("issueRunId"), "tenantId": r.TenantID, "projectId": w.S("projectId"), "workspaceId": w.S("id"), "runtimeGeneration": w.N("runtimeGeneration"), "responsibility": Object{}, "reclaimTargets": []Object{}}
 	} else {
-		require(r.OperationID == "", 400, "invalid_residual_scope")
+		require(r.OperationID == "" && !r.AllowMissingDeleteOperation, 400, "invalid_residual_scope")
 		require(row.S("reclaimState") == "reconciling", 409, "residual_mode_conflict")
 		require(row["reclaimConflictedAt"] == nil, 409, "residual_fact_conflict")
 	}
@@ -120,8 +140,8 @@ func registerControlledTermination(t *transaction, r *ResidualManagementRequest,
 	requireNoForceStop(t, w.S("id"))
 	id, reclaim := newID(), newID()
 	c := runtimeControl(t, w.S("id"))
-	t.exec(`INSERT INTO agent_run_reclamation_intents(id,command_kind,source,tenant_id,project_id,run_id,workspace_id,runtime_generation,reclaim_id,legacy_delete_operation_id,control_epoch,actor_subject,operator_label,reason,impact_confirmed)
- VALUES($1,'terminate',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true)`, id, source, r.TenantID, p.S("id"), row.S("runId"), w.S("id"), row.N("runtimeGeneration"), reclaim, nullable(r.OperationID), c.N("controlEpoch"), actor, r.OperatorLabel, r.Reason)
+	t.exec(`INSERT INTO agent_run_reclamation_intents(id,command_kind,source,tenant_id,project_id,run_id,workspace_id,runtime_generation,reclaim_id,legacy_delete_operation_id,control_epoch,actor_subject,operator_label,reason,impact_confirmed,legacy_delete_operation_missing)
+ VALUES($1,'terminate',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true,$14)`, id, source, r.TenantID, p.S("id"), row.S("runId"), w.S("id"), row.N("runtimeGeneration"), reclaim, nullable(r.OperationID), c.N("controlEpoch"), actor, r.OperatorLabel, r.Reason, r.AllowMissingDeleteOperation)
 	if source == "residual_ledger" {
 		claimed := claimResidualReclamation(t, row.S("runId"), "controlled", Object{"kind": "controlled_intent", "intentId": id, "source": "cloudctl"})
 		require(claimed.B("claimed"), 409, "resource_in_use")
@@ -134,7 +154,7 @@ func registerControlledTermination(t *transaction, r *ResidualManagementRequest,
 	t.exec("UPDATE agent_run_reclamation_intents SET control_epoch=(SELECT control_epoch FROM runtime_controls WHERE workspace_id=$2) WHERE id=$1", id, w.S("id"))
 	root := t.one("SELECT * FROM agent_run_reclamation_intents WHERE id=$1", id)
 	refreshControlledTargets(t, root)
-	controlledAudit(t, id, "registered", actor, Object{"impactConfirmed": true, "operatorLabel": r.OperatorLabel, "source": source})
+	controlledAudit(t, id, "registered", actor, Object{"impactConfirmed": true, "operatorLabel": r.OperatorLabel, "source": source, "legacyDeleteOperationMissing": r.AllowMissingDeleteOperation})
 	return t.one("SELECT * FROM agent_run_reclamation_intents WHERE id=$1", id)
 }
 
