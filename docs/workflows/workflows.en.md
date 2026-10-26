@@ -128,8 +128,17 @@ and `checkpoint`; an unknown field is `400 unknown_field` and an invalid value i
 Authorization is cancellation's: on a bound run only the initiator and the tenant's administrators may call it, and
 any other member answers `403 workflow_run_resume_forbidden`. Every valid request answers
 `501 workflow_run_resume_unavailable` and writes nothing — no run state and no idempotency record — so a repeat is
-the same refusal rather than a replay of a recorded success. A failed run's Workspace is already declared deleted,
-leaving `keep` nothing to resume onto, so the frontend offers no resume entry point.
+the same refusal rather than a replay of a recorded success. Retaining an unsaved failed Workspace does not enable resume, so the frontend offers no resume entry point.
+
+## Delivery and history archives
+
+The execution status, `delivery` and `workspaceRelease` are independent facts in both list and detail responses. A terminal run first revokes session writes and waits for every registered writer to stop. Runs with no dispatched session record `not_required` without inventing a Revision. Other runs save one whole-run Revision before normal release, including failed and cancelled executions; saving never changes the execution conclusion.
+
+The fixed delivery input includes every node attempt, original execution identity, shared checkout, history key and immutable delivery ref. The Node freezes original session bytes and a `workflow_manifest_v1` index. Cloud verifies the ref, manifest inventory and every object's size and SHA-256 outside SQL, then commits the Revision, receipt and delivery conclusion in one short transaction. Missing history, malformed manifests and failed uploads retain the unsaved Workspace.
+
+Retries have independent work items and refs but never create another logical result. The existing delivery limits end in `failed` with a retained Workspace; unconfigured storage or Git Server records `skipped` and also retains it. Only `released` means physical deletion was observed. Targets without the `workflow_history_delivery` handshake capability wait for Node/Controller upgrades before receiving this input.
+
+Workspace directories include same-Project workflow Workspaces and frozen run identity, without granting access. Task-invoked and standalone runs initialize from the Project snapshot; subsequent nodes and retries reuse this checkout and never restore a task predecessor. Node history UI and cross-task handoff are separate concerns. The [governing ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/workflow/20261025-run-owned-git-delivery-and-history.md) remains `approved` until implementation and real multi-node acceptance are complete.
 
 ## Scheduling
 
@@ -174,10 +183,7 @@ seconds):
   (a retry's new row re-times), using only the database clock — replay, restart and replica passes never reset it.
   Results win: a committed result settles by its own reason, an unreachable Node is still `node_unavailable`, and only
   when neither holds does the window apply. A result that arrives after the window already settled the run is kept on the
-  execution row and never rewrites the terminal run. Once the run reaches a terminal state, Cloud declares the deletion
-  of its Workspace. In the first phase this session has no Git Server
-  access (reads and writes get `403`), and its Workspace is not listed in an IssueRun session's Workspace directory;
-  see [Git Server](../repositories/git-server.en.md).
+  execution row and never rewrites the terminal run. Terminal runs enter the independent save barrier before normal release; see the delivery section above.
 - **Agent-node retry is decided by the `agentConfig.retry` frozen on the node.** A session retries only when it ends
   as `agent_failed`, the policy is enabled and the budget is not spent: the budget is `maxRetries + 1` attempts
   (`maxRetries` ranges 0–5 and defaults to 2), and the next attempt starts after `initialDelaySeconds × 2^(n-1)`
@@ -186,15 +192,14 @@ seconds):
   `output.reason`, records `retryAt` from the database clock and clears `finishedAt`; it keeps the run's single
   session slot until `retryAt` arrives. The new attempt has its own execution identity (`workflow_node_attempt`), so
   the previous attempt's result and end request are never reused. A spent budget, a disabled policy or a reason
-  outside `agent_failed` fails the node with the last reason, and the run reaches a terminal state and releases its
-  Workspace. At publish, `agentConfig.retry` must be a complete object; absent or `null` means the default policy,
+  outside `agent_failed` fails the node with the last reason, and the run reaches a terminal state and enters the save barrier. At publish, `agentConfig.retry` must be a complete object; absent or `null` means the default policy,
   and unknown keys are ignored. A frozen historical snapshot is never re-gated, and a policy that cannot be parsed
   runs as the default.
 - **A workflow session is single-turn, and Cloud decides when it ends.** Once the initial turn's `turnEnded`
   receipt arrives (with a `stop_reason` other than `cancelled`), the scheduler ends the session through the existing
   `EndSession` command relay; the session result the Node reports remains the node's only terminal evidence. If the
   session has no terminal state within the confirmation window after the end request was released, the node fails
-  as `session_end_deadline_exceeded`, the run reaches a terminal state and its Workspace is released — no run stays
+  as `session_end_deadline_exceeded`, the run reaches a terminal state and enters the save barrier — no run stays
   `running` forever.
 - **A cancellation request is settled by the scheduler, within a bound.** Once the request is recorded, a `pending`
   run no longer starts — it stamps no `started_at`, validates no graph, creates no Workspace and settles `cancelled`
@@ -203,20 +208,9 @@ seconds):
   yet the scheduler reuses that node's existing end request, or releases `end_session{cancelled}` when there is none,
   and the wait stays bounded by `issue_runs.agent_end_confirm_timeout`, after which the node and the run settle
   `cancelled`. A Node that can no longer report is a cancellation too, not `node_unavailable`. Every terminal path
-  declares the run Workspace's deletion, and a result arriving after the run is terminal is kept on the execution row
+  preserves the run's results before normal Workspace release, and a result arriving after the run is terminal is kept on the execution row
   without rewriting the run.
-- **A Workspace release is an independent fact after the terminal state, and it is bounded.** In the same transaction
-  that settles the run `succeeded`/`failed`/`cancelled`, Cloud records the release state on the run row and declares the
-  run Workspace's deletion: a run that never had a Workspace records `not_required`, every other run records
-  `releasing`. The transaction that writes the delete operation `succeeded` and soft-deletes the Workspace records
-  `released`, with that instant as the release fact; a Workspace deleted by another path — a project deletion, for
-  example — is healed to `released` from the Workspace's own `deleted_at` instead of staying `releasing`. When the
-  Workspace still holds a live sandbox whose Node has sent no heartbeat for longer than
-  `issue_runs.delivery_unreachable_after` (30 minutes by default; an unconfigured window never gives up), the scheduler
-  gives up the release: the unfinished delete operation fails as `node_unavailable`, the run records `abandoned` with
-  its reason, the Workspace row stays readable, and no release instant is written. **Only `released` means Cloud
-  observed the Workspace deleted**; `abandoned` is never reported as a successful release and is never re-declared or
-  retried by a later pass. Replayed delete completions and repeated reconciliation passes are no-ops.
+- **Workspace release follows verified delivery.** Unsaved Workspaces are retained; execution, delivery and actual release remain independent facts, as described above.
 
 Development fixtures (`collaboration.development_fixtures`) install a deterministic run simulator that fills in the
 execution trace at run creation and says in its output that nothing really ran; production never installs it.

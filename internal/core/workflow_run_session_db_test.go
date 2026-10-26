@@ -574,8 +574,17 @@ func assertRunWorkspaceReleased(t *testing.T, store *Store, runID string) {
 		WHERE w.workflow_run_id=$1 AND o.kind='delete_workspace'`, runID).Scan(&deletes); err != nil {
 		t.Fatalf("count delete operations: %v", err)
 	}
-	if deletes != 1 {
-		t.Fatalf("%d workspace deletions declared for a terminal run; want 1", deletes)
+	var attempts int
+	var delivery, release string
+	if err := store.Pool.QueryRow("SELECT delivery_state,workspace_release_state,(SELECT count(*) FROM node_executions WHERE operation_id=$1 AND kind='agent_session') FROM workflow_runs WHERE id=$1", runID).Scan(&delivery, &release, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts == 0 {
+		if deletes != 1 || delivery != "not_required" {
+			t.Fatalf("no-session cleanup: deletes=%d delivery=%s", deletes, delivery)
+		}
+	} else if deletes != 0 || (delivery != "pending" && delivery != "skipped" && delivery != "failed") || (release != "pending" && release != "abandoned") {
+		t.Fatalf("unsaved attempts must retain their workspace: deletes=%d delivery=%s release=%s", deletes, delivery, release)
 	}
 }
 
@@ -1332,7 +1341,7 @@ func TestWorkflowSessionResultAfterTheNodeSettledIsKept(t *testing.T) {
 		t.Fatalf("the late result moved the run to %q error %q; want %q error %q", afterStatus, afterErr, status, runErr)
 	}
 	if afterVersion != version {
-		t.Fatalf("the late result bumped the version to %d; want %d", afterVersion, version)
+		t.Fatalf("a late stop fact must not change an abandoned delivery: version=%d want=%d", afterVersion, version)
 	}
 	if jsonText(afterStates) != jsonText(states) {
 		t.Fatalf("the late result rewrote the node states:\n got %v\nwant %v", afterStates, states)

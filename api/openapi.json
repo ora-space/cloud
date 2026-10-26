@@ -5951,6 +5951,48 @@
             "nullable": true,
             "type": "object"
           },
+          "delivery": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "revisionId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "settledAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "delivering",
+                  "saved",
+                  "unchanged",
+                  "failed",
+                  "skipped",
+                  "not_required"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "error",
+              "revisionId",
+              "startedAt",
+              "settledAt"
+            ],
+            "type": "object"
+          },
           "error": {
             "type": "string"
           },
@@ -6029,6 +6071,35 @@
           },
           "workflowName": {
             "type": "string"
+          },
+          "workspaceRelease": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "releasedAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "releasing",
+                  "released",
+                  "abandoned",
+                  "not_required"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "error",
+              "releasedAt"
+            ],
+            "type": "object"
           }
         },
         "required": [

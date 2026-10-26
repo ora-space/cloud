@@ -131,6 +131,13 @@ func Document() map[string]any {
 	properties(s, "WorkflowSnapshot")["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The graph document frozen at publish time; restoring this snapshot writes it back to the workflow's live graph."}
 	s["WorkflowRun"] = resource("id tenantId workflowId snapshotId name status input nodeStates rounds error startedAt finishedAt createdAt updatedAt workflowName cancelRequestedAt pluginVersion", "startedAt finishedAt cancelRequestedAt pluginVersion")
 	workflowRunProps := properties(s, "WorkflowRun")
+	workflowRunProps["delivery"] = object(obj{
+		"state": enumeration("pending", "delivering", "saved", "unchanged", "failed", "skipped", "not_required"),
+		"error": str(), "revisionId": optional(str()), "startedAt": optional(obj{"type": "string", "format": "date-time"}), "settledAt": optional(obj{"type": "string", "format": "date-time"}),
+	}, "state", "error", "revisionId", "startedAt", "settledAt")
+	workflowRunProps["workspaceRelease"] = object(obj{
+		"state": enumeration("pending", "releasing", "released", "abandoned", "not_required"), "error": str(), "releasedAt": optional(obj{"type": "string", "format": "date-time"}),
+	}, "state", "error", "releasedAt")
 	// awaiting_input is a reserved storage value only: the column's CHECK admits it, no writer
 	// produces it, and the approved phase-one scope defers HITL. Publishing it would tell clients
 	// the state is reachable, so the public contract lists only the states a run can actually hold.

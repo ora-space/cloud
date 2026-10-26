@@ -81,6 +81,7 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | 产物大小下界改为零，允许空文件登记 |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | 保存未列明的拒绝数和遍历截断事实 |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | 工作流节点工作项、执行与结束请求的尝试序号 |
+| [0071_workflow_run_delivery.sql](0071_workflow_run_delivery.sql) | WorkflowRun 整次成果归属、历史类型、保存屏障与 Node 能力 |
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | D8 无原删除操作的显式来源标记与互斥约束 |
 
 0050 不复制个人连接或 Key，不回填历史运行；清除配置保留 revision，运行选项独立于共享运行输入保存。

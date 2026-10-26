@@ -81,6 +81,7 @@ There are currently 72 SQL files.
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | Accept zero-length artifacts in verified registration |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | Persist omitted rejection counts and walk truncation facts |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | Per-attempt identity for workflow node work items, executions and end requests |
+| [0071_workflow_run_delivery.sql](0071_workflow_run_delivery.sql) | Whole-workflow Revision ownership, history type, save barrier and Node capability |
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | Explicit D8 missing-delete provenance and mutually exclusive identity constraints |
 
 0050 copies no personal connection or key and backfills no historical run. Clearing configuration retains its revision; run options are stored separately from shared run input.

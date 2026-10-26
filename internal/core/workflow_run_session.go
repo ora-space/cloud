@@ -311,8 +311,9 @@ func finishWorkflowRun(t *transaction, runID string, version int64, status, runE
 // and the declaration commit in the transaction that settles the run, so a terminal run is never
 // without either. Safe to call on any terminal run in any pass.
 func finishWorkflowRunCleanup(t *transaction, runID string) {
-	t.exec("DELETE FROM execution_work WHERE workflow_run_id=$1 AND execution_id IS NULL", runID)
-	declareWorkflowRunWorkspaceRelease(t, runID)
+	if prepareWorkflowRunDelivery(t, runID) {
+		declareWorkflowRunWorkspaceRelease(t, runID)
+	}
 }
 
 // workflowSessionTarget resolves the Workspace's current connected Node the way currentNode does,
@@ -388,6 +389,7 @@ func workflowSessionSpec(t *transaction, run Object, node workflowNodeView, w Ob
 		return nil, "workflow_executor_unconfigured"
 	}
 	spec["modelBindingId"] = binding.S("id")
+	spec["workspaceDirectory"] = workspaceDirectory(t, w.S("id"))
 	return spec, ""
 }
 

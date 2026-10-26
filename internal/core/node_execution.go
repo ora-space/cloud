@@ -68,6 +68,8 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 	// predicate does not read the workflow_runs lifecycle.
 	if work.S("runId") != "" {
 		require(t.one(executionWorkLiveRuns+" AND id=$1", runID) != nil, 409, "dispatch_conflict")
+	} else if input.S("kind") == "agent_session" {
+		require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND status='running' AND cancel_requested_at IS NULL AND delivery_state='pending' AND deleted_at IS NULL", runID) != nil, 409, "dispatch_conflict")
 	}
 	require(jsonText(work.O("input")) == jsonText(input), 409, "dispatch_conflict")
 	target := work.O("target")
@@ -94,7 +96,11 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 			require(t.one("SELECT execution_id FROM node_executions WHERE operation_id=$1 AND kind='agent_session'", runID) == nil, 409, "dispatch_conflict")
 		}
 	}
-	if input.S("kind") == "deliver_revision" || input.S("kind") == "deliver_scheduled_artifacts" {
+	if input.S("kind") == "deliver_revision" && work.S("workflowRunId") != "" {
+		require(current.B("workflowHistoryDelivery"), 409, "dispatch_conflict")
+		require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND delivery_state='delivering' AND status IN ('succeeded','failed','cancelled') AND deleted_at IS NULL", runID) != nil, 409, "dispatch_conflict")
+		require(input.O("workflow").S("workflowRunId") == runID && input.S("sessionExecutionId") == "" && len(input.O("priorRevision")) == 0, 409, "dispatch_conflict")
+	} else if input.S("kind") == "deliver_revision" || input.S("kind") == "deliver_scheduled_artifacts" {
 		require(t.one("SELECT execution_id FROM node_executions WHERE execution_id=$1 AND operation_id=$2 AND workspace_id=$3 AND kind='agent_session' AND result->>'outcome'='agent_session_ended'", input.S("sessionExecutionId"), runID, wid) != nil, 409, "dispatch_conflict")
 	}
 	// Both deliveries may run together after their session ended. A session still excludes all
