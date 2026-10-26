@@ -19,7 +19,7 @@
 | `ratelimit.go` | 按客户端地址的令牌桶，键表有界；start/callback 在写入任何 attempt 前限流。 |
 | `cleanup.go` | `RunCleanup`：生命周期拥有的有界批量清理循环。 |
 | `web.go` | `Web`/`OpenWeb`：可选地从 `web.dist_dir` 提供前端构建产物。启动时要求 `index.html` 存在；只处理无路由命中的 `GET`/`HEAD`，文件经 `os.Root` 打开（`..` 与符号链接无法逃出目录），未命中的客户端路由返回 `index.html`（`Cache-Control: no-cache`）；`/api/`、`/auth/`、`/internal/` 与 `/healthz` 仍是 JSON 404。 |
-| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`：默认值与所有安全边界的启动期校验，包括至少配置一个 provider，以及 `login.development_provider` 只能与 `public.development` 同时开启。 |
+| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`：默认值与所有安全边界的启动期校验，包括至少配置一个 provider，以及 `login.development_provider` 只能在 `public.development` 开启且公开 origin 为 loopback HTTP 时通过配置校验。 |
 
 ## 不变量
 
@@ -28,6 +28,7 @@
 让原始 Key 落入 Cloud。Gateway 仅挂载该服务的公开 CA，不取得其加密主密钥或 TLS 私钥。
 
 - 原始 session token、attempt secret、OAuth code、provider token 与 PKCE verifier 不持久化、不写日志、不进入 Cloud。
+- 代理 SSE 在客户端断开且响应已写入时，把标准库 `http.ErrAbortHandler` 交由 `net/http` 终止连接，不当作内部错误记录或再写 500；其他 panic 仍记完整诊断并返回安全错误。
 - 外部 HTTP 调用不在数据库事务或行锁内；provider 成功但事务失败即登录失败，不推断 session 已创建。
 - 每个 attempt 最多创建一个 session；两个并发 callback 只有一个能通过 `FOR UPDATE` 后的未消费检查。
 - `Resolve` 不续期；未知、过期、吊销统一为 `ErrNotFound`/`401 unauthenticated`。
@@ -37,6 +38,10 @@
 ## 测试
 
 单元测试覆盖 `return_to`/origin/Cookie 策略、identity 规范化、凭据签发与 Cloud 验证器互认、配置边界、限流与前端静态文件（文件、SPA 回退、越界与保留路径）；`integration/gateway_test.go` 用真实 HTTP、PostgreSQL、真实 Cloud router 与会校验 PKCE 的假 provider 覆盖登录、代理、伪造 header、跨源 mutation、重放、并发消费、多副本、过期、吊销、清理、provider/Cloud 故障、数据库约束，以及前端与 `/auth`、`/api` 同源提供。
+
+`TestDevelopmentProviderRequiresExplicitLoopbackHTTPOrigin` 验证配置阶段拒绝公开 HTTPS、loopback HTTPS 和缺少开发开关的 dev provider。`integration/gateway_authorization_test.go` 通过同一真实 Gateway/Cloud/PostgreSQL 链路验证创建者成为管理员、外部登录不授予成员关系、普通成员不能提升权限、停用成员后所有副本立即拒绝租户访问且保留有效身份；重新外部登录不会恢复停用的成员关系。假 provider 只用于自动化协议测试，不能作为真实提供方浏览器验收证据。
+
+`integration/gateway_callback_test.go` 验证 browser Cookie 与 provider code 仍有效时，数据库中已过期的 attempt 在兑换 code 前即被拒绝，不创建 session，并清除 attempt Cookie。
 
 `query_test.go` 覆盖会话查询保护的路径、方法与编码边界；`query_db_test.go` 使用独立 PostgreSQL schema、真实 Gateway 和 Cloud router，验证异常查询在代理清洗前被拒绝、认证顺序、正常查询原样转发、Cloud 的业务参数拒绝，以及其他路由的兼容行为。运行时设置 `TEST_DATABASE_URL`；`REQUIRE_POSTGRES=1` 禁止缺少数据库时跳过。
 

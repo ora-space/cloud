@@ -14,25 +14,56 @@ func (s *Store) sessionModelRead(ctx context.Context, r *PublicRequest) (Object,
 		require(validID(r.RunID), 404, "not_found")
 		run := t.one("SELECT executor_type FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL", r.RunID, r.TenantID, r.IssueID)
 		require(run != nil && run.S("executorType") == "agent", 404, "not_found")
-		if strings.HasSuffix(r.Path, "/model-calls") {
-			return sessionModelCalls(t, r)
-		}
-		return sessionModelStatistics(t, r)
+		return modelAttemptRead(t, r, issueRunAttempts)
 	})
 	return out, 200, err
 }
 
-func sessionModelCalls(t *transaction, r *PublicRequest) Object {
+// WorkflowRun model reads use the same recorded-attempt ledger, response shapes and pagination as
+// IssueRun reads. The run is resolved through its workflow, so an archived workflow (and with it
+// the run history) and a run belonging to another workflow or tenant are 404. Membership is the
+// only gate beyond that: any active tenant member who can read the run can read its statistics.
+func (s *Store) workflowModelRead(ctx context.Context, r *PublicRequest) (Object, int, error) {
+	out, err := s.transact(ctx, func(t *transaction) Object {
+		uid := sessionReadIdentity(t, r.Identity)
+		membership(t, r.TenantID, uid, false)
+		workflow(t, r.TenantID, r.WorkflowID)
+		require(validID(r.RunID), 404, "not_found")
+		run := t.one("SELECT id FROM workflow_runs WHERE id=$1 AND tenant_id=$2 AND workflow_id=$3 AND deleted_at IS NULL", r.RunID, r.TenantID, r.WorkflowID)
+		require(run != nil, 404, "not_found")
+		return modelAttemptRead(t, r, workflowRunAttempts)
+	})
+	return out, 200, err
+}
+
+// modelAttemptOwner is the ledger's owner discriminator. 0044 requires exactly one of run_id and
+// workflow_run_id, so every read names its owner kind and can never observe the other's rows.
+type modelAttemptOwner string
+
+const (
+	issueRunAttempts    modelAttemptOwner = "run_id"
+	workflowRunAttempts modelAttemptOwner = "workflow_run_id"
+)
+
+func modelAttemptRead(t *transaction, r *PublicRequest, owner modelAttemptOwner) Object {
+	if strings.HasSuffix(r.Path, "/model-calls") {
+		return modelAttemptCalls(t, r, owner)
+	}
+	return modelAttemptStatistics(t, r, owner)
+}
+
+func modelAttemptCalls(t *transaction, r *PublicRequest, owner modelAttemptOwner) Object {
 	require(r.Limit >= 0 && r.Limit <= 100 && r.Before == "" && (r.After == "" || validID(r.After)), 400, "invalid_pagination")
+	column := string(owner)
 	query := `SELECT id,started_at,finished_at,model_id,protocol,streamed,outcome,error_code,http_status,
 	 duration_ms,first_output_ms,terminal_observed,jsonb_build_object('inputTokens',input_tokens,
 	 'outputTokens',output_tokens,'totalTokens',total_tokens,'cacheReadTokens',cache_read_tokens,
 	 'cacheWriteTokens',cache_write_tokens,'reasoningTokens',reasoning_tokens,
 	 'inputSemantics',input_semantics,'availability',usage_availability) AS usage
-	 FROM model_request_attempts WHERE tenant_id=$1 AND run_id=$2`
+	 FROM model_request_attempts WHERE tenant_id=$1 AND ` + column + `=$2`
 	args := []any{r.TenantID, r.RunID}
 	if r.After != "" {
-		anchor := t.one("SELECT started_at FROM model_request_attempts WHERE id=$1 AND tenant_id=$2 AND run_id=$3", r.After, r.TenantID, r.RunID)
+		anchor := t.one("SELECT started_at FROM model_request_attempts WHERE id=$1 AND tenant_id=$2 AND "+column+"=$3", r.After, r.TenantID, r.RunID)
 		require(anchor != nil, 400, "invalid_pagination")
 		args = append(args, anchor["startedAt"], r.After)
 		query += " AND (started_at,id)>($3::timestamptz,$4::uuid)"
@@ -61,7 +92,7 @@ var modelTimingColumns = []modelMetricColumn{
 
 // Aggregate in PostgreSQL across all recorded attempts, never the visible page or archived
 // message count. Each counter carries its own coverage; unavailable values stay SQL NULL.
-func sessionModelStatistics(t *transaction, r *PublicRequest) Object {
+func modelAttemptStatistics(t *transaction, r *PublicRequest, owner modelAttemptOwner) Object {
 	parts := []string{
 		"COUNT(*) AS total", "MIN(started_at) AS first_recorded_at", "MAX(started_at) AS last_recorded_at",
 		"CASE WHEN COUNT(DISTINCT input_semantics)=1 THEN MIN(input_semantics) ELSE 'unknown' END AS input_semantics",
@@ -84,7 +115,7 @@ func sessionModelStatistics(t *transaction, r *PublicRequest) Object {
 				"CASE WHEN "+operation+"<=9007199254740991 THEN "+operation+" ELSE NULL END AS \""+col.name+"Value\"")
 		}
 	}
-	row := t.one("SELECT "+strings.Join(parts, ",")+" FROM model_request_attempts WHERE tenant_id=$1 AND run_id=$2", r.TenantID, r.RunID)
+	row := t.one("SELECT "+strings.Join(parts, ",")+" FROM model_request_attempts WHERE tenant_id=$1 AND "+string(owner)+"=$2", r.TenantID, r.RunID)
 	total := row.N("total")
 	counts := Object{"total": total}
 	for _, state := range states {

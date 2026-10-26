@@ -125,8 +125,16 @@ export function InspectorExecution({ entry }: { entry: RunNodeEntry | undefined 
     return null
   }
   const rows: Array<[string, string]> = []
+  if (entry.attempt !== undefined) {
+    rows.push([t('workflows.run.inspector.attempt'), String(entry.attempt)])
+  }
   if (entry.startedAt !== undefined) {
     rows.push([t('workflows.run.inspector.startedAt'), formatClock(entry.startedAt)])
+  }
+  if (entry.retryAt !== undefined) {
+    // The retry instant is the only forward-looking row: it tells the reader when the
+    // node will try again instead of leaving a failed attempt looking final.
+    rows.push([t('workflows.run.inspector.retryAt'), formatClock(entry.retryAt)])
   }
   if (entry.finishedAt !== undefined) {
     rows.push([t('workflows.run.inspector.finishedAt'), formatClock(entry.finishedAt)])

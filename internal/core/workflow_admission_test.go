@@ -26,6 +26,7 @@ func TestRequireWorkflowRunInput(t *testing.T) {
 			"name": "scope", "fieldType": "select", "valueType": "string",
 			"options": []any{"changed", "full"},
 		},
+		Object{"name": "items", "valueType": "array"},
 	})
 
 	cases := []struct {
@@ -68,6 +69,34 @@ func TestRequireWorkflowRunInput(t *testing.T) {
 			input: Object{"topic": "auth", "scope": "everything"},
 			want:  &Fault{Code: "invalid_field_value", Status: 400, Params: Object{"field": "scope"}},
 		},
+		{
+			// An iteration source is a structured value: a direct run carries the array itself, not
+			// only its JSON text.
+			name:  "an array for a structured variable",
+			input: Object{"topic": "auth", "items": []any{"a", "b"}},
+		},
+		{
+			name:  "a JSON document for a structured variable",
+			input: Object{"topic": "auth", "items": Object{"a": 1}},
+		},
+		{
+			// `input` is the reserved kickoff selector rather than a declared variable. Desktop
+			// carries it as a string, and accepting another type here would make [start, input] an
+			// object on Cloud and a string on desktop.
+			name:  "the reserved kickoff selector as a string",
+			input: Object{"topic": "auth", "input": "review the diff"},
+		},
+		{
+			// A null override is a run that named none: it is treated as absent and falls back to
+			// the authored Start instruction, exactly like a declared variable left null.
+			name:  "the reserved kickoff selector explicitly null",
+			input: Object{"topic": "auth", "input": nil},
+		},
+		{
+			name:  "the reserved kickoff selector as an object",
+			input: Object{"topic": "auth", "input": Object{"text": "review the diff"}},
+			want:  &Fault{Code: "invalid_field_value", Status: 400, Params: Object{"field": "input"}},
+		},
 	}
 
 	for _, tc := range cases {
@@ -81,6 +110,30 @@ func TestRequireWorkflowRunInput(t *testing.T) {
 				t.Fatalf("fault = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRequireWorkflowRunInputKickoffShadowsInputVariable pins the desktop shadow semantics for a Start
+// variable literally named `input`: the reserved kickoff selector overwrites the declared variable, so
+// the declared type is never judged while the reserved key stays string-only. Without the shadow a
+// graph declaring `input` as a number would reject every run — a string kickoff fails the declared
+// type, and a number fails the reserved-string check — a Cloud-only dead end desktop runs fine.
+func TestRequireWorkflowRunInputKickoffShadowsInputVariable(t *testing.T) {
+	graph := inputGraph(t, []any{
+		Object{"name": "topic", "valueType": "string", "required": true},
+		Object{"name": "input", "valueType": "number"},
+	})
+
+	// A string `input` is the kickoff and is admitted even though the declared `input` variable is a
+	// number: the reserved selector shadows it, so the number's type is not judged.
+	noFault(t, func() { requireWorkflowRunInput(graph, Object{"topic": "auth", "input": "review the diff"}) })
+
+	// The reserved key is still string-only: a number fails the reserved check even though a declared
+	// `input` variable of that type would have been legal on its own.
+	fault := faultOf(t, func() { requireWorkflowRunInput(graph, Object{"topic": "auth", "input": 7}) })
+	want := &Fault{Code: "invalid_field_value", Status: 400, Params: Object{"field": "input"}}
+	if !reflect.DeepEqual(fault, want) {
+		t.Fatalf("fault = %+v, want %+v", fault, want)
 	}
 }
 

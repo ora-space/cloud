@@ -1,0 +1,28 @@
+-- Freeze the Agent plugin release package a WorkflowRun executes with (circus#527; specs decisions/cloud/
+-- workflow/0-cloud-side-scheduler-owns-workflow-execution.md D3: the execution identity — snapshot,
+-- input, initiator, Project, run Workspace binding, per-slot model bindings, plugin version — is frozen
+-- in the run's creation transaction, and an in-flight plugin upgrade does not change what it executes).
+--
+-- Why the package, not just the version. 0042 froze `plugin_version` and the session spec carries it,
+-- but the run Workspace's `plugin` step still installed whatever the Space selected when that step
+-- ran. A run created against 1.0.0 and dispatched after an administrator upgraded the Space to 2.0.0
+-- therefore had a Workspace carrying 2.0.0 while its session required 1.0.0; the Node ended the
+-- session as `agent_plugin_unavailable` and the run failed. Freezing the release next to the version
+-- lets the plugin step install exactly the package the session will require, so the window between
+-- creation and the plugin step (longer while the Project queues) no longer decides the content.
+--
+-- Written only when the Space's `selected_release` is the very version being frozen. A Space row that
+-- points at another release — a selection still converging, or a catalog entry replaced under the
+-- same version — has no package that honestly answers for the frozen version, so the run keeps the
+-- 0042 behaviour: the plugin step installs the Space's selection and the start gate reports the
+-- mismatch as `agent_plugin_unavailable`. A run with no plugin, no selected release or no Project
+-- leaves this NULL for the same reason.
+--
+-- Nullable, and deliberately not backfilled: rows written before this migration never froze a package,
+-- and the Space's current release is not what such a run was created against. A run whose plugin was
+-- removed after creation is not silently reinstalled from it either: the plugin step only replaces an
+-- entry the Space still selects, and the start gate fails the run with `agent_plugin_unavailable`.
+--
+-- Additive; edits no applied migration.
+
+ALTER TABLE workflow_runs ADD COLUMN plugin_release jsonb;

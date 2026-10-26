@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -117,7 +116,7 @@ func (p WorkflowFormDescriptors) ResolveFormDescriptor(ctx context.Context, tena
 	// Only an issue-scoped form carries the launch fields, so only it pays for the second query: a
 	// caller with no issue context gets the same single lookup it always did.
 	if issue.IssueID != "" {
-		source.Snapshots, err = p.snapshots(ctx, tenantID, formRef)
+		source.Snapshots, source.Withheld, err = p.snapshots(ctx, tenantID, formRef)
 		if err != nil {
 			return FormDescriptor{}, false, err
 		}
@@ -125,16 +124,48 @@ func (p WorkflowFormDescriptors) ResolveFormDescriptor(ctx context.Context, tena
 	return formDescriptorFromGraph(&source, &issue), true, nil
 }
 
-// snapshots lists the workflow's published versions, newest first, capped at the number of options a
-// descriptor may carry: a workflow published more than a hundred times would otherwise build a
-// descriptor that fails validation closed and takes every confirm down with it.
+// workflowSnapshotReservedFieldSQL mirrors workflowDeclaresReservedField over a stored graph, for the
+// version selector's queries. It has to be SQL rather than a filter over fetched rows: the option cap
+// counts only selectable versions, so the excluded rows must not consume the limit. The two
+// definitions are kept side by side in this file and exercised together by the selector's tests.
+//
+// `jsonb_typeof` guards the reads rather than trusting the row: publishing validates the document,
+// but the table's own constraint only says the graph is an object, and a malformed array element
+// makes jsonb_array_elements raise instead of contributing nothing.
+const workflowSnapshotReservedFieldSQL = `EXISTS (
+		SELECT 1 FROM jsonb_array_elements(
+			CASE WHEN jsonb_typeof(graph->'nodes') = 'array' THEN graph->'nodes' ELSE '[]'::jsonb END
+		) AS node
+		WHERE node->'data'->>'kind' = 'start'
+		  AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements(
+				CASE WHEN jsonb_typeof(node->'data'->'inputVariables') = 'array' THEN node->'data'->'inputVariables' ELSE '[]'::jsonb END
+			) AS variable
+			WHERE variable->>'name' = 'snapshotId'
+		  )
+	) OR EXISTS (
+		SELECT 1 FROM jsonb_array_elements(
+			CASE WHEN jsonb_typeof(graph->'globalVariables') = 'array' THEN graph->'globalVariables' ELSE '[]'::jsonb END
+		) AS variable
+		WHERE variable->>'name' = 'snapshotId'
+	)`
+
+// snapshots lists the workflow's selectable published versions, newest first, capped at the number of
+// options a descriptor may carry: a workflow published more than a hundred times would otherwise build
+// a descriptor that fails validation closed and takes every confirm down with it.
+//
+// A version whose frozen graph declares the reserved `snapshotId` is not selectable
+// (20261021-snapshot-id-is-a-reserved-field.md D2). The exclusion is in SQL so the cap still fills
+// with selectable versions, and `withheld` reports whether any version was excluded at all — the
+// selector explains that in its description, because the descriptor contract has no disabled option
+// to mark an excluded one with.
 //
 // Snapshots are immutable and never deleted — the table has no `deleted_at` — so there is no
 // soft-delete filter, and the ordering is the one the existing list index already serves.
-func (p WorkflowFormDescriptors) snapshots(ctx context.Context, tenantID, workflowID string) ([]Object, error) {
-	rows, err := p.Pool.QueryContext(ctx, "SELECT id, version, name FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 ORDER BY version DESC LIMIT $3", tenantID, workflowID, maxFormOptions)
+func (p WorkflowFormDescriptors) snapshots(ctx context.Context, tenantID, workflowID string) ([]Object, bool, error) {
+	rows, err := p.Pool.QueryContext(ctx, "SELECT id, version, name FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 AND NOT ("+workflowSnapshotReservedFieldSQL+") ORDER BY version DESC LIMIT $3", tenantID, workflowID, maxFormOptions)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = rows.Close() }()
 	out := []Object{}
@@ -142,13 +173,21 @@ func (p WorkflowFormDescriptors) snapshots(ctx context.Context, tenantID, workfl
 		var id, name string
 		var version int64
 		if err := rows.Scan(&id, &version, &name); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		// Scanned straight into int64 rather than read back as a decoded number: `version` is a
 		// bigint, and everything that comes through a JSON round-trip arrives as a float64.
 		out = append(out, Object{"id": id, "version": version, "name": name})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	var withheld bool
+	err = p.Pool.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 AND ("+workflowSnapshotReservedFieldSQL+"))", tenantID, workflowID).Scan(&withheld)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, withheld, nil
 }
 
 // workflowFormSource is everything one descriptor projection reads: the workflow's own identity and
@@ -160,6 +199,9 @@ type workflowFormSource struct {
 	Description string
 	Graph       Object
 	Snapshots   []Object
+	// Withheld says at least one published version was left out of Snapshots because its own graph
+	// claims the reserved `snapshotId`; the selector explains that in its description.
+	Withheld bool
 }
 
 // formDescriptorFromGraph projects a stored graph onto a form descriptor. Title and description are
@@ -173,7 +215,8 @@ type workflowFormSource struct {
 func formDescriptorFromGraph(source *workflowFormSource, issue *IssueFormContext) FormDescriptor {
 	fields := workflowInputFields(source.Graph)
 	if issue.IssueID != "" {
-		fields = injectPlatformFields(fields, issue, workflowStartPrompt(source.Graph), source.Snapshots, launchFieldsFromGraph(source.Graph))
+		fields = withoutPlatformOwnedDeclarations(fields)
+		fields = injectPlatformFields(fields, issue, workflowStartPrompt(source.Graph), source.Snapshots, source.Withheld, launchFieldsFromGraph(source.Graph))
 	}
 	return FormDescriptor{
 		FormRef:     source.Ref,
@@ -204,117 +247,91 @@ func workflowInputFields(graph Object) []FormField {
 	return appendGlobalVariableFields(fields, graph)
 }
 
-// workflowSnapshotOptions lists a workflow's published versions newest first, in the shape the launch
-// field offers them. It is the transaction-scoped twin of the descriptor provider's own query, for the
-// callers that already hold a transaction and must not open a second connection inside it.
-func workflowSnapshotOptions(t *transaction, tid, wid string) []Object {
-	return t.list("SELECT id, version, name FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 ORDER BY version DESC LIMIT $3", tid, wid, maxFormOptions)
+// withoutPlatformOwnedDeclarations drops the author's own fields under the keys the platform owns in
+// an issue-scoped form. `snapshotId` is such a key: its value is the version cursor a confirm resolves
+// the run's snapshot from, not a value the workflow receives. Issue collaboration D8 rule 1 — a key the
+// author declared in their Start node keeps the author's control, label and requiredness — does not
+// apply to it (20261021-snapshot-id-is-a-reserved-field.md): the form always projects the platform's
+// selector under that key, so an author declaration is neither rendered nor validated. The declaration
+// itself is refused the next time the graph is frozen (D1); dropping it here keeps the key's meaning
+// single in the meantime, rather than letting a form silently execute a version the author's variable
+// was meant to govern.
+//
+// The drop happens here rather than in workflowInputFields because that projection is also the schema
+// a direct run's input is checked against, and a direct run keeps the author's variable: its input
+// object is separate from the request's version selection, so the two meanings never meet there.
+func withoutPlatformOwnedDeclarations(fields []FormField) []FormField {
+	kept := make([]FormField, 0, len(fields))
+	for i := range fields {
+		if fields[i].Key == fieldKeySnapshotID {
+			continue
+		}
+		kept = append(kept, fields[i])
+	}
+	return kept
+}
+
+// workflowSnapshotOptions lists a workflow's selectable published versions newest first, in the shape
+// the launch field offers them, together with whether any version was withheld for claiming the
+// reserved `snapshotId` (20261021-snapshot-id-is-a-reserved-field.md D2). It is the transaction-scoped
+// twin of the descriptor provider's own query, for the callers that already hold a transaction and
+// must not open a second connection inside it.
+func workflowSnapshotOptions(t *transaction, tid, wid string) ([]Object, bool) {
+	snapshots := t.list("SELECT id, version, name FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 AND NOT ("+workflowSnapshotReservedFieldSQL+") ORDER BY version DESC LIMIT $3", tid, wid, maxFormOptions)
+	withheld := t.one("SELECT EXISTS(SELECT 1 FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 AND ("+workflowSnapshotReservedFieldSQL+")) AS withheld", tid, wid)
+	return snapshots, withheld.B("withheld")
+}
+
+// workflowLatestSelectableSnapshot returns the version the `@` form opens on: the newest published
+// version the selector may offer, or nil when nothing is published or every published version is
+// withheld for claiming the reserved `snapshotId` (20261021-snapshot-id-is-a-reserved-field.md D2).
+//
+// It is what assist validates a submission without a version cursor against. Assist answers for the
+// form the user is filling, and that form's `snapshotId` field defaults to the first *selectable*
+// option; the newest published row is a different version whenever a stock snapshot is withheld. A
+// withheld version may declare a different field set, so resolving it would make assist refuse fields
+// the visible form asks for. When every version is withheld the selector is absent and the form is the
+// live document, which is why this returns nil instead of falling back to a withheld version.
+//
+// A run's own resolution deliberately does not use this: Confirm without a cursor still resolves the
+// newest published version and refuses it by name (D3). Silently executing or substituting a version
+// the user did not choose is the outcome the decision exists to prevent.
+func workflowLatestSelectableSnapshot(t *transaction, tid, wid string) Object {
+	return t.one("SELECT * FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2 AND NOT ("+workflowSnapshotReservedFieldSQL+") ORDER BY version DESC LIMIT 1", tid, wid)
 }
 
 // workflowDescriptorSource is the projection input for one graph of a workflow: its live document, or
-// one of its frozen versions. Both descriptors a confirm compares are built from here, so the graph is
-// the only thing that can differ between them — a source assembled any other way could make them
+// one of its frozen versions. Both are built from here, so for the same graph the live form and a
+// version's form differ only in the graph — a source assembled any other way could make a version
 // differ for a reason that has nothing to do with what the user was shown.
 func workflowDescriptorSource(t *transaction, w, graph Object) *workflowFormSource {
+	snapshots, withheld := workflowSnapshotOptions(t, w.S("tenantId"), w.S("id"))
 	return &workflowFormSource{
 		Ref:         w.S("id"),
 		Title:       w.S("name"),
 		Description: w.S("description"),
 		Graph:       graph,
-		Snapshots:   workflowSnapshotOptions(t, w.S("tenantId"), w.S("id")),
+		Snapshots:   snapshots,
+		Withheld:    withheld,
 	}
 }
 
-// liveFormDescriptor projects a workflow's live document — the document the client rendered the form
-// from, since the read routes resolve it through WorkflowFormDescriptors. A confirm projects it here
-// rather than through that provider because the provider may not be wired at all: what a confirm needs
-// must not depend on a service being available, which is the same reason it resolves the version itself.
-func liveFormDescriptor(t *transaction, w Object, issue *IssueFormContext) FormDescriptor {
-	return formDescriptorFromGraph(workflowDescriptorSource(t, w, w.O("graph")), issue)
-}
-
 // snapshotFormDescriptor projects one *frozen* snapshot onto the form descriptor a confirm validates
-// against, rather than the live document the form was rendered from.
+// against, rather than the live document.
 //
 // The distinction is the whole point of confirming against a version: an edit made after the last
 // publish must not retroactively change what an already-offered version accepts, and a variable an
 // older version declared must still be submittable when that version is the one chosen. The
 // platform's own launch fields are still injected — they describe the invocation, not the version —
-// so the descriptor carries the same field set the form showed for this version.
-//
-// That last clause is a promise this projection cannot keep on its own: the form was rendered from the
-// live document, so the two describe the same fields only while the draft has not moved on from this
-// version. A confirm checks that before it validates — see workflowFieldDivergence.
+// so the descriptor carries the same field set the form showed for this version. A confirm validates
+// against this descriptor alone, so selecting an older version whose fields differ from the live
+// draft runs that version on its own schema.
 func snapshotFormDescriptor(t *transaction, w, s Object, issue *IssueFormContext) FormDescriptor {
 	descriptor := formDescriptorFromGraph(workflowDescriptorSource(t, w, s.O("graph")), issue)
 	// Fail closed, exactly as the provider path does: a descriptor that cannot be rendered is a 500
 	// rather than a form that silently accepts less than it shows.
 	validateFormDescriptor(descriptor)
 	return descriptor
-}
-
-// judgedField is what a descriptor says about one key that decides whether a submitted value is
-// accepted: which control receives it, whether the run must be given one, and which values it offers.
-// A label, a description, a placeholder and a default judge none of that — they change what the form
-// looks like, not what it takes — so they are deliberately left out and a draft that changed only one
-// of them is not a divergence.
-type judgedField struct {
-	Type     string
-	Required bool
-	Options  []string
-}
-
-// sameAs compares two judged controls. The offered values are compared as a set: reordering a select's
-// options changes the order the form draws them in, not which submissions it accepts.
-func (f judgedField) sameAs(other judgedField) bool {
-	return f.Type == other.Type && f.Required == other.Required && slices.Equal(f.Options, other.Options)
-}
-
-// judgedFields reduces a descriptor to the keys that judge a submission, for comparison.
-func judgedFields(d FormDescriptor) map[string]judgedField {
-	out := make(map[string]judgedField, len(d.Fields))
-	for i := range d.Fields {
-		field := &d.Fields[i]
-		options := make([]string, 0, len(field.Options))
-		for _, option := range field.Options {
-			options = append(options, option.Value)
-		}
-		slices.Sort(options)
-		out[field.Key] = judgedField{Type: field.Type, Required: field.Required, Options: options}
-	}
-	return out
-}
-
-// workflowFieldDivergence names the fields on which the form the client rendered and the version being
-// confirmed disagree, sorted, or nothing when they agree about every field.
-//
-// A confirm validates the submitted values against the version it will execute, and that is only a
-// meaningful thing to do while the version still describes the form the user filled in. The form is
-// rendered from the live document — a draft is a legitimate document — so an author editing between
-// publishing a version and confirming against it hands the client a form that version does not accept:
-// the user is shown a field the version rejects as unknown, or is never shown one the version insists
-// on, and either way the submission can only be refused by a fault that blames a value the user was
-// legitimately given. Naming the divergence says the true thing instead: this version no longer matches
-// the form, so publish it or select another.
-//
-// The comparison is of the whole descriptor rather than of the submission in hand. A divergence means
-// the values are answers to a different question, and accepting them because they happen to fit the
-// version too would be luck rather than agreement.
-func workflowFieldDivergence(rendered, version FormDescriptor) []string {
-	live, frozen := judgedFields(rendered), judgedFields(version)
-	diverged := []string{}
-	for key, want := range frozen {
-		if got, ok := live[key]; !ok || !got.sameAs(want) {
-			diverged = append(diverged, key)
-		}
-	}
-	for key := range live {
-		if _, ok := frozen[key]; !ok {
-			diverged = append(diverged, key)
-		}
-	}
-	slices.Sort(diverged)
-	return diverged
 }
 
 // Reserved keys of the fields the platform injects into every workflow form (Issue collaboration D8). They
@@ -441,9 +458,11 @@ func launchFieldRequired(declaration map[string]launchFieldOverride, key string,
 //
 // This is the catalog rather than the form. A workflow's declaration narrows it in
 // injectPlatformFields, and only there, because a key the author declared in their own Start node is
-// not the platform's to withdraw (Issue collaboration D8).
-func platformFormFields(issue *IssueFormContext, startPrompt string, snapshots []Object) []FormField {
-	version, hasVersion := versionField(snapshots)
+// not the platform's to withdraw (Issue collaboration D8). The reserved `snapshotId` never reaches
+// here as an author key: the issue form drops that declaration first, so the catalog's entry is
+// always the one projected (see withoutPlatformOwnedDeclarations).
+func platformFormFields(issue *IssueFormContext, startPrompt string, snapshots []Object, withheld bool) []FormField {
+	version, hasVersion := versionField(snapshots, withheld)
 	refs, hasRefs := contextRefsField(issue)
 	catalog := []struct {
 		field   FormField
@@ -500,7 +519,14 @@ func platformFormFields(issue *IssueFormContext, startPrompt string, snapshots [
 //
 // A workflow that has never been published has nothing to offer, and an option-less select would fail
 // descriptor validation, so the field is dropped rather than injected empty.
-func versionField(snapshots []Object) (FormField, bool) {
+//
+// A published version whose frozen graph declares the reserved `snapshotId` is not offered at all
+// (20261021-snapshot-id-is-a-reserved-field.md D2): the descriptor contract has no way to mark an
+// option disabled, so the only form that expresses "not selectable" is leaving it out. When that
+// happened, the field's description carries the explanation and the remedy — republish from a draft
+// that does not declare the name. It is the same field for every reader, including the frontend that
+// renders the description under the control.
+func versionField(snapshots []Object, withheld bool) (FormField, bool) {
 	options := []FormOption{}
 	for _, snapshot := range snapshots {
 		id := snapshot.S("id")
@@ -513,14 +539,18 @@ func versionField(snapshots []Object) (FormField, bool) {
 	if len(options) == 0 {
 		return FormField{}, false
 	}
-	return FormField{
+	field := FormField{
 		Key:          fieldKeySnapshotID,
 		Label:        "运行版本",
 		Type:         fieldSelect,
 		Required:     false,
 		DefaultValue: options[0].Value,
 		Options:      options,
-	}, true
+	}
+	if withheld {
+		field.Description = "有已发布版本把保留字段 snapshotId 声明成了自己的变量，已不可选；请从不再声明该字段的活稿重新发布后选择新版本。"
+	}
+	return field, true
 }
 
 // contextRefsField offers the references this run may carry *in addition to* the issue's own. It is
@@ -579,29 +609,27 @@ func platformDefault(value string) any {
 // before the platform field existed — and so is an *illegal* default: the same URL is not a legal
 // value for a `repository` the author declared as a select that does not offer it.
 //
-// The snapshot selector is the one key the platform contributes nothing to. Its value is not a value
-// the workflow receives but the cursor `confirmInteraction` resolves the run's snapshot from, so it is
-// never a default the author's own variable of that name could mean: filling it would hand the run a
-// snapshot id as the variable's value. The author's field is left exactly as they declared it, and the
-// cursor stays the platform's — see workflowVersionCursor.
+// The snapshot selector has no author counterpart by the time the catalog is merged: a declaration
+// under that key is dropped before this runs (see withoutPlatformOwnedDeclarations), because its value
+// is the cursor `confirmInteraction` resolves the run's snapshot from rather than a value the workflow
+// receives. The platform's field is therefore always the one projected, and the cursor stays the
+// platform's — see workflowVersionCursor.
 //
 // The workflow's declaration (Issue collaboration D8) is applied here, and only to the fields the platform is
 // *adding*. A field the author asked for in their own Start node is asked for because they asked for
 // it, so no declaration withdraws it: for that key the declaration is inert, control and requiredness
 // alike, and the platform contributes nothing but the default.
-func injectPlatformFields(fields []FormField, issue *IssueFormContext, startPrompt string, snapshots []Object, declaration map[string]launchFieldOverride) []FormField {
+func injectPlatformFields(fields []FormField, issue *IssueFormContext, startPrompt string, snapshots []Object, withheld bool, declaration map[string]launchFieldOverride) []FormField {
 	declared := map[string]int{}
 	for i := range fields {
 		declared[fields[i].Key] = i
 	}
-	offered := platformFormFields(issue, startPrompt, snapshots)
+	offered := platformFormFields(issue, startPrompt, snapshots, withheld)
 	platform := []FormField{}
 	for i := range offered {
 		field := &offered[i]
 		if i, ok := declared[field.Key]; ok {
-			if field.Key != fieldKeySnapshotID {
-				fillDefault(&fields[i], field)
-			}
+			fillDefault(&fields[i], field)
 			continue
 		}
 		if !launchFieldEnabled(declaration, field.Key) {
@@ -699,11 +727,13 @@ func fillDefault(field, platform *FormField) {
 // key can be — the platform's cursor or an author's variable — is a decision that must be made the same
 // way wherever it is read.
 //
-// A key is the platform's own only when the graph's own input fields do not declare it (Issue collaboration D8): an
-// author who declares a variable under that name keeps it, no version selector is injected into their
-// form, and the value the user typed is theirs to give the workflow. Reading it as a snapshot id would
-// either 404 on a value that is not an id or, when the value is one, run the version the user asked for
-// while feeding the workflow that same id as its parameter.
+// `snapshotId` is always the platform's cursor, whether or not the live document declares a variable
+// under that name. Issue collaboration D8 rule 1, which keeps an author-declared key for the author,
+// does not apply to this key: the `@` form never renders such a declaration (see
+// withoutPlatformOwnedDeclarations), and the declaration is refused by the publish gate the next time
+// the graph is frozen (20261021-snapshot-id-is-a-reserved-field.md D1). Reading the key as anything
+// else would give one submission two meanings — the version being executed and a value the workflow
+// receives — which is exactly the ambiguity that decision removes.
 //
 // There are two keys to try because the field was renamed (Issue collaboration D8) and a rename cannot reach a form
 // that was rendered before it: `snapshotId` is the name this build's form asks under, and `version` is
@@ -713,14 +743,12 @@ func fillDefault(field, platform *FormField) {
 // the version the user picked is dropped without a word.
 //
 // The graph is the *live* document rather than the version being resolved — the one the form was
-// rendered from — because that is what fixes the meaning of the value in hand, and it is decidable
-// before the snapshot is resolved. Reading it from the resolved version instead would make the meaning
-// of a submitted value depend on which version the same submission selected.
+// rendered from — because that is what fixes whether the old key is still an author's variable, and it
+// is decidable before the snapshot is resolved. Reading it from the resolved version instead would
+// make the meaning of a submitted value depend on which version the same submission selected.
 func workflowVersionCursor(graph, values Object) string {
-	if !declaresWorkflowInputField(graph, fieldKeySnapshotID) {
-		if id := values.S(fieldKeySnapshotID); id != "" {
-			return id
-		}
+	if id := values.S(fieldKeySnapshotID); id != "" {
+		return id
 	}
 	if !declaresWorkflowInputField(graph, legacyFieldKeyVersion) {
 		return values.S(legacyFieldKeyVersion)
@@ -739,29 +767,53 @@ func declaresWorkflowInputField(graph Object, key string) bool {
 	return false
 }
 
+// formKickoff reads the kickoff text a confirmed `@` form submitted, or nil when the form named none.
+//
+// The platform's prompt field is prefilled with the Start node's authored instruction and is what the
+// user edits to override it, so its submitted value is the run's kickoff — desktop's kickoff_input,
+// which the variable pool lets overwrite the authored text (see WorkflowStartKickoff). graph must be
+// the selected version's, the one the run executes: the form the user answered was rendered from that
+// version's own fields (see snapshotFormDescriptor), so ownership of `prompt` has to be judged on the
+// same document the projection and the run use. Reading the live draft instead would let an edit
+// saved after the last publish flip the meaning of the key the user submitted, in either direction —
+// dropping the kickoff they wrote, or turning an author variable into one.
+//
+// It is the platform's only while the author's own Start node does not declare a variable under that
+// name: a workflow owning `prompt` keeps the key for its variable, the platform injects no prompt
+// field, and that value is the workflow's parameter rather than a kickoff (see injectPlatformFields).
+// A form whose launch-field declaration withdrew the field submits no key at all, which is the same
+// absence: the run falls back to the authored instruction.
+//
+// An empty answer is a value rather than an absence: the user cleared the prefilled prompt and meant
+// to run with nothing, which is what desktop's Some("") does. Type is judged later, by the one
+// admission gate every entry shares, so this reader does not repeat the rule.
+func formKickoff(graph, values Object) any {
+	if declaresWorkflowInputField(graph, fieldKeyPrompt) {
+		return nil
+	}
+	return values[fieldKeyPrompt]
+}
+
 // foldLegacyVersionAnswer takes the pre-rename `version` key back out of a submission, rewriting it
 // under `snapshotId` where that key is free.
 //
 // It runs immediately after workflowVersionCursor, and the order is the point: the old key has to
-// survive until the cursor has read it — in a graph whose author declared `snapshotId` for a variable
-// of their own, the old key is the *only* place the selection can be read from — and it has to be gone
-// afterwards, because the `@` form is the one surface where the set of keys *is* the contract and a key
-// the descriptor does not declare fails the confirm outright (see validateFormValues).
+// survive until the cursor has read it, and it has to be gone afterwards, because the `@` form is the
+// one surface where the set of keys *is* the contract and a key the descriptor does not declare fails
+// the confirm outright (see validateFormValues).
 //
 // The rewrite is what keeps the interaction stored under the name this build uses, as every new one is.
-// It is skipped where the author has claimed `snapshotId` for their own variable: there is nowhere to
-// write the answer, and writing it anyway would hand the workflow a snapshot id as that variable's
-// value. The answer is dropped there, which costs nothing that is not recorded elsewhere — the version
-// the run executed is frozen onto the run's own input by the gate that resolved it.
+// It is skipped where the author has claimed `version` — the old key is also not a reserved field, so a
+// Start variable of that name is still theirs (20261021-snapshot-id-is-a-reserved-field.md D1). There
+// is no such exemption for `snapshotId`: that key is always the platform's, so the answer is written
+// under it even when the live document declares a variable of the same name — a declaration the issue
+// form does not render and the publish gate refuses.
 func foldLegacyVersionAnswer(graph, values Object) {
 	answer, ok := values[legacyFieldKeyVersion]
 	if !ok || declaresWorkflowInputField(graph, legacyFieldKeyVersion) {
 		return
 	}
 	delete(values, legacyFieldKeyVersion)
-	if declaresWorkflowInputField(graph, fieldKeySnapshotID) {
-		return
-	}
 	// The same rule the cursor reads by: an answer the client already gave under the new key is the one
 	// this build's form wrote, and the old key does not displace it.
 	if values.S(fieldKeySnapshotID) == "" {
@@ -769,9 +821,14 @@ func foldLegacyVersionAnswer(graph, values Object) {
 	}
 }
 
-// workflowStartNode returns the `data` of the graph's first Start node. The graph is a document the API
-// never interprets, so its shape is read defensively: anything unexpected contributes nothing rather
-// than failing the request. The first Start node wins, matching the editor, which allows at most one.
+// workflowStartNode returns the `data` of the graph's first outer Start node. The graph is a document
+// the API never interprets, so its shape is read defensively: anything unexpected contributes nothing
+// rather than failing the request. The first outer Start node wins, matching the editor, which allows
+// at most one.
+//
+// A loop body carries its own Start node, and that node is not the run's entry point: its variables
+// never enter the @ form and its prompt is never the kickoff. Skipping container members here is what
+// keeps the launcher fields reading only the document's outer start.
 //
 // Reading the prompt and the variables through this one lookup is what keeps them from ever coming
 // from two different nodes in a graph that somehow carries more than one.
@@ -783,7 +840,7 @@ func workflowStartNode(graph Object) Object {
 			continue
 		}
 		data, ok := node["data"].(map[string]any)
-		if !ok || data["kind"] != "start" {
+		if !ok || data["kind"] != "start" || workflowContainerID(Object(node)) != "" {
 			continue
 		}
 		return Object(data)
@@ -857,8 +914,10 @@ func startInputField(variable Object) (FormField, bool) {
 		field.Options = options
 	case "file-list", "json":
 		// Issues has no upload or structured-value control. A textarea collects the reference or the
-		// document as text, which is what the workflow receives either way.
+		// document as text, which is what the workflow receives either way. A direct run still accepts
+		// the structured value itself, which is what an iteration source needs.
 		field.Type = fieldTextarea
+		field.jsonField = inputFieldType(variable) == "json"
 	default:
 		// text-input, file, and every control Cloud has no counterpart for degrade to a single line.
 		field.Type = fieldText

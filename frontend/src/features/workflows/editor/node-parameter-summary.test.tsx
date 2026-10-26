@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type {
+  WorkflowAgentConfig,
   WorkflowIterationConfig,
   WorkflowLoopConfig,
   WorkflowNodeData,
@@ -117,5 +118,22 @@ describe('NodeParameterSummary', () => {
 
     expect(container.querySelectorAll('dt')).toHaveLength(0)
     expect(screen.queryByText('初始提示词')).not.toBeInTheDocument()
+  })
+
+  it('does not crash on an agent node saved under the executor-slot schema', () => {
+    // #154 ships `executorSlot` where this build still summarizes the legacy
+    // `executor` binding. The stale type cannot name that wire shape, so the
+    // cast reproduces the exact payload the summary must tolerate without a crash.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the executor-slot payload has no `executor`, which is precisely what the guard under test tolerates.
+    const agentConfig = {
+      schemaVersion: 1,
+      executorSlot: 'writer',
+      prompt: 'review the change',
+    } as unknown as WorkflowAgentConfig
+    const { container } = renderWithProviders(
+      <NodeParameterSummary data={nodeData({ kind: 'agent', agentConfig })} />,
+    )
+
+    expect(container.querySelectorAll('dt')).toHaveLength(0)
   })
 })

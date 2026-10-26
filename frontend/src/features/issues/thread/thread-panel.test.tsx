@@ -165,7 +165,19 @@ describe('IssueThreadPanel', () => {
     expect(screen.queryByText('等待 Agent 会话启动…')).not.toBeInTheDocument()
   })
 
-  it('shows an exhausted clone failure instead of waiting forever', async () => {
+  it.each([
+    {
+      code: 'clone_attempts_exhausted',
+      cloneAttempts: 3,
+      message: 'clone_attempts_exhausted',
+    },
+    {
+      code: 'agent_plugin_unavailable',
+      cloneAttempts: 1,
+      message:
+        '运行所需的 Agent 插件未安装就绪，请检查插件安装状态后重新发送（agent_plugin_unavailable）',
+    },
+  ])('names $code before a Thread exists instead of waiting forever', async (failure) => {
     serveThread({ declared: false, state: 'pending', entries: [] })
     server.use(
       http.get(RUNS_URL, () =>
@@ -176,10 +188,10 @@ describe('IssueThreadPanel', () => {
               status: 'failed',
               preparation: {
                 stage: 'failed',
-                cloneAttempts: 3,
+                cloneAttempts: failure.cloneAttempts,
                 maxCloneAttempts: 3,
                 retryAt: null,
-                errorCode: 'clone_attempts_exhausted',
+                errorCode: failure.code,
               },
             },
           ],
@@ -188,7 +200,8 @@ describe('IssueThreadPanel', () => {
       ),
     )
     renderPanel()
-    expect(await screen.findByRole('alert')).toHaveTextContent('clone_attempts_exhausted')
+    expect(await screen.findByRole('alert')).toHaveTextContent(failure.message)
+    expect(screen.queryByText('Agent 会话失败（agent_failed）')).not.toBeInTheDocument()
     expect(screen.queryByText('等待 Agent 会话启动…')).not.toBeInTheDocument()
   })
 
@@ -307,11 +320,11 @@ describe('IssueThreadPanel', () => {
     renderPanel()
 
     expect(await screen.findByText('Done')).toBeInTheDocument()
-    expect(messages().getAllByText('tool_call')).toHaveLength(199)
+    expect(messages().getAllByText('工具调用')).toHaveLength(199)
     await user.click(screen.getByRole('button', { name: '加载更早' }))
 
     expect(await screen.findByText('Fix login')).toBeInTheDocument()
-    expect(messages().getAllByText('tool_call')).toHaveLength(203)
+    expect(messages().getAllByText('工具调用')).toHaveLength(203)
     expect(reads.some((params) => params.get('before') === '6')).toBe(true)
     expect(screen.queryByRole('button', { name: '加载更早' })).not.toBeInTheDocument()
   })

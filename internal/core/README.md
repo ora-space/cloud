@@ -1,106 +1,72 @@
-# internal/core: 权威领域状态机引擎
+# internal/core：权威领域与持久化
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/core` 是 Ora Cloud 的权威领域和状态机层。它负责所有业务聚合、状态转换、事务边界、密码学 token 验证和 PostgreSQL 持久化编排。
+本包拥有业务状态、授权、事务与恢复判定。HTTP 和 gRPC 适配层将请求翻译到 Store；跨模块契约见 [文档地图](../../docs/README.md)。
 
-## 模块概览
+## 代码地图
 
-- [migrations](migrations/README.md)：定义按顺序执行、仅向前的 PostgreSQL Schema 迁移脚本和校验和验证。
-- [plugins.go](plugins.go)：插件市场目录快照的落库与读取（`pluginmarket.CatalogSink` 实现）、
-  工作区插件选择状态机（安装/移除 fan-out、聚合规则、SSE 失效广播）。
-- [session_list.go](session_list.go) 与 [session_history.go](session_history.go)：租户 Agent 会话列表、
-  当前成员鉴权和已登记 JSONL 归档的完整读取，不创建会话或修改运行状态。
+| 文件组 | 包内职责 | 跨模块说明 |
+|---|---|---|
+| `store.go`、`public.go`、`control.go` | 注入 SQL pool、事务包装、请求分发、幂等与 Fault | [持久化与事务](../../docs/core/persistence.md) |
+| `auth.go`、`tenant.go`、`join.go`、`space*.go` | 已验证身份解析、租户与成员作用域 | [身份与租户](../../docs/identity/tenancy.md) |
+| `node*.go`、`runtime_*.go`、`run_workspace.go` | Node 事实、控制会话、围栏与运行 Workspace | [运行时控制](../../docs/runtime/runtime-control.md) |
+| `repository_*.go`、`git_*.go` | Binding、同步/发布 Operation、GitGrant 与凭据元数据 | [外部 Git 线](../../docs/repositories/external-git.md) |
+| `issue*.go`、`collaboration*.go`、`form_descriptor.go` | Issue 聚合、时间线、交互和消费方协作端口 | [Issue 协作](../../docs/collaboration/interactions.md) |
+| `agent_run_*.go`、`execution*.go`、`thread*.go`、`business_hooks.go` | 运行生命周期、执行登记、Thread 与同事务结算钩子 | [IssueRun](../../docs/agent-runs/issue-runs.md)、[Controller](../../docs/runtime/controller-integration.md) |
+| `agent_run_residual.go`、`agent_run_residual_reclaim.go` | 原身份/目标覆盖与证据资格、单一回收责任和唯一 owned-delete operation、effect/许可及完成检查 | [残留回收](../../docs/agent-runs/residual-reclamation.md) |
+| `agent_run_residual_fact.go`、`agent_run_residual_loop.go` | 不改旧责任的追加事实、重放与持久冲突阻挡；独立于 Run phase 的账本扫描和原 operation 恢复 | [残留回收](../../docs/agent-runs/residual-reclamation.md) |
+| `agent_run_controlled_reclaim*.go` | 部署运维意图与命令回执、单一根责任和从属数据删除、逐目标终止与外部确认、无账本 D8 保护 | [残留回收](../../docs/agent-runs/residual-reclamation.md) |
+| `task_conversation_*.go`、`thread_preview.go` | 任务级有序消息、同任务 Agent 串行交接与暂停屏障、从 Node 可见正文冻结的后续提示、配置缺口提示和有界进程内实时预览；Agent 初始提示只读冻结的运行输入 | [Thread](../../docs/agent-runs/threads.md)、[IssueRun](../../docs/agent-runs/issue-runs.md) |
+| `revision*.go`、`late_delivery.go`、`session_*.go` | Revision 登记、原交付迟到事实及创建顺序守卫、归档读取、会话列表与统计 | [Revision](../../docs/agent-runs/revisions.md)、[会话读取](../../docs/agent-runs/session-reads.md) |
+| `model_*.go` | 个人配置、冻结绑定、授权摘要与请求观察；不解密 API Key | [模型访问](../../docs/models/model-access.md) |
+| `plugins.go`、`plugin_*.go`、`workflow_asset_imports.go` | 含 Agent 声明副本的市场快照、空间选择、冻结声明关联的 Node 安装计划和资产导入账本 | [插件市场](../../docs/plugins/marketplace.md) |
+| `workflow*.go` | 图、发布快照、准入、运行身份、调度器；Issue Confirm/manual 与直接启动共用的 WorkflowRun 创建、`workflow_invocation_ref` 关联，以及调度器把 WorkflowRun 状态投影回关联 IssueRun | [工作流](../../docs/workflows/workflows.md)、[Issue 协作](../../docs/collaboration/interactions.md) |
+| `hub.go`、`signals.go` | 提交后失效通知和控制信号；不承载权威状态 | [HTTP API](../../docs/core/http-api.md) |
 
-## 架构与运行时模型
+## 定时运行的产物交付
 
-### 聚合根与实体关系
-- **用户与身份（Users & Identities）**：用户通过稳定的 IdP 身份断言（`source`、`subject`）识别。华为登录以 IDaaS `uuid` 为登录键，以经验证的 `globalUserId` 关联预添加的人员；工号不参与授权。冲突的身份映射不能自动合并。
-- **租户、协作空间与成员（Tenants, Spaces & Memberships）**：每个租户恰有一个可见的协作空间，用户可以加入多个租户并切换。`tenant_memberships` 是唯一的成员角色与状态来源，角色为平权的 `admin` 或 `member`。公网通过邀请或申请链接加入，内网通过天舟在职人员核验加入。
-- **项目（Projects）**：每个项目属于一个租户及其唯一协作空间，保留 `(tenant_id, owner_user_id)` 作为持久资源归属与凭据边界；有效租户成员可以访问租户项目。每个 Workspace 按自己的 `requested_ref` 将项目仓库克隆到独立数据目录；`project_storage` 记录只作为历史保留。
-- **仓库 Binding 与 Operation（Repository Bindings & Operations）**：项目的外部仓库（地址、要同步的分支、凭据引用）记录在它唯一的 `repository_bindings` 行上，`projectView` 以项目原有字段名读出。建项目的同一事务建立 Binding 和一行 `pending`、`project_created` 的同步（`repository_operations`）。同步与发布 Operation 的状态和终态由 CHECK 约束固定，每个 Binding 至多一个未结束的同步（部分唯一索引）；`repository_snapshots` 记录 Binding 当前核验过的快照。项目进入 `deleting` 的事务取消尚未 `running` 的 Operation 并清除补同步标记；节点拒绝 quiesce、项目回到 `active` 时，同一事务把被取消的同步或补同步标记补回来（新建一行 `pending`、`deletion_aborted` 的同步，已有同步在跑时改为置补同步标记），被取消的发布不恢复。`delete_project` 等到没有未结束的 Operation 才开始；`create_project` 失败时项目一律转为 `active`。Repo Executor 的 Git 访问由 `AuthorizeGitOperation` 按 Operation 的当前状态判定。
-- **工作区与任务（Workspaces & Tasks）**：每个项目至多拥有一个活跃的 `main` 主工作区（由 `one_main` 部分唯一索引强制约束）。其余工作区均为 `isolated` 隔离工作区，且与 `tasks` 保持 1:1 映射。
-- **操作与效果（Operations & Effects）**：状态变更（如创建项目、启动/停止工作区或删除）作为持久化 `operations` 执行（状态包括 `queued`、`running`、`retry_wait`、`blocked`、`done`、`failed`）。Operation 被分解为持久化 `effects`，表示由 Substrate 和 Controller 执行的外部任务。
-- **clone 请求（Clone Requests）**：由 `(tenant_id, actor_user_id, request_id)` 幂等接受的独立工作项，不挂在 operation/effect 模型上；Controller 经内部控制契约领取、登记派发（`clone_executions`）并接管 Node 结果（`clone_event_receipts`）。公开 `/clones` 路由只对提交者可见，`state` 由请求状态与执行结果投影而来。
-- **节点与会话（Nodes & Sessions）**：`node_instances` 记录运行时工作区上的 Node。Agent 会话以
-  `issue_runs`、`thread_entries` 和执行收据持久化；已交付的完整 JSONL 由 `revisions` 登记到对象存储。
+`scheduled_artifact*.go` 保存声明、签发授权、核验对象并收敛交付，依据
+[verdict 与产物 ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/scheduled-task/20261022-run-verdict-and-artifacts.md)。
+Revision 与产物可以分别派发，每类最多一个未完成执行，两者均收敛后才释放运行 Workspace。
+上传授权不超过运行的固定截止；到期回执仍按原执行身份确认，但不请求 HEAD、不登记对象。
+最终登记在持锁后以数据库实际当前时间检查截止，不能沿用等待锁之前的事务开始时间。
+整批失败或到期时，同事务为冻结清单中未登记的文件补齐拒绝事实；既有采集/核验拒绝与成功登记保持不变，重放不增记。
+对象核验与删除都在事务外执行。清理按确定性键删除索引未覆盖的对象，已结算运行每分钟可再次扫描，
+包含已被保留策略淘汰索引的成功交付；`artifacts_gc_at` 表示上次扫描时间，不表示永久完成。
 
-### 并发控制与锁机制
-- **事务级咨询锁**：第一阶段在 `Store.transact` 中使用 PostgreSQL 的 `SELECT pg_advisory_xact_lock(67420911)` 将领域变更串行化。这会在将锁保持在数据库内部的同时，避免聚合状态转换期间的竞态条件。
-- **单项目单活动操作约束**：由 `idleProject` 守卫强制保证：若某个项目当前存在处于 `queued`、`running`、`retry_wait` 或 `blocked` 状态的未完成操作，则严禁为其调度新的操作。
-- **乐观并发控制**：对可变实体的变更必须传入显式的 `version` 资源版本号。缺失版本号返回 `428 version_required`；版本号不匹配返回 `409 version_conflict`。
-- **Controller 独占租约与 Epoch 栅栏**：Controller 工作进程通过 `/internal/v1/controller-lease/acquire` 获取独占租约并定期续约。任务分发使用单调递增的 `epoch` 栅栏（fencing），杜绝过期陈旧 Controller 实例写入。
+零字节文件可声明、上传并登记；每个条目的 index 和名称分别去重。会话原始清单及交付行保留
+`omitted_rejections` 和 `walk_truncated`，不会把有界拒绝明细当成完整遍历结果。只有拒绝或截断信息、
+没有可上传文件时，保留这些事实并直接收敛，不派发空上传或等待截止。
 
-### 幂等性保障
-- 创建与加入等写请求需要 `Idempotency-Key`；租户内记录按 `(tenant_id, user_id)` 隔离，加入前的记录按 `user_id` 隔离。
-- 系统根据 HTTP 方法、请求路径和归一化后的请求体计算 SHA256 哈希指纹。
-- 若相同请求重放已有 Key，系统直接返回之前持久化存储的 HTTP 响应。
-- 若使用相同的 Key 发送不同内容的请求，则直接拒绝并返回 `409 idempotency_conflict`。
+## Store 与事务边界
 
-### 身份认证与信任机制
-- `Authenticator` 基于启动时加载的 Ed25519/RS256 公钥验证 JWT token：
-  - **服务 token**：带有 `kind="service"` 和 `role`（`gateway`、`controller` 或 `node`）声明。
-  - **用户 token**：带有 `kind="user"` 声明，由网关在 `X-Ora-User-Token` header 中转发。路由层严格校验 `user.Caller == service.Subject`。
+- `NewStore` 从注入的 GORM 获取 `*sql.DB`，装配真实 Workflow Directory/Forms；不连接、迁移或建立全局数据库。
+- `transact` 在 PostgreSQL 事务内取得 `pg_advisory_xact_lock(67420911)`，处理领域 Fault 和提交后的通知。调用方必须使用传入的事务执行钩子，不能嵌套开启 Store 事务。
+- `transactWorkflowRun` 以共享模式取全局锁，再尽力取该 run 的排他锁；取到后按关联 Issue 取 Issue 锁，保证同一 Issue 的 Timeline `seq` 写入不并发。锁顺序固定为全局 → run → Issue → Project。
+- 外部网络、Git、文件和对象存储调用必须在事务外；返回后按原身份、版本和授权重新核对。归档读取、发布源核对与凭据确认有专用入口。
+- `Object` 是边界 JSON 值；`Fault` 与 `ErrorCode` 将可预期错误和数据库失败转换为安全公开错误。领域内部的 panic 只在事务控制边界转换，不能吞掉未知 panic。
+- `Store` 的端口与策略时长由命令装配。开发协作端口见 [collab](../collab/README.md)；物理执行证据不由模拟结果代替。
 
-### 错误处理
-- 领域层只产生 `*Fault` 值，其中包含机器可读的 `Code`、动态 `Params` 和 HTTP `Status`。
-- `ErrorCode(err)` 将领域错误和内部数据库错误转换为对客户端安全的 `Fault` 对象，并将意外错误映射为 `500 internal_error`，而不泄露数据库 Schema 或凭据信息。
+迁移目录与完整文件名见 [migrations](migrations/README.md)。包内 `dispatcherDB` fixture 每个进程迁移一次真实 PostgreSQL 模板，再为各 fixture 创建独立数据库副本；跨 HTTP、Git 与存储边界的覆盖在 [integration](../../integration/README.md)。
 
-## 边界与不变量
+残留事实继续由原入口接管：`agent_run_provisioning_fact.go` 处理创建侧，`node_execution.go` 与 `revision.go` 处理原执行终态和交付，
+`runtime_control_delivery.go` 接收已有 `runtime_ack` 的完整运行时证据。`run_workspace.go`、`control.go` 及 effect/许可路径检查原责任绑定；
+不新增 RPC/proto 或公开的系统删除开关。第 2 步受控入口为 `cloudctl residual`：以部署数据库凭据及 `session_user` 识别认证主体，
+人工 operator 标签仅为自述，不新增 HTTP 或租户权限。根 terminate 与最多一个从属 delete_data 各自三态推进；根完成不回退，
+删除只绑定一个 operation，保留首次 `cleared_at`。外部确认仅面向已有未完成意图，并要求逐目标事实引用，不替代物理成功证据。
+受控目标借既有 `ListForceStops` / `ConfirmForceStop` / `GetEffectPermit` 字段交付，普通 force-stop 历史与业务收尾保持独立。
+D8 按原身份显式接管，不回填账本。自动层 A1–A6、两阶段处置和恢复保护见上述专页；本文说明 Cloud 实现合同，
+不声明测试通过，Controller/Sandbox 物理证明及跨仓故障验收仍分别属于第 3/4 步。
 
-- **严禁长事务**：数据库事务绝对禁止跨越外部网络调用、Git 操作、Substrate 调用或子进程执行。
-- **零内存业务状态**：所有状态流转在向客户端返回成功之前，必须已提交持久化至 PostgreSQL。
-- **租户强隔离**：项目和运行时读取先核验活动租户成员身份，再以可信 `tenant_id` 限定查询；`owner_user_id` 保留资源、凭据与外部执行归属，不用于排除同租户的其他成员。
+## 数据库测试 fixture
 
-参见 [数据库迁移目录](migrations/README.md)、[权威持久化与事务模型](../../docs/core/persistence.md) 与 [内部凭据与服务信任](../../docs/identity/authentication.md)。
+`fixture_template_test.go` 只用于本包测试：以 `core_template_` 加 32 位 UUID 建立并迁移模板，关闭迁移连接后封闭模板；每个 fixture 取得 `core_run_` 加 32 位 UUID 的独立副本。测试账号需要 `CREATEDB`。普通副本由 `t.Cleanup` 删除，受控回收矩阵沿用逐用例重置，并在 `TestMain` 先清理其副本、再清理模板。模板不接收业务写入，新的 Store 继续绑定原业务 hooks。包结束输出模板迁移和复制累计耗时。
 
-## 个人模型连接
+`fixture_template_isolation_test.go` 验证数据、DDL、迁移记录、后续副本与并行副本隔离，并调用产品的 `CheckSchema`；迁移/升级专用测试仍走 integration 的空白/旧 schema 入口，不使用最新模板替代迁移。清理强制终止进程留下的库见[测试文档](../../docs/development/testing.md#清理遗留测试数据库)。
 
-`model_connections.go`、`model_credentials.go`、`model_run_binding.go` 和 `model_grants.go`
-管理用户私有连接、不可变密文引用、运行快照与临时令牌摘要。Core 不接收或解密上游 API Key；
-冻结、权限、续期与撤销规则见 [个人模型连接](../../docs/models/model-access.md)。
+本包镜像 integration 的小型测试 helper：integration 的 `_test.go` 代码不能作为包导入，而且 integration 已依赖 core；抽取共享包会额外引入回调 API 并改动另一套 fixture。生产代码不依赖这些全局测试状态。
 
-## 会话 Dashboard 读取
+`scheduled_run_artifact_api.go` 在短事务中按当前成员、Issue 和 Run 检查读取范围。列表只返回登记元数据，下载在事务外通过私有端点读取并校验大小/SHA-256（上限 10 MiB），返回前再次核验权限与登记；调用者不能指定对象键。登记/淘汰同事务发出失效提示，历史中的 verdict 与数量从独立运行事实读取。
 
-`GET /api/v1/tenants/:tid/agent-sessions` 仅列出已持久化的 Agent IssueRun，排除已删除的 Run 和
-Issue。筛选项为 `projectId`、单个 `status`、精确插件标识 `agent` 和创建时间区间 `from`（含）/
-`to`（不含，RFC 3339）。默认 `limit=50`，最大 100；按 `(createdAt,id)` 倒序，`after` 为上一页的
-`nextCursor` UUID。游标必须属于当前租户内可见的 Agent Run；不支持 `before`。
-
-两个新读取入口在通用 `Public` 事务之前分派：`sessionReadIdentity` 只解析已有身份及 Huawei 别名，
-检查身份冲突、用户启用状态和当前租户成员资格，不进行 JIT 建号、别名绑定或运行时状态刷新。
-列表只投影 Issue、项目、Agent 插件、状态、时间及可空的冻结模型摘要；`historyAvailable` 仅表示存在
-未过期的 Revision 登记，不保证对象存储当前可达，也不保证文件在读取上限内。
-
-`GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history` 由 `Store.SessionHistory` 实现。
-它先在短事务中校验成员、Issue、Agent Run 和未过期 Revision，再在事务外通过私有 S3 端点签名 GET。
-对象键只能来自登记，并精确匹配 `revisions/{tenant}/{run}/{work UUID}/session.jsonl`；客户端不能传 URL
-或路径。实际字节必须与登记大小、SHA-256 相符，最大 32 MiB、100000 条合法 UTF-8 JSONL 对象；
-拒绝重定向、传播取消，存储读取超时 30 秒。返回前再次核验当前权限和登记一致性。
-
-成功响应为 `{source:"archive",records:[...],sizeBytes,sha256}`。`records` 保留文件顺序、重复 `seq`
-更新、原始字段和 JSON 数字精度，由消费者按原 history 语义重放。缺少或过期登记返回
-`404 history_unavailable`，超限返回 `413 history_too_large`，损坏返回 `502 history_invalid`，
-存储故障返回 `502 history_unavailable`；响应不含存储 URL、对象键或凭据。
-
-第一版不将 Chat 或 Workflow Run 声称为 Agent 会话，也不扫描用户个人会话目录。实时页面继续通过已有
-Thread API 读取投影，空间 SSE 只作失效提示。完整归档和 Thread 都不能保证存在 token、cost、父子会话
-关系或每个工具的输入/输出与耗时；缺失信息应显示不可用，不能补造。原始记录的 `seq` 与 Cloud Thread
-分页 `seq` 是两个序列，归档回放不得用后者覆盖前者。
-
-`session_history*_test.go` 使用合成数据、真实 HTTP 和独立 PostgreSQL schema，覆盖授权、路径隔离、
-纯只读身份解析、下载期间撤销权限/替换登记、大小/摘要/JSONL 上限、取消及数值保真；
-`session_list_test.go` 覆盖列表作用域与分页。测试不使用真实用户日志作为 fixture。
-
-## 模型请求统计
-
-`model_attempts.go` 在发送上游 HTTP 前，以当前 grant 的真实租户、Run、执行与冻结模型登记请求。
-迁移 `0035_model_attempt_statistics.sql` 新增 `model_request_attempts`，通过复合外键约束作用域；不回填旧会话。
-完成记录只含状态、协议、模型标识、HTTP 状态、安全错误码、网关观察耗时与可空 token 指标，不保存正文或凭据。
-开始失败则不发送；完成允许在 grant 撤销后写入，重复同内容完成幂等，不同内容为冲突。
-
-`session_model_statistics.go` 提供同 Run 的 `/statistics` 与 `/model-calls` 只读接口，独立于归档可用性。
-前者聚合该 Run 全部已登记 HTTP 尝试，后者按 `(startedAt,id)` 升序分页，默认 50、最大 100。
-每个指标带 `value/knownCount/totalCount/availability`，缺失为 null，已知零仍为零；未完成快照不标为完整。
-`started` 可能是正在请求，也可能是进程退出留下的未完成观察，不推断模型成功、失败或消费为零。
-数据库聚合不读取日志正文，不执行身份创建或生命周期刷新；测试覆盖真实 PG、并发完成、只读查询和覆盖率。
+产物读取将成员关系不足映射为与不存在一致的 404。历史只有在已成功/部分交付且登记索引为空时报告产物过期，不从任务历史年龄或失败状态推断。

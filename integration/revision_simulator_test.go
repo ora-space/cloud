@@ -163,7 +163,7 @@ func TestSimulatorDeliversRevisionToS3AcrossRestart(t *testing.T) {
 			preparedRef := runGit(t, "-C", checkout, "rev-parse", work.O("input").S("revisionRef"))
 			rebootedNode, err := simulator.NewAgentNode(filepath.Join(f.root, "agent-node"))
 			must(t, err)
-			f.controller = &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL, Executions: f.executions, AgentRuns: originalClient, AgentNode: rebootedNode}
+			f.controller = &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL, Executions: f.executions, AgentRuns: originalClient, AgentNode: rebootedNode, Git: f.git}
 			must(t, f.controller.Acquire(t.Context()))
 			refresh := &expiryFirstGrantClient{AgentRunServiceClient: originalClient, cfg: cfg}
 			f.controller.AgentRuns = refresh
@@ -177,7 +177,7 @@ func TestSimulatorDeliversRevisionToS3AcrossRestart(t *testing.T) {
 			// Replace both doubles after upload, then retry the same durable Node evidence.
 			rebootedNode, err = simulator.NewAgentNode(filepath.Join(f.root, "agent-node"))
 			must(t, err)
-			f.controller = &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL, Executions: f.executions, AgentRuns: controlpb.NewAgentRunServiceClient(f.controlConn), AgentNode: rebootedNode}
+			f.controller = &simulator.Controller{Client: f.client, SubstrateURL: f.external.URL, Executions: f.executions, AgentRuns: controlpb.NewAgentRunServiceClient(f.controlConn), AgentNode: rebootedNode, Git: f.git}
 			must(t, f.controller.Acquire(t.Context()))
 			fail = false
 			_, err = f.controller.Step(t.Context())

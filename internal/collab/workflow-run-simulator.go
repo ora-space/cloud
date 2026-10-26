@@ -46,8 +46,20 @@ func (MockWorkflowRunSimulator) SimulateWorkflowRun(graph, input core.Object) (n
 			"finishedAt":  finishedAt.UTC().Format(time.RFC3339),
 		}
 		if isStart {
-			// The one thing the sim can truthfully report: what it was kicked off with.
-			state["output"] = core.Object{"input": input}
+			// The one thing the sim can truthfully report: what it was kicked off with. Match the
+			// real Start output shape — `input` is the run's kickoff (the submitted value, else the
+			// authored prompt) and each run-form variable is a root — so a UI negative case reads the
+			// same pool the scheduler writes.
+			output := core.Object{}
+			for key, value := range input {
+				if key != "input" {
+					output[key] = value
+				}
+			}
+			if kickoff, ok := core.WorkflowStartKickoff(data, input); ok {
+				output["input"] = kickoff
+			}
+			state["output"] = output
 		} else {
 			state["output"] = core.Object{"message": "Simulated " + title + " result (simulated; no real work was performed)."}
 		}

@@ -2,9 +2,11 @@ import {
   ArrowRight,
   Boxes,
   Braces,
+  CornerDownRight,
   GitBranch,
   GitMerge,
   Layers,
+  Merge,
   Play,
   Repeat,
   UserCheck,
@@ -38,6 +40,11 @@ const NODE_METADATA: Record<WorkflowNodeKind, WorkflowNodeMetadata> = {
     icon: GitBranch,
     tone: 'bg-amber-500/12 text-amber-700 dark:text-amber-400',
   },
+  aggregator: {
+    kind: 'aggregator',
+    icon: Merge,
+    tone: 'bg-orange-500/12 text-orange-700 dark:text-orange-400',
+  },
   tool: { kind: 'tool', icon: Braces, tone: 'bg-cyan-500/12 text-cyan-700 dark:text-cyan-400' },
   junction: {
     kind: 'junction',
@@ -48,6 +55,11 @@ const NODE_METADATA: Record<WorkflowNodeKind, WorkflowNodeMetadata> = {
   loop: {
     kind: 'loop',
     icon: Repeat,
+    tone: 'bg-indigo-500/12 text-indigo-700 dark:text-indigo-400',
+  },
+  loopExit: {
+    kind: 'loopExit',
+    icon: CornerDownRight,
     tone: 'bg-indigo-500/12 text-indigo-700 dark:text-indigo-400',
   },
   iteration: {

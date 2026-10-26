@@ -147,6 +147,7 @@ export function WorkflowEditor({ tenantId, workflow, onImported }: WorkflowEdito
             edges={state.edges}
             globalVariables={state.globalVariables}
             onUpdate={state.onNodeDataUpdate}
+            onAddLoopExit={state.onAddLoopExit}
             onClose={() => inspectorRef.current?.collapse()}
           />
         </ResizablePanel>

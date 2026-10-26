@@ -2,6 +2,8 @@ package controlgrpc
 
 import (
 	"context"
+	"encoding/json"
+	"math"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -10,11 +12,23 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 )
 
-// agentRunService is the session side of the control plane: Thread events, Thread commands and
-// upload grants. Writes carry a submission identity, the same way ExecutionService does.
+// agentRunService serves durable session operations and the independent optional preview path.
 type agentRunService struct {
 	controlpb.UnimplementedAgentRunServiceServer
 	store *core.Store
+}
+
+// PublishThreadPreview accepts a lossy replacement under the current execution and lease fences.
+func (s *agentRunService) PublishThreadPreview(ctx context.Context, req *controlpb.PublishThreadPreviewRequest) (*controlpb.PublishThreadPreviewResponse, error) {
+	blocks := make([]core.ThreadPreviewBlock, 0, len(req.GetBlocks()))
+	for _, block := range req.GetBlocks() {
+		blocks = append(blocks, core.ThreadPreviewBlock{HistorySequence: int64(block.GetHistorySequence()), TurnID: block.GetTurnId(), Record: json.RawMessage(block.GetRecord())})
+	}
+	err := s.store.PublishThreadPreview(ctx, principal(ctx), req.GetEpoch(), req.GetOperationId(), core.ThreadPreviewSnapshot{ExecutionID: req.GetExecutionId(), Version: req.GetVersion(), Blocks: blocks, Incomplete: req.GetIncomplete()})
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &controlpb.PublishThreadPreviewResponse{}, nil
 }
 
 func (s *agentRunService) TakeOverThreadEvents(ctx context.Context, req *controlpb.TakeOverThreadEventsRequest) (*controlpb.TakeOverThreadEventsResponse, error) {
@@ -27,6 +41,15 @@ func (s *agentRunService) TakeOverThreadEvents(ctx context.Context, req *control
 		item := core.Object{"sequence": sequence, "record": ev.GetRecord(), "truncated": ev.GetTruncated()}
 		if ev.TurnId != nil {
 			item["turnId"] = ev.GetTurnId()
+		}
+		if ev.VisibleText != nil {
+			item["visibleText"] = ev.GetVisibleText()
+		}
+		if ev.GetVisibleTextTruncated() {
+			item["visibleTextTruncated"] = true
+		}
+		if ev.HistorySequence != nil {
+			item["historySequence"] = int64(ev.GetHistorySequence())
 		}
 		events = append(events, item)
 	}
@@ -78,18 +101,31 @@ func (s *agentRunService) GrantRevisionUpload(ctx context.Context, req *controlp
 	return &controlpb.GrantRevisionUploadResponse{Grants: grants}, nil
 }
 
-// GrantRevisionDownload signs the read of a session execution's prior Revision bundle.
-func (s *agentRunService) GrantRevisionDownload(ctx context.Context, req *controlpb.GrantRevisionDownloadRequest) (*controlpb.GrantRevisionDownloadResponse, error) {
-	out, e := control(ctx, s.store, "grant_revision_download", "", "", core.Object{"epoch": req.GetEpoch(), "executionId": req.GetExecutionId()})
+// GrantScheduledArtifactUpload issues fresh grants for the artifacts a scheduled run declared. Each
+// requested entry must name a declared index whose size and digest Cloud persisted; a request that
+// tries to describe an object Cloud did not freeze is refused instead of granted.
+func (s *agentRunService) GrantScheduledArtifactUpload(ctx context.Context, req *controlpb.GrantScheduledArtifactUploadRequest) (*controlpb.GrantScheduledArtifactUploadResponse, error) {
+	artifacts := make([]core.Object, 0, len(req.GetArtifacts()))
+	for _, artifact := range req.GetArtifacts() {
+		if artifact.GetSize() > math.MaxInt64 {
+			return nil, invalidInput("invalid_upload_checksum")
+		}
+		artifacts = append(artifacts, core.Object{
+			// #nosec G115 -- sizes above MaxInt64 were refused just above.
+			"index": int64(artifact.GetIndex()), "size": int64(artifact.GetSize()), "sha256": artifact.GetSha256(),
+		})
+	}
+	out, e := control(ctx, s.store, "grant_scheduled_artifact_upload", "", "", core.Object{
+		"epoch": req.GetEpoch(), "executionId": req.GetExecutionId(), "artifacts": artifacts,
+	})
 	if e != nil {
 		return nil, e
 	}
-	grants := make([]*controlpb.DownloadGrant, 0)
+	grants := make([]*controlpb.UploadGrant, 0)
 	for _, row := range rows(out["grants"]) {
-		upload := grantMessage(row)
-		grants = append(grants, &controlpb.DownloadGrant{ObjectKey: upload.GetObjectKey(), Url: upload.GetUrl(), Method: upload.GetMethod(), Headers: upload.GetHeaders(), ExpiresAt: upload.GetExpiresAt()})
+		grants = append(grants, grantMessage(row))
 	}
-	return &controlpb.GrantRevisionDownloadResponse{Grants: grants}, nil
+	return &controlpb.GrantScheduledArtifactUploadResponse{Grants: grants}, nil
 }
 
 func threadCommand(row core.Object) *controlpb.ThreadCommand {

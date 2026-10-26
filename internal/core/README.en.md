@@ -1,117 +1,81 @@
-# internal/core: Authoritative Domain Engine
+# internal/core: authoritative domain and persistence
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/core` is the authoritative domain and state-machine layer of Ora Cloud. It owns all business aggregates, state transitions, transaction boundaries, cryptographic token verification, and PostgreSQL persistence orchestration.
+This package owns business state, authorization, transactions and recovery decisions. HTTP and gRPC adapters translate requests into Store calls; see the [document map](../../docs/README.en.md) for cross-module contracts.
 
-## Module map
+## Code map
 
-- [migrations](migrations/README.en.md) defines the forward-only, linear PostgreSQL schema migration scripts and checksum verification.
-- [plugins.go](plugins.go) persists and reads the plugin catalog snapshot (the `pluginmarket.CatalogSink` implementation) and owns the space plugin selection state machine (install/remove fan-out, the aggregation rule, SSE invalidation broadcasts).
-- [session_list.go](session_list.go) and [session_history.go](session_history.go) provide tenant Agent
-  session discovery, current-member authorization and complete registered JSONL archive reads.
+| File group | Package responsibility | Cross-module documentation |
+|---|---|---|
+| `store.go`, `public.go`, `control.go` | Injected SQL pool, transaction wrapper, dispatch, idempotency and Fault | [Persistence and transactions](../../docs/core/persistence.en.md) |
+| `auth.go`, `tenant.go`, `join.go`, `space*.go` | Verified identity resolution, tenant and membership scope | [Identity and tenancy](../../docs/identity/tenancy.en.md) |
+| `node*.go`, `runtime_*.go`, `run_workspace.go` | Node facts, control sessions, fencing and run Workspaces | [Runtime control](../../docs/runtime/runtime-control.en.md) |
+| `repository_*.go`, `git_*.go` | Bindings, sync/publish Operations, GitGrant and credential metadata | [External Git line](../../docs/repositories/external-git.en.md) |
+| `issue*.go`, `collaboration*.go`, `form_descriptor.go` | Issue aggregates, timeline, interactions and consuming collaboration ports | [Issue collaboration](../../docs/collaboration/interactions.en.md) |
+| `agent_run_*.go`, `execution*.go`, `thread*.go`, `business_hooks.go` | Run lifecycle, execution registry, Thread and transaction-scoped settlement hooks | [IssueRun](../../docs/agent-runs/issue-runs.en.md), [Controller](../../docs/runtime/controller-integration.en.md) |
+| `agent_run_residual.go`, `agent_run_residual_reclaim.go` | Original identity/target coverage and evidence eligibility, one reclamation responsibility and one owned-delete operation, effect/permit and completion checks | [Residual reclamation](../../docs/agent-runs/residual-reclamation.en.md) |
+| `agent_run_residual_fact.go`, `agent_run_residual_loop.go` | Appended facts without rewriting old responsibility, replay and durable conflict blocking; ledger scans independent of Run phase and original-operation recovery | [Residual reclamation](../../docs/agent-runs/residual-reclamation.en.md) |
+| `agent_run_controlled_reclaim*.go` | Deployment-operator intents and command receipts, one root responsibility and dependent data deletion, per-target termination and external confirmation, and D8 guards without ledger backfill | [Residual reclamation](../../docs/agent-runs/residual-reclamation.en.md) |
+| `task_conversation_*.go`, `thread_preview.go` | Ordered task messages, serial same-task Agent handoff and pause barriers, follow-up prompts frozen from Node visible text, configuration-gap hints and a bounded in-process live preview; initial Agent prompts read only the frozen run input | [Thread](../../docs/agent-runs/threads.en.md), [IssueRun](../../docs/agent-runs/issue-runs.en.md) |
+| `revision*.go`, `late_delivery.go`, `session_*.go` | Revision registration, original late-delivery facts and creation-order guard, archives, session listing and statistics | [Revision](../../docs/agent-runs/revisions.en.md), [Session reads](../../docs/agent-runs/session-reads.en.md) |
+| `model_*.go` | Personal configuration, frozen bindings, grant digests and request observations; no API Key decryption | [Model access](../../docs/models/model-access.en.md) |
+| `plugins.go`, `plugin_*.go`, `workflow_asset_imports.go` | Catalog snapshots with Agent declaration copies, space selection, Node install plans with frozen declaration associations and asset import ledger | [Plugin marketplace](../../docs/plugins/marketplace.en.md) |
+| `workflow*.go` | Graphs, published snapshots, admission, run identity and scheduler; WorkflowRun creation shared by Issue confirm/manual and direct starts, the `workflow_invocation_ref` link, and the scheduler's projection of WorkflowRun status onto the linked IssueRun | [Workflows](../../docs/workflows/workflows.en.md), [Issue collaboration](../../docs/collaboration/interactions.en.md) |
+| `hub.go`, `signals.go` | Post-commit invalidation and control hints; no authoritative state | [HTTP API](../../docs/core/http-api.en.md) |
 
-## Architecture and runtime model
+## Scheduled-run artifact delivery
 
-### Aggregates and relationships
-- **Users & Identities**: Users are identified by stable IdP claims (`source`, `subject`). Huawei login keeps the IDaaS `uuid` as its subject and associates a directory-selected person through the verified `globalUserId`; employee numbers grant no access. Conflicting identity mappings are never merged automatically.
-- **Tenants, Spaces & Memberships**: Each tenant has exactly one visible collaboration space, and a user may join and switch among many tenants. `tenant_memberships` is the sole authority for the peer `admin` and `member` roles and membership status. Public deployments use invitation or application links; corporate deployments verify active employees through Tianzhou.
-- **Projects**: Each project belongs to a tenant and its sole collaboration space. `(tenant_id, owner_user_id)` remains the durable resource and credential ownership boundary, while any active tenant member can access tenant projects. Each Workspace clones the project repository into its own data at its `requested_ref`; `project_storage` rows are retained history only.
-- **Repository Bindings & Operations**: A project's external repository (URL, branch to sync, credential references) lives on its sole `repository_bindings` row, read under the project's published field names through `projectView`. The transaction that creates a project also creates its Binding and one `pending` sync with trigger `project_created` (`repository_operations`). CHECK constraints fix the sync and publish states and their terminal states, and a partial unique index allows at most one unfinished sync per Binding; `repository_snapshots` records each Binding's current verified snapshot. Entering `deleting` cancels the Operations that have not reached `running` and clears the resync request in the same transaction; when a Node refuses quiesce and the project returns to `active`, that transaction gives the owed sync back (a `pending` sync with trigger `deletion_aborted`, or the resync request while a sync is still running), while cancelled publishes stay cancelled. `delete_project` starts only once no Operation is unfinished, and a failed `create_project` always leaves the project `active`. `AuthorizeGitOperation` decides the Repo Executor's Git access from the Operation's current state.
-- **Workspaces & Tasks**: Each project has at most one active `main` workspace (enforced by the `one_main` partial unique index). Additional workspaces are `isolated` and map 1:1 with `tasks`.
-- **Operations & Effects**: Mutations (such as project creation, workspace start/stop, or deletion) execute as durable `operations` (`queued`, `running`, `retry_wait`, `blocked`, `done`, `failed`). Operations decompose into durable `effects` representing external tasks executed by Substrate and Controller.
-- **Clone Requests**: independent work items accepted idempotently by `(tenant_id, actor_user_id, request_id)`, outside the operation/effect model; a Controller claims them over the internal control contract, registers the dispatch (`clone_executions`) and takes over the Node result (`clone_event_receipts`). The public `/clones` routes are visible to the submitting user only; `state` is projected from the request state and the execution result.
-- **Nodes & Sessions**: `node_instances` records Nodes on runtime workspaces. Agent conversations
-  persist in `issue_runs`, `thread_entries` and execution receipts; `revisions` registers delivered
-  complete JSONL objects in storage.
+`scheduled_artifact*.go` persists declarations, signs grants, verifies objects and settles delivery under
+the [verdict/artifact ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/scheduled-task/20261022-run-verdict-and-artifacts.md).
+Revision and artifact deliveries dispatch independently, with at most one unfinished execution of
+each kind; both must settle before the run Workspace releases. Upload grants never outlive the run's
+fixed deadline. Expired receipts still acknowledge the original execution without HEAD or registration.
+Final registration checks the actual database clock after acquiring the lock, rather than the
+transaction start before the lock wait. Batch failure or expiry atomically records rejections for
+unregistered files in the frozen manifest, preserving existing collection/verification rejections
+and registered successes without adding facts on replay.
+Object verification and deletion happen outside transactions. Cleanup derives deterministic keys and
+deletes objects absent from the index. Settled runs become eligible for another sweep after one minute,
+including successful deliveries whose index retention has pruned. `artifacts_gc_at` records the last
+sweep, never permanent completion.
 
-### Concurrency and locking
-- **Transactional advisory lock**: Phase-one serializes domain mutations using PostgreSQL's `SELECT pg_advisory_xact_lock(67420911)` within `Store.transact`. This eliminates race conditions during aggregate state transitions while keeping locking database-local.
-- **Single active operation per project**: Enforced by `idleProject`: a new project operation cannot be scheduled if another operation is currently `queued`, `running`, `retry_wait`, or `blocked`.
-- **Optimistic concurrency**: Mutations on mutable entities require an explicit `version` parameter. A missing version returns `428 version_required`; a mismatched version returns `409 version_conflict`.
-- **Controller leases**: Controller workers acquire exclusive leases via `/internal/v1/controller-lease/acquire`, renewed periodically. Work dispatching uses monotonic `epoch` fencing to reject stale controller instances.
+Zero-length files may be declared, uploaded and registered; indices and names are deduplicated
+independently. The original session manifest and delivery row preserve `omitted_rejections` and
+`walk_truncated`, so a bounded refusal list never implies a complete walk. A declaration containing
+only refusals or truncation facts settles immediately without an empty upload or deadline wait.
 
-### Idempotency
-- Creation and joining writes require an `Idempotency-Key` header. Tenant-scoped records use `(tenant_id, user_id)`; pre-membership join records use `user_id`.
-- Requests compute a SHA256 hash of the method, path, and normalized body.
-- An identical request replaying an existing key returns the previously stored HTTP response.
-- A differing request using the same key is rejected with `409 idempotency_conflict`.
+## Store and transaction boundaries
 
-### Authentication and trust
-- `Authenticator` validates JWT tokens using Ed25519/RS256 public keys loaded at startup:
-  - **Service tokens**: Carry `kind="service"` and `role` (`gateway`, `controller`, or `node`).
-  - **User tokens**: Carry `kind="user"` and are forwarded in the `X-Ora-User-Token` header by the gateway. The router ensures `user.Caller == service.Subject`.
+- `NewStore` obtains `*sql.DB` from injected GORM and wires the real Workflow Directory/Forms; it neither connects nor migrates nor creates a global database.
+- `transact` takes `pg_advisory_xact_lock(67420911)` inside PostgreSQL, handles domain Faults and post-commit notifications. Hooks must use the supplied transaction, never start a nested Store transaction.
+- `transactWorkflowRun` takes the global lock in shared mode, then this run's exclusive lock on a best-effort basis; once it holds that right it takes the linked Issue's lock so Timeline `seq` writes of one Issue never overlap. Lock order is always global → run → Issue → Project.
+- Network, Git, filesystem and object-store calls happen outside transactions; callers recheck identity, version and authorization afterwards. Archive reads, publish-source checks and credential confirmation have dedicated entrypoints.
+- `Object` is the boundary JSON value. `Fault` and `ErrorCode` convert expected failures and database errors into safe public errors. Domain panics are converted only at the transaction control boundary; unexpected panics must not be swallowed.
+- Commands wire Store ports and policy durations. See [collab](../collab/README.en.md) for development ports; simulated results do not replace physical execution evidence.
 
-### Error handling
-- The domain exclusively raises `*Fault` values containing a machine-readable `Code`, dynamic `Params`, and an HTTP `Status`.
-- `ErrorCode(err)` converts domain and internal database errors into client-safe `Fault` objects, mapping unexpected errors to `500 internal_error` without leaking database schema or credential information.
+See [migrations](migrations/README.en.md) for complete migration filenames. Package `dispatcherDB` fixtures migrate one real PostgreSQL template per process and give each fixture an independent database copy; [integration](../../integration/README.en.md) covers HTTP, Git and storage boundaries.
 
-## Boundaries and invariants
+Residual facts retain their original intake: `agent_run_provisioning_fact.go` handles creation facts, `node_execution.go` and `revision.go` handle
+original execution terminals and delivery, and `runtime_control_delivery.go` accepts full runtime evidence through existing `runtime_ack`.
+`run_workspace.go`, `control.go` and effect/permit paths enforce the original responsibility binding. No new RPC/proto or public system-delete
+flag is introduced. Step 2 uses `cloudctl residual` with deployment database credentials and authenticated `session_user`; an operator label is
+self-reported. No HTTP route or tenant privilege is added. One root terminate and at most one dependent delete_data intent each follow three
+states. Root completion never regresses; deletion binds one operation and preserves the first `cleared_at`. External confirmation requires an
+existing unfinished intent and per-target fact references, without fabricating physical success.
+Controlled targets use existing `ListForceStops` / `ConfirmForceStop` / `GetEffectPermit` fields, independently of ordinary force-stop history
+and business completion. D8 takeover is explicit and uses original identity without ledger backfill. See the dedicated page for automatic
+A1–A6 eligibility, two-stage disposition and recovery guards. This describes the Cloud implementation contract, not passing tests;
+Controller/Sandbox physical proof and cross-repository fault acceptance remain steps 3 and 4 respectively.
 
-- **No long-lived transactions**: Transactions must never encompass network calls, Git operations, Substrate calls, or child process execution.
-- **No in-memory state**: All state transitions must be committed to PostgreSQL before returning success.
-- **Tenant isolation**: Project and runtime reads verify active tenant membership and scope queries by a trusted `tenant_id`. `owner_user_id` remains for resource, credential, and execution ownership; it does not exclude another member of the same tenant.
+## Database test fixtures
 
-See [Database migrations](migrations/README.en.md), [Authoritative persistence](../../docs/core/persistence.en.md), and [Internal credentials](../../docs/identity/authentication.en.md).
+`fixture_template_test.go` is local to this test package. It creates and migrates a `core_template_` database with a 32-character UUID suffix, closes the migration pool and seals the source. Each fixture receives an independent `core_run_` database with a 32-character UUID suffix. The test role requires `CREATEDB`. Ordinary copies belong to `t.Cleanup`; controlled-reclamation matrices retain their per-case resets, and `TestMain` drops their copy before the template. The template accepts no business writes; fresh Stores retain the existing business hooks. Package shutdown reports cumulative migration and copy time.
 
-## Personal model connections
+`fixture_template_isolation_test.go` covers data, DDL, migration history, later copies and parallel copies, and calls the product's `CheckSchema`. Migration/upgrade tests retain integration's empty/older-schema path rather than substituting the latest template. See the [testing guide](../../docs/development/testing.en.md#cleaning-up-leftover-test-databases) for cleanup after a killed process.
 
-`model_connections.go`, `model_credentials.go`, `model_run_binding.go` and `model_grants.go`
-own private metadata, immutable ciphertext references, run snapshots and temporary-token digests.
-Core never receives or decrypts upstream API keys. See [personal model connections](../../docs/models/model-access.en.md)
-for freezing, authorization, renewal and revocation rules.
+This package mirrors integration's small test helper: its `_test.go` code is not importable, and integration already depends on core. Extracting a shared package would add a callback API and change another fixture implementation. Production code does not depend on these global test states.
 
-## Session Dashboard reads
+`scheduled_run_artifact_api.go` authorises the current member, Issue and Run within a short transaction. Lists return registered metadata only; downloads read through the private endpoint outside the transaction, verify size/SHA-256 under a 10 MiB cap, and recheck access/registration before returning, without accepting caller-selected object keys. Registration/pruning emit transactional invalidation hints, and history reads verdict/counts from independent run facts.
 
-`GET /api/v1/tenants/:tid/agent-sessions` lists persisted Agent IssueRuns, excluding deleted runs
-and Issues. Filters are `projectId`, one `status`, the exact plugin identifier `agent`, and creation
-times `from` (inclusive) / `to` (exclusive, RFC 3339). `limit` defaults to 50 and caps at 100.
-Ordering is descending `(createdAt,id)`; `after` is the preceding page's `nextCursor` UUID and must
-resolve to a visible Agent Run in the current tenant. `before` is unsupported.
-
-Both new readers dispatch before the general `Public` transaction. `sessionReadIdentity` resolves
-existing identities and Huawei aliases and checks conflicts, active user status and current tenant
-membership without provisioning users, binding aliases or refreshing runtime state. The list projects
-Issue/project identity, Agent plugin, status, timestamps and a nullable frozen model summary.
-`historyAvailable` means an unexpired Revision registration exists; storage reachability and size
-bounds are checked only when reading the archive.
-
-`GET /api/v1/tenants/:tid/issues/:iid/runs/:rid/history` calls `Store.SessionHistory`. A short
-transaction checks membership, Issue, Agent Run and unexpired registration. Private signed S3 GET
-runs outside the transaction. Only the registered key is accepted, with the exact layout
-`revisions/{tenant}/{run}/{work UUID}/session.jsonl`; callers cannot supply a URL or path. Actual
-bytes must match the registered size and SHA-256, with a 32 MiB / 100000-object bound and valid UTF-8
-JSONL. The read refuses redirects, propagates cancellation and has a 30-second storage timeout.
-A second short transaction rechecks current authorization and unchanged registration before return.
-
-The response is `{source:"archive",records:[...],sizeBytes,sha256}`. Records retain file order,
-duplicate `seq` updates, original fields and JSON numeric precision for consumer-side history replay.
-Absent/expired registration returns `404 history_unavailable`; oversized input returns
-`413 history_too_large`; invalid bytes or JSONL return `502 history_invalid`; storage failures return
-`502 history_unavailable`. No storage URL, object key or credential is exposed.
-
-This version does not represent Chat or Workflow Runs as Agent sessions and never scans personal
-session directories. Live views keep using the existing Thread projection; space SSE is an invalidation
-hint. Neither Thread nor an archive guarantees token/cost usage, parent-child relationships, or every
-tool's input/output and timing. Missing data stays unavailable. Record `seq` and Cloud Thread paging
-`seq` are separate sequences and must remain distinct during replay.
-
-`session_history*_test.go` uses synthetic data, real HTTP and isolated PostgreSQL schemas for access,
-scoped keys, read-only identities, revocation/replacement during I/O, byte/checksum/JSONL bounds,
-cancellation and numeric preservation. `session_list_test.go` covers list scope and pagination.
-No real user conversation is a product test fixture.
-
-## Model request statistics
-
-`model_attempts.go` records intent before outbound HTTP using the live grant's tenant, run, execution and frozen model.
-Append-only migration `0035_model_attempt_statistics.sql` adds `model_request_attempts` with composite scope foreign keys;
-existing sessions are not backfilled. Rows contain statuses, protocol/model, safe error codes, gateway timing and nullable
-usage counters, never request/response content or credentials. Failed intent persistence blocks forwarding. Finalization
-may close a revoked grant's existing attempt; identical completion is idempotent and conflicting completion is rejected.
-
-`session_model_statistics.go` serves authorized run `/statistics` and `/model-calls` reads independently of archives.
-Statistics aggregate every recorded HTTP attempt in the run; calls page ascending `(startedAt,id)`, default 50, maximum 100.
-Every metric carries `value/knownCount/totalCount/availability`: missing stays null, measured zero stays zero, and unfinished
-usage snapshots remain partial. `started` may mean an active request or a lost final observation, never inferred success,
-failure or zero consumption. Reads do not provision identities or refresh lifecycle state. Real PG tests cover immutable
-concurrent completion, coverage, pagination and database-enforced read-only access.
+Artifact reads map missing membership to the same 404 as an absent resource. History reports expiry only for settled successful/partial deliveries whose registered index is empty, never from occurrence age or failure.

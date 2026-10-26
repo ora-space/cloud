@@ -19,9 +19,11 @@
 | `ratelimit.go` | Per-client token bucket with a bounded key table; start/callback are limited before any attempt row is written. |
 | `cleanup.go` | `RunCleanup`: lifecycle-owned bounded batch cleanup loop. |
 | `web.go` | `Web`/`OpenWeb`: optionally serves the built frontend from `web.dist_dir`. Startup requires `index.html`; only `GET`/`HEAD` requests no route matches are handled, files are opened through an `os.Root` (neither `..` nor a symbolic link escapes the directory), and an unmatched client-side route gets `index.html` (`Cache-Control: no-cache`); `/api/`, `/auth/`, `/internal/` and `/healthz` stay JSON 404s. |
-| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`: defaults and startup validation of every security bound, including that at least one provider is configured and that `login.development_provider` is only accepted with `public.development`. |
+| `config.go` | `Config`/`LoadConfig`/`Validate`/`PublicOrigin`: defaults and startup validation of every security bound, including that at least one provider is configured and that `login.development_provider` passes configuration validation only with `public.development` and a loopback HTTP public origin. |
 
 ## Invariants
+
+- When an SSE client disconnects after proxy headers were committed, pass the standard `http.ErrAbortHandler` to `net/http` to abort the connection without an internal-error log or a second 500 response. Unexpected panics still retain diagnostics and a safe error response.
 
 Personal model credential routes go only to the fixed HTTPS model-gateway after the normal session,
 same-origin and signature checks. Cloud is never a fallback for a malformed credential path or an
@@ -37,6 +39,10 @@ unavailable service. Gateway receives public trust only, not the model vault mas
 ## Tests
 
 Unit tests cover `return_to`/origin/cookie policy, identity normalization, credential issuance verified by Cloud's authenticator, configuration bounds, rate limiting, and static frontend serving (files, SPA fallback, escapes, reserved paths). `integration/gateway_test.go` uses real HTTP, PostgreSQL, the real Cloud router, and a PKCE-verifying fake provider to cover login, proxying, forged headers, cross-site mutations, replay, concurrent consumption, multiple replicas, expiry, revocation, cleanup, provider/Cloud failures, database constraints, and serving the frontend on the same origin as `/auth` and `/api`.
+
+`TestDevelopmentProviderRequiresExplicitLoopbackHTTPOrigin` proves that configuration validation rejects public HTTPS, loopback HTTPS, and a development provider without the development flag. `integration/gateway_authorization_test.go` exercises the real Gateway/Cloud/PostgreSQL path: the creator becomes administrator, external login grants no membership, ordinary members cannot promote themselves, and disabling a membership immediately denies tenant access on every replica while preserving the valid identity. Another external login cannot reactivate that membership. The fake provider supplies automated protocol evidence; it does not establish browser acceptance against a real external provider.
+
+`integration/gateway_callback_test.go` proves that an attempt expired in PostgreSQL is rejected before code exchange even while its browser cookie and provider code remain valid. No session is created, and the attempt cookie is cleared.
 
 `query_test.go` covers route, method, and encoding boundaries of the session query guard. `query_db_test.go` uses an isolated PostgreSQL schema and the real Gateway and Cloud router to verify rejection before proxy cleanup, authentication order, unchanged valid queries, Cloud-owned parameter rejection, and compatibility for other routes. Set `TEST_DATABASE_URL`; `REQUIRE_POSTGRES=1` prevents skipping when the database is missing.
 

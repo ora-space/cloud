@@ -4,8 +4,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/wanglongan587/cloud/internal/config"
@@ -21,44 +23,76 @@ func main() {
 }
 
 func run() error {
-	configFile := flag.String("config", "", "configuration file")
-	command := flag.String("command", "", "migrate | bootstrap | credential-ref")
-	name := flag.String("name", "", "tenant name")
-	source := flag.String("source", "", "stable identity namespace")
-	subject := flag.String("subject", "", "identity subject")
-	display := flag.String("display-name", "", "display name")
-	tenant := flag.String("tenant", "", "tenant UUID")
-	owner := flag.String("owner", "", "owner UUID")
-	secret := flag.String("secret-ref", "", "infrastructure secret reference, never a secret value")
-	flag.Parse()
-	cfg, e := config.Load(*configFile)
+	return runArgs(context.Background(), os.Args[1:], os.Stdout)
+}
+
+type commandOptions struct {
+	configFile, command, name, source, subject, display string
+	residual                                            core.ResidualManagementRequest
+}
+
+func parseCommand(args []string) (commandOptions, error) {
+	var opts commandOptions
+	flags := flag.NewFlagSet("cloudctl", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&opts.configFile, "config", "", "configuration file")
+	flags.StringVar(&opts.command, "command", "", "migrate | bootstrap")
+	flags.StringVar(&opts.name, "name", "", "tenant name")
+	flags.StringVar(&opts.source, "source", "", "stable identity namespace")
+	flags.StringVar(&opts.subject, "subject", "", "identity subject")
+	flags.StringVar(&opts.display, "display-name", "", "display name")
+	if err := flags.Parse(args); err != nil {
+		return opts, invalidArguments()
+	}
+	if rest := flags.Args(); len(rest) != 0 {
+		if rest[0] != "residual" || opts.command != "" || opts.name != "" || opts.source != "" || opts.subject != "" || opts.display != "" {
+			return opts, invalidArguments()
+		}
+		request, err := parseResidual(rest[1:])
+		if err != nil {
+			return opts, err
+		}
+		opts.command, opts.residual = "residual", request
+	}
+	if opts.command != "migrate" && opts.command != "bootstrap" && (opts.command != "residual" || opts.residual.Action == "") {
+		return opts, invalidArguments()
+	}
+	return opts, nil
+}
+
+func runArgs(ctx context.Context, args []string, output io.Writer) error {
+	opts, e := parseCommand(args)
 	if e != nil {
 		return e
 	}
-	db, e := repository.InitDB(context.Background(), cfg.Database)
+	cfg, e := config.Load(opts.configFile)
 	if e != nil {
-		return e
+		return errors.New("configuration_error")
+	}
+	db, e := repository.InitDB(ctx, cfg.Database)
+	if e != nil {
+		return errors.New("database_unavailable")
 	}
 	s, e := core.NewStore(db)
 	if e != nil {
-		return e
+		if pool, poolErr := db.DB(); poolErr == nil {
+			_ = pool.Close()
+		}
+		return errors.New("database_unavailable")
 	}
 	defer s.Pool.Close()
-	ctx := context.Background()
 	var out core.Object
-	switch *command {
+	switch opts.command {
 	case "migrate":
 		e = s.Migrate(ctx)
 		out = core.Object{"migrated": e == nil}
 	case "bootstrap":
-		out, e = s.Bootstrap(ctx, *name, *source, *subject, *display)
-	case "credential-ref":
-		out, e = s.ConfigureCredential(ctx, *tenant, *owner, *secret)
-	default:
-		return fmt.Errorf("unknown command; choose migrate, bootstrap, credential-ref")
+		out, e = s.Bootstrap(ctx, opts.name, opts.source, opts.subject, opts.display)
+	case "residual":
+		return dispatchResidual(ctx, &opts.residual, output, s.ManageResidual)
 	}
 	if e != nil {
-		return e
+		return core.ErrorCode(e)
 	}
-	return json.NewEncoder(os.Stdout).Encode(out)
+	return json.NewEncoder(output).Encode(out)
 }

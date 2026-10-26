@@ -14,6 +14,16 @@ import { db } from '@/mocks/data/store'
  */
 export const mockApi = create({ baseURL: '/mock-api' })
 
+// A missing/restarting mock worker lets the SPA fallback answer with HTML and
+// HTTP 200. Reject it before query caching; consumers expect domain JSON. An empty
+// body (204) also arrives as a string and stays valid.
+mockApi.interceptors.response.use((response) => {
+  if (typeof response.data === 'string' && response.data !== '') {
+    throw new Error('Mock API returned a non-JSON response')
+  }
+  return response
+})
+
 mockApi.interceptors.request.use((config) => {
   if (config.url?.startsWith('/workspaces/')) {
     config.url = config.url.replace(/^\/workspaces\/[^/]+/, `/workspaces/${db.workspace.slug}`)

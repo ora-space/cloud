@@ -69,7 +69,7 @@ Cloud's own background loops, see [Agent IssueRuns](../agent-runs/issue-runs.en.
 A workflow has exactly one execution boundary: an explicit **confirm**.
 
 ```text
-select workflow ──▶ read form descriptor ──▶ fill in (optional AI assist) ──▶ confirm ──▶ IssueRun
+select workflow ──▶ read form descriptor ──▶ fill in (optional AI assist) ──▶ confirm ──▶ WorkflowRun + IssueRun
   no execution        no execution             no execution, no run              the only execution boundary
 ```
 
@@ -77,26 +77,63 @@ select workflow ──▶ read form descriptor ──▶ fill in (optional AI as
   Issue-facing rendering description: `formRef`, title, description and a list of fields. It is not the
   workflow's schema and binds to no schema technology. Fields come in three bands: platform fields, the
   variables declared by the workflow's Start node, and the graph's global variables.
+  The frontend first reads the current document only to locate the platform version selector and its
+  default version. Once the default (the newest selectable published version) is known, the initial form is read
+  from that version through `GET /tenants/:tid/workflows/:wfid/snapshots/:snapshotId/form?issueId=…`,
+  and switching the selector reloads the new version the same way. The form shown and the version Confirm
+  validates are therefore always the same, and fields the live draft has not published never appear in
+  the default view.
+  That promise does not depend on the live draft: whenever a selectable published version exists the
+  form carries the platform's version selector, defaulting to the newest selectable version, and a
+  same-named declaration in the live draft is neither rendered nor read as the cursor. Versions
+  published before this rule that declare `snapshotId` themselves are not offered by the selector, and
+  Confirm refuses one it resolves to with `409 workflow_version_reserved_field` instead of choosing
+  another version (see [Workflows](../workflows/workflows.en.md)). When a launch field withdraws the
+  selector the form has none: leaving the key out resolves the newest published version, and submitting
+  it is still read as the version cursor; a resolved version that declares the reserved key itself is
+  likewise refused with `409 workflow_version_reserved_field` instead of running.
 - **Platform fields** are injected only when the form is opened for an Issue: repository URL and branch
   (defaulting to the repository and default branch of the Issue's Project; required), a prompt, the
   published version to run `snapshotId`, and additional context references `context_refs`. When the
-  workflow declares a variable of the same name, the workflow's declaration wins.
+  workflow declares a variable of the same name, the workflow's declaration wins — except for the
+  reserved field `snapshotId`, which always belongs to the platform and is never projected from the
+  author's declaration (see [Workflows](../workflows/workflows.en.md)).
+- **The version selector lists only selectable versions.** The platform-owned `snapshotId` field offers
+  only published versions whose graph no longer declares the reserved field `snapshotId`; the option cap
+  counts only those, and the default is the newest one. When nothing is selectable the form carries no
+  selector. If versions are withheld for this reason, the selector's description says why and asks the
+  author to republish from a live draft that no longer declares the key (see
+  [Workflows](../workflows/workflows.en.md)).
 - **AI assist** (`POST .../issues/:iid/collaboration/assist`) only returns a field-level suggestion patch
   and suggested context references: it never creates a run and never writes persistent context
-  references. Applying a suggestion is the user's action. Production has no assist provider wired in and
-  returns `503 assist_unavailable`.
+  references. Applying a suggestion is the user's action. It judges the shape of the submission against
+  the form the user is filling: the version named by the cursor when there is one, otherwise the newest
+  selectable published version the selector opens on, and the live draft when nothing is selectable. It
+  therefore accepts only the fields that version declares. Confirm still resolves a cursorless submission
+  to the newest published version and refuses it under the reserved-field rule rather than choosing
+  another version; assist executes nothing and substitutes nothing. Production has no assist provider
+  wired in and returns `503 assist_unavailable`.
 - **Confirm** (`POST .../issues/:iid/interactions/:ixid/confirm`) is the only transition that turns a
   workflow interaction into execution intent:
   - Frontend validation is only for user experience. On confirm Cloud resolves the target **again** and
     validates the submitted values against the form of **the published version being confirmed**; a
     workflow with no published version cannot be confirmed, because an unpublished draft cannot run.
-  - The form the user saw comes from the current document; if its fields no longer match the confirmed
-    version's, the confirm is refused with the changed fields listed
-    (`409 workflow_version_fields_changed`), rather than validating the user's values against a schema
-    they never saw.
+  - Cloud validates against the selected published version's own fields alone, no longer comparing
+    them with the live draft. Choosing an older version runs that snapshot: a submission that matches
+    its form is accepted even when its fields differ from the current draft, and a missing required
+    field or a field that version never declared is refused by that version's schema.
+  - `snapshotId` always belongs to the platform: the submitted value under it is always the version
+    cursor, whether or not the live draft still declares a variable of that name. When the resolved
+    published version's graph declares the key, the confirm returns `409 workflow_version_reserved_field`
+    with the version and the field in its params. This holds with or without a version cursor: Cloud
+    neither substitutes another version nor leaves a run or a claimed interaction behind.
   - The submitted values are kept as the interaction's input and the executed version is frozen into the
     run input, so the run still knows which version it executed after the workflow is edited or
     published again.
+  - One WorkflowRun and one IssueRun are created in the same transaction, and the IssueRun's
+    `workflowInvocationRef` points at that WorkflowRun (a unique composite foreign key with the tenant).
+    Direct runs, manual workflow IssueRuns and confirm share one creation function. A linked IssueRun is
+    never handed to `ExecutionDispatcher`.
   - The interaction is claimed with a compare-and-set on `run_id IS NULL`; a repeated confirm returns
     `409 interaction_already_confirmed`, and confirming a non-form interaction returns
     `409 interaction_not_confirmable`.
@@ -112,11 +149,17 @@ defining what those capabilities are internally:
 | `FormDescriptorProvider` | Produce the form descriptor for a `formRef` | Forms projected from workflow documents |
 | `InputAssistProvider` | AI assist for forms | Not wired (503) |
 | `ContextBuilder` | Assemble a run's context snapshot | Not wired; falls back to a deterministic snapshot of task, form values, target and raw context references |
-| `ExecutionDispatcher`, `ExecutionObserver` | Hand queued runs to an external executor and observe their progress | Not wired: team runs and workflow runs confirmed from an Issue stay `queued` in production |
+| `ExecutionDispatcher`, `ExecutionObserver` | Hand queued runs to an external executor and observe their progress | Not wired: team runs stay `queued` in production; workflow IssueRuns bypass it and execute through their linked WorkflowRun |
 
 Agent runs do not go through `ExecutionDispatcher`; Cloud's own scheduling carries them (see
 [Agent IssueRuns](../agent-runs/issue-runs.en.md)). Runs started directly from a workflow are a different
 aggregate, WorkflowRun; see [Workflows](../workflows/workflows.en.md).
+
+For a linked workflow IssueRun, actual WorkflowRun status updates advance it in the same transaction:
+updates affecting no rows do not project, the reserved `awaiting_input` value (no writer in phase one; see
+[Workflows](../workflows/workflows.en.md)) leaves it unchanged, and contract conflicts roll back the transaction. Output summaries are `system` `run.message` activities bounded to 20000
+bytes of valid UTF-8, never workflow-authored comments. Direct workflow runs without a linked IssueRun
+create none of these collaboration records.
 
 **Development fixtures.** `collaboration.development_fixtures: true` (environment variable
 `CLOUD_COLLABORATION_DEVELOPMENT_FIXTURES`) installs the in-process doubles from `internal/collab` on the
@@ -131,3 +174,4 @@ failure never falls back to a fixture identity. The doubles create no simulated 
 - [Issue collaboration: `@` only selects typed targets; execution comes only from explicit intent](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-collaboration/0-typed-targets-and-explicit-execution-intent.md)
 - [An @Agent IssueRun on an Issue is orchestrated by Cloud](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-run/0-agent-run-in-disposable-isolated-workspace.md)
 - [Workflows are executed by a Cloud-side scheduler](https://github.com/ora-space/specs/blob/main/decisions/cloud/workflow/0-cloud-side-scheduler-owns-workflow-execution.md) (approved)
+- [`snapshotId` is a reserved field: the publish gate refuses author declarations and stock versions are not selectable](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-collaboration/20261021-snapshot-id-is-a-reserved-field.md) (approved)

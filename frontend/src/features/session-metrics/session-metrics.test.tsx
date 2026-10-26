@@ -120,7 +120,90 @@ function trendAttempts(values: (number | null)[]): SessionModelAttempt[] {
   }))
 }
 
+type DecodeCase = {
+  name: string
+  expected: string
+  patch?: Partial<SessionModelAttempt>
+  usage?: Partial<SessionModelAttempt['usage']>
+}
+
+const decodeCases: DecodeCase[] = [
+  { name: 'excludes first-output waiting and does not add reasoning tokens', expected: '50' },
+  { name: 'supports Anthropic streams', patch: { protocol: 'anthropic-messages' }, expected: '50' },
+  { name: 'preserves measured zero', usage: { outputTokens: 0 }, expected: '0' },
+  { name: 'preserves a zero first-output delay', patch: { firstOutputMs: 0 }, expected: '40' },
+  { name: 'formats fractional rates', usage: { outputTokens: 205 }, expected: '51.3' },
+  {
+    name: 'does not round positive rates to zero',
+    usage: { outputTokens: 1 },
+    patch: { durationMs: 21000 },
+    expected: '< 0.1',
+  },
+  { name: 'rejects absent output', usage: { outputTokens: null }, expected: '未知' },
+  { name: 'rejects negative output', usage: { outputTokens: -1 }, expected: '未知' },
+  { name: 'rejects fractional token counts', usage: { outputTokens: 0.5 }, expected: '未知' },
+  {
+    name: 'rejects unsafe token counts',
+    usage: { outputTokens: Number.MAX_SAFE_INTEGER + 1 },
+    expected: '未知',
+  },
+  { name: 'rejects nonfinite output', usage: { outputTokens: Infinity }, expected: '未知' },
+  { name: 'rejects absent duration', patch: { durationMs: null }, expected: '未知' },
+  { name: 'rejects absent first output', patch: { firstOutputMs: null }, expected: '未知' },
+  { name: 'rejects negative duration', patch: { durationMs: -1 }, expected: '未知' },
+  { name: 'rejects negative first output', patch: { firstOutputMs: -1 }, expected: '未知' },
+  { name: 'rejects nonfinite duration', patch: { durationMs: Infinity }, expected: '未知' },
+  { name: 'rejects invalid first output', patch: { firstOutputMs: NaN }, expected: '未知' },
+  {
+    name: 'rejects unsafe duration',
+    patch: { durationMs: Number.MAX_SAFE_INTEGER + 1 },
+    expected: '未知',
+  },
+  { name: 'rejects fractional first output', patch: { firstOutputMs: 0.5 }, expected: '未知' },
+  { name: 'rejects zero duration', patch: { durationMs: 0, firstOutputMs: 0 }, expected: '未知' },
+  { name: 'rejects zero decode interval', patch: { firstOutputMs: 5000 }, expected: '未知' },
+  { name: 'rejects negative decode interval', patch: { firstOutputMs: 6000 }, expected: '未知' },
+  { name: 'rejects non-streaming observations', patch: { streamed: false }, expected: '未知' },
+  { name: 'rejects missing completion', patch: { finishedAt: null }, expected: '未知' },
+  {
+    name: 'rejects missing terminal evidence',
+    patch: { terminalObserved: false },
+    expected: '未知',
+  },
+  { name: 'rejects partial usage', usage: { availability: 'partial' }, expected: '未知' },
+  { name: 'rejects unavailable usage', usage: { availability: 'unavailable' }, expected: '未知' },
+  ...(['started', 'failed', 'cancelled', 'interrupted', 'incomplete'] as const).map((outcome) => ({
+    name: `rejects ${outcome} attempts`,
+    patch: { outcome },
+    expected: '未知',
+  })),
+]
+
 describe('SessionMetrics', () => {
+  it.each(decodeCases)('decode rate $name', ({ patch, usage, expected }) => {
+    const input = props()
+    const template = input.attempts[0]
+    if (!template) throw new Error('Synthetic request missing')
+    const attempt: SessionModelAttempt = {
+      ...template,
+      durationMs: 5000,
+      firstOutputMs: 1000,
+      ...patch,
+      usage: { ...template.usage, availability: 'complete', outputTokens: 200, ...usage },
+    }
+    render(<SessionMetrics {...input} attempts={[attempt]} />)
+    const table = within(screen.getByRole('table'))
+    const header = table.getByRole('columnheader', { name: '平均 Decode 速率（Token/s，估算）' })
+    const column = table.getAllByRole('columnheader').indexOf(header)
+    const row = table.getAllByRole('row').at(1)
+    if (!row) throw new Error('Expected request row')
+    expect(within(row).getAllByRole('cell').at(column)?.textContent).toBe(expected)
+    expect(screen.getByText(/平均 Decode 速率（估算）=/)).toHaveTextContent(
+      '输出 Token ÷（请求时长 − 首次有效输出耗时）',
+    )
+    expect(screen.getByText(/不代表模型内部纯 Decode 性能/)).toBeInTheDocument()
+  })
+
   it('keeps complete-run summaries separate from the current page and states every coverage boundary', () => {
     render(<SessionMetrics {...props()} />)
     const summary = within(screen.getByLabelText('模型请求汇总'))

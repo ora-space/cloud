@@ -3,11 +3,11 @@ package core
 // defaultExecutorGap reports why the user's personal default executor cannot be used for a run, or
 // returns an empty reason when it can. It is the one policy behind both the OpenCode run binding and
 // the workflow `default` slot, so "the default model is usable" cannot come to mean two different
-// things: the default selection must exist, its connection must still be the user's, enabled and
-// undeleted, the connection must still carry a credential, and the chosen model must still be one the
-// connection offers. The connection and model are returned for the caller that goes on to freeze them.
+// things: the default selection must exist, and then the pair it names is judged by the same rules a
+// mapped slot's pair is (personalExecutorGap). The connection and model are returned for the caller
+// that goes on to freeze them.
 //
-// It reports a reason rather than panicking because the two callers answer differently: the OpenCode
+// It reports a reason rather than panicking because the callers answer differently: the OpenCode
 // binding rejects one run with one fault, while the workflow gate collects every unusable slot before
 // refusing so the user can fix them in one pass.
 func defaultExecutorGap(t *transaction, uid string) (reason string, connection, model Object) {
@@ -15,30 +15,29 @@ func defaultExecutorGap(t *transaction, uid string) (reason string, connection, 
 	if d.S("connectionId") == "" {
 		return slotReasonDefaultMissing, nil, nil
 	}
-	c := t.one("SELECT * FROM personal_model_connections WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND enabled", d.S("connectionId"), uid)
-	if c == nil {
-		return slotReasonConnectionDown, nil, nil
-	}
-	if c.S("credentialId") == "" {
-		return slotReasonCredentialMissing, c, nil
-	}
-	m := findModel(c, d.S("modelId"))
-	if m == nil {
-		return slotReasonModelUnavailable, c, nil
-	}
-	return "", c, m
+	return personalExecutorGap(t, uid, d.S("connectionId"), d.S("modelId"))
 }
 
-// bindRunModel freezes the initiating user's personal configuration only for the production
-// OpenCode plugin. It runs in enqueueRun's transaction so missing configuration rolls back the
-// comment, interaction, activity and run together. Unrelated agents keep their existing contract.
-func bindRunModel(t *transaction, runID, uid string, input Object) {
-	if input.S("agentPluginId") != "official/ora-space.opencode" {
+// bindRunModel freezes personal model and declared Agent configuration in the run's creation
+// transaction. Missing configuration rolls back the comment, interaction, activity and run.
+func bindRunModel(t *transaction, runID, uid string, input Object, selectedModel string) {
+	handled, c, m := declaredAgentRunModel(t, runID, uid, input, selectedModel)
+	if !handled && input.S("agentPluginId") != opencodeAgentCLI {
 		return
 	}
 	// The faults are unchanged from before the policy was shared: this path has always named the one
 	// thing the user has to fix, and a caller of the OpenCode route must keep seeing the same codes.
-	reason, c, m := defaultExecutorGap(t, uid)
+	reason := ""
+	if !handled {
+		reason, c, m = defaultExecutorGap(t, uid)
+		// An undeclared OpenCode run has no declaration protocol gates, so a scheduled override is
+		// still resolved and frozen against the owner's current default connection here. Declared
+		// agents resolve the override inside resolveDeclaredAgentRun so its protocol checks apply.
+		if selectedModel != "" {
+			defaultSelection := modelDefault(t, uid)
+			reason, c, m = personalExecutorGap(t, uid, defaultSelection.S("connectionId"), selectedModel)
+		}
+	}
 	switch reason {
 	case "":
 	case slotReasonConnectionDown:
@@ -59,8 +58,11 @@ func bindRunModel(t *transaction, runID, uid string, input Object) {
 		}
 	}
 	id := newID()
-	t.exec(`INSERT INTO run_model_bindings(id,run_id,user_id,connection_id,connection_version,credential_id,connection_name,protocol,base_url,auth_mode,model)
-	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, runID, uid, c.S("id"), c.N("version"), c.S("credentialId"), c.S("name"), c.S("protocol"), c.S("baseUrl"), c.S("authMode"), jsonText(m))
+	// An IssueRun binds the implicit `default` slot: the run_model_bindings migration (0040)
+	// carries slot_name for both run kinds, so a session's binding lookup is uniform
+	// (workflow_run_session.go resolves the same way).
+	t.exec(`INSERT INTO run_model_bindings(id,run_id,slot_name,user_id,connection_id,connection_version,credential_id,connection_name,protocol,base_url,auth_mode,model)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, runID, "default", uid, c.S("id"), c.N("version"), c.S("credentialId"), c.S("name"), c.S("protocol"), c.S("baseUrl"), c.S("authMode"), jsonText(m))
 	input["gitIdentity"] = git
 	// modelBindingId is a server-owned reference; no key or model-gateway grant enters the
 	// durable execution input or Controller stream.
@@ -85,6 +87,14 @@ func threadModelPermissions(t *transaction, run Object, uid string) Object {
 	if !threadAcceptStates[run.S("threadState")] || run.S("cancelRequestedAt") != "" {
 		out["canAppend"] = false
 		out["canEnd"] = false
+	}
+	if taskThreadAppendBlocker(t, run, taskAppendAtQueueTail) != "" {
+		out["canAppend"] = false
+	}
+	if scheduledTaskRun(t, run.S("id")) {
+		// A scheduled occurrence is headless for its complete lifetime, not merely after it becomes
+		// idle. The append endpoint applies the matching 409 guard authoritatively.
+		out["canAppend"] = false
 	}
 	return out
 }

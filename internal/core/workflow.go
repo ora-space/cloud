@@ -102,7 +102,9 @@ func workflowSnapshotList(t *transaction, r *PublicRequest) Object {
 func publishWorkflow(t *transaction, r *PublicRequest) Object {
 	w := t.one("SELECT * FROM workflows WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE", r.WorkflowID, r.TenantID)
 	require(w != nil, 404, "not_found")
-	requireValidWorkflowGraph(w.O("graph"))
+	graph := w.O("graph")
+	requireValidWorkflowGraph(graph)
+	w["graph"] = normalizeWorkflowGlobals(graph)
 	name := w.S("name")
 	if r.Body.S("name") != "" {
 		name = validText(r.Body.S("name"), 200)
@@ -116,8 +118,9 @@ func insertWorkflowSnapshot(t *transaction, w Object, name string) Object {
 	return insertSnapshotGraph(t, w, name, jsonText(w.O("graph")))
 }
 
-// insertSnapshotGraph is the one snapshot write. The graph text is passed separately because the
-// importer stores the package document verbatim instead of re-encoding the graph it just parsed.
+// insertSnapshotGraph is the one snapshot write. The graph text is passed separately so a caller can
+// freeze a graph it did not build from the live document: the importer passes the package document
+// verbatim, re-encoding it only when normalizeWorkflowGlobals rewrote a legacy file reference.
 func insertSnapshotGraph(t *transaction, w Object, name, graph string) Object {
 	next := t.one("SELECT COALESCE(MAX(version),0)+1 AS version FROM workflow_snapshots WHERE tenant_id=$1 AND workflow_id=$2", w.S("tenantId"), w.S("id")).N("version")
 	id := newID()

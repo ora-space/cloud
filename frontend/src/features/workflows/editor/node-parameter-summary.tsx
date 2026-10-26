@@ -141,8 +141,16 @@ function agentParameters(
   if (config === undefined) {
     return []
   }
+  // A node saved under the executor-slot schema carries `executorSlot` instead of
+  // the legacy `executor` binding this build still summarizes. There is no model
+  // row to read from it, so leave the config section empty rather than crash on
+  // the missing `executor`; slot display belongs to the editor (#154).
+  const executor = config.executor
+  if (executor === undefined) {
+    return []
+  }
   const role = capabilities.roles.find((choice) => choice.value === config.roleId)
-  const model = `${config.executor.agentCli} · ${config.executor.modelId}`
+  const model = `${executor.agentCli} · ${executor.modelId}`
   return [
     {
       label: translate('workflows.inspector.field.role'),

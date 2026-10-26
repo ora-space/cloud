@@ -24,7 +24,7 @@ func provisioningFact(t *transaction, r *ControlRequest) Object {
 	w := t.one("SELECT * FROM workspaces WHERE id=$1", o.S("workspaceId"))
 	require(w != nil && w.S("issueRunId") != "", 409, "operation_not_abandoned")
 	run := w.S("issueRunId")
-	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1 AND cleared_at IS NULL", run) != nil,
+	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", run) != nil,
 		409, "operation_not_abandoned")
 
 	switch r.Body.S("kind") {
@@ -59,9 +59,7 @@ func provisioningEffectFact(t *transaction, r *ControlRequest, o Object, run str
 	factOp["controllerEpoch"] = r.Body.N("epoch")
 	out := effectResult(t, r, factOp)
 	e := out.O("effect")
-	appendResidualFact(t, run, "effect:"+e.S("id"), Object{
-		"kind": "effect", "effectKind": e.S("kind"), "state": e.S("state"), "externalId": e.S("externalId"), "result": e.O("result"),
-	})
+	// effectResult appends the same validated fact on both the live and late intake paths.
 	return Object{"operation": t.one("SELECT * FROM operations WHERE id=$1", o.S("id")), "effect": e}
 }
 
@@ -86,9 +84,7 @@ func provisioningExecutionFact(t *transaction, r *ControlRequest, run string) Ob
 		require(e.S("kind") == "install_plugins" || e.S("kind") == "remove_plugins", 409, "invalid_execution")
 		stored = nodeExecutionResult(t, factRequest, false)
 	}
-	appendResidualFact(t, run, r.Body.S("kind")+":"+stored.S("executionId"), Object{
-		"kind": r.Body.S("kind"), "state": executionState(stored), "result": stored.O("result"),
-	})
+	// The execution applier owns the ledger receipt as well as the canonical result.
 	return Object{"operation": t.one("SELECT * FROM operations WHERE id=$1", r.OperationID), "execution": stored}
 }
 
@@ -120,66 +116,4 @@ func provisioningCreationFact(t *transaction, r *ControlRequest, run string) Obj
 	}
 	appendResidualFact(t, run, "creation", fact)
 	return Object{"operation": t.one("SELECT * FROM operations WHERE id=$1", r.OperationID)}
-}
-
-// appendResidualFact receipts one late fact onto the abandoned creation's residual ledger. The
-// fact key is its stable identity; the same fact replays as a no-op. A provisional observation
-// (running, absent/planned, pending) does not lock the identity: the real world progresses, so a
-// later fact — above all the real terminal — takes over and the superseded observation is kept
-// as prior evidence. A recorded terminal is final: only its identical replay is accepted and any
-// different fact for the identity is a conflict, so a retried submission can never stack
-// duplicates or rewrite an outcome. The fact is durable before the caller's ACK: this write is
-// part of the submission's transaction.
-func appendResidualFact(t *transaction, run, key string, fact Object) {
-	row := t.one("SELECT responsibility FROM agent_run_residuals WHERE run_id=$1 AND cleared_at IS NULL", run)
-	require(row != nil, 409, "operation_not_abandoned")
-	resp := row.O("responsibility")
-	facts := Object{}
-	for k, v := range resp.O("lateFacts") {
-		if m, ok := v.(map[string]any); ok {
-			facts[k] = Object(m)
-		}
-	}
-	var prev Object
-	switch v := facts[key].(type) {
-	case map[string]any:
-		prev = Object(v)
-	case Object:
-		prev = v
-	}
-	if prev != nil {
-		if prev.S("state") == fact.S("state") && prev.S("externalId") == fact.S("externalId") && jsonText(prev.O("result")) == jsonText(fact.O("result")) {
-			return
-		}
-		// The recorded outcome is final: a different fact contradicts it.
-		require(!residualFactTerminal(prev), 409, "fact_conflict")
-		// A provisional observation is superseded, not contradicted: keep it as prior evidence
-		// while the later fact becomes the identity's current receipt.
-		superseded := Object{}
-		for k, v := range prev {
-			if k != "prior" {
-				superseded[k] = v
-			}
-		}
-		prior := []any{}
-		if old, ok := prev["prior"].([]any); ok {
-			prior = append(prior, old...)
-		}
-		fact["prior"] = append(prior, superseded)
-	}
-	fact["receivedAt"] = t.one("SELECT clock_timestamp()::text AS received_at").S("receivedAt")
-	facts[key] = fact
-	resp["lateFacts"] = facts
-	t.exec("UPDATE agent_run_residuals SET responsibility=$2 WHERE run_id=$1", run, jsonText(resp))
-}
-
-// residualFactTerminal reports whether one ledger fact is an outcome rather than an observation:
-// effects and executions end at succeeded/failed, creations at ready/failed; running,
-// absent/planned and pending are states the real world can still move on from.
-func residualFactTerminal(fact Object) bool {
-	switch fact.S("state") {
-	case "succeeded", "failed", "ready":
-		return true
-	}
-	return false
 }

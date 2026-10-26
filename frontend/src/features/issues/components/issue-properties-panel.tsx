@@ -46,7 +46,7 @@ function StatusField({
 }) {
   const keys = orderedColumns(statuses ?? [], [issue.status])
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
       <PropertyLabel>状态</PropertyLabel>
       <Select
         value={issue.status}
@@ -55,7 +55,7 @@ function StatusField({
           if (v !== null) onCommit({ status: v })
         }}
       >
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="w-full" aria-label="状态">
           <span className="flex items-center gap-2">
             <StatusIcon status={issue.status} />
             <SelectValue>
@@ -87,7 +87,7 @@ function PriorityField({
   saving: boolean
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
       <PropertyLabel>优先级</PropertyLabel>
       <Select
         value={issue.priority}
@@ -97,7 +97,7 @@ function PriorityField({
           if (next !== undefined) onCommit({ priority: next })
         }}
       >
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="w-full" aria-label="优先级">
           <span className="flex items-center gap-2">
             <PriorityIcon priority={issue.priority} />
             <SelectValue>
@@ -130,7 +130,7 @@ function ParentField({
 }) {
   const candidates = issues.filter((i) => i.id !== issue.id)
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
       <PropertyLabel>父任务</PropertyLabel>
       <Select
         value={issue.parentIssueId ?? 'none'}
@@ -165,7 +165,7 @@ function AssigneeField({ issue, members }: { issue: Issue; members: TenantMember
   const names = memberNameById(members)
   const type = assigneeType(issue)
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
       <PropertyLabel>负责人</PropertyLabel>
       <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
         <ActorAvatar
@@ -192,7 +192,7 @@ function SubIssuesField({
 }) {
   const subIssues = issues.filter((i) => i.parentIssueId === issue.id)
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
       <PropertyLabel>子任务</PropertyLabel>
       {subIssues.length === 0 ? (
         <p className="text-sm text-muted-foreground">暂无子任务</p>
@@ -241,10 +241,10 @@ function AgentExecutionEntry() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
   const paths = workspaceSlug ? workspacePaths(workspaceSlug) : undefined
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <PropertyLabel>Agent 执行</PropertyLabel>
       <p className="text-xs text-muted-foreground">
-        关联项目后，在活动栏的“提及 / 任务”中选择已安装的 Agent 并提交任务。
+        在任务输入区选择 Agent 并发送；工作流从任务动态中配置并确认。
       </p>
       {paths && (
         <div className="flex flex-wrap gap-2 text-xs">
@@ -264,7 +264,7 @@ function LabelsAndPropertiesFields({ issue }: { issue: Issue }) {
   return (
     <>
       {issue.labels.length > 0 && (
-        <div className="space-y-1.5">
+        <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
           <PropertyLabel>标签</PropertyLabel>
           <div className="flex flex-wrap gap-1.5">
             {issue.labels.map((label) => (
@@ -276,7 +276,7 @@ function LabelsAndPropertiesFields({ issue }: { issue: Issue }) {
         </div>
       )}
       {Object.keys(issue.properties).length > 0 && (
-        <div className="space-y-1.5">
+        <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-2">
           <PropertyLabel>属性</PropertyLabel>
           <dl className="space-y-1 text-sm">
             {Object.entries(issue.properties).map(([key, value]) => (
@@ -312,7 +312,6 @@ export interface IssuePropertiesPanelProps {
  * renders the current issue and never fetches the issue itself.
  */
 export function IssuePropertiesPanel({
-  tid,
   issue,
   issues,
   statuses,
@@ -322,19 +321,31 @@ export function IssuePropertiesPanel({
   saving = false,
 }: IssuePropertiesPanelProps) {
   return (
-    <div className="w-full shrink-0 space-y-4 md:w-64">
+    <div className="w-full space-y-3">
       <StatusField issue={issue} statuses={statuses} onCommit={onCommit} saving={saving} />
       <PriorityField issue={issue} onCommit={onCommit} saving={saving} />
       <AssigneeField issue={issue} members={members} />
-      <ParentField issue={issue} issues={issues} onCommit={onCommit} saving={saving} />
-      <SubIssuesField issue={issue} issues={issues} issueHref={issueHref} />
+      <details>
+        <summary className="cursor-pointer text-xs text-muted-foreground">更多属性</summary>
+        <div className="mt-3 space-y-3">
+          <ParentField issue={issue} issues={issues} onCommit={onCommit} saving={saving} />
+          <SubIssuesField issue={issue} issues={issues} issueHref={issueHref} />
+
+          <LabelsAndPropertiesFields issue={issue} />
+        </div>
+      </details>
       <ProjectField issue={issue} onCommit={onCommit} saving={saving} />
-      <LabelsAndPropertiesFields issue={issue} />
-      <div className="space-y-1.5">
-        <PropertyLabel>上下文引用</PropertyLabel>
-        <ContextRefsPanel slug={tid} issueId={issue.id} />
-      </div>
-      <AgentExecutionEntry />
     </div>
+  )
+}
+
+/** Secondary context references and configuration links stay outside the compact property editor. */
+export function IssueContextDetails({ tid, issueId }: { tid: string; issueId: string }) {
+  return (
+    <details className="space-y-3 border-t pt-4">
+      <summary className="cursor-pointer text-sm font-medium">上下文与设置</summary>
+      <ContextRefsPanel slug={tid} issueId={issueId} />
+      <AgentExecutionEntry />
+    </details>
   )
 }

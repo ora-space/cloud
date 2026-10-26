@@ -16,7 +16,7 @@ shutdown cancels model requests and joins all three listeners.
 | `MODEL_GATEWAY_CERTIFICATE_FILE` / `PRIVATE_KEY_FILE` / `CA_FILE` | `/etc/ora-model-management/` file references |
 | `MODEL_GATEWAY_MASTER_KEY_FILE` / `MASTER_KEY_ID` | `/etc/ora-model-secrets/master-key` / `v1` |
 
-`-healthcheck` verifies HTTPS/public trust and database readiness without opening keys. Exact private
-fixture hosts require both `MODEL_GATEWAY_DEVELOPMENT=true` and `MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS`;
-the production default is public HTTPS only. Run package tests, Cloud `task check`, `task test:race`
-and `task build`; cluster M4 provides real CLI acceptance.
+`-healthcheck` verifies HTTPS/public trust and database readiness without opening keys. Private fixture exceptions in public mode require both `MODEL_GATEWAY_DEVELOPMENT=true` and exact
+`MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS`; enterprise mode admits deployment-listed targets.
+See [Shared egress configuration](../../docs/operations/deployment-egress.en.md) for policy/DNS and
+[modelgateway](../../internal/modelgateway/README.en.md) for implementation and tests.

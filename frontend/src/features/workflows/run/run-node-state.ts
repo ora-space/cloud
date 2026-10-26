@@ -13,6 +13,10 @@ export interface RunNodeEntry {
   displayName?: string
   startedAt?: string
   finishedAt?: string
+  /** The 1-based attempt this row describes; absent for a node that never started. */
+  attempt?: number
+  /** When the next attempt becomes due; present only while the node is retrying. */
+  retryAt?: string
   error?: string
   /** Whatever the node produced; rendered as text by the inspector. */
   output?: unknown
@@ -25,7 +29,7 @@ const NODE_STATUSES = new Set<GraphWorkflowNodeStatus>([
   'succeeded',
   'failed',
   'cancelled',
-  'awaiting_input',
+  'retrying',
 ])
 
 /**
@@ -64,13 +68,21 @@ function readNodeEntry(value: unknown): RunNodeEntry | undefined {
     return undefined
   }
   const entry: RunNodeEntry = { status }
-  const startedAt = value['startedAt']
-  if (typeof startedAt === 'string') {
+  const startedAt = readTimestamp(value['startedAt'])
+  if (startedAt !== undefined) {
     entry.startedAt = startedAt
   }
-  const finishedAt = value['finishedAt']
-  if (typeof finishedAt === 'string') {
+  const finishedAt = readTimestamp(value['finishedAt'])
+  if (finishedAt !== undefined) {
     entry.finishedAt = finishedAt
+  }
+  const attempt = value['attempt']
+  if (typeof attempt === 'number' && Number.isInteger(attempt) && attempt >= 1) {
+    entry.attempt = attempt
+  }
+  const retryAt = readTimestamp(value['retryAt'])
+  if (retryAt !== undefined) {
+    entry.retryAt = retryAt
   }
   const error = value['error']
   if (typeof error === 'string') {
@@ -89,6 +101,16 @@ function readNodeEntry(value: unknown): RunNodeEntry | undefined {
 /** A non-null, non-array object: the only shape a node state entry may be. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * A timestamp worth showing, or `undefined` when the field is absent or blank.
+ *
+ * The backend writes `startedAt`/`finishedAt` as `""` for a node that never ran
+ * (or has not reached that instant), so the empty string is "unset", not a time.
+ */
+function readTimestamp(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 /** Narrows a persisted status string to one this viewer can render. */

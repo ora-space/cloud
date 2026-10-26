@@ -25,6 +25,9 @@ const FetchTimeout = 60 * time.Second
 type Fetcher struct {
 	objects *objectstore.Config
 	client  *http.Client
+	// Timeout bounds an HTTPS download through its last byte. Nonpositive values use
+	// FetchTimeout. Configure it before the first Fetch; concurrent fetches only read it.
+	Timeout time.Duration
 }
 
 // NewFetcher returns a fetcher over the given object store configuration and HTTPS transport.
@@ -34,7 +37,7 @@ func NewFetcher(objects *objectstore.Config, transport http.RoundTripper) *Fetch
 	if transport == nil {
 		transport = refusingTransport{}
 	}
-	return &Fetcher{objects: objects, client: &http.Client{
+	return &Fetcher{objects: objects, Timeout: FetchTimeout, client: &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -66,7 +69,11 @@ func (f *Fetcher) Fetch(ctx context.Context, locator, digest string) ([]byte, er
 	if e != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return nil, failure(FailureInvalid, "invalid https locator")
 	}
-	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
+	timeout := f.Timeout
+	if timeout <= 0 {
+		timeout = FetchTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), http.NoBody)
 	if e != nil {
@@ -80,7 +87,7 @@ func (f *Fetcher) Fetch(ctx context.Context, locator, digest string) ([]byte, er
 		if ctx.Err() != nil {
 			return nil, failure(FailureUnavailable, "download timed out")
 		}
-		return nil, failure(FailureUnavailable, "download failed")
+		return nil, failure(FailureUnavailable, downloadFailure(e))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -104,6 +111,21 @@ func (f *Fetcher) Fetch(ctx context.Context, locator, digest string) ([]byte, er
 		return nil, failure(FailureDigestMismatch, "package sha256 does not match the catalog")
 	}
 	return data, nil
+}
+
+// checkedDialFailure exposes the checked dialer's bounded address-and-reason summary. The error
+// returned by http.Client is a *url.Error whose text carries the request URL, which may include a
+// signed asset query, so only this method's output may enter the failure detail.
+type checkedDialFailure interface{ DialFailureDetail() string }
+
+// downloadFailure keeps the checked dialer's attribution without copying the request URL. The
+// detail is bounded and holds only numeric addresses and failure reasons.
+func downloadFailure(err error) string {
+	var dial checkedDialFailure
+	if errors.As(err, &dial) {
+		return "download failed: " + dial.DialFailureDetail()
+	}
+	return "download failed"
 }
 
 // mapObjectError translates object-store classifications into the package-level codes; the

@@ -9,14 +9,18 @@ Ora Cloud 是 Ora 多人协作的权威服务端：它保存租户、成员、Pr
 ## 参与方
 
 ```text
-Browser
-  │  HTTPS, session cookie
-  ▼
+Browser ── credential submission (one-time grant) ──▶ Credential Store
+  │                                                        ▲
+  │  HTTPS, session cookie                                 │ redeem (mTLS)
+  ▼                                                        │
 Gateway ─────────── personal key writes ──────────▶ model-gateway
   │  /api/v1/* + service JWT + user JWT                  ▲
   ▼                                                      │ model requests (short-lived token)
 Cloud server ◀──── mTLS gRPC, dialed out ──── Controller │
-  │                                              │       │
+  │  │                                           │       │
+  │  ├── mTLS task ──▶ Repo Executor ──▶ external Git repository
+  │  │                     └──▶ git-server (snapshot / tracking refs)
+  │  └── ref query ───▶ git-server
   ▼                                              │ Substrate effects / Node protocol
 PostgreSQL                                       ▼       │
                                    Sandbox Server ──▶ sandbox: Node + Agent
@@ -27,6 +31,8 @@ PostgreSQL                                       ▼       │
 - 浏览器只和 Gateway 通信；Gateway 为每个请求现签两份内部 JWT，再转发给 Cloud server。
 - Controller 只主动拨出到 Cloud 的 gRPC 控制监听，Cloud 从不连接 Controller；Controller 驱动 Sandbox Server 建删沙盒，并与沙盒里的 Node 建立会话。
 - 沙盒只能到达 model-gateway、git-server 的仓库监听和对象存储的公开地址，不能直接访问 Cloud、Gateway 或数据库。
+- Cloud server 只用自己的客户端证书访问 git-server 的 ref 查询监听，在登记 Revision 之前核对交付 ref（见 [Git Server](repositories/git-server.md#ref-查询)）。
+- 外部 Git 只由 Repo Executor 访问；浏览器提交的 token 只进入 Credential Store，Cloud 只读凭据元数据并签发短期的一次性授权。
 
 | 参与方 | 仓库 | 职责 |
 |---|---|---|
@@ -34,16 +40,19 @@ PostgreSQL                                       ▼       │
 | Gateway（`cmd/gateway`） | 本仓库 | 浏览器唯一的入口：外部登录（华为 IDaaS、GitHub）、会话、代理 |
 | model-gateway（`cmd/model-gateway`） | 本仓库 | 个人模型 Key 的保管与模型请求转发 |
 | git-server（`cmd/git-server`） | 本仓库 | 每个 Project 的代码中心，逐请求按 Cloud 状态授权 |
+| Repo Executor（`cmd/repo-executor`） | 本仓库 | 唯一访问外部 Git 仓库的进程：同步、显式发布与只读探测；无状态，不连数据库 |
+| Credential Store（`cmd/credential-store`） | 本仓库 | 独立保管外部 Git token：浏览器提交、执行器兑换、Cloud 管理与撤销；只保存密文 |
+| git-credential-ora（`cmd/git-credential-ora`） | 本仓库 | Repo Executor 的固定 Git credential helper，只在请求的仓库等于暂存作用域时交付凭据 |
 | PostgreSQL | — | 唯一的业务权威存储 |
-| 对象存储 | — | Revision 的 bundle 与会话 JSONL |
+| 对象存储 | — | Revision 的会话 JSONL（改走 Git 之前登记的 Revision 另有 bundle） |
 | Controller（`ora-controller`） | desktop | 只拨出到 Cloud；领取工作，执行 Substrate effect，与 Node 建会话并转发事件与命令 |
 | Sandbox Server | cluster | Substrate 的 Docker 实现：按 Workspace 创建、终止沙盒，删除数据 |
 | Node（`ora-node`） | desktop | 沙盒里的执行端：clone、插件安装、Agent 会话、Revision 交付 |
 
 ## 贯穿始终的原则
 
-1. **PostgreSQL 是唯一的权威。** 其他进程都不持有另一份业务状态。所有决定在 `internal/core` 的短事务里做出，事务用一把全局 advisory lock
-   串行（见 [权威持久化与事务模型](core/persistence.md)）。
+1. **PostgreSQL 是唯一的权威。** 其他进程都不持有另一份业务状态。所有决定在 `internal/core` 的短事务里做出，普通事务用一把全局 advisory lock
+   串行，WorkflowRun 的事务先取这把锁的共享模式、再取该 run 的排他事务锁（见 [权威持久化与事务模型](core/persistence.md)）。
 2. **事务里只做数据库工作。** HTTP、Git、对象存储、Node、Substrate 的调用都在事务之外；需要时拆成"事务 → 外部调用 → 事务"，后一个事务重新
    检查前提。
 3. **先持久化意图，再产生副作用。** 每个外部动作先在 Cloud 登记成持久的操作、effect 或执行，带稳定的幂等身份，Controller 执行后报回证据，
@@ -54,6 +63,8 @@ PostgreSQL                                       ▼       │
 6. **身份只证明"谁"，授权看当前状态。** 内部 JWT、mTLS 证书只说明调用方是谁；能做什么由 core 按当前的成员、角色、归属和运行状态判定。
 7. **契约只有一个来源。** HTTP 契约是 `router.Routes` 与 `internal/contract` 生成的 `api/openapi.json`，Controller 契约是 `proto/`；前端客户端和
    desktop 的客户端都由它们生成。
+8. **外部 Git 只有一个出口，凭据明文只有一条路径。** 只有 Repo Executor 访问外部仓库，只有 Credential Store 保管 token 明文；
+   Cloud 只记录元数据并签发短期、至多使用一次的授权。
 
 ## 一个请求的路径
 
@@ -69,7 +80,7 @@ PostgreSQL                                       ▼       │
 
 ```text
 Controller 领取操作 ──▶ 计划 sandbox_ensure effect ──▶ Sandbox Server 建沙盒
-      ──▶ 与 Node 握手并代报注册 ──▶ 登记并派发 clone 执行 ──▶ Node clone
+      ──▶ 与 Node 握手并代报注册 ──▶ 登记并派发 clone 执行 ──▶ Node 从 Git Server 上 Binding 的快照 clone
       ──▶ 登记并派发插件执行 ──▶ Cloud 在同一事务里打开准入、标记 Workspace 就绪、操作成功
 ```
 
@@ -85,8 +96,8 @@ Controller 领取操作 ──▶ 计划 sandbox_ensure effect ──▶ Sandbox
   ──▶ 派发循环：建运行 Workspace（一次性的 isolated Workspace）
   ──▶ 就绪后：写 Thread 首条提问，放出会话工作项 ──▶ Node 启动 Agent 会话
   ──▶ Thread：会话记录逐条流回 Cloud，用户可以继续追加消息
-  ──▶ 会话结束：放出交付工作项 ──▶ Node 上传 bundle 与会话 JSONL
-  ──▶ Cloud 在事务外核对对象，事务内登记 Revision ──▶ 删除运行 Workspace
+  ──▶ 会话结束：放出交付工作项 ──▶ Node 把最终提交推送到 Git Server 的交付 ref，上传会话 JSONL
+  ──▶ Cloud 在事务外经 ref 查询核对交付 ref、核对 JSONL，事务内登记 Revision ──▶ 删除运行 Workspace
 ```
 
 执行结果与成果保存分开记录，启动、交付、删除各有等待上限，未知结果只请求结束、保留残留责任（见 [Agent IssueRun](agent-runs/issue-runs.md)）。
@@ -97,7 +108,7 @@ Controller 领取操作 ──▶ 计划 sandbox_ensure effect ──▶ Sandbox
 |---|---|---|
 | 身份与租户 | 用户、身份映射、租户、Space、成员 | [内部凭据](identity/authentication.md)、[Gateway](identity/gateway.md)、[用户、租户与成员](identity/tenancy.md) |
 | 运行时 | Project、Workspace、操作、effect、沙盒、Node、运行时控制、强停 | [Workspace 生命周期](runtime/workspaces.md)、[运行时控制](runtime/runtime-control.md)、[Controller 契约](runtime/controller-integration.md) |
-| 仓库 | 仓库 Binding、仓库 Operation、Project 仓库 | [Git Server](repositories/git-server.md) |
+| 仓库 | 仓库 Binding、仓库 Operation、外部同步与发布、Git 凭据、Project 仓库 | [Git Server](repositories/git-server.md)、[外部 Git 线](repositories/external-git.md) |
 | 协作 | Issue、状态列、评论、活动、交互 | [Issue 看板](collaboration/issues.md)、[Issue 协作](collaboration/interactions.md) |
 | Agent 运行 | IssueRun、运行 Workspace、Thread、Revision、残留账本 | [Agent IssueRun](agent-runs/issue-runs.md) 及同目录各篇 |
 | 模型 | 个人模型连接、运行绑定、临时授权、请求台账 | [个人模型连接](models/model-access.md)、[model-gateway](models/model-gateway.md) |
@@ -114,6 +125,7 @@ Cloud server 进程里运行着一组周期循环，处理没有外部事件可�
 | 工作流插件资产导入 | `plugins.asset_import_interval`（默认 30 秒） | [工作流](workflows/workflows.md#插件资产导入) |
 | Agent 运行的派发、会话启动、Thread 结束、取消、交付放弃、删除重声明、删除放弃 | 10 秒 | [Agent IssueRun](agent-runs/issue-runs.md#后台循环) |
 | WorkflowRun 调度 | 10 秒 | [工作流](workflows/workflows.md#调度) |
+| 仓库 Operation 的租约、发布核对、凭据核验与撤销重试 | 2 秒 | [外部 Git 线](repositories/external-git.md#失败与清扫) |
 
 它们都在全局锁之外做有界的只读扫描，再为每个对象开一个短事务重新判断并以比较并交换的方式转换，重复执行不会产生第二次效果。
 

@@ -8,11 +8,12 @@ token digests. Controller and Node receive only opaque references and temporary 
 
 | Files | Responsibility |
 |---|---|
+| anthropic.go | Pinned Claude query/protocol-header policy and the frozen model listing |
 | `crypto.go`, `key_verification.go` | AES-256-GCM records, retry fingerprints and existing-key verification |
 | `credentials.go` | Gateway-only credential writes with separately verified service/user claims |
 | `grants.go` | Purpose-specific model-access mTLS grants, same-token renewal and revocation |
 | `forward.go`, `events.go`, `envelopes.go`, `response_io.go` | Restricted protocol/model forwarding, envelope validation, safe errors and blocked-write cancellation |
-| `transport.go`, `dns.go` | `NewUpstreamClient(UpstreamConfig)` fixes deployment-owned `DNSConfig`; authenticated HTTPS DNS and numeric public-IP dialing, without environmental proxies or redirects |
+| `transport.go`, `connection.go`, `internal/egress` | `NewUpstreamClient` dials under the deployment egress policy: public mode uses authenticated HTTPS DNS, enterprise mode uses the policy's TCP DNS or static addresses, without environmental proxies or redirects |
 | `diagnostics.go` | Finite typed error categories without inspecting upstream text; `Options.Logger` records only the category |
 | `attempt.go`, `usage.go` | Durable HTTP-attempt intent, monotonic timing, protocol usage snapshots and bounded idempotent finalization |
 | `config.go`, `health.go` | Deployment references, listener purposes and verified-TLS readiness |
@@ -22,6 +23,19 @@ a dedicated model-access client certificate; data requests require temporary run
 Those purposes are not interchangeable. Original keys must never appear in responses or diagnostics.
 SSE events flush continuously; error events inside HTTP200 are sanitized too. Revocation interrupts
 the upstream and a blocked downstream write. Each watcher has one request owner, cancellation and a join.
+
+The Anthropic surface targets Claude Code 2.1.303. POST messages accepts no query or exactly
+beta=true; the version is fixed to 2023-06-01 and beta tokens are limited to the claudeBetaHeaders
+set in anthropic.go. Duplicate or unknown tokens fail. Other client headers are dropped; the CLI's
+browser-access marker is validated and discarded. GET models (no query or limit=1000) rechecks
+current authorization and returns only the frozen model without an upstream call, key decryption
+or inference-attempt record. Optional endpoints such as count_tokens remain explicitly unsupported.
+This listing describes the authorized set, not a supplier discovery result.
+
+TestPinnedClaudeMessagesCompatibility accepts CLAUDE_COMPAT_BINARY pointing to the upstream-lock-
+verified 2.1.303 CLI. It uses a private HOME/config directory, synthetic credentials and a controlled
+supplier through the production ModelHandler. An unset binary path produces an explicit skip;
+ordinary protocol fixtures are not presented as real CLI evidence.
 
 Forwarding calls Core `BeginModelAttempt` before `Upstream.Do`. Failure returns the safe
 `model_metrics_unavailable` error without dispatching. A row records one gateway dispatch intent,
@@ -65,10 +79,16 @@ Accounting follows [OpenAI Chat Completions](https://developers.openai.com/api/r
 [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) and
 [thinking usage](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
 
-Production DNS never falls back to the system resolver. Public numeric IPs bootstrap HTTPS DNS with
-normal TLS verification. Every A/AAAA answer must pass address policy before numeric dialing, while
+Production resolution never falls back to the system resolver. Public mode bootstraps HTTPS DNS from
+public numeric IPs with normal TLS verification; enterprise mode uses the policy file's DNS-over-TCP
+resolver or static addresses. Every A/AAAA answer must pass address policy before numeric dialing, while
 TLS verifies the original model hostname. Only exact deployment-owned development fixture hosts use
-system DNS; user connection settings cannot enable this exemption. Both `2001:2::/48` and `198.18.0.0/15` are denied.
+system DNS, and that exemption cannot be combined with enterprise mode. Both `2001:2::/48` and
+`198.18.0.0/15` are denied. See [Shared deployment egress](../../docs/operations/deployment-egress.en.md).
+
+The whole dial budget remains `Connect` (ten seconds by default) and checked addresses are still tried in DNS order; each attempt receives the remaining whole-dial budget divided by the addresses left, with a roughly two-second floor, so one silent edge address cannot exhaust the time reserved for the addresses after it. When every address fails, the error and the structured log's `detail` list a bounded reason per address (timeout, connection refused, network unreachable or not attempted) using only numeric addresses and reasons, never a URL, query, header or credential.
+
+`NewUpstreamClientWithTimeouts` accepts `UpstreamTimeouts` to inject construction-time `Connect` and `ResponseHeader` limits; nonpositive fields retain the production defaults of ten seconds each for TCP/TLS and thirty seconds for headers. The original constructors keep those defaults. Workflow asset boundary tests shorten waits without replacing the secure transport.
 
 Raw keys stay in this service's memory. Ciphertext uses fresh nonces; runtime tokens persist only as
 digests. Backups need the database and master-key volume. Startup refuses a key that cannot open

@@ -219,12 +219,11 @@ type replicaKeys struct {
 
 func setupGateway(t *testing.T) *gatewayFixture {
 	t.Helper()
-	pool, _ := testSchema(t, "test_gateway_")
+	pool, _ := migratedTestSchema(t, "test_gateway_")
 	db, e := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	must(t, e)
 	cloudStore, e := core.NewStore(db)
 	must(t, e)
-	must(t, cloudStore.Migrate(context.Background()))
 	must(t, cloudStore.CheckSchema(context.Background()))
 	f := &gatewayFixture{t: t, pool: pool, provider: newFakeProvider(t)}
 	f.store, e = gateway.NewStore(pool)

@@ -5,8 +5,8 @@
 The workspace sidebar's "Plugins" screen and its data layer: the **selected plugins** list
 (desired/observed state badges + removal) on top, the **workflow asset** import results (one row
 per document, separate from install state) below it, and the **marketplace** catalog grid
-(search, kind filter, install) last. It expresses only the cloud-authoritative selection state;
-activation, stop, configuration and logs belong to the Node runtime plane and stay out of this
+(search, kind filter, install) last. Selected Agents delegate a personal entry to `agent-configurations`. It expresses the cloud-authoritative selection state;
+activation, stop and logs belong to the Node runtime plane and stay out of this
 module.
 
 ## Files
@@ -22,7 +22,7 @@ module.
 ## Dependencies and callers
 
 - Depends on: `src/api` (orval-generated client), `features/spaces` (current-space, idempotency
-  keys, SSE invalidation), `components/ui`.
+  keys, SSE invalidation), `components/ui`, `features/agent-configurations`.
 - Called by: `routes.tsx` (`/w/:slug/plugins`), `components/layout/app-sidebar.tsx` (nav entry).
 - Tests depend on: `mocks/handlers/plugins.ts`, `test/cloud-handlers.ts`.
 
@@ -38,6 +38,7 @@ module.
 - Import rows poll only while `pending`/`importing`; once terminal the interval stops and SSE or
   the next mount refreshes stale data.
 - `pack` entries are not installable in v1: the button stays disabled and reads "暂不支持".
+- My Configuration uses the selected release's `kind`, not the latest catalog's type; members can open it, and personal data is read only then.
 - Every async update stays inside query/mutation act boundaries (clean-stderr gate).
 
 ## Tests

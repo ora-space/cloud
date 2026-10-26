@@ -1,4 +1,5 @@
 import { fireEvent, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createDefaultWorkflowCapabilities } from '@/features/workflows/runtime/capabilities'
 import type {
@@ -13,10 +14,11 @@ import { ConditionNodeFields } from '@/features/workflows/editor/workflow-condit
 import {
   HumanNodeFields,
   JunctionNodeFields,
-  LoopNodeFields,
+  LoopExitNodeFields,
   SubflowNodeFields,
   ToolNodeFields,
 } from '@/features/workflows/editor/workflow-kind-fields'
+import { LoopNodeFields } from '@/features/workflows/editor/workflow-loop-fields'
 import { IterationNodeFields } from '@/features/workflows/editor/workflow-iteration-fields'
 import type { WorkflowCanvasNode } from '@/features/workflows/editor/canvas-types'
 import { renderWithProviders } from '@/test/render'
@@ -310,6 +312,13 @@ describe('HumanNodeFields', () => {
 })
 
 describe('LoopNodeFields', () => {
+  /** The graph props the Loop panels need; the selector catalog derives from them. */
+  const LOOP_PROPS = {
+    nodeId: 'loop-1',
+    graphNodes: [],
+    edges: [],
+    globalVariables: [],
+  } as const
   const LOOP_CONFIG: WorkflowLoopConfig = {
     maxIterations: 3,
     variables: [
@@ -324,33 +333,145 @@ describe('LoopNodeFields', () => {
     outputs: [],
   }
 
-  it('clamps the iteration ceiling and writes the carried initial value', () => {
+  /** Renders the panel with the shared config; `rerenderPanel` rebinds it to the captured node. */
+  function setUpLoopPanel() {
     const { data, onChange } = captureOnChange()
     const view = renderWithProviders(
       <LoopNodeFields
+        {...LOOP_PROPS}
         data={nodeData({ kind: 'loop', loopConfig: LOOP_CONFIG })}
         onChange={onChange}
       />,
     )
+    const rerenderPanel = (): void => {
+      view.rerender(<LoopNodeFields {...LOOP_PROPS} data={data} onChange={onChange} />)
+    }
+    return { data, rerenderPanel }
+  }
 
+  it('clamps the round ceiling and writes a variable first-round value', () => {
+    const { data, rerenderPanel } = setUpLoopPanel()
+
+    expect(screen.getByLabelText('轮次耗尽时')).toHaveTextContent('失败')
     fireEvent.change(screen.getByLabelText('最大轮次'), { target: { value: '55' } })
     expect(data.loopConfig?.maxIterations).toBe(55)
 
-    view.rerender(<LoopNodeFields data={data} onChange={onChange} />)
-    fireEvent.change(screen.getByLabelText('初始值'), { target: { value: 'ready' } })
-    expect(data.loopConfig?.variables[0]?.initial).toEqual({
-      kind: 'constant',
-      value: 'ready',
+    rerenderPanel()
+    fireEvent.change(screen.getByLabelText('初值 1'), { target: { value: 'ready' } })
+    expect(data.loopConfig?.variables[0]?.initial).toEqual({ kind: 'constant', value: 'ready' })
+  })
+
+  it('adds a carried variable and records its feedback selector', async () => {
+    const user = userEvent.setup()
+    const { data, rerenderPanel } = setUpLoopPanel()
+    fireEvent.click(screen.getByRole('button', { name: '添加变量' }))
+    expect(data.loopConfig?.variables).toHaveLength(2)
+
+    rerenderPanel()
+    fireEvent.change(screen.getByLabelText('变量名 2'), { target: { value: 'draft' } })
+    rerenderPanel()
+    await user.click(screen.getByLabelText('反馈 2'))
+    await user.click(await screen.findByRole('option', { name: /value/ }))
+    expect(data.loopConfig?.variables[1]).toMatchObject({
+      name: 'draft',
+      feedback: ['loop-1', 'value'],
     })
+
+    fireEvent.click(screen.getByRole('button', { name: '删除变量 1' }))
+    expect(data.loopConfig?.variables).toHaveLength(1)
+    expect(data.loopConfig?.variables[0]?.name).toBe('draft')
+  })
+
+  it('adds a named output and picks its selector from the catalog', async () => {
+    const user = userEvent.setup()
+    const { data, rerenderPanel } = setUpLoopPanel()
+    fireEvent.click(screen.getByRole('button', { name: '添加输出' }))
+    expect(data.loopConfig?.outputs).toHaveLength(1)
+
+    rerenderPanel()
+    fireEvent.change(screen.getByLabelText('输出名 1'), { target: { value: 'result' } })
+    rerenderPanel()
+    await user.click(screen.getByLabelText('取值 1'))
+    await user.click(await screen.findByRole('option', { name: /value/ }))
+    expect(data.loopConfig?.outputs[0]).toEqual({
+      name: 'result',
+      variableSelector: ['loop-1', 'value'],
+    })
+  })
+
+  it('adds a round-end rule and records its selector, operator and value', async () => {
+    const user = userEvent.setup()
+    const { data, rerenderPanel } = setUpLoopPanel()
+    fireEvent.click(screen.getByRole('button', { name: '添加条件' }))
+    expect(data.loopConfig?.until.conditions).toHaveLength(1)
+
+    rerenderPanel()
+    await user.click(screen.getByLabelText('变量 1'))
+    await user.click(await screen.findByRole('option', { name: /value/ }))
+    rerenderPanel()
+    fireEvent.change(screen.getByLabelText('值 1'), { target: { value: 'done' } })
+    expect(data.loopConfig?.until.conditions[0]).toEqual({
+      variableSelector: ['loop-1', 'value'],
+      operator: 'equals',
+      value: 'done',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '删除条件 1' }))
+    expect(data.loopConfig?.until.conditions).toHaveLength(0)
+  })
+
+  it('keeps body and carried roots out of first-round variable initial choices', async () => {
+    const user = userEvent.setup()
+    const config: WorkflowLoopConfig = {
+      ...LOOP_CONFIG,
+      variables: [
+        {
+          name: 'value',
+          valueType: 'string',
+          initial: { kind: 'variable', selector: [] },
+          feedback: [],
+        },
+      ],
+    }
+    const member: WorkflowCanvasNode = {
+      id: 'body',
+      type: 'workflow',
+      parentId: 'loop-1',
+      position: { x: 20, y: 30 },
+      data: nodeData({ kind: 'agent', title: '内部产物' }),
+    }
+    renderWithProviders(
+      <LoopNodeFields
+        {...LOOP_PROPS}
+        graphNodes={[member]}
+        data={nodeData({ kind: 'loop', loopConfig: config })}
+        onChange={vi.fn<(data: WorkflowNodeData) => void>()}
+      />,
+    )
+    await user.click(screen.getByLabelText('初值 1'))
+    expect(screen.queryByRole('option', { name: /内部产物/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /value/ })).not.toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: /workflow_id/ })).toBeInTheDocument()
   })
 
   it('hides the config inputs for a legacy loop without executable config', () => {
     const onChange = vi.fn<(data: WorkflowNodeData) => void>()
-    renderWithProviders(<LoopNodeFields data={nodeData({ kind: 'loop' })} onChange={onChange} />)
+    renderWithProviders(
+      <LoopNodeFields {...LOOP_PROPS} data={nodeData({ kind: 'loop' })} onChange={onChange} />,
+    )
 
     expect(screen.getByLabelText('最大轮次')).toBeDisabled()
-    expect(screen.getByLabelText('初始值')).toBeDisabled()
+    expect(screen.getByLabelText('轮次耗尽时')).toBeDisabled()
+    expect(screen.queryByLabelText('变量名 1')).not.toBeInTheDocument()
     expect(screen.getByText('此旧循环节点缺少可执行配置，请删除后重新添加。')).toBeInTheDocument()
+  })
+})
+
+describe('LoopExitNodeFields', () => {
+  it('explains that the marker has no configuration of its own', () => {
+    renderWithProviders(<LoopExitNodeFields />)
+
+    expect(screen.getByText(/循环体内的终端节点/)).toBeInTheDocument()
   })
 })
 

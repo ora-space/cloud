@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,10 +52,18 @@ type fixture struct {
 	tid, uid, root, commit string
 	cloud                  *httptest.Server
 	external               *httptest.Server
-	pgConfig               *pgx.ConnConfig
-	executions             controlpb.ExecutionServiceClient
-	controlConn            *grpc.ClientConn
-	controlSessions        map[string]string
+	// git is the Git Server double: the Project repositories Workspaces clone snapshots from and
+	// deliveries push to. refs answers Cloud's ref query from it, or from refs a case pins.
+	git  *simulator.GitServer
+	refs *gitRefs
+	// source is the local repository whose HEAD every Project created through f.call is synced to,
+	// standing in for the external line's first sync. withoutSnapshot leaves new Projects unsynced.
+	source          string
+	withoutSnapshot bool
+	pgConfig        *pgx.ConnConfig
+	executions      controlpb.ExecutionServiceClient
+	controlConn     *grpc.ClientConn
+	controlSessions map[string]string
 	// objects is the fixture's one object-store double. It is created on first use and reused, so a
 	// test that installs storage and a helper that needs storage configured name the same endpoint
 	// and the same recorded probes.
@@ -65,6 +74,38 @@ type fixture struct {
 // The schema is dropped on cleanup; REQUIRE_POSTGRES=1 turns a missing database into a failure.
 func testSchema(t *testing.T, prefix string) (*sql.DB, *pgx.ConnConfig) {
 	t.Helper()
+	return testSchemaWithCleanup(t, prefix, func(cleanup func() error) {
+		t.Cleanup(func() {
+			if err := cleanup(); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+}
+
+// testSchemaWithCleanup keeps the empty-schema route independent of migrated template copies.
+// Migration tests retain their original schema lifetime through testSchema.
+func testSchemaWithCleanup(t *testing.T, prefix string, registerCleanup func(func() error)) (*sql.DB, *pgx.ConnConfig) {
+	t.Helper()
+	config := testDatabaseConfig(t)
+	admin := stdlib.OpenDB(*config)
+	must(t, admin.Ping())
+	schema := prefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+	_, e := admin.Exec("CREATE SCHEMA " + schema)
+	must(t, e)
+	config.RuntimeParams["search_path"] = schema
+	pool := stdlib.OpenDB(*config)
+	registerCleanup(func() error {
+		poolErr := pool.Close()
+		_, dropErr := admin.Exec("DROP SCHEMA " + schema + " CASCADE")
+		adminErr := admin.Close()
+		return errors.Join(poolErr, dropErr, adminErr)
+	})
+	return pool, config
+}
+
+func testDatabaseConfig(t *testing.T) *pgx.ConnConfig {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		if os.Getenv("REQUIRE_POSTGRES") == "1" {
@@ -74,34 +115,34 @@ func testSchema(t *testing.T, prefix string) (*sql.DB, *pgx.ConnConfig) {
 	}
 	config, e := pgx.ParseConfig(dsn)
 	must(t, e)
-	admin := stdlib.OpenDB(*config)
-	must(t, admin.Ping())
-	schema := prefix + strings.ReplaceAll(uuid.NewString(), "-", "")
-	_, e = admin.Exec("CREATE SCHEMA " + schema)
-	must(t, e)
-	config.RuntimeParams["search_path"] = schema
-	pool := stdlib.OpenDB(*config)
-	t.Cleanup(func() {
-		if err := pool.Close(); err != nil {
-			t.Error(err)
-		}
-		_, err := admin.Exec("DROP SCHEMA " + schema + " CASCADE")
-		if err != nil {
-			t.Error(err)
-		}
-		if err = admin.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return pool, config
+	return config
 }
+
+// setGinTestModeOnce makes setup safe to call from parallel tests: gin.SetMode writes a
+// package global, so concurrent setups would race under the race detector. The first call
+// wins and every router is created after the mode is fixed.
+var setGinTestModeOnce sync.Once
 
 func setup(t *testing.T) *fixture {
 	t.Helper()
-	pool, config := testSchema(t, "test_")
+	return setupWithPreparedResources(t, nil)
+}
+
+// setupWithPreparedResources keeps each case's Store, servers and runtime state independent while
+// allowing serial controlled-reclamation cases to reuse their parent's migrated schema and source.
+// The parent owns the shared pool and immutable source directory; a child owns everything else.
+func setupWithPreparedResources(t *testing.T, prepared *fixture) *fixture {
+	t.Helper()
+	var pool *sql.DB
+	var config *pgx.ConnConfig
+	if prepared == nil {
+		pool, config = migratedTestSchema(t, "test_")
+	} else {
+		pool, config = prepared.store.Pool, prepared.pgConfig
+	}
 	db, e := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	must(t, e)
-	store, e := core.NewDevelopmentStore(db)
+	store, e := core.NewStore(db)
 	must(t, e)
 	// Wire the dev/demo collaboration fixtures so the mock execution path is exercised. Workflow
 	// targets and their form descriptors stay database-backed: the fixtures layer agent/team in front
@@ -110,13 +151,11 @@ func setup(t *testing.T) *fixture {
 	// Plugin execution has no real executor yet; the simulation capability is what the fixtures above
 	// stand in for, and it must be opted into explicitly (see plugin_maintenance.go).
 	store.PluginExecution = core.PluginExecutionSimulation
-	must(t, store.Migrate(context.Background()))
-	must(t, store.Migrate(context.Background()))
 	credentials, e := simulator.NewCredentials()
 	must(t, e)
 	auth, e := core.NewAuthenticator("ora-cloud", credentials.Trust)
 	must(t, e)
-	gin.SetMode(gin.TestMode)
+	setGinTestModeOnce.Do(func() { gin.SetMode(gin.TestMode) })
 	log, _ := zap.NewDevelopment()
 	cloud := httptest.NewServer(router.NewDevelopment(store, auth, log))
 	t.Cleanup(cloud.Close)
@@ -128,6 +167,41 @@ func setup(t *testing.T) *fixture {
 			t.Error(err)
 		}
 	})
+	var repo, commit string
+	if prepared == nil {
+		repo, commit = prepareFixtureSource(t, root)
+	} else {
+		repo, commit = prepared.source, prepared.commit
+	}
+	git, e := simulator.NewGitServer(filepath.Join(root, "git"))
+	must(t, e)
+	refs := &gitRefs{git: git, pinned: map[string]string{}}
+	store.GitServer = &core.GitServer{RepositoryBaseURL: simulator.GitServerBaseURL, Refs: refs}
+	substrate, e := simulator.NewSubstrate(filepath.Join(root, "substrate"), git)
+	must(t, e)
+	external := httptest.NewServer(substrate)
+	t.Cleanup(external.Close)
+	client := &simulator.Client{URL: cloud.URL, Credentials: credentials, HTTP: &http.Client{Timeout: 10 * time.Second}, Subject: "controller-a"}
+	f := &fixture{t: t, store: store, client: client, substrate: substrate, root: root, commit: commit, cloud: cloud, git: git, refs: refs, source: repo, user: core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "alice"}, Source: "corp", DisplayName: "Alice"}}
+	bootstrap, e := store.Bootstrap(context.Background(), "Test tenant", "corp", "alice", "Alice")
+	must(t, e)
+	f.tid, f.uid = bootstrap.S("tenantId"), bootstrap.S("userId")
+	f.controlConn = controlConn(t, store)
+	f.executions = controlpb.NewExecutionServiceClient(f.controlConn)
+	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: f.executions, Git: git}
+	f.controller.AgentRuns = controlpb.NewAgentRunServiceClient(f.controlConn)
+	f.controller.AgentNode, e = simulator.NewAgentNode(filepath.Join(root, "agent-node"))
+	must(t, e)
+	f.external, f.pgConfig = external, config
+	validateHTTP(t, f)
+	must(t, f.controller.Acquire(context.Background()))
+	return f
+}
+
+// prepareFixtureSource creates the immutable repository used as the external line's initial HEAD.
+// Runtime directories and mutable Git Server repositories remain owned by each individual fixture.
+func prepareFixtureSource(t *testing.T, root string) (string, string) {
+	t.Helper()
 	repo := filepath.Join(root, "source")
 	must(t, os.MkdirAll(repo, 0o700))
 	runGit(t, "init", "--initial-branch=main", repo)
@@ -136,26 +210,7 @@ func setup(t *testing.T) *fixture {
 	must(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("durable workspace data\n"), 0o600))
 	runGit(t, "-C", repo, "add", ".")
 	runGit(t, "-C", repo, "commit", "-m", "fixture")
-	commit := runGit(t, "-C", repo, "rev-parse", "HEAD")
-	substrate, e := simulator.NewSubstrate(filepath.Join(root, "substrate"), map[string]string{"https://example.invalid/repo.git": repo})
-	must(t, e)
-	external := httptest.NewServer(substrate)
-	t.Cleanup(external.Close)
-	client := &simulator.Client{URL: cloud.URL, Credentials: credentials, HTTP: &http.Client{Timeout: 10 * time.Second}, Subject: "controller-a"}
-	f := &fixture{t: t, store: store, client: client, substrate: substrate, root: root, commit: commit, cloud: cloud, user: core.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "alice"}, Source: "corp", DisplayName: "Alice"}}
-	bootstrap, e := store.Bootstrap(context.Background(), "Test tenant", "corp", "alice", "Alice")
-	must(t, e)
-	f.tid, f.uid = bootstrap.S("tenantId"), bootstrap.S("userId")
-	f.controlConn = controlConn(t, store)
-	f.executions = controlpb.NewExecutionServiceClient(f.controlConn)
-	f.controller = &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: f.executions}
-	f.controller.AgentRuns = controlpb.NewAgentRunServiceClient(f.controlConn)
-	f.controller.AgentNode, e = simulator.NewAgentNode(filepath.Join(root, "agent-node"))
-	must(t, e)
-	f.external, f.pgConfig = external, config
-	validateHTTP(t, f)
-	must(t, f.controller.Acquire(context.Background()))
-	return f
+	return repo, runGit(t, "-C", repo, "rev-parse", "HEAD")
 }
 
 // controlConn serves the gRPC control surface for store over bufconn; the simulator Controller
@@ -254,6 +309,11 @@ func (f *fixture) call(method, path string, body core.Object, key string, want i
 	must(f.t, e)
 	if status != want {
 		f.t.Fatalf("%s %s: want %d got %d %v", method, path, want, status, o)
+	}
+	// A replayed creation already has its snapshot; only a new Project gets its first sync.
+	if pid := o.O("resource").S("id"); method == "POST" && strings.HasSuffix(path, "/projects") && status == 202 && !f.withoutSnapshot &&
+		f.scalar("SELECT count(*) FROM repository_snapshots WHERE project_id=$1", pid) == 0 {
+		f.syncProject(pid)
 	}
 	return o
 }

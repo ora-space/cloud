@@ -24,14 +24,19 @@ const (
 type CloneFailureReason int32
 
 const (
-	CloneFailureReason_CLONE_FAILURE_REASON_UNSPECIFIED          CloneFailureReason = 0
+	CloneFailureReason_CLONE_FAILURE_REASON_UNSPECIFIED CloneFailureReason = 0
+	// The Git Server was unreachable, or answered 5xx until the retries ran out.
 	CloneFailureReason_CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE   CloneFailureReason = 1
-	CloneFailureReason_CLONE_FAILURE_REASON_BRANCH_NOT_FOUND     CloneFailureReason = 2
 	CloneFailureReason_CLONE_FAILURE_REASON_DESTINATION_CONFLICT CloneFailureReason = 3
 	CloneFailureReason_CLONE_FAILURE_REASON_OPERATION_FAILED     CloneFailureReason = 4
 	// The attempt was terminated before Git reached its own verdict (Node stop, command deadline,
 	// or an external signal) and its cleanup was confirmed; a new execution may simply retry.
 	CloneFailureReason_CLONE_FAILURE_REASON_INTERRUPTED CloneFailureReason = 5
+	// The Git Server answered that the snapshot ref is missing or not readable (it gives both the
+	// same answer).
+	CloneFailureReason_CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE CloneFailureReason = 6
+	// The fetched snapshot ref did not point at base_commit.
+	CloneFailureReason_CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH CloneFailureReason = 7
 )
 
 // Enum value maps for CloneFailureReason.
@@ -39,18 +44,20 @@ var (
 	CloneFailureReason_name = map[int32]string{
 		0: "CLONE_FAILURE_REASON_UNSPECIFIED",
 		1: "CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE",
-		2: "CLONE_FAILURE_REASON_BRANCH_NOT_FOUND",
 		3: "CLONE_FAILURE_REASON_DESTINATION_CONFLICT",
 		4: "CLONE_FAILURE_REASON_OPERATION_FAILED",
 		5: "CLONE_FAILURE_REASON_INTERRUPTED",
+		6: "CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE",
+		7: "CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH",
 	}
 	CloneFailureReason_value = map[string]int32{
 		"CLONE_FAILURE_REASON_UNSPECIFIED":          0,
 		"CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE":   1,
-		"CLONE_FAILURE_REASON_BRANCH_NOT_FOUND":     2,
 		"CLONE_FAILURE_REASON_DESTINATION_CONFLICT": 3,
 		"CLONE_FAILURE_REASON_OPERATION_FAILED":     4,
 		"CLONE_FAILURE_REASON_INTERRUPTED":          5,
+		"CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE": 6,
+		"CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH": 7,
 	}
 )
 
@@ -135,11 +142,19 @@ func (x *NodeIdentity) GetNodeIncarnationId() string {
 	return ""
 }
 
+// A Workspace clone from a Binding snapshot on the Git Server. Cloud freezes all four fields before
+// the clone step is handed to a Controller; the Controller forwards them verbatim. Checkout paths
+// belong to the Node, never to the caller.
 type CloneSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// HTTPS or SSH repository URL. Checkout paths belong to the Node, never to the caller.
-	Repository    string `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	Branch        string `protobuf:"bytes,2,opt,name=branch,proto3" json:"branch,omitempty"`
+	// https://<git-server>/<tenantId>/<projectId>.git
+	RepositoryUrl string `protobuf:"bytes,3,opt,name=repository_url,json=repositoryUrl,proto3" json:"repository_url,omitempty"`
+	// refs/ora/upstreams/<bindingId>/snapshots/<commitOid>
+	SnapshotRef string `protobuf:"bytes,4,opt,name=snapshot_ref,json=snapshotRef,proto3" json:"snapshot_ref,omitempty"`
+	// The commit snapshot_ref points to; the checkout is verified against it.
+	BaseCommit string `protobuf:"bytes,5,opt,name=base_commit,json=baseCommit,proto3" json:"base_commit,omitempty"`
+	// refs/heads/workspaces/<workspaceId>/<branch>; <branch> is the local branch of the checkout.
+	WorkspaceRef  string `protobuf:"bytes,6,opt,name=workspace_ref,json=workspaceRef,proto3" json:"workspace_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,16 +189,30 @@ func (*CloneSpec) Descriptor() ([]byte, []int) {
 	return file_ora_cloud_internal_v1_executions_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *CloneSpec) GetRepository() string {
+func (x *CloneSpec) GetRepositoryUrl() string {
 	if x != nil {
-		return x.Repository
+		return x.RepositoryUrl
 	}
 	return ""
 }
 
-func (x *CloneSpec) GetBranch() string {
+func (x *CloneSpec) GetSnapshotRef() string {
 	if x != nil {
-		return x.Branch
+		return x.SnapshotRef
+	}
+	return ""
+}
+
+func (x *CloneSpec) GetBaseCommit() string {
+	if x != nil {
+		return x.BaseCommit
+	}
+	return ""
+}
+
+func (x *CloneSpec) GetWorkspaceRef() string {
+	if x != nil {
+		return x.WorkspaceRef
 	}
 	return ""
 }
@@ -199,6 +228,7 @@ type ExecutionInput struct {
 	//	*ExecutionInput_RemovePlugins
 	//	*ExecutionInput_AgentSession
 	//	*ExecutionInput_DeliverRevision
+	//	*ExecutionInput_DeliverScheduledArtifacts
 	Spec          isExecutionInput_Spec `protobuf_oneof:"spec"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -286,6 +316,15 @@ func (x *ExecutionInput) GetDeliverRevision() *DeliverRevisionSpec {
 	return nil
 }
 
+func (x *ExecutionInput) GetDeliverScheduledArtifacts() *DeliverScheduledArtifactsSpec {
+	if x != nil {
+		if x, ok := x.Spec.(*ExecutionInput_DeliverScheduledArtifacts); ok {
+			return x.DeliverScheduledArtifacts
+		}
+	}
+	return nil
+}
+
 type isExecutionInput_Spec interface {
 	isExecutionInput_Spec()
 }
@@ -310,6 +349,10 @@ type ExecutionInput_DeliverRevision struct {
 	DeliverRevision *DeliverRevisionSpec `protobuf:"bytes,5,opt,name=deliver_revision,json=deliverRevision,proto3,oneof"`
 }
 
+type ExecutionInput_DeliverScheduledArtifacts struct {
+	DeliverScheduledArtifacts *DeliverScheduledArtifactsSpec `protobuf:"bytes,6,opt,name=deliver_scheduled_artifacts,json=deliverScheduledArtifacts,proto3,oneof"`
+}
+
 func (*ExecutionInput_Clone) isExecutionInput_Spec() {}
 
 func (*ExecutionInput_InstallPlugins) isExecutionInput_Spec() {}
@@ -320,10 +363,13 @@ func (*ExecutionInput_AgentSession) isExecutionInput_Spec() {}
 
 func (*ExecutionInput_DeliverRevision) isExecutionInput_Spec() {}
 
+func (*ExecutionInput_DeliverScheduledArtifacts) isExecutionInput_Spec() {}
+
 type CloneReady struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Commit        string                 `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Path  string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// Must equal the input's base_commit.
+	Commit        string `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -439,6 +485,8 @@ type ExecutionResult struct {
 	//	*ExecutionResult_RevisionDelivered
 	//	*ExecutionResult_RevisionUnchanged
 	//	*ExecutionResult_RevisionFailed
+	//	*ExecutionResult_ScheduledArtifactsDelivered
+	//	*ExecutionResult_ScheduledArtifactsFailed
 	Outcome       isExecutionResult_Outcome `protobuf_oneof:"outcome"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -560,6 +608,24 @@ func (x *ExecutionResult) GetRevisionFailed() *RevisionFailed {
 	return nil
 }
 
+func (x *ExecutionResult) GetScheduledArtifactsDelivered() *ScheduledArtifactsDelivered {
+	if x != nil {
+		if x, ok := x.Outcome.(*ExecutionResult_ScheduledArtifactsDelivered); ok {
+			return x.ScheduledArtifactsDelivered
+		}
+	}
+	return nil
+}
+
+func (x *ExecutionResult) GetScheduledArtifactsFailed() *ScheduledArtifactsFailed {
+	if x != nil {
+		if x, ok := x.Outcome.(*ExecutionResult_ScheduledArtifactsFailed); ok {
+			return x.ScheduledArtifactsFailed
+		}
+	}
+	return nil
+}
+
 type isExecutionResult_Outcome interface {
 	isExecutionResult_Outcome()
 }
@@ -596,6 +662,14 @@ type ExecutionResult_RevisionFailed struct {
 	RevisionFailed *RevisionFailed `protobuf:"bytes,9,opt,name=revision_failed,json=revisionFailed,proto3,oneof"`
 }
 
+type ExecutionResult_ScheduledArtifactsDelivered struct {
+	ScheduledArtifactsDelivered *ScheduledArtifactsDelivered `protobuf:"bytes,10,opt,name=scheduled_artifacts_delivered,json=scheduledArtifactsDelivered,proto3,oneof"`
+}
+
+type ExecutionResult_ScheduledArtifactsFailed struct {
+	ScheduledArtifactsFailed *ScheduledArtifactsFailed `protobuf:"bytes,11,opt,name=scheduled_artifacts_failed,json=scheduledArtifactsFailed,proto3,oneof"`
+}
+
 func (*ExecutionResult_CloneReady) isExecutionResult_Outcome() {}
 
 func (*ExecutionResult_CloneFailed) isExecutionResult_Outcome() {}
@@ -611,6 +685,10 @@ func (*ExecutionResult_RevisionDelivered) isExecutionResult_Outcome() {}
 func (*ExecutionResult_RevisionUnchanged) isExecutionResult_Outcome() {}
 
 func (*ExecutionResult_RevisionFailed) isExecutionResult_Outcome() {}
+
+func (*ExecutionResult_ScheduledArtifactsDelivered) isExecutionResult_Outcome() {}
+
+func (*ExecutionResult_ScheduledArtifactsFailed) isExecutionResult_Outcome() {}
 
 // The run Workspace sandbox a work item must be dispatched to, as of its current generation.
 type WorkTarget struct {
@@ -680,8 +758,7 @@ type WorkItem struct {
 	// The IssueRun ID for Agent session and Revision delivery work.
 	OperationId string          `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Input       *ExecutionInput `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`
-	// Set for Agent session and Revision delivery work; unset for a tenant-level clone, whose Node
-	// the Controller chooses.
+	// Always set: Agent session and Revision delivery work name their run Workspace sandbox.
 	Target        *WorkTarget `protobuf:"bytes,3,opt,name=target,proto3,oneof" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1493,18 +1570,21 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"&ora/cloud/internal/v1/executions.proto\x12\x15ora.cloud.internal.v1\x1a,ora/cloud/internal/v1/agent_executions.proto\x1a-ora/cloud/internal/v1/plugin_executions.proto\"W\n" +
 	"\fNodeIdentity\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12.\n" +
-	"\x13node_incarnation_id\x18\x02 \x01(\tR\x11nodeIncarnationId\"C\n" +
-	"\tCloneSpec\x12\x1e\n" +
-	"\n" +
-	"repository\x18\x01 \x01(\tR\n" +
-	"repository\x12\x16\n" +
-	"\x06branch\x18\x02 \x01(\tR\x06branch\"\xa4\x03\n" +
+	"\x13node_incarnation_id\x18\x02 \x01(\tR\x11nodeIncarnationId\"\xbb\x01\n" +
+	"\tCloneSpec\x12%\n" +
+	"\x0erepository_url\x18\x03 \x01(\tR\rrepositoryUrl\x12!\n" +
+	"\fsnapshot_ref\x18\x04 \x01(\tR\vsnapshotRef\x12\x1f\n" +
+	"\vbase_commit\x18\x05 \x01(\tR\n" +
+	"baseCommit\x12#\n" +
+	"\rworkspace_ref\x18\x06 \x01(\tR\fworkspaceRefJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\n" +
+	"repositoryR\x06branch\"\x9c\x04\n" +
 	"\x0eExecutionInput\x128\n" +
 	"\x05clone\x18\x01 \x01(\v2 .ora.cloud.internal.v1.CloneSpecH\x00R\x05clone\x12T\n" +
 	"\x0finstall_plugins\x18\x02 \x01(\v2).ora.cloud.internal.v1.InstallPluginsSpecH\x00R\x0einstallPlugins\x12Q\n" +
 	"\x0eremove_plugins\x18\x03 \x01(\v2(.ora.cloud.internal.v1.RemovePluginsSpecH\x00R\rremovePlugins\x12N\n" +
 	"\ragent_session\x18\x04 \x01(\v2'.ora.cloud.internal.v1.AgentSessionSpecH\x00R\fagentSession\x12W\n" +
-	"\x10deliver_revision\x18\x05 \x01(\v2*.ora.cloud.internal.v1.DeliverRevisionSpecH\x00R\x0fdeliverRevisionB\x06\n" +
+	"\x10deliver_revision\x18\x05 \x01(\v2*.ora.cloud.internal.v1.DeliverRevisionSpecH\x00R\x0fdeliverRevision\x12v\n" +
+	"\x1bdeliver_scheduled_artifacts\x18\x06 \x01(\v24.ora.cloud.internal.v1.DeliverScheduledArtifactsSpecH\x00R\x19deliverScheduledArtifactsB\x06\n" +
 	"\x04spec\"8\n" +
 	"\n" +
 	"CloneReady\x12\x12\n" +
@@ -1513,7 +1593,7 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"\vCloneFailed\x12A\n" +
 	"\x06reason\x18\x01 \x01(\x0e2).ora.cloud.internal.v1.CloneFailureReasonR\x06reason\x12(\n" +
 	"\rretained_path\x18\x02 \x01(\tH\x00R\fretainedPath\x88\x01\x01B\x10\n" +
-	"\x0e_retained_path\"\xe6\x05\n" +
+	"\x0e_retained_path\"\xd1\a\n" +
 	"\x0fExecutionResult\x127\n" +
 	"\x04node\x18\x01 \x01(\v2#.ora.cloud.internal.v1.NodeIdentityR\x04node\x12D\n" +
 	"\vclone_ready\x18\x02 \x01(\v2!.ora.cloud.internal.v1.CloneReadyH\x00R\n" +
@@ -1524,7 +1604,10 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"\x13agent_session_ended\x18\x06 \x01(\v2(.ora.cloud.internal.v1.AgentSessionEndedH\x00R\x11agentSessionEnded\x12Y\n" +
 	"\x12revision_delivered\x18\a \x01(\v2(.ora.cloud.internal.v1.RevisionDeliveredH\x00R\x11revisionDelivered\x12Y\n" +
 	"\x12revision_unchanged\x18\b \x01(\v2(.ora.cloud.internal.v1.RevisionUnchangedH\x00R\x11revisionUnchanged\x12P\n" +
-	"\x0frevision_failed\x18\t \x01(\v2%.ora.cloud.internal.v1.RevisionFailedH\x00R\x0erevisionFailedB\t\n" +
+	"\x0frevision_failed\x18\t \x01(\v2%.ora.cloud.internal.v1.RevisionFailedH\x00R\x0erevisionFailed\x12x\n" +
+	"\x1dscheduled_artifacts_delivered\x18\n" +
+	" \x01(\v22.ora.cloud.internal.v1.ScheduledArtifactsDeliveredH\x00R\x1bscheduledArtifactsDelivered\x12o\n" +
+	"\x1ascheduled_artifacts_failed\x18\v \x01(\v2/.ora.cloud.internal.v1.ScheduledArtifactsFailedH\x00R\x18scheduledArtifactsFailedB\t\n" +
 	"\aoutcome\"x\n" +
 	"\n" +
 	"WorkTarget\x12!\n" +
@@ -1584,14 +1667,15 @@ const file_ora_cloud_internal_v1_executions_proto_rawDesc = "" +
 	"\x1cListPendingDispatchesRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"a\n" +
 	"\x1dListPendingDispatchesResponse\x12@\n" +
-	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\x92\x02\n" +
+	"\arecords\x18\x01 \x03(\v2&.ora.cloud.internal.v1.ExecutionRecordR\arecords*\xf2\x02\n" +
 	"\x12CloneFailureReason\x12$\n" +
 	" CLONE_FAILURE_REASON_UNSPECIFIED\x10\x00\x12+\n" +
-	"'CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE\x10\x01\x12)\n" +
-	"%CLONE_FAILURE_REASON_BRANCH_NOT_FOUND\x10\x02\x12-\n" +
+	"'CLONE_FAILURE_REASON_SOURCE_UNAVAILABLE\x10\x01\x12-\n" +
 	")CLONE_FAILURE_REASON_DESTINATION_CONFLICT\x10\x03\x12)\n" +
 	"%CLONE_FAILURE_REASON_OPERATION_FAILED\x10\x04\x12$\n" +
-	" CLONE_FAILURE_REASON_INTERRUPTED\x10\x052\xc2\x05\n" +
+	" CLONE_FAILURE_REASON_INTERRUPTED\x10\x05\x12-\n" +
+	")CLONE_FAILURE_REASON_SNAPSHOT_UNAVAILABLE\x10\x06\x12-\n" +
+	")CLONE_FAILURE_REASON_BASE_COMMIT_MISMATCH\x10\a\"\x04\b\x02\x10\x02*%CLONE_FAILURE_REASON_BRANCH_NOT_FOUND2\xc2\x05\n" +
 	"\x10ExecutionService\x12^\n" +
 	"\tClaimWork\x12'.ora.cloud.internal.v1.ClaimWorkRequest\x1a(.ora.cloud.internal.v1.ClaimWorkResponse\x12m\n" +
 	"\x0eRecordDispatch\x12,.ora.cloud.internal.v1.RecordDispatchRequest\x1a-.ora.cloud.internal.v1.RecordDispatchResponse\x12v\n" +
@@ -1642,12 +1726,15 @@ var file_ora_cloud_internal_v1_executions_proto_goTypes = []any{
 	(*RemovePluginsSpec)(nil),             // 23: ora.cloud.internal.v1.RemovePluginsSpec
 	(*AgentSessionSpec)(nil),              // 24: ora.cloud.internal.v1.AgentSessionSpec
 	(*DeliverRevisionSpec)(nil),           // 25: ora.cloud.internal.v1.DeliverRevisionSpec
-	(*PluginsResult)(nil),                 // 26: ora.cloud.internal.v1.PluginsResult
-	(*PluginsFailed)(nil),                 // 27: ora.cloud.internal.v1.PluginsFailed
-	(*AgentSessionEnded)(nil),             // 28: ora.cloud.internal.v1.AgentSessionEnded
-	(*RevisionDelivered)(nil),             // 29: ora.cloud.internal.v1.RevisionDelivered
-	(*RevisionUnchanged)(nil),             // 30: ora.cloud.internal.v1.RevisionUnchanged
-	(*RevisionFailed)(nil),                // 31: ora.cloud.internal.v1.RevisionFailed
+	(*DeliverScheduledArtifactsSpec)(nil), // 26: ora.cloud.internal.v1.DeliverScheduledArtifactsSpec
+	(*PluginsResult)(nil),                 // 27: ora.cloud.internal.v1.PluginsResult
+	(*PluginsFailed)(nil),                 // 28: ora.cloud.internal.v1.PluginsFailed
+	(*AgentSessionEnded)(nil),             // 29: ora.cloud.internal.v1.AgentSessionEnded
+	(*RevisionDelivered)(nil),             // 30: ora.cloud.internal.v1.RevisionDelivered
+	(*RevisionUnchanged)(nil),             // 31: ora.cloud.internal.v1.RevisionUnchanged
+	(*RevisionFailed)(nil),                // 32: ora.cloud.internal.v1.RevisionFailed
+	(*ScheduledArtifactsDelivered)(nil),   // 33: ora.cloud.internal.v1.ScheduledArtifactsDelivered
+	(*ScheduledArtifactsFailed)(nil),      // 34: ora.cloud.internal.v1.ScheduledArtifactsFailed
 }
 var file_ora_cloud_internal_v1_executions_proto_depIdxs = []int32{
 	2,  // 0: ora.cloud.internal.v1.ExecutionInput.clone:type_name -> ora.cloud.internal.v1.CloneSpec
@@ -1655,46 +1742,49 @@ var file_ora_cloud_internal_v1_executions_proto_depIdxs = []int32{
 	23, // 2: ora.cloud.internal.v1.ExecutionInput.remove_plugins:type_name -> ora.cloud.internal.v1.RemovePluginsSpec
 	24, // 3: ora.cloud.internal.v1.ExecutionInput.agent_session:type_name -> ora.cloud.internal.v1.AgentSessionSpec
 	25, // 4: ora.cloud.internal.v1.ExecutionInput.deliver_revision:type_name -> ora.cloud.internal.v1.DeliverRevisionSpec
-	0,  // 5: ora.cloud.internal.v1.CloneFailed.reason:type_name -> ora.cloud.internal.v1.CloneFailureReason
-	1,  // 6: ora.cloud.internal.v1.ExecutionResult.node:type_name -> ora.cloud.internal.v1.NodeIdentity
-	4,  // 7: ora.cloud.internal.v1.ExecutionResult.clone_ready:type_name -> ora.cloud.internal.v1.CloneReady
-	5,  // 8: ora.cloud.internal.v1.ExecutionResult.clone_failed:type_name -> ora.cloud.internal.v1.CloneFailed
-	26, // 9: ora.cloud.internal.v1.ExecutionResult.plugins_result:type_name -> ora.cloud.internal.v1.PluginsResult
-	27, // 10: ora.cloud.internal.v1.ExecutionResult.plugins_failed:type_name -> ora.cloud.internal.v1.PluginsFailed
-	28, // 11: ora.cloud.internal.v1.ExecutionResult.agent_session_ended:type_name -> ora.cloud.internal.v1.AgentSessionEnded
-	29, // 12: ora.cloud.internal.v1.ExecutionResult.revision_delivered:type_name -> ora.cloud.internal.v1.RevisionDelivered
-	30, // 13: ora.cloud.internal.v1.ExecutionResult.revision_unchanged:type_name -> ora.cloud.internal.v1.RevisionUnchanged
-	31, // 14: ora.cloud.internal.v1.ExecutionResult.revision_failed:type_name -> ora.cloud.internal.v1.RevisionFailed
-	3,  // 15: ora.cloud.internal.v1.WorkItem.input:type_name -> ora.cloud.internal.v1.ExecutionInput
-	7,  // 16: ora.cloud.internal.v1.WorkItem.target:type_name -> ora.cloud.internal.v1.WorkTarget
-	3,  // 17: ora.cloud.internal.v1.ExecutionRecord.input:type_name -> ora.cloud.internal.v1.ExecutionInput
-	6,  // 18: ora.cloud.internal.v1.ExecutionRecord.result:type_name -> ora.cloud.internal.v1.ExecutionResult
-	8,  // 19: ora.cloud.internal.v1.ClaimWorkResponse.item:type_name -> ora.cloud.internal.v1.WorkItem
-	3,  // 20: ora.cloud.internal.v1.RecordDispatchRequest.input:type_name -> ora.cloud.internal.v1.ExecutionInput
-	9,  // 21: ora.cloud.internal.v1.RecordDispatchResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	6,  // 22: ora.cloud.internal.v1.TakeOverNodeEventRequest.result:type_name -> ora.cloud.internal.v1.ExecutionResult
-	9,  // 23: ora.cloud.internal.v1.TakeOverNodeEventResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	6,  // 24: ora.cloud.internal.v1.RecordQueriedResultRequest.result:type_name -> ora.cloud.internal.v1.ExecutionResult
-	9,  // 25: ora.cloud.internal.v1.RecordQueriedResultResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	9,  // 26: ora.cloud.internal.v1.GetDispatchResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	9,  // 27: ora.cloud.internal.v1.ListPendingDispatchesResponse.records:type_name -> ora.cloud.internal.v1.ExecutionRecord
-	10, // 28: ora.cloud.internal.v1.ExecutionService.ClaimWork:input_type -> ora.cloud.internal.v1.ClaimWorkRequest
-	12, // 29: ora.cloud.internal.v1.ExecutionService.RecordDispatch:input_type -> ora.cloud.internal.v1.RecordDispatchRequest
-	14, // 30: ora.cloud.internal.v1.ExecutionService.TakeOverNodeEvent:input_type -> ora.cloud.internal.v1.TakeOverNodeEventRequest
-	16, // 31: ora.cloud.internal.v1.ExecutionService.RecordQueriedResult:input_type -> ora.cloud.internal.v1.RecordQueriedResultRequest
-	18, // 32: ora.cloud.internal.v1.ExecutionService.GetDispatch:input_type -> ora.cloud.internal.v1.GetDispatchRequest
-	20, // 33: ora.cloud.internal.v1.ExecutionService.ListPendingDispatches:input_type -> ora.cloud.internal.v1.ListPendingDispatchesRequest
-	11, // 34: ora.cloud.internal.v1.ExecutionService.ClaimWork:output_type -> ora.cloud.internal.v1.ClaimWorkResponse
-	13, // 35: ora.cloud.internal.v1.ExecutionService.RecordDispatch:output_type -> ora.cloud.internal.v1.RecordDispatchResponse
-	15, // 36: ora.cloud.internal.v1.ExecutionService.TakeOverNodeEvent:output_type -> ora.cloud.internal.v1.TakeOverNodeEventResponse
-	17, // 37: ora.cloud.internal.v1.ExecutionService.RecordQueriedResult:output_type -> ora.cloud.internal.v1.RecordQueriedResultResponse
-	19, // 38: ora.cloud.internal.v1.ExecutionService.GetDispatch:output_type -> ora.cloud.internal.v1.GetDispatchResponse
-	21, // 39: ora.cloud.internal.v1.ExecutionService.ListPendingDispatches:output_type -> ora.cloud.internal.v1.ListPendingDispatchesResponse
-	34, // [34:40] is the sub-list for method output_type
-	28, // [28:34] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	26, // 5: ora.cloud.internal.v1.ExecutionInput.deliver_scheduled_artifacts:type_name -> ora.cloud.internal.v1.DeliverScheduledArtifactsSpec
+	0,  // 6: ora.cloud.internal.v1.CloneFailed.reason:type_name -> ora.cloud.internal.v1.CloneFailureReason
+	1,  // 7: ora.cloud.internal.v1.ExecutionResult.node:type_name -> ora.cloud.internal.v1.NodeIdentity
+	4,  // 8: ora.cloud.internal.v1.ExecutionResult.clone_ready:type_name -> ora.cloud.internal.v1.CloneReady
+	5,  // 9: ora.cloud.internal.v1.ExecutionResult.clone_failed:type_name -> ora.cloud.internal.v1.CloneFailed
+	27, // 10: ora.cloud.internal.v1.ExecutionResult.plugins_result:type_name -> ora.cloud.internal.v1.PluginsResult
+	28, // 11: ora.cloud.internal.v1.ExecutionResult.plugins_failed:type_name -> ora.cloud.internal.v1.PluginsFailed
+	29, // 12: ora.cloud.internal.v1.ExecutionResult.agent_session_ended:type_name -> ora.cloud.internal.v1.AgentSessionEnded
+	30, // 13: ora.cloud.internal.v1.ExecutionResult.revision_delivered:type_name -> ora.cloud.internal.v1.RevisionDelivered
+	31, // 14: ora.cloud.internal.v1.ExecutionResult.revision_unchanged:type_name -> ora.cloud.internal.v1.RevisionUnchanged
+	32, // 15: ora.cloud.internal.v1.ExecutionResult.revision_failed:type_name -> ora.cloud.internal.v1.RevisionFailed
+	33, // 16: ora.cloud.internal.v1.ExecutionResult.scheduled_artifacts_delivered:type_name -> ora.cloud.internal.v1.ScheduledArtifactsDelivered
+	34, // 17: ora.cloud.internal.v1.ExecutionResult.scheduled_artifacts_failed:type_name -> ora.cloud.internal.v1.ScheduledArtifactsFailed
+	3,  // 18: ora.cloud.internal.v1.WorkItem.input:type_name -> ora.cloud.internal.v1.ExecutionInput
+	7,  // 19: ora.cloud.internal.v1.WorkItem.target:type_name -> ora.cloud.internal.v1.WorkTarget
+	3,  // 20: ora.cloud.internal.v1.ExecutionRecord.input:type_name -> ora.cloud.internal.v1.ExecutionInput
+	6,  // 21: ora.cloud.internal.v1.ExecutionRecord.result:type_name -> ora.cloud.internal.v1.ExecutionResult
+	8,  // 22: ora.cloud.internal.v1.ClaimWorkResponse.item:type_name -> ora.cloud.internal.v1.WorkItem
+	3,  // 23: ora.cloud.internal.v1.RecordDispatchRequest.input:type_name -> ora.cloud.internal.v1.ExecutionInput
+	9,  // 24: ora.cloud.internal.v1.RecordDispatchResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	6,  // 25: ora.cloud.internal.v1.TakeOverNodeEventRequest.result:type_name -> ora.cloud.internal.v1.ExecutionResult
+	9,  // 26: ora.cloud.internal.v1.TakeOverNodeEventResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	6,  // 27: ora.cloud.internal.v1.RecordQueriedResultRequest.result:type_name -> ora.cloud.internal.v1.ExecutionResult
+	9,  // 28: ora.cloud.internal.v1.RecordQueriedResultResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	9,  // 29: ora.cloud.internal.v1.GetDispatchResponse.record:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	9,  // 30: ora.cloud.internal.v1.ListPendingDispatchesResponse.records:type_name -> ora.cloud.internal.v1.ExecutionRecord
+	10, // 31: ora.cloud.internal.v1.ExecutionService.ClaimWork:input_type -> ora.cloud.internal.v1.ClaimWorkRequest
+	12, // 32: ora.cloud.internal.v1.ExecutionService.RecordDispatch:input_type -> ora.cloud.internal.v1.RecordDispatchRequest
+	14, // 33: ora.cloud.internal.v1.ExecutionService.TakeOverNodeEvent:input_type -> ora.cloud.internal.v1.TakeOverNodeEventRequest
+	16, // 34: ora.cloud.internal.v1.ExecutionService.RecordQueriedResult:input_type -> ora.cloud.internal.v1.RecordQueriedResultRequest
+	18, // 35: ora.cloud.internal.v1.ExecutionService.GetDispatch:input_type -> ora.cloud.internal.v1.GetDispatchRequest
+	20, // 36: ora.cloud.internal.v1.ExecutionService.ListPendingDispatches:input_type -> ora.cloud.internal.v1.ListPendingDispatchesRequest
+	11, // 37: ora.cloud.internal.v1.ExecutionService.ClaimWork:output_type -> ora.cloud.internal.v1.ClaimWorkResponse
+	13, // 38: ora.cloud.internal.v1.ExecutionService.RecordDispatch:output_type -> ora.cloud.internal.v1.RecordDispatchResponse
+	15, // 39: ora.cloud.internal.v1.ExecutionService.TakeOverNodeEvent:output_type -> ora.cloud.internal.v1.TakeOverNodeEventResponse
+	17, // 40: ora.cloud.internal.v1.ExecutionService.RecordQueriedResult:output_type -> ora.cloud.internal.v1.RecordQueriedResultResponse
+	19, // 41: ora.cloud.internal.v1.ExecutionService.GetDispatch:output_type -> ora.cloud.internal.v1.GetDispatchResponse
+	21, // 42: ora.cloud.internal.v1.ExecutionService.ListPendingDispatches:output_type -> ora.cloud.internal.v1.ListPendingDispatchesResponse
+	37, // [37:43] is the sub-list for method output_type
+	31, // [31:37] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_executions_proto_init() }
@@ -1710,6 +1800,7 @@ func file_ora_cloud_internal_v1_executions_proto_init() {
 		(*ExecutionInput_RemovePlugins)(nil),
 		(*ExecutionInput_AgentSession)(nil),
 		(*ExecutionInput_DeliverRevision)(nil),
+		(*ExecutionInput_DeliverScheduledArtifacts)(nil),
 	}
 	file_ora_cloud_internal_v1_executions_proto_msgTypes[4].OneofWrappers = []any{}
 	file_ora_cloud_internal_v1_executions_proto_msgTypes[5].OneofWrappers = []any{
@@ -1721,6 +1812,8 @@ func file_ora_cloud_internal_v1_executions_proto_init() {
 		(*ExecutionResult_RevisionDelivered)(nil),
 		(*ExecutionResult_RevisionUnchanged)(nil),
 		(*ExecutionResult_RevisionFailed)(nil),
+		(*ExecutionResult_ScheduledArtifactsDelivered)(nil),
+		(*ExecutionResult_ScheduledArtifactsFailed)(nil),
 	}
 	file_ora_cloud_internal_v1_executions_proto_msgTypes[7].OneofWrappers = []any{}
 	file_ora_cloud_internal_v1_executions_proto_msgTypes[8].OneofWrappers = []any{}

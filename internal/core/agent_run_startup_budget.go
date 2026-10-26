@@ -82,6 +82,12 @@ func (s *Store) abandonExpiredAgentStartup(t *transaction, runID string) bool {
 	}
 	t.exec(`INSERT INTO agent_run_residuals(run_id,tenant_id,project_id,workspace_id,runtime_generation,responsibility,reason)
 	 VALUES($1,$2,$3,$4,$5,$6,'agent_start_failed') ON CONFLICT(run_id) DO NOTHING`, runID, run.S("tenantId"), w.S("projectId"), wid, w.N("runtimeGeneration"), jsonText(refs))
+	// The expired business window says nothing about physical stop. Retain one named observation
+	// on this same residual, addressed by the original execution, without rewriting responsibility.
+	t.exec(`UPDATE agent_run_residuals SET stop_evidence=stop_evidence||jsonb_build_object(
+	 'stop_unconfirmed',jsonb_build_object('kind','stop_unconfirmed','source','cloud',
+	 'observedAt',clock_timestamp(),'executionId',$2::text))
+	 WHERE run_id=$1 AND NOT stop_evidence ? 'stop_unconfirmed'`, runID, e.S("executionId"))
 	t.exec(`UPDATE workspaces SET admission_open=false,admission_epoch=admission_epoch+1,version=version+1 WHERE id=$1`, wid)
 	t.exec(`UPDATE runtime_controls SET state='reconciling',binding_confirmed=false,input_closed=false,
 	 version=version+1,updated_at=clock_timestamp() WHERE workspace_id=$1`, wid)

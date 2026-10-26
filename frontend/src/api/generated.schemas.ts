@@ -164,8 +164,6 @@ export type CloneExecutionInput = { [key: string]: unknown };
 export type CloneExecutionResult = { [key: string]: unknown } | null;
 
 export interface CloneExecution {
-  /** @nullable */
-  cloneRequestId: string | null;
   createdAt: string;
   /** @nullable */
   credentialRefId?: string | null;
@@ -182,51 +180,23 @@ export interface CloneExecution {
   /** @nullable */
   terminatedByForceStopId: string | null;
   updatedAt: string;
-  /** @nullable */
-  workspaceId: string | null;
+  workspaceId: string;
 }
 
-export type CloneStateKind = typeof CloneStateKind[keyof typeof CloneStateKind];
+export type CloneInputKind = typeof CloneInputKind[keyof typeof CloneInputKind];
 
 
-export const CloneStateKind = {
-  pending: 'pending',
-  succeeded: 'succeeded',
-  failed: 'failed',
+export const CloneInputKind = {
+  clone: 'clone',
 } as const;
 
-export type CloneStateReason = typeof CloneStateReason[keyof typeof CloneStateReason];
-
-
-export const CloneStateReason = {
-  sourceUnavailable: 'sourceUnavailable',
-  branchNotFound: 'branchNotFound',
-  destinationConflict: 'destinationConflict',
-  operationFailed: 'operationFailed',
-  interrupted: 'interrupted',
-  unspecified: 'unspecified',
-} as const;
-
-export interface CloneState {
-  commit?: string;
-  kind: CloneStateKind;
-  path?: string;
-  reason?: CloneStateReason;
-  retainedPath?: string;
-}
-
-export interface CloneOperation {
-  branch: string;
-  createdAt: string;
-  /** @nullable */
-  executionId: string | null;
-  /** @nullable */
-  nodeId: string | null;
-  operationId: string;
-  repository: string;
-  requestId: string;
-  state: CloneState;
-  updatedAt: string;
+export interface CloneInput {
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  baseCommit: string;
+  kind: CloneInputKind;
+  repositoryUrl: string;
+  snapshotRef: string;
+  workspaceRef: string;
 }
 
 export type CollaborationTargetType = typeof CollaborationTargetType[keyof typeof CollaborationTargetType];
@@ -308,19 +278,11 @@ export interface ContextRef {
 export interface ControllerProject {
   createdAt: string;
   /** @nullable */
-  credentialRefId: string | null;
-  defaultBranch: string;
-  /** @nullable */
   deletedAt: string | null;
   id: string;
   lifecycle: string;
   name: string;
   ownerUserId: string;
-  /** @nullable */
-  repositoryCredentialRefId?: string | null;
-  repositoryUrl: string;
-  /** @nullable */
-  secretRef: string | null;
   spaceId: string;
   tenantId: string;
   version: number;
@@ -498,6 +460,170 @@ export interface FormDescriptor {
   title?: string | null;
 }
 
+export type GitCredentialAttribution = typeof GitCredentialAttribution[keyof typeof GitCredentialAttribution];
+
+
+export const GitCredentialAttribution = {
+  personal: 'personal',
+  team: 'team',
+  unknown: 'unknown',
+} as const;
+
+export type GitCredentialAvailability = typeof GitCredentialAvailability[keyof typeof GitCredentialAvailability];
+
+
+export const GitCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type GitCredentialCapabilitiesItem = typeof GitCredentialCapabilitiesItem[keyof typeof GitCredentialCapabilitiesItem];
+
+
+export const GitCredentialCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+/**
+ * Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification.
+ */
+export type GitCredentialCapabilityEvidence = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type GitCredentialLastVerificationResult = typeof GitCredentialLastVerificationResult[keyof typeof GitCredentialLastVerificationResult] | null;
+
+
+export const GitCredentialLastVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type GitCredentialLastVerificationState = typeof GitCredentialLastVerificationState[keyof typeof GitCredentialLastVerificationState];
+
+
+export const GitCredentialLastVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+/**
+ * @nullable
+ */
+export type GitCredentialLastVerification = {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: GitCredentialLastVerificationResult;
+  state: GitCredentialLastVerificationState;
+  storeVersion: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type GitCredentialPendingSubmission = {
+  expiresAt: string;
+  storeVersion: number;
+  submissionId: string;
+} | null;
+
+export type GitCredentialRequestedCapabilitiesItem = typeof GitCredentialRequestedCapabilitiesItem[keyof typeof GitCredentialRequestedCapabilitiesItem];
+
+
+export const GitCredentialRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type GitCredentialSecretState = typeof GitCredentialSecretState[keyof typeof GitCredentialSecretState];
+
+
+export const GitCredentialSecretState = {
+  awaiting_secret: 'awaiting_secret',
+  stored: 'stored',
+  revoked: 'revoked',
+} as const;
+
+export interface GitCredential {
+  attribution: GitCredentialAttribution;
+  availability: GitCredentialAvailability;
+  capabilities: GitCredentialCapabilitiesItem[];
+  /** Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification. */
+  capabilityEvidence: GitCredentialCapabilityEvidence;
+  createdAt: string;
+  id: string;
+  /** @nullable */
+  lastVerification?: GitCredentialLastVerification;
+  name: string;
+  ownerUserId: string;
+  /** @nullable */
+  pendingSubmission?: GitCredentialPendingSubmission;
+  repositoryScope: string;
+  requestedCapabilities: GitCredentialRequestedCapabilitiesItem[];
+  /** @nullable */
+  revokedAt?: string | null;
+  secretState: GitCredentialSecretState;
+  storeVersion: number;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason?: string | null;
+  version: number;
+}
+
+export interface GitCredentialSubmission {
+  expiresAt: string;
+  /** One-time submission grant, presented to the Credential Store as `Authorization: Ora-Submission <grant>`. It authorizes writing one version, expires within five minutes and is not a credential. */
+  grant: string;
+  /** The Credential Store browser entry the token is PUT to, as `{"token": "..."}`. The token never goes to Cloud. */
+  ingressUrl: string;
+  storeVersion: number;
+  submissionId: string;
+}
+
+/**
+ * @nullable
+ */
+export type GitCredentialVerificationResult = typeof GitCredentialVerificationResult[keyof typeof GitCredentialVerificationResult] | null;
+
+
+export const GitCredentialVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type GitCredentialVerificationState = typeof GitCredentialVerificationState[keyof typeof GitCredentialVerificationState];
+
+
+export const GitCredentialVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+export interface GitCredentialVerification {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: GitCredentialVerificationResult;
+  state: GitCredentialVerificationState;
+  storeVersion: number;
+}
+
 export interface GitIdentity {
   email: string;
   isDefault: boolean;
@@ -640,6 +766,12 @@ export interface IssueInteraction {
   tenantId: string;
 }
 
+export type IssueRunAgentConfiguration = {
+  configurationRevision: number;
+  pluginId: string;
+  pluginVersion: string;
+};
+
 export type IssueRunExecutorType = typeof IssueRunExecutorType[keyof typeof IssueRunExecutorType];
 
 
@@ -714,7 +846,10 @@ export const IssueRunStatus = {
 } as const;
 
 export interface IssueRun {
+  agentConfiguration?: IssueRunAgentConfiguration;
   attempt: number;
+  /** @nullable */
+  cancelRequestedAt: string | null;
   /** @nullable */
   completedAt: string | null;
   createdAt: string;
@@ -1184,6 +1319,16 @@ export interface PluginLogoCandidate {
   role: PluginLogoCandidateRole;
 }
 
+/**
+ * @nullable
+ */
+export type PluginCatalogEntryAgentConfiguration = {
+  copyPath: string;
+  declaration: string;
+  declarationSha256: string;
+  schemaVersion: number;
+} | null;
+
 export type PluginCatalogEntryLogo = {
   universal: PluginLogoCandidate;
 } | {
@@ -1192,6 +1337,10 @@ export type PluginCatalogEntryLogo = {
 } | null;
 
 export interface PluginCatalogEntry {
+  /** @nullable */
+  agentConfiguration?: PluginCatalogEntryAgentConfiguration;
+  /** @nullable */
+  agentConfigurationIssue?: string | null;
   description: string;
   /** @nullable */
   homepage: string | null;
@@ -1229,6 +1378,7 @@ export type OperationRequestPluginsItem = { [key: string]: unknown };
 export type OperationRequestPrevious = {[key: string]: Workspace};
 
 export interface OperationRequest {
+  clone?: CloneInput;
   desiredRevision?: number;
   pluginId?: string;
   pluginMeta?: OperationRequestPluginMetaItem[];
@@ -1269,6 +1419,82 @@ export interface Operation {
   workspaceId: string | null;
 }
 
+export type PersonalAgentConfigurationSettings = {[key: string]: string | number | boolean};
+
+export interface PersonalAgentConfiguration {
+  cleared: boolean;
+  /** @nullable */
+  connectionId?: string | null;
+  declarationFingerprint?: string;
+  /** @nullable */
+  modelId?: string | null;
+  revision: number;
+  settings: PersonalAgentConfigurationSettings;
+  updatedAt?: string;
+}
+
+export type PersonalAgentConfigurationContextDeclarationModelAccessModelCardinality = typeof PersonalAgentConfigurationContextDeclarationModelAccessModelCardinality[keyof typeof PersonalAgentConfigurationContextDeclarationModelAccessModelCardinality];
+
+
+export const PersonalAgentConfigurationContextDeclarationModelAccessModelCardinality = {
+  single: 'single',
+} as const;
+
+export type PersonalAgentConfigurationContextDeclarationModelAccess = {
+  contractVersion: number;
+  modelCardinality: PersonalAgentConfigurationContextDeclarationModelAccessModelCardinality;
+  protocols: string[];
+};
+
+export type PersonalAgentConfigurationContextDeclarationSettingsItemSettingType = typeof PersonalAgentConfigurationContextDeclarationSettingsItemSettingType[keyof typeof PersonalAgentConfigurationContextDeclarationSettingsItemSettingType];
+
+
+export const PersonalAgentConfigurationContextDeclarationSettingsItemSettingType = {
+  string: 'string',
+  number: 'number',
+  boolean: 'boolean',
+} as const;
+
+export type PersonalAgentConfigurationContextDeclarationSettingsItem = {
+  /** A scalar of the declared type, or null when no default exists. */
+  default: unknown | null;
+  description: string;
+  id: string;
+  /** @nullable */
+  order: number | null;
+  required: boolean;
+  settingType: PersonalAgentConfigurationContextDeclarationSettingsItemSettingType;
+  title: string;
+};
+
+export type PersonalAgentConfigurationContextDeclaration = {
+  fingerprint: string;
+  modelAccess: PersonalAgentConfigurationContextDeclarationModelAccess;
+  schemaVersion: number;
+  settings: PersonalAgentConfigurationContextDeclarationSettingsItem[];
+};
+
+export type PersonalAgentConfigurationContextSettings = {[key: string]: string | number | boolean};
+
+export interface PersonalAgentConfigurationContext {
+  cleared: boolean;
+  /** @nullable */
+  connectionId?: string | null;
+  declaration: PersonalAgentConfigurationContextDeclaration;
+  declarationFingerprint?: string;
+  modelDefault?: ModelDefault;
+  /** @nullable */
+  modelId?: string | null;
+  pluginId: string;
+  pluginVersion: string;
+  requiresRepair: boolean;
+  revision: number;
+  selectionVersion: number;
+  settings: PersonalAgentConfigurationContextSettings;
+  spaceId: string;
+  updatedAt?: string;
+}
+
 export interface PluginCatalog {
   items: PluginCatalogEntry[];
   /** @nullable */
@@ -1286,12 +1512,361 @@ export interface Project {
   lifecycle: string;
   name: string;
   ownerUserId: string;
-  /** @nullable */
-  repositoryCredentialRefId?: string | null;
   repositoryUrl: string;
   spaceId: string;
   tenantId: string;
   version: number;
+}
+
+export type ProjectRepositoryBinding = {
+  branch: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  id: string;
+  projectId: string;
+  repositoryUrl: string;
+  resyncRequested: boolean;
+  version: number;
+};
+
+export type ProjectRepositoryCredentialAttribution = typeof ProjectRepositoryCredentialAttribution[keyof typeof ProjectRepositoryCredentialAttribution];
+
+
+export const ProjectRepositoryCredentialAttribution = {
+  personal: 'personal',
+  team: 'team',
+  unknown: 'unknown',
+} as const;
+
+export type ProjectRepositoryCredentialAvailability = typeof ProjectRepositoryCredentialAvailability[keyof typeof ProjectRepositoryCredentialAvailability];
+
+
+export const ProjectRepositoryCredentialAvailability = {
+  available: 'available',
+  frozen: 'frozen',
+  invalid: 'invalid',
+} as const;
+
+export type ProjectRepositoryCredentialCapabilitiesItem = typeof ProjectRepositoryCredentialCapabilitiesItem[keyof typeof ProjectRepositoryCredentialCapabilitiesItem];
+
+
+export const ProjectRepositoryCredentialCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+/**
+ * Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification.
+ */
+export type ProjectRepositoryCredentialCapabilityEvidence = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialLastVerificationResult = typeof ProjectRepositoryCredentialLastVerificationResult[keyof typeof ProjectRepositoryCredentialLastVerificationResult] | null;
+
+
+export const ProjectRepositoryCredentialLastVerificationResult = {
+  verified: 'verified',
+  push_denied: 'push_denied',
+  verification_failed: 'verification_failed',
+} as const;
+
+export type ProjectRepositoryCredentialLastVerificationState = typeof ProjectRepositoryCredentialLastVerificationState[keyof typeof ProjectRepositoryCredentialLastVerificationState];
+
+
+export const ProjectRepositoryCredentialLastVerificationState = {
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialLastVerification = {
+  createdAt: string;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  result?: ProjectRepositoryCredentialLastVerificationResult;
+  state: ProjectRepositoryCredentialLastVerificationState;
+  storeVersion: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredentialPendingSubmission = {
+  expiresAt: string;
+  storeVersion: number;
+  submissionId: string;
+} | null;
+
+export type ProjectRepositoryCredentialRequestedCapabilitiesItem = typeof ProjectRepositoryCredentialRequestedCapabilitiesItem[keyof typeof ProjectRepositoryCredentialRequestedCapabilitiesItem];
+
+
+export const ProjectRepositoryCredentialRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type ProjectRepositoryCredentialSecretState = typeof ProjectRepositoryCredentialSecretState[keyof typeof ProjectRepositoryCredentialSecretState];
+
+
+export const ProjectRepositoryCredentialSecretState = {
+  awaiting_secret: 'awaiting_secret',
+  stored: 'stored',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryCredential = {
+  attribution: ProjectRepositoryCredentialAttribution;
+  availability: ProjectRepositoryCredentialAvailability;
+  capabilities: ProjectRepositoryCredentialCapabilitiesItem[];
+  /** Per capability: when it was proven, for which storeVersion, and by which sync Operation or verification. */
+  capabilityEvidence: ProjectRepositoryCredentialCapabilityEvidence;
+  createdAt: string;
+  id: string;
+  /** @nullable */
+  lastVerification?: ProjectRepositoryCredentialLastVerification;
+  name: string;
+  ownerUserId: string;
+  /** @nullable */
+  pendingSubmission?: ProjectRepositoryCredentialPendingSubmission;
+  repositoryScope: string;
+  requestedCapabilities: ProjectRepositoryCredentialRequestedCapabilitiesItem[];
+  /** @nullable */
+  revokedAt?: string | null;
+  secretState: ProjectRepositoryCredentialSecretState;
+  storeVersion: number;
+  tenantId: string;
+  /** @nullable */
+  unavailableReason?: string | null;
+  version: number;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryLatestSyncApproverKind = typeof ProjectRepositoryLatestSyncApproverKind[keyof typeof ProjectRepositoryLatestSyncApproverKind] | null;
+
+
+export const ProjectRepositoryLatestSyncApproverKind = {
+  credential_owner: 'credential_owner',
+  publisher: 'publisher',
+} as const;
+
+/**
+ * Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output.
+ */
+export type ProjectRepositoryLatestSyncResult = { [key: string]: unknown };
+
+export type ProjectRepositoryLatestSyncState = typeof ProjectRepositoryLatestSyncState[keyof typeof ProjectRepositoryLatestSyncState];
+
+
+export const ProjectRepositoryLatestSyncState = {
+  awaiting_approval: 'awaiting_approval',
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  uncertain: 'uncertain',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  superseded: 'superseded',
+  cancelled: 'cancelled',
+  conflict: 'conflict',
+  rejected: 'rejected',
+} as const;
+
+export type ProjectRepositoryLatestSyncType = typeof ProjectRepositoryLatestSyncType[keyof typeof ProjectRepositoryLatestSyncType];
+
+
+export const ProjectRepositoryLatestSyncType = {
+  repository_sync: 'repository_sync',
+  repository_publish: 'repository_publish',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositoryLatestSync = {
+  /** @nullable */
+  approvalExpiresAt?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  approvedBy?: string | null;
+  /** @nullable */
+  approverKind?: ProjectRepositoryLatestSyncApproverKind;
+  bindingId: string;
+  checkAttempts: number;
+  createdAt: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  /** @nullable */
+  credentialVersion?: number | null;
+  /** @nullable */
+  errorCode?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  expectedOldOid?: string | null;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  nextCheckAt?: string | null;
+  projectId: string;
+  replayCount: number;
+  /** @nullable */
+  requestedBy?: string | null;
+  /** Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output. */
+  result: ProjectRepositoryLatestSyncResult;
+  /** @nullable */
+  revisionId?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  sourceCommit?: string | null;
+  /** @nullable */
+  sourceOperationId?: string | null;
+  /** @nullable */
+  sourceRef?: string | null;
+  /** @nullable */
+  startedAt?: string | null;
+  state: ProjectRepositoryLatestSyncState;
+  /** @nullable */
+  targetBranch?: string | null;
+  tenantId: string;
+  trigger: string;
+  type: ProjectRepositoryLatestSyncType;
+} | null;
+
+/**
+ * @nullable
+ */
+export type ProjectRepositorySnapshot = {
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  commitOid: string;
+  forced: boolean;
+  recordedAt: string;
+  snapshotRef: string;
+  syncOperationId: string;
+} | null;
+
+export interface ProjectRepository {
+  binding: ProjectRepositoryBinding;
+  /** @nullable */
+  credential?: ProjectRepositoryCredential;
+  /** @nullable */
+  latestSync?: ProjectRepositoryLatestSync;
+  /** @nullable */
+  snapshot?: ProjectRepositorySnapshot;
+}
+
+/**
+ * @nullable
+ */
+export type RepositoryOperationApproverKind = typeof RepositoryOperationApproverKind[keyof typeof RepositoryOperationApproverKind] | null;
+
+
+export const RepositoryOperationApproverKind = {
+  credential_owner: 'credential_owner',
+  publisher: 'publisher',
+} as const;
+
+/**
+ * Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output.
+ */
+export type RepositoryOperationResult = { [key: string]: unknown };
+
+export type RepositoryOperationState = typeof RepositoryOperationState[keyof typeof RepositoryOperationState];
+
+
+export const RepositoryOperationState = {
+  awaiting_approval: 'awaiting_approval',
+  pending: 'pending',
+  leased: 'leased',
+  running: 'running',
+  uncertain: 'uncertain',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  superseded: 'superseded',
+  cancelled: 'cancelled',
+  conflict: 'conflict',
+  rejected: 'rejected',
+} as const;
+
+export type RepositoryOperationType = typeof RepositoryOperationType[keyof typeof RepositoryOperationType];
+
+
+export const RepositoryOperationType = {
+  repository_sync: 'repository_sync',
+  repository_publish: 'repository_publish',
+} as const;
+
+export interface RepositoryOperation {
+  /** @nullable */
+  approvalExpiresAt?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  approvedBy?: string | null;
+  /** @nullable */
+  approverKind?: RepositoryOperationApproverKind;
+  bindingId: string;
+  checkAttempts: number;
+  createdAt: string;
+  /** @nullable */
+  credentialRefId?: string | null;
+  /** @nullable */
+  credentialVersion?: number | null;
+  /** @nullable */
+  errorCode?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  expectedOldOid?: string | null;
+  /** @nullable */
+  finishedAt?: string | null;
+  id: string;
+  /** @nullable */
+  nextCheckAt?: string | null;
+  projectId: string;
+  replayCount: number;
+  /** @nullable */
+  requestedBy?: string | null;
+  /** Settled facts: commitOid and forced for a sync, observed external values for a publish, a redacted detail. Never a credential or raw platform output. */
+  result: RepositoryOperationResult;
+  /** @nullable */
+  revisionId?: string | null;
+  /**
+     * @nullable
+     * @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$
+     */
+  sourceCommit?: string | null;
+  /** @nullable */
+  sourceOperationId?: string | null;
+  /** @nullable */
+  sourceRef?: string | null;
+  /** @nullable */
+  startedAt?: string | null;
+  state: RepositoryOperationState;
+  /** @nullable */
+  targetBranch?: string | null;
+  tenantId: string;
+  trigger: string;
+  type: RepositoryOperationType;
 }
 
 export type RunPreparationStage = typeof RunPreparationStage[keyof typeof RunPreparationStage];
@@ -1381,6 +1956,120 @@ export interface Sandbox {
   terminatedAt: string | null;
   version: number;
   workspaceId: string;
+}
+
+export interface ScheduledArtifact {
+  index: number;
+  kind: string;
+  name: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+export interface ScheduledArtifactList {
+  artifacts: ScheduledArtifact[];
+}
+
+export type ScheduledTaskScheduleKind = typeof ScheduledTaskScheduleKind[keyof typeof ScheduledTaskScheduleKind];
+
+
+export const ScheduledTaskScheduleKind = {
+  every_hours: 'every_hours',
+  daily: 'daily',
+  weekly: 'weekly',
+} as const;
+
+export type ScheduledTaskScheduleWeekdaysItem = typeof ScheduledTaskScheduleWeekdaysItem[keyof typeof ScheduledTaskScheduleWeekdaysItem];
+
+
+export const ScheduledTaskScheduleWeekdaysItem = {
+  sunday: 'sunday',
+  monday: 'monday',
+  tuesday: 'tuesday',
+  wednesday: 'wednesday',
+  thursday: 'thursday',
+  friday: 'friday',
+  saturday: 'saturday',
+} as const;
+
+export interface ScheduledTaskSchedule {
+  /** @nullable */
+  hour?: number | null;
+  /** @nullable */
+  intervalHours?: number | null;
+  kind: ScheduledTaskScheduleKind;
+  /** @nullable */
+  minute?: number | null;
+  /** @nullable */
+  weekdays?: ScheduledTaskScheduleWeekdaysItem[] | null;
+}
+
+export interface ScheduledTask {
+  agentId: string;
+  createdAt: string;
+  creatorUserId: string;
+  /** @nullable */
+  disabledReason?: string | null;
+  enabled: boolean;
+  id: string;
+  issueId: string;
+  /** @nullable */
+  model?: string | null;
+  name: string;
+  prompt: string;
+  revision: number;
+  schedule: ScheduledTaskSchedule;
+  timezone: string;
+  /** @nullable */
+  unattendedConsentedAt?: string | null;
+  /** @nullable */
+  unattendedPolicy?: string | null;
+  updatedAt: string;
+  version: number;
+}
+
+export type ScheduledTaskApprovalPolicy = typeof ScheduledTaskApprovalPolicy[keyof typeof ScheduledTaskApprovalPolicy];
+
+
+export const ScheduledTaskApprovalPolicy = {
+  full_auto_in_cloud_workspace: 'full_auto_in_cloud_workspace',
+} as const;
+
+export interface ScheduledTaskApproval {
+  policy: ScheduledTaskApprovalPolicy;
+}
+
+export interface ScheduledTaskOccurrence {
+  /** @nullable */
+  artifactCount?: number | null;
+  /** @nullable */
+  artifactsExpired?: boolean | null;
+  /** @nullable */
+  failureReason?: string | null;
+  observedAt: string;
+  outcome: string;
+  /** @nullable */
+  rejectedArtifactCount?: number | null;
+  /** @nullable */
+  runId?: string | null;
+  scheduledAt: string;
+  /** @nullable */
+  sessionId?: string | null;
+  taskRevision: number;
+  /** @nullable */
+  verdict?: string | null;
+  /** @nullable */
+  verdictDetail?: string | null;
+}
+
+export interface ScheduledTaskHistory {
+  entries: ScheduledTaskOccurrence[];
+  taskId: string;
+}
+
+export interface ScheduledTaskList {
+  acceptanceEnabled: boolean;
+  tasks: ScheduledTask[];
 }
 
 export type SessionHistoryRecordsItem = { [key: string]: unknown };
@@ -1509,9 +2198,24 @@ export interface SessionModelStatistics {
   usage: SessionModelStatisticsUsage;
 }
 
+export interface SlotMapping {
+  agentCli: string;
+  available: boolean;
+  connectionId: string;
+  connectionName: string;
+  createdAt: string;
+  modelId: string;
+  modelName: string;
+  slotName: string;
+  unavailableReason: string;
+  updatedAt: string;
+  version: number;
+}
+
 export type SnapshotPluginInput = { [key: string]: unknown };
 
 export interface Snapshot {
+  cloneInput?: CloneInput;
   clones: CloneExecution[];
   effects: Effect[];
   nodes: Node[];
@@ -1550,6 +2254,10 @@ export const SpaceEventType = {
   pluginscatalog_updated: 'plugins.catalog_updated',
   issue_runthread_appended: 'issue_run.thread_appended',
   issue_runthread_changed: 'issue_run.thread_changed',
+  projectrepository_updated: 'project.repository_updated',
+  issueconversation_changed: 'issue.conversation_changed',
+  scheduled_taskartifacts_updated: 'scheduled_task.artifacts_updated',
+  spacescheduled_tasks_updated: 'space.scheduled_tasks_updated',
 } as const;
 
 export interface SpaceEvent {
@@ -1558,6 +2266,8 @@ export interface SpaceEvent {
   /** @nullable */
   projectId?: string | null;
   runId?: string;
+  /** @nullable */
+  scheduledTaskId?: string | null;
   spaceId: string;
   type: SpaceEventType;
   version?: number;
@@ -1586,6 +2296,20 @@ export const SpacePluginDesiredState = {
   removed: 'removed',
 } as const;
 
+export type SpacePluginKind = typeof SpacePluginKind[keyof typeof SpacePluginKind];
+
+
+export const SpacePluginKind = {
+  workbench: 'workbench',
+  agent: 'agent',
+  webview: 'webview',
+  skill: 'skill',
+  mcp: 'mcp',
+  hook: 'hook',
+  pack: 'pack',
+  workflow: 'workflow',
+} as const;
+
 export type SpacePluginObservedState = typeof SpacePluginObservedState[keyof typeof SpacePluginObservedState];
 
 
@@ -1610,6 +2334,7 @@ export interface SpacePlugin {
   identifier: string;
   /** @nullable */
   installError: string | null;
+  kind?: SpacePluginKind;
   observedState: SpacePluginObservedState;
   /** @nullable */
   observedVersion: string | null;
@@ -1627,6 +2352,57 @@ export interface SpacePlugin {
 
 export interface SpacePluginList {
   items: SpacePlugin[];
+}
+
+export interface TaskAgentReadiness {
+  agentId: string;
+  /** @nullable */
+  errorCode: string | null;
+  requiresPersonalModel: boolean;
+}
+
+/**
+ * @nullable
+ */
+export type TaskConversationMessageDelivery = typeof TaskConversationMessageDelivery[keyof typeof TaskConversationMessageDelivery] | null;
+
+
+export const TaskConversationMessageDelivery = {
+  pending: 'pending',
+  queued: 'queued',
+  delivered: 'delivered',
+  discarded: 'discarded',
+  failed: 'failed',
+  cancelled: 'cancelled',
+} as const;
+
+export type TaskConversationMessageState = typeof TaskConversationMessageState[keyof typeof TaskConversationMessageState];
+
+
+export const TaskConversationMessageState = {
+  waiting: 'waiting',
+  submitted: 'submitted',
+  cancelled: 'cancelled',
+  failed: 'failed',
+} as const;
+
+export interface TaskConversationMessage {
+  agentId: string;
+  body: string;
+  createdAt: string;
+  /** @nullable */
+  delivery?: TaskConversationMessageDelivery;
+  /** @nullable */
+  errorCode: string | null;
+  id: string;
+  /** @nullable */
+  runId: string | null;
+  /** @minimum 1 */
+  seq: number;
+  state: TaskConversationMessageState;
+  /** @nullable */
+  threadSeq: number | null;
+  userId: string;
 }
 
 export interface Tenant {
@@ -1667,6 +2443,11 @@ export const ThreadEntryStatus = {
 
 export interface ThreadEntry {
   createdAt: string;
+  /**
+     * @minimum 0
+     * @nullable
+     */
+  historySequence?: number | null;
   kind: string;
   record: ThreadEntryRecord;
   /** @minimum 1 */
@@ -1685,6 +2466,22 @@ export interface ThreadModel {
   connectionName: string;
   modelId: string;
   modelName: string;
+}
+
+export type ThreadPreviewSnapshotBlocksItemRecord = { [key: string]: unknown };
+
+export type ThreadPreviewSnapshotBlocksItem = {
+  historySequence: number;
+  record: ThreadPreviewSnapshotBlocksItemRecord;
+  turnId: string;
+};
+
+export interface ThreadPreviewSnapshot {
+  available: boolean;
+  blocks: ThreadPreviewSnapshotBlocksItem[];
+  executionId: string;
+  incomplete: boolean;
+  version: number;
 }
 
 export interface Ticket {
@@ -1847,12 +2644,12 @@ export interface WorkflowAssetImportList {
 export type WorkflowRunDefinitionSnapshot = { [key: string]: unknown } | null;
 
 /**
- * The kickoff input passed to the run's start node.
+ * The run's input object: each form value keyed by variable name, plus the reserved `input` key carrying the kickoff text the run submitted. A run that submitted no kickoff evaluates against the Start node's authored instruction instead.
  */
 export type WorkflowRunInput = { [key: string]: unknown };
 
 /**
- * Per-node execution state keyed by node id: status, output, error, timestamps.
+ * Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts.
  */
 export type WorkflowRunNodeStates = { [key: string]: unknown };
 
@@ -1864,13 +2661,22 @@ export type WorkflowRunStatus = typeof WorkflowRunStatus[keyof typeof WorkflowRu
 export const WorkflowRunStatus = {
   pending: 'pending',
   running: 'running',
-  awaiting_input: 'awaiting_input',
   succeeded: 'succeeded',
   failed: 'failed',
   cancelled: 'cancelled',
 } as const;
 
+export interface WorkflowRunModelBinding {
+  connectionName: string;
+  modelId: string;
+  modelName: string;
+  revoked: boolean;
+  slot: string;
+}
+
 export interface WorkflowRun {
+  /** @nullable */
+  cancelRequestedAt: string | null;
   createdAt: string;
   /**
      * The frozen graph document this run executed against, from the snapshot it captured.
@@ -1881,11 +2687,21 @@ export interface WorkflowRun {
   /** @nullable */
   finishedAt: string | null;
   id: string;
-  /** The kickoff input passed to the run's start node. */
+  /** The run's input object: each form value keyed by variable name, plus the reserved `input` key carrying the kickoff text the run submitted. A run that submitted no kickoff evaluates against the Start node's authored instruction instead. */
   input: WorkflowRunInput;
+  /**
+     * The frozen per-slot model bindings this run executes against, ordered by slot name. Present on a detail read. Each binding is frozen at run creation and used for the run's whole lifetime; only `revoked` can turn true (the owning connection's grant was revoked).
+     * @nullable
+     */
+  modelBindings?: WorkflowRunModelBinding[] | null;
   name: string;
-  /** Per-node execution state keyed by node id: status, output, error, timestamps. */
+  /** Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. */
   nodeStates: WorkflowRunNodeStates;
+  /**
+     * The agent plugin version frozen into the run at creation: the frozen identity the run's agent sessions execute with. Null only when the space declared no plugin at creation (or the run predates migration 0042); the first agent node then fails with `agent_plugin_version_unfrozen`.
+     * @nullable
+     */
+  pluginVersion: string | null;
   rounds: WorkflowRunRoundsItem[];
   snapshotId: string;
   /** @nullable */
@@ -1921,6 +2737,13 @@ export interface WorkflowSnapshotForm {
   snapshotId: string;
   /** @nullable */
   title?: string | null;
+}
+
+export interface WorkspaceBranch {
+  branch: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  commit: string;
+  ref: string;
 }
 
 export type WorkspaceListItemDesiredState = typeof WorkspaceListItemDesiredState[keyof typeof WorkspaceListItemDesiredState];
@@ -1993,6 +2816,101 @@ export type PostApiV1JoinInvitationsRedeemBody = {
 
 export type PostApiV1JoinRequestsBody = {
   token: string;
+};
+
+export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody = {
+  /** @minimum 0 */
+  revision: number;
+};
+
+export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200 = {
+  resource: PersonalAgentConfiguration;
+};
+
+export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBodySettings = {[key: string]: string | number | boolean};
+
+export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody = {
+  connectionId?: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  declarationFingerprint: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  modelId?: string;
+  /** @minimum 0 */
+  revision: number;
+  /** @minimum 0 */
+  selectionVersion: number;
+  settings: PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBodySettings;
+};
+
+export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200 = {
+  resource: PersonalAgentConfiguration;
+};
+
+export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBodySettings = {[key: string]: string | number | boolean};
+
+export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody = {
+  connectionId?: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  declarationFingerprint: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  modelId?: string;
+  /** @minimum 0 */
+  revision: number;
+  /** @minimum 0 */
+  selectionVersion: number;
+  settings: PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBodySettings;
+};
+
+export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair200 = {
+  resource: PersonalAgentConfiguration;
+};
+
+export type GetApiV1MeExecutorSlotMappingsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1MeExecutorSlotMappings200 = {
+  items: SlotMapping[];
+  nextCursor: string;
+};
+
+export type DeleteApiV1MeExecutorSlotMappingsSlotBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1MeExecutorSlotMappingsSlot200 = {
+  resource: SlotMapping;
+};
+
+export type PutApiV1MeExecutorSlotMappingsSlotBody = {
+  agentCli: string;
+  connectionId: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  modelId: string;
+  /** @minimum 0 */
+  version?: number;
+};
+
+export type PutApiV1MeExecutorSlotMappingsSlot200 = {
+  resource: SlotMapping;
 };
 
 export type DeleteApiV1MeGitIdentityBody = {
@@ -2218,7 +3136,19 @@ export type GetApiV1TenantsTidAgentSessions200 = {
   nextCursor: string;
 };
 
-export type GetApiV1TenantsTidClonesParams = {
+export type GetApiV1TenantsTidCollaborationFormsFormRefParams = {
+/**
+ * Issue the form is being configured for. Tailors the descriptor with the platform fields (repository, branch, prompt, snapshotId) and prefills them from the issue's project repository and the workflow's Start prompt. An unknown or foreign issue is 404.
+ */
+issueId?: string;
+};
+
+export type GetApiV1TenantsTidCollaborationTargets200 = {
+  items: CollaborationTarget[];
+  nextCursor: string;
+};
+
+export type GetApiV1TenantsTidGitCredentialsParams = {
 /**
  * @minimum 1
  * @maximum 100
@@ -2230,27 +3160,74 @@ limit?: number;
 after?: string;
 };
 
-export type GetApiV1TenantsTidClones200 = {
-  items: CloneOperation[];
+export type GetApiV1TenantsTidGitCredentials200 = {
+  items: GitCredential[];
   nextCursor: string;
 };
 
-export type PostApiV1TenantsTidClonesBody = {
-  branch: string;
-  repository: string;
-  requestId: string;
+export type PostApiV1TenantsTidGitCredentialsBodyAttribution = typeof PostApiV1TenantsTidGitCredentialsBodyAttribution[keyof typeof PostApiV1TenantsTidGitCredentialsBodyAttribution];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyAttribution = {
+  personal: 'personal',
+  team: 'team',
+} as const;
+
+export type PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem = typeof PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem[keyof typeof PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem];
+
+
+export const PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem = {
+  read: 'read',
+  publish: 'publish',
+} as const;
+
+export type PostApiV1TenantsTidGitCredentialsBody = {
+  attribution: PostApiV1TenantsTidGitCredentialsBodyAttribution;
+  name: string;
+  /**
+     * The one https repository the credential works on; normalized (lowercase host, no :443, no trailing / or .git).
+     * @maxLength 2048
+     */
+  repositoryScope: string;
+  requestedCapabilities?: PostApiV1TenantsTidGitCredentialsBodyRequestedCapabilitiesItem[];
 };
 
-export type GetApiV1TenantsTidCollaborationFormsFormRefParams = {
-/**
- * Issue the form is being configured for. Tailors the descriptor with the platform fields (repository, branch, prompt, snapshotId) and prefills them from the issue's project repository and the workflow's Start prompt. An unknown or foreign issue is 404.
- */
-issueId?: string;
+export type PostApiV1TenantsTidGitCredentials201 = {
+  resource: GitCredential;
+  submission: GitCredentialSubmission;
 };
 
-export type GetApiV1TenantsTidCollaborationTargets200 = {
-  items: CollaborationTarget[];
-  nextCursor: string;
+export type DeleteApiV1TenantsTidGitCredentialsGcidBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type DeleteApiV1TenantsTidGitCredentialsGcid200 = {
+  resource: GitCredential;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidConfirmBody = {
+  submissionId: string;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidConfirm200 = {
+  resource: GitCredential;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidRotateBody = {
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidRotate200 = {
+  resource: GitCredential;
+  submission: GitCredentialSubmission;
+};
+
+export type PostApiV1TenantsTidGitCredentialsGcidVerificationsBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidGitCredentialsGcidVerifications202 = {
+  resource: GitCredentialVerification;
 };
 
 export type GetApiV1TenantsTidInvitationsParams = {
@@ -2598,6 +3575,94 @@ export type PostApiV1TenantsTidIssuesIidContextRefs200 = {
 
 export type DeleteApiV1TenantsTidIssuesIidContextRefsCridBody = { [key: string]: unknown };
 
+export type GetApiV1TenantsTidIssuesIidConversationParams = {
+/**
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
+/**
+ * Forward Thread seq cursor: the window starts after this seq. Mutually exclusive with before; neither cursor reads the tail.
+ * @minimum 0
+ */
+after?: number;
+/**
+ * Backward Thread seq cursor: the window ends just before this seq, taking the entries closest to it from below. Mutually exclusive with after.
+ * @minimum 0
+ */
+before?: number;
+};
+
+export type GetApiV1TenantsTidIssuesIidConversation200 = {
+  /** @nullable */
+  activeRunId?: string | null;
+  agentReadiness?: TaskAgentReadiness[];
+  /** @nullable */
+  blockedRunId?: string | null;
+  canStop?: boolean;
+  items: TaskConversationMessage[];
+  /** @nullable */
+  nextCursor: number | null;
+  /** @nullable */
+  pausedRunId?: string | null;
+  /** @nullable */
+  prevCursor: number | null;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationDiscardBody = {
+  acknowledgeLostWork: boolean;
+  runId: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationDiscard200 = {
+  acknowledgedRunId: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationMessagesBody = {
+  agentId: string;
+  body: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationMessages201 = {
+  resource: TaskConversationMessage;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationMessagesMidCancelBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidIssuesIidConversationMessagesMidCancel200 = {
+  resource: TaskConversationMessage;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationMessagesMidRetryBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidIssuesIidConversationMessagesMidRetry200 = {
+  resource: TaskConversationMessage;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationResumeBody = {
+  runId: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationResume200 = {
+  acknowledgedRunId: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationStopBody = {
+  runId: string;
+};
+
+export type PostApiV1TenantsTidIssuesIidConversationStop202State = typeof PostApiV1TenantsTidIssuesIidConversationStop202State[keyof typeof PostApiV1TenantsTidIssuesIidConversationStop202State];
+
+
+export const PostApiV1TenantsTidIssuesIidConversationStop202State = {
+  stopping: 'stopping',
+} as const;
+
+export type PostApiV1TenantsTidIssuesIidConversationStop202 = {
+  runId: string;
+  state: PostApiV1TenantsTidIssuesIidConversationStop202State;
+};
+
 export type GetApiV1TenantsTidIssuesIidInteractions200 = {
   items: IssueInteraction[];
   nextCursor: string;
@@ -2686,6 +3751,12 @@ export type PostApiV1TenantsTidIssuesIidRunsBody = {
 
 export type PostApiV1TenantsTidIssuesIidRuns200 = {
   resource: IssueRun;
+};
+
+export type PostApiV1TenantsTidIssuesIidRunsRidCancelBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidIssuesIidRunsRidCancel202 = {
+  cancelRequestedAt: string;
 };
 
 export type GetApiV1TenantsTidIssuesIidRunsRidModelCallsParams = {
@@ -3054,6 +4125,91 @@ export type PatchApiV1TenantsTidProjectsPidBody = {
   version: number;
 };
 
+export type PostApiV1TenantsTidProjectsPidRepositoryCredentialBody = {
+  credentialRefId: string;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryCredential202 = {
+  resource: RepositoryOperation;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryOperationsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryOperations200 = {
+  items: RepositoryOperation[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidApproveBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidApprove200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancelBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCancel200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheckBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidCheck200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidRejectBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositoryOperationsRoidReject200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryPublishesBody = {
+  credentialRefId?: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  expectedOldOid: string;
+  revisionId?: string;
+  /** @pattern ^([0-9a-f]{40}|[0-9a-f]{64})$ */
+  sourceCommit?: string;
+  /** refs/heads/workspaces/<workspaceId>/<branch> or refs/ora/deliveries/<deliveryWorkId> of this Project. */
+  sourceRef?: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  targetBranch: string;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositoryPublishes201 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncsBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncs200 = {
+  resource: RepositoryOperation;
+};
+
+export type PostApiV1TenantsTidProjectsPidRepositorySyncs202 = {
+  resource: RepositoryOperation;
+};
+
+export type GetApiV1TenantsTidProjectsPidRepositoryWorkspacesWidBranches200 = {
+  items: WorkspaceBranch[];
+};
+
 export type GetApiV1TenantsTidProjectsPidWorkspacesParams = {
 /**
  * @minimum 1
@@ -3096,6 +4252,73 @@ after?: string;
 export type GetApiV1TenantsTidResourceStatus200 = {
   items: AdminResource[];
   nextCursor: string;
+};
+
+export type PostApiV1TenantsTidScheduledTasksBody = {
+  agentId: string;
+  approval?: ScheduledTaskApproval;
+  enabled?: boolean;
+  issueId: string;
+  model?: string;
+  name: string;
+  prompt: string;
+  schedule: ScheduledTaskSchedule;
+  /**
+     * IANA timezone name the schedule evaluates in (e.g. Asia/Shanghai).
+     * @minLength 1
+     * @maxLength 64
+     */
+  timezone: string;
+};
+
+export type PostApiV1TenantsTidScheduledTasks200 = {
+  resource: ScheduledTask;
+};
+
+export type DeleteApiV1TenantsTidScheduledTasksStidBody = { [key: string]: unknown };
+
+export type DeleteApiV1TenantsTidScheduledTasksStid200 = {
+  taskId: string;
+};
+
+export type PatchApiV1TenantsTidScheduledTasksStidBody = {
+  agentId?: string;
+  model?: string;
+  name?: string;
+  prompt?: string;
+  schedule?: ScheduledTaskSchedule;
+  /**
+     * IANA timezone name the schedule evaluates in (e.g. Asia/Shanghai).
+     * @minLength 1
+     * @maxLength 64
+     */
+  timezone?: string;
+  /** @minimum 0 */
+  version: number;
+};
+
+export type PatchApiV1TenantsTidScheduledTasksStid200 = {
+  resource: ScheduledTask;
+};
+
+export type PostApiV1TenantsTidScheduledTasksStidDisableBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidScheduledTasksStidDisable200 = {
+  resource: ScheduledTask;
+};
+
+export type PostApiV1TenantsTidScheduledTasksStidEnableBody = {
+  approval?: ScheduledTaskApproval;
+};
+
+export type PostApiV1TenantsTidScheduledTasksStidEnable200 = {
+  resource: ScheduledTask;
+};
+
+export type PostApiV1TenantsTidScheduledTasksStidRevokeConsentBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidScheduledTasksStidRevokeConsent200 = {
+  resource: ScheduledTask;
 };
 
 export type GetApiV1TenantsTidSpacesParams = {
@@ -3247,11 +4470,49 @@ export type PostApiV1TenantsTidWorkflowsWfidRunsBodyInput = { [key: string]: unk
 export type PostApiV1TenantsTidWorkflowsWfidRunsBody = {
   input?: PostApiV1TenantsTidWorkflowsWfidRunsBodyInput;
   name?: string;
+  /** The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404. */
+  projectId: string;
   snapshotId?: string;
 };
 
 export type PostApiV1TenantsTidWorkflowsWfidRuns200 = {
   resource: WorkflowRun;
+};
+
+export type PostApiV1TenantsTidWorkflowsWfidRunsRidCancelBody = { [key: string]: unknown };
+
+export type PostApiV1TenantsTidWorkflowsWfidRunsRidCancel202 = {
+  cancelRequestedAt: string;
+};
+
+export type GetApiV1TenantsTidWorkflowsWfidRunsRidModelCallsParams = {
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Exclusive UUID cursor; Agent sessions use descending (createdAt, id), other lists use ascending stable ordering.
+ */
+after?: string;
+};
+
+export type GetApiV1TenantsTidWorkflowsWfidRunsRidModelCalls200 = {
+  items: SessionModelAttempt[];
+  nextCursor: string;
+};
+
+export type PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBodyMode = typeof PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBodyMode[keyof typeof PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBodyMode];
+
+
+export const PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBodyMode = {
+  keep: 'keep',
+  node_files: 'node_files',
+  checkpoint: 'checkpoint',
+} as const;
+
+export type PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBody = {
+  mode?: PostApiV1TenantsTidWorkflowsWfidRunsRidResumeBodyMode;
 };
 
 export type GetApiV1TenantsTidWorkflowsWfidSnapshotsParams = {
@@ -3360,6 +4621,14 @@ export type PostApiV1TenantsTidWorkspacesWidStop202 = {
   resource: Workspace;
 };
 
+export type Health200DependenciesGitServer = typeof Health200DependenciesGitServer[keyof typeof Health200DependenciesGitServer];
+
+
+export const Health200DependenciesGitServer = {
+  configured: 'configured',
+  unconfigured: 'unconfigured',
+} as const;
+
 export type Health200DependenciesObjectStore = typeof Health200DependenciesObjectStore[keyof typeof Health200DependenciesObjectStore];
 
 
@@ -3369,6 +4638,7 @@ export const Health200DependenciesObjectStore = {
 } as const;
 
 export type Health200Dependencies = {
+  gitServer: Health200DependenciesGitServer;
   objectStore: Health200DependenciesObjectStore;
 };
 

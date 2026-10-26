@@ -19,8 +19,11 @@ Git Server（`cmd/git-server`，实现在 `internal/gitserver`）为每个 Proje
   或结果待确认（`uncertain`）的 Operation 照常收尾，`delete_project` 等它们全部结束才开始删除。删除因 Node 拒绝停止而中止、
   Project 回到 `active` 时，同一事务把被取消的同步补回来；被取消的发布不恢复，需要用户重新发起。
 
-执行仓库 Operation 的 Repo Executor 不在本仓库里。Cloud 负责记录 Operation、按 Operation 状态授权 Git 访问；目前 Workspace
-的 `clone` 步骤仍然直接从外部仓库地址克隆。
+执行仓库 Operation 的 Repo Executor 是本仓库的 `cmd/repo-executor`，它按 Operation 状态获得 Git 访问授权；同步只写入本
+Binding 的快照前缀和跟踪 ref，发布只读取源。整条线的同步、发布、凭据与收敛规则见
+[外部 Git 线](external-git.md)。Workspace 的 `clone` 步骤只从 Binding 的当前快照 clone（见
+[Workspace 生命周期](../runtime/workspaces.md#clone-步骤从-binding-快照-clone)），Node 不接触外部仓库，仓库凭据也不参与任何
+Node 工作。
 
 ## 监听
 
@@ -45,27 +48,35 @@ Git Server（`cmd/git-server`，实现在 `internal/gitserver`）为每个 Proje
 缺头、带错头、两个都带都返回 `400`。core 把请求解析成一份授权：可以读取整个 Project 仓库，以及可以写入的 ref 或前缀，每一项
 带上所在 namespace 固定的规则。仓库就是隔离边界，读取时不隐藏仓库内的任何 ref。
 
-**沙盒执行的授权。** 执行必须属于这个运行时、未结束、未被强停，运行时处于当前代次且就绪，Project 处于 `active`；触发运行的
+**Agent 会话与交付执行的授权。** 执行必须属于这个运行时、未结束、未被强停，运行时处于当前代次且就绪，Project 处于 `active`；触发运行的
 用户仍然能使用这个运行时；当前 Node 就是执行的目标 Node，运行时控制处于该运行的 `maintenance` 且已确认绑定到这个沙盒。在此
 基础上：
 
-| 执行 | 运行阶段 | 授权 |
+| 执行 | 运行阶段 | 可写入的 ref |
 |---|---|---|
-| `deliver_revision` | `delivering` | 只能新建 `refs/ora/deliveries/<交付工作项 ID>` |
-| `agent_session` | `starting` 或 `running`，未请求取消，Thread 未在结束 | 只读，而且只给需要恢复前序 Revision 的会话；其他会话从外部仓库克隆，没有理由访问 Git Server |
+| `agent_session` | `starting` 或 `running`，未请求取消，Thread 未在结束 | `refs/heads/workspaces/<证书里的 workspaceId>/` 下的分支（快进规则）；前缀取自证书，从不取自请求 |
+| `deliver_revision` | `delivering` | 新建输入固定的交付 ref `refs/ora/deliveries/<交付工作项 ID>`；另可把输入的 `workspaceRef` 新建或快进，前提是它属于证书里的 Workspace |
+
+插件执行一律拒绝，不能访问仓库。WorkflowRun 的 Agent 会话第一阶段同样拒绝：授权只认 IssueRun 的运行 Workspace 上的执行，WorkflowRun
+的 Workspace 上的 `agent_session` 得到同一个 `403`。
+
+**clone 执行的授权。** Workspace 操作 `clone` 步骤的 clone 执行只读，并且只在操作仍处于 `running` 的 `clone` 步骤时有效：执行
+没有结果、未被强停；Workspace 处于证书里的代次、未删除；Project 处于 `provisioning` 或 `active`（main Workspace 在 Project 创建中
+clone）；执行输入的仓库地址指向这个租户和 Project；操作的发起者仍能使用这个运行时；没有强停；当前 Node 就是执行的目标 Node。它
+不要求 Workspace 已就绪或已开放准入，因为 clone 发生在准入打开之前。操作离开 `clone` 步骤或执行有了结果，授权随即失效。
 
 **Repo Executor 的授权。** 请求指定的 Operation 必须在这个租户和 Project 下、属于该 Project 的 Binding、处于 `running`，Project
 未删除（`provisioning`、`active`、`deleting` 都可以，因为首次同步发生在创建中，删除开始时正在运行的同步也要能收尾）：
 
 | Operation | 授权 |
 |---|---|
-| `repository_sync` | 在本 Binding 的快照前缀下新建快照 ref |
+| `repository_sync` | 在本 Binding 的快照前缀下新建快照 ref，并把本 Binding 的跟踪 ref 从授权记录的期望旧值推到新提交 |
 | `repository_publish` | 只读，发布只需要从 Project 仓库读取源 |
 
 **结果。** 任何拒绝都是同一个 `403`，仓库不存在也一样，沙盒无法借此探测仓库、执行或 Node 是否存在。数据库故障返回 `503`，
 绝不放行。授权在只读的一致性快照里完成，不取 core 的全局锁，Git 流量不与控制面写入串行。
 
-结束执行、替换沙盒、取消运行、停用触发者账号、取消或结束 Operation，都会在**下一个请求**生效，包括已经进入 pre-receive 的推送。
+结束执行、clone 操作离开 `clone` 步骤、替换沙盒、取消运行、停用触发者账号、取消或结束 Operation，都会在**下一个请求**生效，包括已经进入 pre-receive 的推送。
 长时间的 fetch 不在传输中途重新授权。
 
 ## ref namespace 与写入规则
@@ -79,7 +90,7 @@ Git Server（`cmd/git-server`，实现在 `internal/gitserver`）为每个 Proje
 
 - `pre-receive` 在写入任何 ref 之前**重新**解析同一份授权，逐个 ref 核对规则。任何 ref 都不能删除，也不能写表外的 ref；只要有
   一个更新不被接受，整次推送拒绝。
-- 目前沙盒执行只产生交付规则，同步 Operation 只产生快照前缀；工作区分支和跟踪 ref 的授权来源尚未接入。
+- 沙盒执行产生 Workspace 分支与交付两种规则；外部线的同步 Operation 产生快照前缀和本 Binding 的跟踪 ref。
 - 仓库策略和 hook 路径通过每个 git 进程的 `GIT_CONFIG_*` 环境变量生效，不写进仓库，所以重启或旧仓库都无法削弱它们。两个仓库
   监听都禁止删除 ref；仓库监听同时禁止非快进，服务仓库监听放开非快进，让跟踪 ref 能跟随外部的 force-push，其他 namespace 的
   非快进仍由 hook 拒绝。
@@ -92,8 +103,15 @@ ref 查询监听只对 Cloud 的固定身份开放，只读：
 - `GET ...?ref=<ref>`：返回任意 namespace 里一个 ref 指向的提交；
 - `GET ...?prefix=<前缀>`：列出一个 namespace 实例内的 ref 与提交（一个交付、一个 Binding 的全部、快照或跟踪 ref、一个 Workspace）。
 
-把交付 ref 作为 Revision 登记依据的方案还在决策中（见下方 proposed 的 ADR）；当前的 Revision 仍按
-[对象存储里的 bundle](../agent-runs/revisions.md) 校验登记，Cloud server 还没有调用 ref 查询。
+Cloud server 用 `git_server.*` 配置里的地址和自己的客户端证书调用 ref 查询（`internal/gitrefquery`，只用 `?ref=`），在任何数据库
+事务之外核验 Revision 的交付 ref 指向 Node 声明的最终提交，再登记 Revision（见 [Revision](../agent-runs/revisions.md#交付流程)）。
+只有 `404 ref_not_found` 算作 ref 确实不存在；其他响应、传输失败或超时都让核验暂不可用、之后重试，不作结论。查询不跟随重定向。
+没有配置 Git Server 时，clone 步骤停在 `blocked`（`git_server_unconfigured`），交付以 `skipped` 结算，Cloud 也不经这个客户端调用 ref 查询。
+
+这条交付路径实现的是已 `approved` 的 Revision 决策（见文末）。
+
+外部 Git 线用 `repository.git_refs_*` 配置的另一个客户端（`internal/gitrefs`）在三个地方调用 ref 查询：同步报告 `applied`
+后核对快照与跟踪 ref，创建发布前确认源 ref，以及列出 Workspace 的协作分支供选择发布源（见 [外部 Git 线](external-git.md)）。
 
 ## 运维
 
@@ -106,4 +124,6 @@ ref 查询监听只对 Cloud 的固定身份开放，只读：
 
 - [Git Server 是 Project 的代码中心：独立 HTTPS 服务，证书只认证身份，授权按 Cloud 当前状态逐请求判定](https://github.com/ora-space/specs/blob/main/decisions/cloud/git-server/0-project-code-hub-git-server-over-https.md)（approved）
 - [Git Server 成为每个 Project 的代码中心：ref namespace、规则集授权与两类写入者的契约](https://github.com/ora-space/specs/blob/main/decisions/cloud/git-server/20261016-project-repository-as-code-hub-and-ref-contract.md)（approved）
-- [Revision 的代码改动只经 Git Server 交付](https://github.com/ora-space/specs/blob/main/decisions/cloud/revision/20261012-git-server-delivery-and-verified-delivery-refs.md)（proposed）
+- [Workspace 的 clone 步骤改为消费 Binding 当前快照](https://github.com/ora-space/specs/blob/main/decisions/cloud/operation/20261016-clone-step-consumes-binding-snapshot.md)（approved）
+- [clone 输入替换为 Git Server 快照输入；Git Server 按执行类型给出写入规则](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261016-snapshot-clone-input-and-execution-ref-grants.md)（approved）
+- [Revision 的代码改动只经 Git Server 交付，Cloud 经 ref 查询核验后登记交付 ref](https://github.com/ora-space/specs/blob/main/decisions/cloud/revision/20261017-git-native-delivery-refs-and-resume.md)（approved；取代 20261012 的交付决策）

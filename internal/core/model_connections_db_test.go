@@ -248,7 +248,7 @@ func TestModelGrantsScopeRenewalFreezeAndRevocation(t *testing.T) {
 		r := tx.one("SELECT * FROM issue_runs WHERE id=$1", scene.run)
 		input := r.O("input")
 		input["agentPluginId"] = "official/ora-space.opencode"
-		bindRunModel(tx, scene.run, uid, input)
+		bindRunModel(tx, scene.run, uid, input, "")
 		bindingID = input.S("modelBindingId")
 		return Object{}
 	})

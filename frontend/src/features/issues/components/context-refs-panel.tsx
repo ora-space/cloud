@@ -16,7 +16,6 @@ const REF_TYPE_OPTIONS: { value: ContextRef['refType']; label: string }[] = [
   { value: 'parent_issue', label: '父任务' },
   { value: 'run', label: '运行' },
   { value: 'timeline_message', label: '时间线消息' },
-  { value: 'pull_request', label: 'Pull Request' },
   { value: 'project', label: '项目' },
   { value: 'workspace', label: '工作区' },
   { value: 'acceptance_criteria', label: '验收标准' },
@@ -36,7 +35,10 @@ function isRefType(value: unknown): value is ContextRef['refType'] {
  * resources. No smart resolution: the ref id is stored and shown verbatim.
  */
 export function ContextRefsPanel({ slug, issueId }: { slug: string; issueId: string }) {
-  const { data: refs } = useContextRefs(slug, issueId)
+  const query = useContextRefs(slug, issueId)
+  const refs = query.isError
+    ? undefined
+    : query.data?.filter((ref) => ref.refType !== 'pull_request')
   const createRef = useCreateContextRef(slug, issueId)
   const deleteRef = useDeleteContextRef(slug, issueId)
   const [refType, setRefType] = useState<ContextRef['refType']>('parent_issue')
@@ -82,6 +84,7 @@ export function ContextRefsPanel({ slug, issueId }: { slug: string; issueId: str
           <Plus className="size-4" />
         </Button>
       </div>
+      {query.isError && <p role="alert">上下文引用加载失败</p>}
       {refs && refs.length === 0 && <p className="text-xs text-muted-foreground">无上下文引用。</p>}
       {refs?.map((ref) => (
         <div key={ref.id} className="flex items-center gap-2 text-sm">

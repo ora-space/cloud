@@ -104,3 +104,9 @@ Thread 有变化时，Space 的 SSE 流发出 `issue_run.thread_appended`（追�
 - [Agent 运行的对话记为 Thread](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/0-durable-agent-thread-with-user-turns.md)
 - [个人模型 Thread 只由发起者追加，成员可读且管理员可结束](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/20261010-personal-model-initiator-controls-input.md)
 - [Internal Control gRPC 增加插件、Agent 会话与 Revision 交付三类执行，新增 AgentRunService](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260928-agent-run-executions-thread-and-upload-grants.md)
+
+## 跨运行上下文与工具轮次
+
+后续运行仅携带 Node 投影的用户可见正文，按最近轮次选择并冻结。最近一轮超预算时，在 UTF-8 边界截断助手正文并保留该轮用户问题，设置 `assistantTruncated` 和历史不完整标记；预算以实际提示渲染结果计量，包含多块聚合与 JSON 转义的膨胀。可恢复的有界历史不能描述为完整记忆。
+
+公开 Node 条目返回已存储的 `turnId`，用于将正文、思考和工具更新关联到真实轮次；下一条用户输入即使已入队，也不会改变先前执行输出的轮次。用户投递 `status` 仍仅属于用户条目，Node 的内部执行和收据身份不公开。

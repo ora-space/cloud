@@ -132,8 +132,10 @@ type Controller struct {
 	Executions   controlpb.ExecutionServiceClient
 	AgentRuns    controlpb.AgentRunServiceClient
 	AgentNode    *AgentNode
-	Epoch        int64
-	Operation    core.Object
+	// Git is the Git Server double deliveries push to; the simulated Node reaches nothing else.
+	Git       *GitServer
+	Epoch     int64
+	Operation core.Object
 }
 
 func (c *Controller) Acquire(ctx context.Context) error {
@@ -395,7 +397,10 @@ func (c *Controller) Step(ctx context.Context) (bool, error) {
 		return false, e
 	}
 	c.Operation = out
-	if out.S("state") == "succeeded" {
+	// An advance can also leave the operation with Cloud: succeeded, or parked (retry_wait, blocked)
+	// or failed when the clone step it entered has no snapshot to clone. Either way this worker no
+	// longer drives it; a later claim hands it out again if it is still claimable.
+	if out.S("state") != "running" {
 		c.Operation = nil
 	}
 	return false, nil

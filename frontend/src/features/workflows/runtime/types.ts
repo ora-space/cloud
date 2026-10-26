@@ -8,10 +8,12 @@ export const WORKFLOW_NODE_KINDS = [
   'start',
   'agent',
   'condition',
+  'aggregator',
   'tool',
   'junction',
   'human',
   'loop',
+  'loopExit',
   'iteration',
   'subflow',
   'output',
@@ -173,6 +175,11 @@ export interface WorkflowConditionCase {
   conditions: WorkflowConditionComparison[]
 }
 
+/** Ordered root selectors of an Aggregator node; the first assigned candidate is passed through. */
+export interface WorkflowAggregatorConfig {
+  variables: string[][]
+}
+
 /** One named result an Output node exposes, resolved from the run variable pool at completion. */
 export interface WorkflowOutputBinding {
   name: string
@@ -191,6 +198,8 @@ export interface WorkflowLoopVariable {
 /** Executable bounded Loop configuration shared with the Rust snapshot decoder. */
 export interface WorkflowLoopConfig {
   maxIterations: number
+  /** What an exhausted round budget does: fail (default) or publish the final round. */
+  maxIterationsBehavior?: 'fail' | 'succeed'
   variables: WorkflowLoopVariable[]
   until: {
     logic: WorkflowConditionLogic
@@ -267,6 +276,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   condition?: string
   agentConfig?: WorkflowAgentConfig
   conditionBranches?: WorkflowConditionBranch[]
+  /** Aggregator node: ordered root selectors (backend data.aggregatorConfig). */
+  aggregatorConfig?: WorkflowAggregatorConfig
   /** Legacy executable cases retained so existing saved graphs remain readable. */
   conditionCases?: WorkflowConditionCase[]
   /** Executable cases for Condition nodes, matching the backend `data.cases` wire format. */
@@ -342,8 +353,7 @@ export interface WorkflowDefinition {
 }
 
 /** Run-level lifecycle for a project-attached graph workflow execution. */
-export type GraphWorkflowRunStatus =
-  'pending' | 'running' | 'awaiting_input' | 'succeeded' | 'failed' | 'cancelled'
+export type GraphWorkflowRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 /** True for a run that can no longer change: its trace is complete and final. */
 export function isTerminalRunStatus(status: GraphWorkflowRunStatus): boolean {
@@ -352,7 +362,7 @@ export function isTerminalRunStatus(status: GraphWorkflowRunStatus): boolean {
 
 /** Per-node execution status overlaid on a frozen definition snapshot. */
 export type GraphWorkflowNodeStatus =
-  'idle' | 'inactive' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'awaiting_input'
+  'idle' | 'inactive' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'retrying'
 
 /** HITL timeout policy; MVP mock always waits (`wait`) until submit. */
 export type HitlTimeoutPolicy = 'fail' | 'skip' | 'wait'

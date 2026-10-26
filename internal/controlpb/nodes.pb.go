@@ -90,7 +90,8 @@ type NodeRecord struct {
 	// Admission epoch of the latest accepted idle evidence.
 	IdleAdmissionEpoch *int64 `protobuf:"varint,8,opt,name=idle_admission_epoch,json=idleAdmissionEpoch,proto3,oneof" json:"idle_admission_epoch,omitempty"`
 	// Dedicated personal-model proxy access was advertised by this Node's handshake.
-	ModelProxy    bool `protobuf:"varint,9,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelProxy    bool                      `protobuf:"varint,9,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelAdapter  *ModelAdapterCapabilities `protobuf:"bytes,10,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -188,6 +189,13 @@ func (x *NodeRecord) GetModelProxy() bool {
 	return false
 }
 
+func (x *NodeRecord) GetModelAdapter() *ModelAdapterCapabilities {
+	if x != nil {
+		return x.ModelAdapter
+	}
+	return nil
+}
+
 type RegisterNodeRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	SubmissionId string                 `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
@@ -198,7 +206,8 @@ type RegisterNodeRequest struct {
 	Node              *NodeIdentity `protobuf:"bytes,5,opt,name=node,proto3" json:"node,omitempty"`
 	ProtocolVersion   uint32        `protobuf:"varint,6,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// False for older Nodes or Nodes without configured model-access mTLS credentials.
-	ModelProxy    bool `protobuf:"varint,7,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelProxy    bool                      `protobuf:"varint,7,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelAdapter  *ModelAdapterCapabilities `protobuf:"bytes,8,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -282,6 +291,74 @@ func (x *RegisterNodeRequest) GetModelProxy() bool {
 	return false
 }
 
+func (x *RegisterNodeRequest) GetModelAdapter() *ModelAdapterCapabilities {
+	if x != nil {
+		return x.ModelAdapter
+	}
+	return nil
+}
+
+// Exact host capability advertised after startup validation, independent of plugin metadata.
+type ModelAdapterCapabilities struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ContractVersion uint32                 `protobuf:"varint,1,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
+	Target          string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	Protocols       []string               `protobuf:"bytes,3,rep,name=protocols,proto3" json:"protocols,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ModelAdapterCapabilities) Reset() {
+	*x = ModelAdapterCapabilities{}
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelAdapterCapabilities) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelAdapterCapabilities) ProtoMessage() {}
+
+func (x *ModelAdapterCapabilities) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelAdapterCapabilities.ProtoReflect.Descriptor instead.
+func (*ModelAdapterCapabilities) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ModelAdapterCapabilities) GetContractVersion() uint32 {
+	if x != nil {
+		return x.ContractVersion
+	}
+	return 0
+}
+
+func (x *ModelAdapterCapabilities) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *ModelAdapterCapabilities) GetProtocols() []string {
+	if x != nil {
+		return x.Protocols
+	}
+	return nil
+}
+
 type RegisterNodeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Node          *NodeRecord            `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
@@ -291,7 +368,7 @@ type RegisterNodeResponse struct {
 
 func (x *RegisterNodeResponse) Reset() {
 	*x = RegisterNodeResponse{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[2]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -303,7 +380,7 @@ func (x *RegisterNodeResponse) String() string {
 func (*RegisterNodeResponse) ProtoMessage() {}
 
 func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[2]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -316,7 +393,7 @@ func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterNodeResponse.ProtoReflect.Descriptor instead.
 func (*RegisterNodeResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{2}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RegisterNodeResponse) GetNode() *NodeRecord {
@@ -341,7 +418,7 @@ type ReportNodeStatusRequest struct {
 
 func (x *ReportNodeStatusRequest) Reset() {
 	*x = ReportNodeStatusRequest{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +430,7 @@ func (x *ReportNodeStatusRequest) String() string {
 func (*ReportNodeStatusRequest) ProtoMessage() {}
 
 func (x *ReportNodeStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[3]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +443,7 @@ func (x *ReportNodeStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportNodeStatusRequest.ProtoReflect.Descriptor instead.
 func (*ReportNodeStatusRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{3}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReportNodeStatusRequest) GetSubmissionId() string {
@@ -420,7 +497,7 @@ type ReportNodeStatusResponse struct {
 
 func (x *ReportNodeStatusResponse) Reset() {
 	*x = ReportNodeStatusResponse{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -432,7 +509,7 @@ func (x *ReportNodeStatusResponse) String() string {
 func (*ReportNodeStatusResponse) ProtoMessage() {}
 
 func (x *ReportNodeStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[4]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -445,7 +522,7 @@ func (x *ReportNodeStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportNodeStatusResponse.ProtoReflect.Descriptor instead.
 func (*ReportNodeStatusResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{4}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReportNodeStatusResponse) GetNode() *NodeRecord {
@@ -467,7 +544,7 @@ type EndNodeRequest struct {
 
 func (x *EndNodeRequest) Reset() {
 	*x = EndNodeRequest{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[5]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +556,7 @@ func (x *EndNodeRequest) String() string {
 func (*EndNodeRequest) ProtoMessage() {}
 
 func (x *EndNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[5]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +569,7 @@ func (x *EndNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndNodeRequest.ProtoReflect.Descriptor instead.
 func (*EndNodeRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{5}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EndNodeRequest) GetSubmissionId() string {
@@ -532,7 +609,7 @@ type EndNodeResponse struct {
 
 func (x *EndNodeResponse) Reset() {
 	*x = EndNodeResponse{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[6]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +621,7 @@ func (x *EndNodeResponse) String() string {
 func (*EndNodeResponse) ProtoMessage() {}
 
 func (x *EndNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[6]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +634,7 @@ func (x *EndNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndNodeResponse.ProtoReflect.Descriptor instead.
 func (*EndNodeResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{6}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *EndNodeResponse) GetNode() *NodeRecord {
@@ -582,7 +659,7 @@ type ReportNodeIdleRequest struct {
 
 func (x *ReportNodeIdleRequest) Reset() {
 	*x = ReportNodeIdleRequest{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +671,7 @@ func (x *ReportNodeIdleRequest) String() string {
 func (*ReportNodeIdleRequest) ProtoMessage() {}
 
 func (x *ReportNodeIdleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +684,7 @@ func (x *ReportNodeIdleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportNodeIdleRequest.ProtoReflect.Descriptor instead.
 func (*ReportNodeIdleRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{7}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ReportNodeIdleRequest) GetSubmissionId() string {
@@ -671,7 +748,7 @@ type ReportNodeIdleResponse struct {
 
 func (x *ReportNodeIdleResponse) Reset() {
 	*x = ReportNodeIdleResponse{}
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -683,7 +760,7 @@ func (x *ReportNodeIdleResponse) String() string {
 func (*ReportNodeIdleResponse) ProtoMessage() {}
 
 func (x *ReportNodeIdleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_nodes_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -696,7 +773,7 @@ func (x *ReportNodeIdleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportNodeIdleResponse.ProtoReflect.Descriptor instead.
 func (*ReportNodeIdleResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{8}
+	return file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReportNodeIdleResponse) GetAccepted() bool {
@@ -717,7 +794,7 @@ var File_ora_cloud_internal_v1_nodes_proto protoreflect.FileDescriptor
 
 const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\n" +
-	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\xa4\x03\n" +
+	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\xfa\x03\n" +
 	"\n" +
 	"NodeRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
@@ -731,8 +808,10 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\aversion\x18\a \x01(\x03R\aversion\x125\n" +
 	"\x14idle_admission_epoch\x18\b \x01(\x03H\x00R\x12idleAdmissionEpoch\x88\x01\x01\x12\x1f\n" +
 	"\vmodel_proxy\x18\t \x01(\bR\n" +
-	"modelProxyB\x17\n" +
-	"\x15_idle_admission_epoch\"\xa5\x02\n" +
+	"modelProxy\x12T\n" +
+	"\rmodel_adapter\x18\n" +
+	" \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapterB\x17\n" +
+	"\x15_idle_admission_epoch\"\xfb\x02\n" +
 	"\x13RegisterNodeRequest\x12#\n" +
 	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12.\n" +
@@ -743,7 +822,12 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\x04node\x18\x05 \x01(\v2#.ora.cloud.internal.v1.NodeIdentityR\x04node\x12)\n" +
 	"\x10protocol_version\x18\x06 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
 	"\vmodel_proxy\x18\a \x01(\bR\n" +
-	"modelProxy\"M\n" +
+	"modelProxy\x12T\n" +
+	"\rmodel_adapter\x18\b \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapter\"{\n" +
+	"\x18ModelAdapterCapabilities\x12)\n" +
+	"\x10contract_version\x18\x01 \x01(\rR\x0fcontractVersion\x12\x16\n" +
+	"\x06target\x18\x02 \x01(\tR\x06target\x12\x1c\n" +
+	"\tprotocols\x18\x03 \x03(\tR\tprotocols\"M\n" +
 	"\x14RegisterNodeResponse\x125\n" +
 	"\x04node\x18\x01 \x01(\v2!.ora.cloud.internal.v1.NodeRecordR\x04node\"\x81\x02\n" +
 	"\x17ReportNodeStatusRequest\x12#\n" +
@@ -802,42 +886,45 @@ func file_ora_cloud_internal_v1_nodes_proto_rawDescGZIP() []byte {
 }
 
 var file_ora_cloud_internal_v1_nodes_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ora_cloud_internal_v1_nodes_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_ora_cloud_internal_v1_nodes_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_ora_cloud_internal_v1_nodes_proto_goTypes = []any{
 	(NodeConnection)(0),              // 0: ora.cloud.internal.v1.NodeConnection
 	(*NodeRecord)(nil),               // 1: ora.cloud.internal.v1.NodeRecord
 	(*RegisterNodeRequest)(nil),      // 2: ora.cloud.internal.v1.RegisterNodeRequest
-	(*RegisterNodeResponse)(nil),     // 3: ora.cloud.internal.v1.RegisterNodeResponse
-	(*ReportNodeStatusRequest)(nil),  // 4: ora.cloud.internal.v1.ReportNodeStatusRequest
-	(*ReportNodeStatusResponse)(nil), // 5: ora.cloud.internal.v1.ReportNodeStatusResponse
-	(*EndNodeRequest)(nil),           // 6: ora.cloud.internal.v1.EndNodeRequest
-	(*EndNodeResponse)(nil),          // 7: ora.cloud.internal.v1.EndNodeResponse
-	(*ReportNodeIdleRequest)(nil),    // 8: ora.cloud.internal.v1.ReportNodeIdleRequest
-	(*ReportNodeIdleResponse)(nil),   // 9: ora.cloud.internal.v1.ReportNodeIdleResponse
-	(*NodeIdentity)(nil),             // 10: ora.cloud.internal.v1.NodeIdentity
+	(*ModelAdapterCapabilities)(nil), // 3: ora.cloud.internal.v1.ModelAdapterCapabilities
+	(*RegisterNodeResponse)(nil),     // 4: ora.cloud.internal.v1.RegisterNodeResponse
+	(*ReportNodeStatusRequest)(nil),  // 5: ora.cloud.internal.v1.ReportNodeStatusRequest
+	(*ReportNodeStatusResponse)(nil), // 6: ora.cloud.internal.v1.ReportNodeStatusResponse
+	(*EndNodeRequest)(nil),           // 7: ora.cloud.internal.v1.EndNodeRequest
+	(*EndNodeResponse)(nil),          // 8: ora.cloud.internal.v1.EndNodeResponse
+	(*ReportNodeIdleRequest)(nil),    // 9: ora.cloud.internal.v1.ReportNodeIdleRequest
+	(*ReportNodeIdleResponse)(nil),   // 10: ora.cloud.internal.v1.ReportNodeIdleResponse
+	(*NodeIdentity)(nil),             // 11: ora.cloud.internal.v1.NodeIdentity
 }
 var file_ora_cloud_internal_v1_nodes_proto_depIdxs = []int32{
-	10, // 0: ora.cloud.internal.v1.NodeRecord.identity:type_name -> ora.cloud.internal.v1.NodeIdentity
+	11, // 0: ora.cloud.internal.v1.NodeRecord.identity:type_name -> ora.cloud.internal.v1.NodeIdentity
 	0,  // 1: ora.cloud.internal.v1.NodeRecord.connection:type_name -> ora.cloud.internal.v1.NodeConnection
-	10, // 2: ora.cloud.internal.v1.RegisterNodeRequest.node:type_name -> ora.cloud.internal.v1.NodeIdentity
-	1,  // 3: ora.cloud.internal.v1.RegisterNodeResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
-	0,  // 4: ora.cloud.internal.v1.ReportNodeStatusRequest.connection:type_name -> ora.cloud.internal.v1.NodeConnection
-	1,  // 5: ora.cloud.internal.v1.ReportNodeStatusResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
-	1,  // 6: ora.cloud.internal.v1.EndNodeResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
-	1,  // 7: ora.cloud.internal.v1.ReportNodeIdleResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
-	2,  // 8: ora.cloud.internal.v1.NodeReportService.RegisterNode:input_type -> ora.cloud.internal.v1.RegisterNodeRequest
-	4,  // 9: ora.cloud.internal.v1.NodeReportService.ReportNodeStatus:input_type -> ora.cloud.internal.v1.ReportNodeStatusRequest
-	6,  // 10: ora.cloud.internal.v1.NodeReportService.EndNode:input_type -> ora.cloud.internal.v1.EndNodeRequest
-	8,  // 11: ora.cloud.internal.v1.NodeReportService.ReportNodeIdle:input_type -> ora.cloud.internal.v1.ReportNodeIdleRequest
-	3,  // 12: ora.cloud.internal.v1.NodeReportService.RegisterNode:output_type -> ora.cloud.internal.v1.RegisterNodeResponse
-	5,  // 13: ora.cloud.internal.v1.NodeReportService.ReportNodeStatus:output_type -> ora.cloud.internal.v1.ReportNodeStatusResponse
-	7,  // 14: ora.cloud.internal.v1.NodeReportService.EndNode:output_type -> ora.cloud.internal.v1.EndNodeResponse
-	9,  // 15: ora.cloud.internal.v1.NodeReportService.ReportNodeIdle:output_type -> ora.cloud.internal.v1.ReportNodeIdleResponse
-	12, // [12:16] is the sub-list for method output_type
-	8,  // [8:12] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	3,  // 2: ora.cloud.internal.v1.NodeRecord.model_adapter:type_name -> ora.cloud.internal.v1.ModelAdapterCapabilities
+	11, // 3: ora.cloud.internal.v1.RegisterNodeRequest.node:type_name -> ora.cloud.internal.v1.NodeIdentity
+	3,  // 4: ora.cloud.internal.v1.RegisterNodeRequest.model_adapter:type_name -> ora.cloud.internal.v1.ModelAdapterCapabilities
+	1,  // 5: ora.cloud.internal.v1.RegisterNodeResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
+	0,  // 6: ora.cloud.internal.v1.ReportNodeStatusRequest.connection:type_name -> ora.cloud.internal.v1.NodeConnection
+	1,  // 7: ora.cloud.internal.v1.ReportNodeStatusResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
+	1,  // 8: ora.cloud.internal.v1.EndNodeResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
+	1,  // 9: ora.cloud.internal.v1.ReportNodeIdleResponse.node:type_name -> ora.cloud.internal.v1.NodeRecord
+	2,  // 10: ora.cloud.internal.v1.NodeReportService.RegisterNode:input_type -> ora.cloud.internal.v1.RegisterNodeRequest
+	5,  // 11: ora.cloud.internal.v1.NodeReportService.ReportNodeStatus:input_type -> ora.cloud.internal.v1.ReportNodeStatusRequest
+	7,  // 12: ora.cloud.internal.v1.NodeReportService.EndNode:input_type -> ora.cloud.internal.v1.EndNodeRequest
+	9,  // 13: ora.cloud.internal.v1.NodeReportService.ReportNodeIdle:input_type -> ora.cloud.internal.v1.ReportNodeIdleRequest
+	4,  // 14: ora.cloud.internal.v1.NodeReportService.RegisterNode:output_type -> ora.cloud.internal.v1.RegisterNodeResponse
+	6,  // 15: ora.cloud.internal.v1.NodeReportService.ReportNodeStatus:output_type -> ora.cloud.internal.v1.ReportNodeStatusResponse
+	8,  // 16: ora.cloud.internal.v1.NodeReportService.EndNode:output_type -> ora.cloud.internal.v1.EndNodeResponse
+	10, // 17: ora.cloud.internal.v1.NodeReportService.ReportNodeIdle:output_type -> ora.cloud.internal.v1.ReportNodeIdleResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_nodes_proto_init() }
@@ -847,14 +934,14 @@ func file_ora_cloud_internal_v1_nodes_proto_init() {
 	}
 	file_ora_cloud_internal_v1_executions_proto_init()
 	file_ora_cloud_internal_v1_nodes_proto_msgTypes[0].OneofWrappers = []any{}
-	file_ora_cloud_internal_v1_nodes_proto_msgTypes[8].OneofWrappers = []any{}
+	file_ora_cloud_internal_v1_nodes_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_nodes_proto_rawDesc), len(file_ora_cloud_internal_v1_nodes_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

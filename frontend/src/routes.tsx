@@ -17,9 +17,9 @@ import { JoinContinue, JoinPage } from '@/features/onboarding/join-page'
 import { PluginsPage } from '@/features/plugins/plugins-page'
 import { ProjectDetailPage } from '@/features/projects/project-detail-page'
 import { ProjectsPage } from '@/features/projects/projects-page'
-import { RepositoriesPage } from '@/features/clones/repositories-page'
 import { RuntimesPage } from '@/features/runtimes/runtimes-page'
 import { GeneralSettingsPage } from '@/features/settings/general-settings-page'
+import { GitCredentialsPage } from '@/features/repositories/credential-page'
 import { GitIdentityPage } from '@/features/settings/git-identity-page'
 import { ModelConnectionsPage } from '@/features/model-connections/model-connections-page'
 import { SettingsLayout } from '@/features/settings/settings-layout'
@@ -32,6 +32,7 @@ import { WorkflowEditorPage } from '@/features/workflows/workflow-editor-page'
 import { WorkflowsPage } from '@/features/workflows/workflows-page'
 import { SessionListPage } from '@/features/sessions/session-list-page'
 import { SessionDetailPage } from '@/features/sessions/session-detail-page'
+import { ScheduledTasksPage } from '@/features/scheduled-tasks/scheduled-tasks-page'
 import { db } from '@/mocks/data/store'
 import { WORKSPACE_ROUTE_PATTERN } from '@/lib/paths'
 
@@ -116,6 +117,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <Navigate to="issues" replace /> },
       { path: 'issues', element: <CloudScope component={IssuesPage} /> },
       { path: 'issues/:issueId', element: <CloudScope component={IssueDetailPage} /> },
+      { path: 'scheduled-tasks', element: <CloudScope component={ScheduledTasksPage} /> },
       { path: 'sessions', element: <CloudScope component={SessionListPage} /> },
       {
         path: 'sessions/agent/:issueId/:runId',
@@ -124,7 +126,6 @@ export const routes: RouteObject[] = [
       { path: 'my-issues', element: <CloudScope component={MyIssuesPage} /> },
       { path: 'projects', element: <WithSlug component={ProjectsPage} /> },
       { path: 'projects/:projectId', element: <WithSlug component={ProjectDetailPage} /> },
-      { path: 'repositories', element: <WithSlug component={RepositoriesPage} /> },
       { path: 'workflows', element: <CloudScope component={WorkflowsPage} /> },
       {
         path: 'workflows/:workflowId',
@@ -152,6 +153,7 @@ export const routes: RouteObject[] = [
           { path: 'members', element: <WithSlug component={MembersPage} /> },
           { path: 'billing', element: <WithSlug component={BillingPage} /> },
           { path: 'git-identity', element: <GitIdentityPage /> },
+          { path: 'git-credentials', element: <GitCredentialsPage /> },
           { path: 'model-connections', element: <ModelConnectionsPage /> },
         ],
       },

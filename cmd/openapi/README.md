@@ -6,7 +6,7 @@
 
 ## 职责
 
-- **契约编译**：调用 `internal/contract.Document()`，构建覆盖全部 19 个公开端点、15 个内部控制端点以及健康检查端点的权威 OpenAPI 3.0 文档对象。
+- **契约编译**：调用 `internal/contract.Document()`，构建与路由定义及已退役管理入口的响应保持一致的权威 OpenAPI 3.0 文档对象。
 - **制品同步**：将文档序列化为带缩进的 JSON，并写入 `api/openapi.json`。
 - **单一事实来源（SSOT）**：保证 `api/openapi.json`、`router.Routes()` 和 `internal/contract` 始终严格一致。
 

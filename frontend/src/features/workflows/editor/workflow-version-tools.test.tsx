@@ -153,6 +153,102 @@ describe('WorkflowPublishDialog', () => {
     expect(onOpenChange).not.toHaveBeenCalled()
   })
 
+  it('explains the unsupported structured output at the rejected node without closing', async () => {
+    server.use(
+      http.post(`/api/v1/tenants/${TEST_TENANT_ID}/workflows/:wfid/publish`, () =>
+        HttpResponse.json(
+          {
+            code: 'workflow_graph_invalid',
+            params: {
+              problems: [
+                { code: 'node_config_unsupported', nodeId: 'agent-1', field: 'outputContract' },
+              ],
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    )
+    const onOpenChange = vi.fn<(open: boolean) => void>()
+    renderPublishDialog(onOpenChange)
+
+    fireEvent.click(screen.getByRole('button', { name: '发布' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('工作流配置未通过发布检查，请修正以下问题后重新发布。')
+    expect(alert).toHaveTextContent('节点 agent-1')
+    expect(alert).toHaveTextContent(
+      'Cloud 当前不支持结构化输出，请关闭该节点的「结构化输出」后重新发布。',
+    )
+    expect(alert).not.toHaveTextContent('操作失败，请稍后重试。')
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, { problems: 'invalid' }, { problems: [null, 3, {}] }])(
+    'keeps a useful graph validation summary when problem details are malformed: %j',
+    async (params) => {
+      server.use(
+        http.post(`/api/v1/tenants/${TEST_TENANT_ID}/workflows/:wfid/publish`, () =>
+          HttpResponse.json({ code: 'workflow_graph_invalid', params }, { status: 400 }),
+        ),
+      )
+      renderPublishDialog(vi.fn())
+
+      fireEvent.click(screen.getByRole('button', { name: '发布' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        '工作流配置未通过发布检查，请检查节点、连线和变量配置后重新发布。',
+      )
+    },
+  )
+
+  it('lists distinct problem locations and safe guidance for known and future rejections', async () => {
+    server.use(
+      http.post(`/api/v1/tenants/${TEST_TENANT_ID}/workflows/:wfid/publish`, () =>
+        HttpResponse.json(
+          {
+            code: 'workflow_graph_invalid',
+            params: {
+              problems: [
+                {
+                  code: 'agent_schema_version_unsupported',
+                  nodeId: 'a',
+                  field: 'agentConfig.schemaVersion',
+                },
+                { code: 'node_config_unsupported', nodeId: 'b', field: 'interactive' },
+                { code: 'node_kind_unsupported', nodeId: 'c' },
+                {
+                  code: 'future_problem',
+                  slot: 'reviewer',
+                  name: 'vars.result',
+                  reason: 'PRIVATE SERVER DETAIL',
+                },
+                { code: 'future_problem' },
+                { code: 'node_kind_unsupported', nodeId: 'c' },
+              ],
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderPublishDialog(vi.fn())
+
+    fireEvent.click(screen.getByRole('button', { name: '发布' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getAllByRole('listitem')).toHaveLength(5)
+    expect(alert).toHaveTextContent('节点 a · agentConfig.schemaVersion')
+    expect(alert).toHaveTextContent('Cloud 只支持 Agent 配置版本 3')
+    expect(alert).toHaveTextContent('节点 b · interactive')
+    expect(alert).toHaveTextContent('请关闭或移除后重新发布')
+    expect(alert).toHaveTextContent('节点 c')
+    expect(alert).toHaveTextContent('请替换或移除该节点')
+    expect(alert).toHaveTextContent('reviewer · vars.result')
+    expect(alert).not.toHaveTextContent('PRIVATE SERVER DETAIL')
+    expect(alert).not.toHaveTextContent('future_problem')
+  })
+
   it('blanks the typed name the moment the dialog closes', () => {
     const onOpenChange = vi.fn<(open: boolean) => void>()
     renderPublishDialog(onOpenChange)

@@ -135,7 +135,7 @@ func TestExecutionIdentityCannotCrossRegistries(t *testing.T) {
 	ctx := asController(f.client.Subject)
 	_, err := f.executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "reuse-clone", Epoch: f.controller.Epoch, OperationId: run, ExecutionId: cloneID, NodeId: node, Input: &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_AgentSession{AgentSession: &controlpb.AgentSessionSpec{AgentPluginId: "official/hello-world", AgentPluginVersion: "1.0.0", CheckoutExecutionId: "checkout-1", GitIdentity: &controlpb.GitIdentity{Name: "Ada", Email: "ada@example.invalid"}, InitialTurn: &controlpb.UserTurn{TurnId: "turn-1", Content: []*controlpb.ContentBlock{{Block: &controlpb.ContentBlock_Text{Text: &controlpb.TextContent{Text: "fix the bug"}}}}}}}}})
 	expectStatus(t, err, codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
-	_, err = f.executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "reuse-session", Epoch: f.controller.Epoch, OperationId: operation, ExecutionId: execution, NodeId: node, Input: &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{Repository: "https://example.invalid/repo.git", Branch: "main"}}}})
+	_, err = f.executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "reuse-session", Epoch: f.controller.Epoch, OperationId: operation, ExecutionId: execution, NodeId: node, Input: cloneInputSpec(seedCloneInput(f.tid, uuid.NewString(), uuid.NewString(), f.commit))})
 	expectStatus(t, err, codes.Aborted, controlpb.ErrorCode_ERROR_CODE_CONFLICT)
 }
 

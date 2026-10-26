@@ -1,31 +1,23 @@
-# internal/config: 配置加载与校验
+# internal/config：配置加载与校验
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/config` 负责 Ora Cloud 的配置解析、Schema 校验和环境变量覆盖。
+`Load` 用局部 Viper 实例加载服务配置，校验后返回 `Config`；没有全局可变配置。
 
-## 职责
+`plugins.personal_agent_target` 为空时不启用声明式个人 Agent 运行；可显式指定当前 Node 支持的 Linux target。Controller/Node 与插件 adapter 部署完成后再配置；运行仍校验当前 incarnation 的 target、版本和协议。
 
-- **结构化配置定义**：定义强类型的 Go 结构体以映射全系统配置项：
-  - `ServerConfig`：端口号、Gin 运行模式、读写超时时间。
-  - `LoggerConfig`：日志级别、输出文件路径、轮转阈值（最大单文件体积、保留天数、备份数、gzip 压缩）。
-  - `DatabaseConfig`：驱动类型（必须为 `postgres`）、连接串 DSN 以及连接池上限参数（`max_open_conns`、`max_idle_conns`、`conn_max_lifetime`）。
-  - `AuthConfig`：预期的 token 受众和 `TrustedKey` 验证参数列表。
-- **基于 Viper 的分层配置加载**：
-  - 依次在 `./configs`、`../configs` 和 `.` 目录下检索 `config.yaml`。
-  - 支持通过 `-config <path>` 显式指定配置文件路径。
-  - 自动映射带有 `CLOUD_` 前缀的环境变量，将点号替换为下划线（例如 `CLOUD_DATABASE_DSN` 覆盖 `database.dsn`）。
-- **启动期合理性校验**：对不合法的配置返回明确错误并拒绝启动；例如，`read_timeout`、`write_timeout` 和 `conn_max_lifetime` 必须是正时长。
+| 文件 | 职责 |
+|---|---|
+| `config.go` | 主结构、默认值、显式环境变量绑定和通用校验 |
+| `env.go` | 将配置键映射为 `CLOUD_*` 环境变量 |
+| `control_tls.go` | 构造控制监听的 TLS 1.3 双向认证材料 |
+| `object_store.go` | 检查对象存储配置、读取密钥文件并构造内存 `objectstore.Config` |
+| `repository.go` | Git ref、执行器与凭据服务的部署引用和开关 |
 
-## 边界与不变量
+未指定路径时在 `./configs`、`../configs`、`.` 查找 `config.yaml`；显式路径由命令的 `-config` 传入。`CLOUD_DATABASE_DSN` 等覆盖对应叶子键；完整默认值和取值范围以源码及 [配置参考](../../docs/operations/configuration.md) 为准。
 
-启动窗口使用数据库时间，确认耗尽后业务结算并保留独立残留责任，不能以业务终态声称物理释放。配置默认值与恢复边界见 [有界启动](../../docs/agent-runs/startup-settlement.md)。
+配置文件保存部署引用，原始私钥和机密通过独立文件加载，不写进配置正文、日志或数据库。包负责启动期配置有效性；业务窗口的冻结、数据库时钟与恢复判定在 Core。对象存储开启不等于在线健康探测。
 
-`object_store` 为可选的 S3 交付配置。`enabled=true` 时 server 在启动阶段读取独立挂载的 `access_key_id_file` 与 `secret_access_key_file`，只保存在进程内存，检查私网 endpoint 与 Node 可达的 public_endpoint、region、bucket、path_style 和 1 秒至 7 天的 upload_grant_ttl。每个字段可由 `CLOUD_OBJECT_STORE_*` 覆盖。短期 PUT 授权可绑定 SHA-256；Cloud 经私网 HEAD 验证存在、大小与存储摘要后登记 Revision。默认关闭：不派发交付工作，以同事务业务钩子结算 skipped/object_store_unconfigured；独立授权请求返回不可用。健康信息报告 configured/unconfigured，不检查 S3 在线状态。
+`issue_runs.residual_reconcile_interval` 控制 Cloud 残留账本恢复扫描的间隔，缺省为 `1m`；环境变量 `CLOUD_ISSUE_RUNS_RESIDUAL_RECONCILE_INTERVAL` 可覆盖它。显式零、负数和非法时长均拒绝启动，没有关闭开关。该间隔只安排扫描，不是资源清理成功的超时判据。Cloud 只接收既有入口提供的真实事实，不新增 Controller 发现契约；证据未到时账本保持 open。
 
-- **不存储机密信息**：配置文件只存储公开验证密钥和基础设施引用。明文部署机密信息和私钥绝不得出现在配置文件中。
-- **运行时不可变**：配置在命令启动时加载一次，并作为就绪可用的值传递。不存在全局可变配置单例。
-
-参见 [config.yaml](../../configs/config.yaml)、[cmd/server](../../cmd/server/README.md) 与 [内部凭据与服务信任](../../docs/identity/authentication.md)。
-
-Agent 启动、恢复和结束确认默认分别为 2m/6m/5m（agent_start_timeout、agent_restore_timeout、agent_end_confirm_timeout）；运行 Workspace 创建首次 blocked 后的有界放弃窗口默认 30m（agent_workspace_blocked_timeout）。省略才选默认，显式非正/非法时长拒绝。配置只影响新进入的持久窗口，已开始的窗口不续期。
+测试覆盖默认值、环境覆盖、非法时长、TLS、对象存储与仓库配置。参见 [server](../../cmd/server/README.md)、[有界启动](../../docs/agent-runs/startup-settlement.md) 与 [部署出网配置](../../docs/operations/deployment-egress.md)。

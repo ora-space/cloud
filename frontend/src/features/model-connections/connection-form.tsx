@@ -108,10 +108,13 @@ function ModelFields({
   )
 }
 
-function useConnectionDraft(connection: ModelConnection | undefined) {
+function useConnectionDraft(
+  connection: ModelConnection | undefined,
+  initialProtocol: ConnectionDraft['protocol'] | undefined,
+) {
   const [metadata, setMetadata] = useState<Omit<ConnectionDraft, 'models'>>({
     name: connection?.name ?? '',
-    protocol: connection?.protocol ?? 'openai-completions',
+    protocol: connection?.protocol ?? initialProtocol ?? 'openai-completions',
     baseUrl: connection?.baseUrl ?? '',
     authMode: connection?.authMode ?? 'bearer',
     enabled: connection?.enabled ?? true,
@@ -136,16 +139,28 @@ function useConnectionDraft(connection: ModelConnection | undefined) {
 export function ConnectionForm({
   connection,
   onClose,
+  initialProtocol,
+  onSaved,
 }: {
   connection: ModelConnection | undefined
   onClose: () => void
+  initialProtocol?: ConnectionDraft['protocol']
+  onSaved?: (connection: ModelConnection) => void
 }) {
-  const { metadata, setMetadata, models, setModels, addModel } = useConnectionDraft(connection)
+  const { metadata, setMetadata, models, setModels, addModel } = useConnectionDraft(
+    connection,
+    initialProtocol,
+  )
   const save = useSaveConnection(connection)
   function submit(event: React.FormEvent) {
     event.preventDefault()
     const draft = { ...metadata, models: models.map(({ key: _key, ...model }) => model) }
-    save.mutate(draft, { onSuccess: onClose })
+    save.mutate(draft, {
+      onSuccess: (saved) => {
+        onSaved?.(saved)
+        onClose()
+      },
+    })
   }
   return (
     <form className="space-y-3 rounded-lg border p-4" onSubmit={submit}>

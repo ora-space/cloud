@@ -109,30 +109,32 @@ func applyCommentTargets(t *transaction, i Object, r *PublicRequest, uid, commen
 
 // confirmInteraction is the ONLY transition that turns a Workflow interaction into an execution intent
 // (Issue collaboration D9). It re-resolves the target server-side, re-validates the submitted values, persists them as
-// the interaction's Issue-owned input, creates the initial run, and claims the interaction with a
-// compare-and-set on `run_id IS NULL`. Dispatch is the caller's post-commit responsibility, so no
-// external effect happens inside this transaction (Issue collaboration D9).
+// the interaction's Issue-owned input, creates the WorkflowRun and linked IssueRun, and claims the
+// interaction with a compare-and-set on `run_id IS NULL`. WorkflowRun owns execution; this path never
+// hands the linked IssueRun to the legacy dispatcher or performs an external effect (Issue collaboration D9).
 //
-// The values are validated against the schema of the *version being confirmed* rather than the live
-// document the form was rendered from, and against the same admission gate the other two entries use.
-// The version is the form's own `snapshotId` field, whose option values are snapshot ids; leaving it
-// unset means the newest published version, and a version that is not this workflow's is a 404 rather
-// than a silent fallback. A workflow with nothing published cannot be confirmed at all: there is no
-// frozen document to execute, and running the live draft is what the draft/published split forbids.
-// The resolved version is frozen onto the run's input, so the run still says what it executed after
-// the workflow has been edited or published again.
+// The values are validated against the schema of the *version being confirmed* alone, never against
+// the live document, and against the same admission gate the other two entries use. Selecting a
+// version has to be a real way to run it: a draft that moved on after the last publish must not turn
+// an already-published version into an unconfirmable one, or the selection would be refused exactly
+// when it matters. This mirrors the manual run entry, which also validates against the version it
+// runs. The version is the form's own `snapshotId` field, whose option values are snapshot ids;
+// leaving it unset means the newest published version, and a version that is not this workflow's is a
+// 404 rather than a silent fallback. A workflow with nothing published cannot be confirmed at all:
+// there is no frozen document to execute, and running the live draft is what the draft/published
+// split forbids. The resolved version is frozen onto the run's input, so the run still says what it
+// executed after the workflow has been edited or published again.
 //
-// `snapshotId` is the platform's key only while the author's own Start node leaves it alone; a workflow
-// that declares a variable under that name owns the key, and the value submitted under it is that
-// variable's rather than a version selection — see workflowVersionCursor. A submission still carrying
-// the pre-rename `version` key is read under it, so the version the user picked is the one that runs,
-// and the key is folded away before the values are validated — see foldLegacyVersionAnswer.
-//
-// The version's schema is the schema of this submission only while it still describes the form the
-// client rendered, which is the live document's. When the two have diverged the confirm refuses with
-// `workflow_version_fields_changed` and names the fields, rather than validating values the user was
-// shown against a schema they were never shown — see workflowFieldDivergence.
-func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches *[]dispatchTarget) Object {
+// `snapshotId` is always the platform's key: the issue form does not render an author declaration under
+// it (see withoutPlatformOwnedDeclarations), the submission's value under it is the version selection,
+// and a resolved version that declares the key itself is refused rather than executed. That refusal
+// answers before the executor-slot gate: the version can never run, so naming a slot the initiator
+// would have to configure first would send them to fix something that cannot make this confirm work.
+// A submission
+// still carrying the pre-rename `version` key is read under it, so the version the user picked is the
+// one that runs, and the key is folded away before the values are validated — see
+// foldLegacyVersionAnswer.
+func confirmInteraction(t *transaction, r *PublicRequest, uid string) Object {
 	it := interaction(t, r.TenantID, r.IssueID, r.InteractionID)
 	require(it.S("mode") == "form", 409, "interaction_not_confirmable")
 	require(it["runId"] == nil, 409, "interaction_already_confirmed")
@@ -143,20 +145,31 @@ func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches
 	w := workflow(t, r.TenantID, targetID)
 	cursor := workflowVersionCursor(w.O("graph"), values)
 	foldLegacyVersionAnswer(w.O("graph"), values)
-	s := admitWorkflowRun(t, r.TenantID, targetID, cursor, uid)
-	issueContext := formContextForIssue(t, r.TenantID, i)
-	versionDescriptor := snapshotFormDescriptor(t, w, s, &issueContext)
-	if diverged := workflowFieldDivergence(liveFormDescriptor(t, w, &issueContext), versionDescriptor); len(diverged) > 0 {
-		rejectWith(409, "workflow_version_fields_changed", Object{"fields": stringList(diverged)})
+	s := workflowRunSnapshot(t, r.TenantID, targetID, cursor)
+	// `snapshotId` belongs to the platform in every `@` form, so the submitted value was read as a
+	// version cursor — including when the live document still declares a variable of that name, which
+	// it can no longer publish. A resolved version whose own graph declares that key would give the one
+	// submission two meanings — the version the platform resolves and a value the workflow receives —
+	// which is the ambiguity 20261021-snapshot-id-is-a-reserved-field.md D3 refuses to execute. Such
+	// versions are stock: the publish gate no longer creates them (D1), and the selector no longer
+	// offers them (D2), so this is the backstop for a cursor that reaches one anyway, or for a confirm
+	// that submitted no cursor and resolved to the newest one. Substituting a selectable version instead
+	// would execute something the user did not choose.
+	if workflowDeclaresReservedField(s.O("graph")) {
+		rejectWith(409, "workflow_version_reserved_field", Object{"snapshotId": s.S("id"), "field": fieldKeySnapshotID})
 	}
-	validateFormValues(versionDescriptor, values, true)
+	// Only a version that may actually run is worth asking the initiator to configure slots for. This is
+	// the same gate the other entries use; it just runs after the reserved-key refusal above.
+	requireWorkflowExecutorSlots(t, s.O("graph"), uid)
+	issueContext := formContextForIssue(t, r.TenantID, i)
+	// The chosen version's own schema decides what the submission may contain: the form offers the
+	// selected version's fields, so a live draft that has moved on neither adds nor removes a question.
+	validateFormValues(snapshotFormDescriptor(t, w, s, &issueContext), values, true)
 
 	input := buildRunContext(t, i, "", targetType, targetID, values, appliedContextRefs(r.Body))
-	freezeWorkflowSnapshot(input, s.S("id"))
-	runObj := enqueueRun(t, r.TenantID, i.S("id"), targetType, targetID, input, "interaction", it.S("id"), "user", uid)
+	runObj := enqueueWorkflowInvocation(t, r.TenantID, i.S("id"), w, s, values, input, formKickoff(s.O("graph"), values), "interaction", it.S("id"), uid)
 	claimed := t.execRows("UPDATE issue_interactions SET input=$3, run_id=$4 WHERE id=$1 AND tenant_id=$2 AND run_id IS NULL", it.S("id"), r.TenantID, jsonText(values), runObj.S("id"))
 	require(claimed == 1, 409, "interaction_already_confirmed")
-	*dispatches = append(*dispatches, dispatchTarget{tenantID: r.TenantID, runID: runObj.S("id")})
 	return Object{"resource": runObj}
 }
 
@@ -170,18 +183,35 @@ func confirmInteraction(t *transaction, r *PublicRequest, uid string, dispatches
 // accept the same keys: a form rendered before the rename answers under the old `version` key, and the
 // live descriptor no longer declares it. The fold is the confirm's own, taken from the one place the
 // rule is defined (see foldLegacyVersionAnswer), rather than a second compatibility rule that could
-// drift from it. Assist reads no version cursor: it resolves no version, and the graph is read only to
-// decide what the old key means for this workflow.
+// drift from it.
+//
+// The descriptor is the version's, not the live document's, whenever the submission names a published
+// version or the workflow has one: the client renders the selected version's form even on its default,
+// so assist has to answer for the fields that form shows. "The default" is the selector's default — the
+// newest *selectable* version — not the newest published row: a stock version that claims the reserved
+// `snapshotId` is withheld from the selector (20261021-snapshot-id-is-a-reserved-field.md D2), and
+// judging the submission against it would refuse fields the visible form offers. A workflow with no
+// selectable version has no selector and the live document is the form, exactly as it is when nothing
+// is published.
 func assistWorkflow(t *transaction, r *PublicRequest) Object {
 	i := issue(t, r.TenantID, r.IssueID)
 	targetID := r.Body.S("targetId")
 	require(validID(targetID), 400, "invalid_target")
 	issueContext := formContextForIssue(t, r.TenantID, i)
+	w := workflow(t, r.TenantID, targetID)
 	descriptor := workflowFormDescriptor(t, r.TenantID, "workflow", targetID, &issueContext)
 	// Assist is requested while the form is still being filled, so shape is validated but requiredness
 	// is not — an incomplete form is exactly when a suggestion is useful.
 	current := interactionValues(r.Body)
-	foldLegacyVersionAnswer(workflow(t, r.TenantID, targetID).O("graph"), current)
+	cursor := workflowVersionCursor(w.O("graph"), current)
+	foldLegacyVersionAnswer(w.O("graph"), current)
+	s := workflowLatestSelectableSnapshot(t, r.TenantID, targetID)
+	if cursor != "" {
+		s = workflowSnapshot(t, r.TenantID, targetID, cursor)
+	}
+	if s != nil {
+		descriptor = snapshotFormDescriptor(t, w, s, &issueContext)
+	}
 	validateFormValues(descriptor, current, false)
 
 	in := AssistInput{

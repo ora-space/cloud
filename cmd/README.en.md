@@ -9,20 +9,22 @@ operating-system signal handling, and process exit codes.
 ## Module map
 
 - [server](server/README.en.md) is the primary authoritative HTTP API service daemon.
-- [gateway](gateway/README.en.md) is the browser-facing authentication and reverse-proxy boundary: GitHub OAuth login, PostgreSQL sessions, and internal credential issuance.
-- [cloudctl](cloudctl/README.en.md) is the restricted deployment and operations CLI for migrations, tenant bootstrap, and credential reference management.
-- [devsetup](devsetup/README.en.md) is the development-only one-shot setup (`task setup`): from `config.toml` it generates the Gateway private keys, the public keys Cloud trusts and the PKCE key, writes the GitHub client secret file and `.local/dev.env`, and applies migrations.
+- [gateway](gateway/README.en.md) is the browser-facing authentication and reverse-proxy boundary: IDaaS/GitHub and development providers, PostgreSQL sessions, and internal credential issuance.
+- [cloudctl](cloudctl/README.en.md) is the restricted deployment and operations CLI for migrations and tenant bootstrap.
+- [devsetup](devsetup/README.en.md) is the development-only one-shot setup (`task setup`): from `config.toml` it generates the Gateway private keys, the public keys Cloud trusts and the PKCE key, writes the selected external provider's client secret file and `.local/dev.env`, and applies migrations.
 - [git-server](git-server/README.en.md) serves Project repositories to sandboxes and the Repo Executor over smart HTTP, authorizing every request from current Cloud state, and answers Cloud's read-only ref query.
 - [git-server-preset](git-server-preset/README.en.md) prepares and checks Git Server contract fixtures for acceptance only; it ships only in the development image.
+- [repo-executor](repo-executor/README.en.md) is the only process that reaches external Git repositories, running sync, explicit publish and read-only probes; it is stateless and has no database, accepting only Cloud's mTLS tasks.
+- [git-credential-ora](git-credential-ora/README.en.md) is the Repo Executor's fixed Git credential helper; it delivers the credential only when the requested https repository equals the staged scope.
+- [credential-store](credential-store/README.en.md) runs the independent Credential Store: the redemption, management and key mTLS listeners and the browser ingress; it refuses to start without a keyring and periodically sweeps expired versions.
 - [simulator](simulator/README.en.md) provides an all-in-one local demo environment backed by in-process Substrate and Git execution doubles.
 - [openapi](openapi/README.en.md) compiles and synchronizes the canonical OpenAPI 3.0 specification (`api/openapi.json`) from Go contract definitions.
 - [checkformat](checkformat/README.en.md) enforces repository Go formatting standards as a strict failing CI gate.
+- [model-gateway](model-gateway/README.en.md) runs personal-key storage and authorized model proxying.
+- [demo-issue-board](demo-issue-board/README.en.md) prints a one-shot board demo in an isolated PostgreSQL schema.
+- [demo-issue-board-web](demo-issue-board-web/README.en.md) serves the embedded browser board with ephemeral demo data.
+- [ora-web](ora-web/README.en.md) serves the frontend through a development edge with a persistent local schema.
 
-## Boundaries and invariants
+## Composition boundary
 
-- **No domain logic**: `cmd/*` packages contain zero domain policy, state transition algorithms, or transactional logic. All domain behavior belongs to `internal/core`.
-- **No direct database queries**: Commands acquire database pools exclusively via `internal/repository` and hand them directly to `internal/core.NewStore`. No raw SQL, GORM models, or queries exist in `cmd/*`.
-- **Resource cleanup on exit**: Process termination must flush logging buffers (`logger.Sync`), close database connection pools (`store.Pool.Close()`), and cleanly cancel background contexts.
-- **Fail-fast on startup**: Commands immediately abort with non-zero exit codes if configuration loading, schema checksum verification, database ping, or cryptographic trust verification fails.
-
-See the [top-level README](../README.en.md), [internal packages](../internal/README.en.md), and [AGENTS.md](../AGENTS.md).
+Service commands load configuration, wire dependencies and own process shutdown; domain policy belongs in [core](../internal/core/README.en.md). Operational tools and development demos have their own data access and migration behavior documented in their module READMEs. See [Architecture](../docs/architecture.en.md), [Deployment](../docs/operations/deployment.en.md) and [AGENTS.md](../AGENTS.md).

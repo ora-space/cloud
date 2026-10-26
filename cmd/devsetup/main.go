@@ -1,7 +1,8 @@
 // devsetup turns config.toml into everything the local development stack
 // needs: the purpose-separated Ed25519 key pairs and PKCE key the Gateway and
-// Cloud share, the external provider's client secret file the Gateway reads, the
-// environment file Taskfile.yml loads (CLOUD_*/GATEWAY_* overrides plus
+// Cloud share, the local control mTLS bundle, the external provider's client
+// secret file the Gateway reads, the environment file Taskfile.yml loads
+// (CLOUD_*/GATEWAY_* overrides plus
 // TEST_DATABASE_URL), and the applied database schema.
 //
 // configs/*.yaml stay the authoritative service configuration; config.toml
@@ -60,10 +61,11 @@ type devConfig struct {
 // devPluginsConfig mirrors the service's config.PluginConfig; the interval is a
 // string here because TOML durations are spelled "5m" and the service parses it.
 type devPluginsConfig struct {
-	MarketplaceURL    string `toml:"marketplace_url"`
-	MarketplaceBranch string `toml:"marketplace_branch"`
-	SyncInterval      string `toml:"sync_interval"`
-	SyncEnabled       bool   `toml:"sync_enabled"`
+	PersonalAgentTarget string `toml:"personal_agent_target"`
+	MarketplaceURL      string `toml:"marketplace_url"`
+	MarketplaceBranch   string `toml:"marketplace_branch"`
+	SyncInterval        string `toml:"sync_interval"`
+	SyncEnabled         bool   `toml:"sync_enabled"`
 }
 
 // defaultPluginsConfig is the backfill for config.toml files predating the
@@ -221,7 +223,11 @@ func materialize(cfg *devConfig, dir, envPath string) error {
 	if e := os.MkdirAll(filepath.Dir(envPath), 0o700); e != nil {
 		return e
 	}
-	if e := writePrivate(envPath, []byte(renderEnv(cfg))); e != nil {
+	controlDir := filepath.Join(filepath.Dir(envPath), "control")
+	if e := materializeControl(controlDir); e != nil {
+		return e
+	}
+	if e := writePrivate(envPath, []byte(renderEnv(cfg)+renderControlEnv(controlDir))); e != nil {
 		return e
 	}
 	fmt.Printf("wrote %s\n", envPath)
@@ -247,6 +253,7 @@ func renderEnv(cfg *devConfig) string {
 		{"GATEWAY_IDAAS_CLIENT_ID", cfg.IDaaS.ClientID},
 		{"GATEWAY_IDAAS_DISPLAY_NAME_FIELD", cfg.IDaaS.DisplayNameField},
 		{"CLOUD_PLUGINS_MARKETPLACE_URL", cfg.Plugins.MarketplaceURL},
+		{"CLOUD_PLUGINS_PERSONAL_AGENT_TARGET", cfg.Plugins.PersonalAgentTarget},
 		{"CLOUD_PLUGINS_MARKETPLACE_BRANCH", cfg.Plugins.MarketplaceBranch},
 		{"CLOUD_PLUGINS_SYNC_INTERVAL", cfg.Plugins.SyncInterval},
 		{"CLOUD_PLUGINS_SYNC_ENABLED", strconv.FormatBool(cfg.Plugins.SyncEnabled)},

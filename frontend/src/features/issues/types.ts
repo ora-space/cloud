@@ -88,6 +88,10 @@ export interface IssueRun {
   issueId: string
   executorType: 'agent' | 'team' | 'workflow'
   executorId: string
+  /** Workflow runs: the linked WorkflowRun id, whose status is authoritative for execution. */
+  workflowInvocationRef?: string | null
+  /** Comment identity behind an Agent Task Mode run; absent for direct/manual runs. */
+  triggerEvidenceRefId?: string | null
   input: Record<string, unknown>
   status: string
   /** Agent runs: the settled delivery, `{revisionId, deliveryState}`, once the run released its Workspace. */
@@ -116,7 +120,7 @@ export interface RunRevision {
   changed: boolean
   bundleSize: number | null
   historySize: number
-  /** The Revision the run resumed; with `changed: false` the run reused that Revision's bundle. */
+  /** The Revision the run resumed; with `changed: false` the run delivered no commits beyond it. */
   priorRevisionId?: string | null
   createdAt: string
 }

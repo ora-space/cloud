@@ -1,7 +1,13 @@
 import { CanceledError } from 'axios'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { installFakeHttp } from '@/test/http'
-import { customInstance, faultCode, isUnauthorizedError, onUnauthorized } from './api-client'
+import {
+  customInstance,
+  faultCode,
+  faultParam,
+  isUnauthorizedError,
+  onUnauthorized,
+} from './api-client'
 
 describe('customInstance', () => {
   it('unwraps the response body', async () => {
@@ -115,5 +121,25 @@ describe('faultCode', () => {
   it('returns undefined for failures that are not axios errors', () => {
     expect(faultCode(new Error('network down'))).toBeUndefined()
     expect(faultCode(undefined)).toBeUndefined()
+  })
+})
+
+describe('faultParam', () => {
+  it('extracts a string parameter the backend marked safe for the client', () => {
+    const error = {
+      isAxiosError: true,
+      response: { data: { code: 'required_field_missing', params: { field: 'prompt' } } },
+    }
+    expect(faultParam(error, 'field')).toBe('prompt')
+  })
+
+  it('returns undefined for missing, non-string or non-axios parameters', () => {
+    expect(faultParam({ isAxiosError: true }, 'field')).toBeUndefined()
+    expect(faultParam({ isAxiosError: true, response: {} }, 'field')).toBeUndefined()
+    expect(
+      faultParam({ isAxiosError: true, response: { data: { params: { field: 3 } } } }, 'field'),
+    ).toBeUndefined()
+    expect(faultParam(new Error('network down'), 'field')).toBeUndefined()
+    expect(faultParam(undefined, 'field')).toBeUndefined()
   })
 })

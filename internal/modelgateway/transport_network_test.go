@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/wanglongan587/cloud/internal/egress"
 )
 
 // Optional live deployment probe: no credential is read or sent. Unit tests remain deterministic.
@@ -15,7 +17,7 @@ func TestLiveTrustedDNSAndVerifiedUpstreamTLS(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("set MODEL_GATEWAY_NETWORK_TEST_URL for the credential-free live network probe")
 	}
-	client, err := NewUpstreamClient(UpstreamConfig{DNS: DNSConfig{HTTPSURL: "https://cloudflare-dns.com/dns-query", BootstrapIPs: []string{"1.1.1.1", "1.0.0.1"}}})
+	client, err := NewUpstreamClient(UpstreamConfig{DNS: egress.DNSConfig{HTTPSURL: "https://cloudflare-dns.com/dns-query", BootstrapIPs: []string{"1.1.1.1", "1.0.0.1"}}})
 	if err != nil {
 		t.Fatal("trusted resolver configuration rejected")
 	}

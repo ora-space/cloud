@@ -40,7 +40,7 @@ func seedModelAttemptScene(t *testing.T) modelAttemptScene {
 	_, err = s.transact(t.Context(), func(tx *transaction) Object {
 		input := tx.one("SELECT input FROM issue_runs WHERE id=$1", scene.run).O("input")
 		input["agentPluginId"] = "official/ora-space.opencode"
-		bindRunModel(tx, scene.run, uid, input)
+		bindRunModel(tx, scene.run, uid, input, "")
 		binding = input.S("modelBindingId")
 		return nil
 	})

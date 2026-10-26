@@ -93,13 +93,14 @@ func Document() map[string]any {
 	// issue_run.thread_appended / issue_run.thread_changed address one agent run's Thread (Thread
 	// D5): issueId and runId name it and lastSeq is only a hint — the Thread GET alone moves a
 	// client's cursor. Every other event omits the three fields.
-	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated", "issue_run.thread_appended", "issue_run.thread_changed"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number(), "issueId": uuid(), "runId": uuid(), "lastSeq": number()}, "type", "spaceId")
+	s["SpaceEvent"] = object(obj{"type": enumeration("space.updated", "space.member_updated", "project.created", "project.updated", "project.archived", "space.plugins_updated", "plugins.catalog_updated", "issue_run.thread_appended", "issue_run.thread_changed", "project.repository_updated", "issue.conversation_changed", "scheduled_task.artifacts_updated", "space.scheduled_tasks_updated"), "spaceId": uuid(), "projectId": optional(uuid()), "version": number(), "issueId": uuid(), "runId": uuid(), "lastSeq": number(), "scheduledTaskId": optional(uuid())}, "type", "spaceId")
 	// GitIdentity is the identity the caller's Agent runs commit as (identity-access git identity
 	// D1). version is 0 while isDefault is true: no identity is stated and the default applies.
 	s["GitIdentity"] = object(obj{"name": str(), "email": str(), "isDefault": boolean(), "version": number()}, "name", "email", "isDefault", "version")
 	s["ModelDefinition"] = object(obj{"id": str(), "name": str(), "contextWindow": number(), "maxTokens": number()}, "id", "name", "contextWindow", "maxTokens")
 	s["ModelConnection"] = object(obj{"id": uuid(), "name": str(), "protocol": enumeration("openai-completions", "anthropic-messages"), "baseUrl": str(), "authMode": enumeration("bearer", "x-api-key"), "models": array(ref("ModelDefinition")), "enabled": boolean(), "credentialConfigured": boolean(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "id", "name", "protocol", "baseUrl", "authMode", "models", "enabled", "credentialConfigured", "version", "createdAt", "updatedAt")
 	s["ModelDefault"] = object(obj{"connectionId": str(), "modelId": str(), "version": number()}, "connectionId", "modelId", "version")
+	personalAgentSchemas(s)
 	s["AgentSessionSummary"] = object(obj{
 		"id": uuid(), "issueId": uuid(), "issueNumber": number(), "issueTitle": str(),
 		"projectId": optional(uuid()), "projectName": optional(str()), "agentPluginId": optional(str()),
@@ -108,9 +109,9 @@ func Document() map[string]any {
 		"historyAvailable": boolean(), "model": optional(object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")),
 	}, "id", "issueId", "issueNumber", "issueTitle", "projectId", "projectName", "agentPluginId", "status", "threadState", "createdAt", "startedAt", "completedAt", "historyAvailable", "model")
 	s["SessionHistory"] = object(obj{"source": enumeration("archive"), "records": array(obj{"type": "object", "additionalProperties": true}), "sizeBytes": number(), "sha256": str()}, "source", "records", "sizeBytes", "sha256")
+	s["SlotMapping"] = object(obj{"slotName": str(), "agentCli": str(), "connectionId": uuid(), "modelId": str(), "modelName": str(), "connectionName": str(), "available": boolean(), "unavailableReason": str(), "version": number(), "createdAt": timestamp(), "updatedAt": timestamp()}, "slotName", "agentCli", "connectionId", "modelId", "modelName", "connectionName", "available", "unavailableReason", "version", "createdAt", "updatedAt")
 	s["ThreadModel"] = object(obj{"connectionName": str(), "modelId": str(), "modelName": str()}, "connectionName", "modelId", "modelName")
 	s["Project"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt", "credentialRefId deletedAt")
-	properties(s, "Project")["repositoryCredentialRefId"] = optional(uuid())
 	s["Workspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")
 	// branchName is the retired linked-worktree branch; only Workspaces created before the Node
 	// clone flow have one.
@@ -128,15 +129,29 @@ func Document() map[string]any {
 	properties(s, "Workflow")["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The authored graph document: nodes, edges, viewport, editor annotations and global variables. Stored and returned whole; the editor is its only reader."}
 	s["WorkflowSnapshot"] = resource("id tenantId workflowId version name graph createdAt", "")
 	properties(s, "WorkflowSnapshot")["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The graph document frozen at publish time; restoring this snapshot writes it back to the workflow's live graph."}
-	s["WorkflowRun"] = resource("id tenantId workflowId snapshotId name status input nodeStates rounds error startedAt finishedAt createdAt updatedAt workflowName", "startedAt finishedAt")
+	s["WorkflowRun"] = resource("id tenantId workflowId snapshotId name status input nodeStates rounds error startedAt finishedAt createdAt updatedAt workflowName cancelRequestedAt pluginVersion", "startedAt finishedAt cancelRequestedAt pluginVersion")
 	workflowRunProps := properties(s, "WorkflowRun")
-	workflowRunProps["status"] = enumeration("pending", "running", "awaiting_input", "succeeded", "failed", "cancelled")
-	workflowRunProps["input"] = obj{"type": "object", "additionalProperties": true, "description": "The kickoff input passed to the run's start node."}
-	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, output, error, timestamps."}
+	// awaiting_input is a reserved storage value only: the column's CHECK admits it, no writer
+	// produces it, and the approved phase-one scope defers HITL. Publishing it would tell clients
+	// the state is reachable, so the public contract lists only the states a run can actually hold.
+	workflowRunProps["status"] = enumeration("pending", "running", "succeeded", "failed", "cancelled")
+	workflowRunProps["pluginVersion"] = optional(obj{"type": "string", "description": "The agent plugin version frozen into the run at creation: the frozen identity the run's agent sessions execute with. Null only when the space declared no plugin at creation (or the run predates migration 0042); the first agent node then fails with `agent_plugin_version_unfrozen`."})
+	workflowRunProps["input"] = obj{"type": "object", "additionalProperties": true, "description": "The run's input object: each form value keyed by variable name, plus the reserved `input` key carrying the kickoff text the run submitted. A run that submitted no kickoff evaluates against the Start node's authored instruction instead."}
+	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts."}
 	workflowRunProps["rounds"] = array(obj{"type": "object", "additionalProperties": true})
 	// definitionSnapshot lives only on a detail read (the history list trips without it);
 	// it is optional so one schema serves both list rows and the composed run page.
 	workflowRunProps["definitionSnapshot"] = optional(obj{"type": "object", "additionalProperties": true, "description": "The frozen graph document this run executed against, from the snapshot it captured."})
+	s["WorkflowRunModelBinding"] = object(obj{
+		"slot":           str(),
+		"connectionName": str(),
+		"modelId":        str(),
+		"modelName":      str(),
+		"revoked":        boolean(),
+	}, "slot", "connectionName", "modelId", "modelName", "revoked")
+	modelBindings := optional(array(ref("WorkflowRunModelBinding")))
+	modelBindings["description"] = "The frozen per-slot model bindings this run executes against, ordered by slot name. Present on a detail read. Each binding is frozen at run creation and used for the run's whole lifetime; only `revoked` can turn true (the owning connection's grant was revoked)."
+	workflowRunProps["modelBindings"] = modelBindings
 	s["IssueStatus"] = resource("id tenantId key name description category color icon isSystem position version createdAt updatedAt deletedAt", "deletedAt")
 	statusProps := properties(s, "IssueStatus")
 	statusProps["isSystem"] = boolean()
@@ -154,8 +169,9 @@ func Document() map[string]any {
 	issueProps["properties"] = obj{"type": "object", "additionalProperties": true}
 	issueProps["labels"] = array(ref("Label"))
 	issueProps["assigneeType"] = enumeration("user", "agent", "team")
-	s["IssueRun"] = resource("id tenantId issueId version executorType executorId externalExecutionId executionContextRef workflowInvocationRef triggerEvidenceKind triggerEvidenceRefId status parentRunId retryOfRunId rerunOfRunId delegatedFromRunId attempt maxAttempts input result error failureReason triggerSummary queuedAt dispatchedAt startedAt completedAt fireAt leaseExpiresAt createdAt updatedAt deletedAt resumeRevisionId", "executionContextRef workflowInvocationRef triggerEvidenceRefId parentRunId retryOfRunId rerunOfRunId delegatedFromRunId result dispatchedAt startedAt completedAt fireAt leaseExpiresAt deletedAt resumeRevisionId")
+	s["IssueRun"] = resource("id tenantId issueId version executorType executorId externalExecutionId executionContextRef workflowInvocationRef triggerEvidenceKind triggerEvidenceRefId status parentRunId retryOfRunId rerunOfRunId delegatedFromRunId attempt maxAttempts input result error failureReason triggerSummary queuedAt dispatchedAt startedAt completedAt fireAt leaseExpiresAt createdAt updatedAt deletedAt resumeRevisionId cancelRequestedAt", "executionContextRef workflowInvocationRef triggerEvidenceRefId parentRunId retryOfRunId rerunOfRunId delegatedFromRunId result dispatchedAt startedAt completedAt fireAt leaseExpiresAt deletedAt resumeRevisionId cancelRequestedAt")
 	runProps := properties(s, "IssueRun")
+	runProps["agentConfiguration"] = object(obj{"pluginId": str(), "pluginVersion": str(), "configurationRevision": number()}, "pluginId", "pluginVersion", "configurationRevision")
 	runProps["executorType"] = enumeration("agent", "team", "workflow")
 	runProps["status"] = enumeration("queued", "dispatched", "running", "completed", "failed", "cancelled", "deferred")
 	runProps["attempt"] = number()
@@ -177,7 +193,8 @@ func Document() map[string]any {
 	runProps["preparation"] = optional(object(preparationProps, preparationFields...))
 	// revision is the run's registered Revision as metadata only (Cloud Revision D5): no object key,
 	// ref, digest or URL is public. Null until a Revision is registered, and for every non-agent run.
-	// `changed` says whether the run stored a bundle of its own; `priorRevisionId` is the Revision it
+	// `changed` is Cloud's verification verdict that the run delivered new commits, and `bundleSize`
+	// is null for a Revision delivered over Git (Revision D8); `priorRevisionId` is the Revision it
 	// resumed (issue-run resume decision D4, D5).
 	runProps["revision"] = optional(object(obj{"id": uuid(), "baseCommit": str(), "finalCommit": str(), "changed": boolean(), "bundleSize": optional(number()), "historySize": number(), "priorRevisionId": optional(uuid()), "createdAt": timestamp()}, "id", "baseCommit", "finalCommit", "changed", "bundleSize", "historySize", "priorRevisionId", "createdAt"))
 	// resumeRevisionId is the Revision an agent run resumes, fixed at session start; null otherwise.
@@ -186,19 +203,81 @@ func Document() map[string]any {
 	runProps["workflowInvocationRef"] = optional(uuid())
 	// ThreadEntry is one ordered record of an Agent run's Thread (Thread D1/D2/D3). `seq` is the
 	// run-scoped conversation order, starting at 1 and gapless; `record` is the verbatim ora-history
-	// line, which Cloud stores and returns without ever rewriting it. `turnId` and `status` describe
-	// the per-turn lifecycle and exist only for a user turn — a `queued` entry becomes `delivered`
-	// when the Node echoes that turn_id — so Node and system entries carry neither. The Node's own
+	// line, which Cloud stores and returns without ever rewriting it. `turnId` correlates Node output
+	// with its actual user turn even when future user inputs are already queued. `status` describes
+	// the per-turn lifecycle and exists only for a user turn — a `queued` entry becomes `delivered`
+	// when the Node echoes that turn_id. Node and system rows omit status. The Node's own
 	// execution id and sequence are deliberately not part of this resource.
 	s["ThreadEntry"] = object(obj{
-		"seq":       obj{"type": "integer", "format": "int64", "minimum": 1},
-		"source":    enumeration("node", "user", "system"),
-		"kind":      str(),
-		"record":    obj{"type": "object", "additionalProperties": true},
-		"turnId":    optional(uuid()),
-		"status":    optional(obj{"type": "string", "enum": []string{"queued", "delivered", "discarded"}, "nullable": true, "description": "User-turn lifecycle. Null for node and system entries."}),
-		"createdAt": timestamp(),
+		"seq":             obj{"type": "integer", "format": "int64", "minimum": 1},
+		"source":          enumeration("node", "user", "system"),
+		"kind":            str(),
+		"record":          obj{"type": "object", "additionalProperties": true},
+		"turnId":          optional(uuid()),
+		"status":          optional(obj{"type": "string", "enum": []string{"queued", "delivered", "discarded"}, "nullable": true, "description": "User-turn lifecycle. Null for node and system entries."}),
+		"createdAt":       timestamp(),
+		"historySequence": optional(obj{"type": "integer", "format": "int64", "minimum": 0}),
 	}, "seq", "source", "kind", "record", "createdAt")
+	s["ThreadPreviewSnapshot"] = object(obj{
+		"available": boolean(), "executionId": str(), "version": number(), "incomplete": boolean(),
+		"blocks": array(object(obj{"historySequence": number(), "turnId": str(), "record": obj{"type": "object", "additionalProperties": true}}, "historySequence", "turnId", "record")),
+	}, "available", "executionId", "version", "incomplete", "blocks")
+	s["TaskConversationMessage"] = object(obj{
+		"id": uuid(), "seq": obj{"type": "integer", "format": "int64", "minimum": 1},
+		"userId": uuid(), "agentId": uuid(), "body": str(),
+		"state": enumeration("waiting", "submitted", "cancelled", "failed"),
+		"runId": optional(uuid()), "threadSeq": optional(obj{"type": "integer", "format": "int64"}),
+		"errorCode": optional(str()), "delivery": optional(enumeration("pending", "queued", "delivered", "discarded", "failed", "cancelled")),
+		"createdAt": timestamp(),
+	}, "id", "seq", "userId", "agentId", "body", "state", "runId", "threadSeq", "errorCode", "createdAt")
+	s["TaskAgentReadiness"] = object(obj{"agentId": uuid(), "requiresPersonalModel": boolean(), "errorCode": optional(str())}, "agentId", "requiresPersonalModel", "errorCode")
+	// Scheduled Task (specs decisions/cloud/scheduled-task, approved): one definition bound to an
+	// issue, running an agent IssueRun per due point. The schedule is a closed three-shape union —
+	// the scheduler never parses cron — and the approval is the personal unattended-consent grant,
+	// frozen with a server-side consent instant at save time.
+	s["ScheduledTaskSchedule"] = object(obj{
+		"kind":          enumeration("every_hours", "daily", "weekly"),
+		"intervalHours": optional(number()),
+		"hour":          optional(number()),
+		"minute":        optional(number()),
+		"weekdays":      optional(array(enumeration("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"))),
+	}, "kind")
+	s["ScheduledTaskApproval"] = object(obj{"policy": enumeration("full_auto_in_cloud_workspace")}, "policy")
+	s["ScheduledTask"] = object(obj{
+		"id": uuid(), "issueId": uuid(), "creatorUserId": uuid(), "name": str(), "prompt": str(), "agentId": uuid(),
+		"model":    optional(str()),
+		"schedule": ref("ScheduledTaskSchedule"), "timezone": str(),
+		"revision":              number(),
+		"version":               number(),
+		"enabled":               boolean(),
+		"unattendedPolicy":      optional(str()),
+		"unattendedConsentedAt": optional(timestamp()),
+		"disabledReason":        optional(str()),
+		"createdAt":             timestamp(), "updatedAt": timestamp(),
+	}, "id", "issueId", "creatorUserId", "name", "prompt", "agentId", "schedule", "timezone", "revision", "version", "enabled", "createdAt", "updatedAt")
+	s["ScheduledTaskList"] = object(obj{"tasks": array(ref("ScheduledTask")), "acceptanceEnabled": boolean()}, "tasks", "acceptanceEnabled")
+	s["ScheduledArtifactList"] = object(obj{"artifacts": array(ref("ScheduledArtifact"))}, "artifacts")
+	s["ScheduledArtifact"] = object(obj{
+		"index": number(), "name": str(), "kind": str(), "sizeBytes": number(), "sha256": str(),
+	}, "index", "name", "kind", "sizeBytes", "sha256")
+	s["ScheduledTaskOccurrence"] = object(obj{
+		"scheduledAt":   timestamp(),
+		"outcome":       str(),
+		"taskRevision":  number(),
+		"observedAt":    timestamp(),
+		"failureReason": optional(str()),
+		"runId":         optional(uuid()),
+		// D6: the run's own business result, and the two counts it owns. The verdict is nullable -
+		// "not reported" is a value, not an absent field - and neither count requires reading an
+		// object: they count registered artifacts and visible refusals.
+		"verdict":               optional(str()),
+		"verdictDetail":         optional(str()),
+		"artifactCount":         optional(number()),
+		"rejectedArtifactCount": optional(number()),
+		"artifactsExpired":      optional(boolean()),
+		"sessionId":             optional(uuid()),
+	}, "scheduledAt", "outcome", "taskRevision", "observedAt")
+	s["ScheduledTaskHistory"] = object(obj{"taskId": uuid(), "entries": array(ref("ScheduledTaskOccurrence"))}, "taskId", "entries")
 	s["ContextRef"] = resource("id tenantId issueId refType refId createdAt", "")
 	contextRefProps := properties(s, "ContextRef")
 	contextRefProps["refType"] = contextRefTypeEnum()
@@ -235,6 +314,17 @@ func Document() map[string]any {
 	// namespace/identifier pair the install API addresses.
 	s["PluginCatalogEntry"] = resource("id sourceNamespace identifier title kind version description homepage license logo url sha256 targets packMembers readme marketplaceVisible sourceUrl indexedAt", "homepage license logo url sha256 targets packMembers readme")
 	pluginEntryProps := properties(s, "PluginCatalogEntry")
+	// The Agent declaration association and its validated static copy: null when the listing
+	// declares nothing, and distinct from the bounded issue string recorded when a declared
+	// association could not be consumed. The declaration bytes are served from the snapshot so
+	// configuration reads never touch the marketplace checkout or the release package.
+	pluginEntryProps["agentConfiguration"] = optional(object(obj{
+		"schemaVersion":     number(),
+		"declarationSha256": str(),
+		"copyPath":          str(),
+		"declaration":       str(),
+	}, "schemaVersion", "declarationSha256", "copyPath", "declaration"))
+	pluginEntryProps["agentConfigurationIssue"] = optional(str())
 	// Plugin versions are semver strings, not the optimistic integer `version`
 	// of mutable resources; fields() typed it as a number by name.
 	pluginEntryProps["version"] = str()
@@ -252,6 +342,7 @@ func Document() map[string]any {
 	s["PluginCatalog"] = object(obj{"items": array(ref("PluginCatalogEntry")), "syncedAt": optional(timestamp())}, "items")
 	s["SpacePlugin"] = resource("id spaceId tenantId sourceNamespace identifier desiredState desiredVersion observedState observedVersion installError version createdAt updatedAt", "observedVersion installError")
 	spacePluginProps := properties(s, "SpacePlugin")
+	spacePluginProps["kind"] = enumeration("workbench", "agent", "webview", "skill", "mcp", "hook", "pack", "workflow")
 	for _, key := range []string{"affectedCount", "completedCount", "waitingStartCount", "waitingControlCount", "unavailableCount", "failedCount", "desiredRevision"} {
 		spacePluginProps[key] = number()
 	}
@@ -287,7 +378,7 @@ func Document() map[string]any {
 	s["PluginUniversalRelease"] = object(obj{"url": str(), "sha256": str()}, "url", "sha256")
 	s["PluginReleaseTarget"] = object(obj{"target": str(), "url": str(), "sha256": str()}, "target", "url", "sha256")
 	s["PluginLogoCandidate"] = object(obj{"role": enumeration("universal", "light", "dark"), "extension": enumeration("svg", "png", "webp", "jpg", "jpeg")}, "role", "extension")
-	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}, "syncOwed": boolean(), "pluginId": str(), "version": str(), "desiredRevision": number(), "release": ref("PluginCatalogEntry"), "plugins": array(obj{"type": "object", "additionalProperties": true}), "pluginMeta": array(object(obj{"pluginId": str(), "desiredRevision": number()}, "pluginId", "desiredRevision"))})
+	s["OperationRequest"] = object(obj{"previous": obj{"type": "object", "additionalProperties": ref("Workspace")}, "syncOwed": boolean(), "pluginId": str(), "version": str(), "desiredRevision": number(), "release": ref("PluginCatalogEntry"), "plugins": array(obj{"type": "object", "additionalProperties": true}), "pluginMeta": array(object(obj{"pluginId": str(), "desiredRevision": number()}, "pluginId", "desiredRevision")), "clone": ref("CloneInput")})
 	s["OperationResult"] = object(obj{"resourceId": uuid(), "forceStopId": uuid()})
 	s["Operation"] = resource("id tenantId actorUserId projectId workspaceId kind state step request result errorCode idempotencyKey requestHash controllerEpoch retryAt version createdAt updatedAt", "workspaceId errorCode controllerEpoch retryAt")
 	opProps := properties(s, "Operation")
@@ -323,15 +414,16 @@ func Document() map[string]any {
 	ep["externalId"] = optional(str())
 	ep["request"] = ref("EffectRequest")
 	ep["result"] = ref("EffectResult")
-	s["ControllerProject"] = resource("id tenantId ownerUserId spaceId name repositoryUrl defaultBranch credentialRefId lifecycle version createdAt deletedAt secretRef", "credentialRefId deletedAt secretRef")
-	properties(s, "ControllerProject")["repositoryCredentialRefId"] = optional(uuid())
+	// The Controller sees the Project's identity and lifecycle only: its external repository and
+	// credential reference stay in Cloud, and a clone step carries its frozen cloneInput instead.
+	s["ControllerProject"] = resource("id tenantId ownerUserId spaceId name lifecycle version createdAt deletedAt", "deletedAt")
 	s["ControllerWorkspace"] = resource("id tenantId ownerUserId projectId kind desiredState observedState runtimeGeneration version admissionOpen admissionEpoch createdAt deletedAt requestedRef baseCommitId creatorUserId creatorOperationId creatorEvidence", "deletedAt baseCommitId creatorUserId creatorOperationId")
 	properties(s, "ControllerWorkspace")["issueRunId"] = optional(uuid())
 	for _, name := range []string{"Workspace", "WorkspaceListItem", "ControllerWorkspace"} {
 		properties(s, name)["baseCommitId"] = optional(obj{"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"})
 	}
 	// A Workspace operation's clone executions, registered through the gRPC ExecutionService.
-	s["CloneExecution"] = resource("executionId operationId workspaceId cloneRequestId nodeId input result dispatchedEpoch createdAt updatedAt nodeOperationId terminatedByForceStopId", "workspaceId cloneRequestId result terminatedByForceStopId")
+	s["CloneExecution"] = resource("executionId operationId workspaceId nodeId input result dispatchedEpoch createdAt updatedAt nodeOperationId terminatedByForceStopId", "result terminatedByForceStopId")
 	ce := properties(s, "CloneExecution")
 	ce["credentialRefId"] = optional(uuid())
 	ce["credentialRefVersion"] = optional(number())
@@ -353,19 +445,15 @@ func Document() map[string]any {
 	ne["result"] = optional(obj{"type": "object", "additionalProperties": true})
 	ne["dispatchedEpoch"] = number()
 	ne["lastEventSequence"] = number()
-	s["Snapshot"] = object(obj{"operation": ref("Operation"), "project": ref("ControllerProject"), "workspaces": array(ref("ControllerWorkspace")), "sandboxes": array(ref("Sandbox")), "nodes": array(ref("Node")), "effects": array(ref("Effect")), "clones": array(ref("CloneExecution")), "pluginExecutions": array(ref("NodeExecution")), "pluginInput": obj{"type": "object", "additionalProperties": true}}, "operation", "project", "workspaces", "sandboxes", "nodes", "effects", "clones", "pluginExecutions")
+	s["Snapshot"] = object(obj{"operation": ref("Operation"), "project": ref("ControllerProject"), "workspaces": array(ref("ControllerWorkspace")), "sandboxes": array(ref("Sandbox")), "nodes": array(ref("Node")), "effects": array(ref("Effect")), "clones": array(ref("CloneExecution")), "pluginExecutions": array(ref("NodeExecution")), "pluginInput": obj{"type": "object", "additionalProperties": true}, "cloneInput": ref("CloneInput")}, "operation", "project", "workspaces", "sandboxes", "nodes", "effects", "clones", "pluginExecutions")
 	s["EmptyClaim"] = object(obj{"operation": obj{"type": "object", "nullable": true, "enum": []any{nil}}}, "operation")
 	s["Access"] = object(obj{"userId": uuid(), "tenantId": uuid(), "workspaceId": uuid(), "allowedAction": enumeration("read", "execute"), "executable": boolean(), "runtimeGeneration": number()}, "userId", "tenantId", "workspaceId", "allowedAction", "executable", "runtimeGeneration")
 	s["IdleRefusal"] = object(obj{"accepted": boolean(), "errorCode": enumeration("resource_in_use")}, "accepted", "errorCode")
-	// Clone requests mirror the transitional Controller DTO: the tagged state carries the terminal
-	// fact, and identities assigned at dispatch are null until a Controller records it.
-	s["CloneState"] = object(obj{"kind": enumeration("pending", "succeeded", "failed"), "path": str(), "commit": str(), "reason": enumeration("sourceUnavailable", "branchNotFound", "destinationConflict", "operationFailed", "interrupted", "unspecified"), "retainedPath": str()}, "kind")
-	cloneProps := fields("operationId createdAt updatedAt")
-	for _, name := range []string{"requestId", "repository", "branch"} {
-		cloneProps[name] = str()
-	}
-	cloneProps["executionId"], cloneProps["nodeId"], cloneProps["state"] = optional(str()), optional(str()), ref("CloneState")
-	s["CloneOperation"] = object(cloneProps, "operationId", "requestId", "repository", "branch", "executionId", "nodeId", "state", "createdAt", "updatedAt")
+	// The clone step's input, frozen from the Binding's current snapshot before a Controller can see
+	// the step and forwarded verbatim: a Git Server repository, a snapshot ref, its commit and the
+	// Workspace's branch there. It names no external repository and no credential.
+	s["CloneInput"] = object(obj{"kind": enumeration("clone"), "repositoryUrl": str(), "snapshotRef": str(), "baseCommit": obj{"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"}, "workspaceRef": str()}, "kind", "repositoryUrl", "snapshotRef", "baseCommit", "workspaceRef")
+	repositorySchemas(s)
 	paths := obj{}
 	for _, r := range router.Routes() {
 		path := r.Path
@@ -384,7 +472,29 @@ func Document() map[string]any {
 		}
 		description := description(r)
 		response, status := responseSchema(r)
-		responses := obj{status: obj{"description": "Successful command or resource response", "content": obj{"application/json": obj{"schema": response}}}}
+		responseDescription := "Successful command or resource response"
+		if status == "501" {
+			// An operation whose documented answer is its own unavailability states the refusal
+			// here instead of calling it a success.
+			responseDescription = errorDescription(status)
+		}
+		responses := obj{status: obj{"description": responseDescription, "content": obj{"application/json": obj{"schema": response}}}}
+		if strings.HasSuffix(r.Path, "/runs/:rid/artifacts/:aidx") {
+			headers := obj{}
+			for name, value := range map[string]string{
+				"Content-Disposition":    "attachment; filename is the safely encoded display-name basename",
+				"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+			} {
+				headers[name] = obj{"description": value, "schema": str()}
+			}
+			responses[status] = obj{
+				"description": "Verified artifact bytes, at most 10 MiB; storage addresses and credentials never reach the browser", "headers": headers,
+				"content": obj{"application/octet-stream": obj{"schema": response}},
+			}
+		}
+		if r.Method == "POST" && strings.HasSuffix(r.Path, "/repository/syncs") {
+			responses["200"] = responses[status]
+		}
 		for _, code := range []string{"400", "401", "403", "404", "409", "428", "500", "503"} {
 			responses[code] = obj{"description": errorDescription(code), "content": obj{"application/json": obj{"schema": ref("Error")}}}
 		}
@@ -392,9 +502,12 @@ func Document() map[string]any {
 		// Restoring the default git identity needs no idempotency record (there is no tenant to scope
 		// one to): an identity that is already the default restores as a no-op, so a retry is safe.
 		credentialWrite := r.Method == "PUT" && strings.HasPrefix(r.Path, "/api/v1/me/model-connections/") && strings.HasSuffix(r.Path, "/credential")
-		if public && (r.Method == "POST" || r.Method == "DELETE" || credentialWrite) && r.Path != "/api/v1/me/git-identity" {
+		if public && (r.Method == "POST" || r.Method == "DELETE" || credentialWrite || personalAgentPath(r.Path) && r.Method == "PUT") && r.Path != "/api/v1/me/git-identity" {
 			keyScope := "Scoped to tenant and user."
-			if strings.HasPrefix(r.Path, "/api/v1/join/") || strings.HasPrefix(r.Path, "/api/v1/me/model-") {
+			// The personal routes are keyed on the verified user alone: a slot mapping is a
+			// (user_id, slot_name) row and a personal connection is the user's, so neither is scoped
+			// to a tenant and saying it is would describe a boundary the handler never checks.
+			if strings.HasPrefix(r.Path, "/api/v1/join/") || strings.HasPrefix(r.Path, "/api/v1/me/model-") || strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") || personalAgentPath(r.Path) {
 				keyScope = "Scoped to the verified user before tenant membership exists."
 			}
 			parameters = append(parameters, obj{"name": "Idempotency-Key", "in": "header", "required": true, "schema": obj{"type": "string", "minLength": 1, "maxLength": 200}, "description": keyScope + " Same key and canonical method/path/body returns the original response before version validation; changed request is 409."})
@@ -419,7 +532,7 @@ func Document() map[string]any {
 				responses[code] = obj{"description": "Archive exceeds limits or cannot be verified/read", "content": obj{"application/json": obj{"schema": ref("Error")}}}
 			}
 		}
-		if r.Method == "GET" && r.Path == router.ThreadPath {
+		if r.Method == "GET" && (r.Path == router.ThreadPath || r.Path == router.TaskConversationPath) {
 			// The Thread read has its own cursor vocabulary and window: `seq` is a decimal
 			// conversation position, not a UUID, and D5 caps the window at 500 rather than the
 			// shared 100. All three parameters are described in full in the operation description.
@@ -476,7 +589,19 @@ func Document() map[string]any {
 			"404": obj{"description": errorDescription("404"), "content": obj{"application/json": obj{"schema": ref("Error")}}},
 		},
 	}}
-	paths["/healthz"] = obj{"get": obj{"operationId": "health", "tags": []string{"health"}, "summary": "PostgreSQL readiness and optional dependency configuration", "responses": obj{"200": obj{"description": "Database reachable", "content": obj{"application/json": obj{"schema": object(obj{"status": enumeration("ok"), "dependencies": object(obj{"objectStore": enumeration("configured", "unconfigured")}, "objectStore")}, "status")}}}, "503": obj{"description": "Database unavailable", "content": obj{"application/json": obj{"schema": ref("Error")}}}}}}
+	paths["/healthz"] = obj{"get": obj{"operationId": "health", "tags": []string{"health"}, "summary": "PostgreSQL readiness and optional dependency configuration", "responses": obj{"200": obj{"description": "Database reachable", "content": obj{"application/json": obj{"schema": object(obj{"status": enumeration("ok"), "dependencies": object(obj{"objectStore": enumeration("configured", "unconfigured"), "gitServer": enumeration("configured", "unconfigured")}, "objectStore", "gitServer")}, "status")}}}, "503": obj{"description": "Database unavailable", "content": obj{"application/json": obj{"schema": ref("Error")}}}}}}
+	paths["/api/v1/tenants/{tid}/issues/{iid}/runs/{rid}/thread/preview/events"] = obj{"get": obj{
+		"operationId": "getThreadPreviewEvents", "tags": []string{"tenants"}, "summary": "Stream ephemeral Thread replacement snapshots", "description": "Bounded optional previews, never durable history. Credentials and active membership are checked before each snapshot; terminal records supersede previews. Disconnect does not stop the Agent.",
+		"parameters": []any{obj{"name": "tid", "in": "path", "required": true, "schema": uuid()}, obj{"name": "iid", "in": "path", "required": true, "schema": uuid()}, obj{"name": "rid", "in": "path", "required": true, "schema": uuid()}},
+		"security":   []any{obj{"serviceCredential": []string{}, "userCredential": []string{}}},
+		"responses": obj{
+			"200": obj{"description": "Replacement snapshot stream", "content": obj{"text/event-stream": obj{"schema": ref("ThreadPreviewSnapshot")}}},
+			"401": obj{"description": errorDescription("401"), "content": obj{"application/json": obj{"schema": ref("Error")}}},
+			"403": obj{"description": errorDescription("403"), "content": obj{"application/json": obj{"schema": ref("Error")}}},
+			"404": obj{"description": errorDescription("404"), "content": obj{"application/json": obj{"schema": ref("Error")}}},
+			"503": obj{"description": errorDescription("503"), "content": obj{"application/json": obj{"schema": ref("Error")}}},
+		},
+	}}
 	return obj{"openapi": "3.0.3", "info": obj{"title": "Ora Cloud phase one", "version": "1.0.0", "description": "Authoritative PostgreSQL core. Simulation is separate; no production Controller/Node/Kubernetes implementation is implied."}, "servers": []any{obj{"url": "http://localhost:8080"}}, "paths": paths, "components": obj{"schemas": s, "securitySchemes": obj{"serviceCredential": obj{"type": "http", "scheme": "bearer", "bearerFormat": "EdDSA JWT", "description": "Pinned issuer/kid/kind=service/role, aud=ora-cloud, exp and iat required, <=5 minute lifetime. Public API requires gateway; internal control requires controller; nodes require scoped node role."}, "userCredential": obj{"type": "apiKey", "in": "header", "name": "X-Ora-User-Token", "description": "Separately signed EdDSA JWT: kind=user, source+sub, caller must equal authenticated service sub, aud=ora-cloud. User and membership status checked in PostgreSQL."}}}}
 }
 
@@ -484,6 +609,12 @@ func Document() map[string]any {
 // provider-scoped token that Issues never parses (Issue collaboration D7), constrained only by the grammar that keeps
 // it safe in a path segment.
 func pathParamSchema(name string) obj {
+	if name == "aidx" {
+		return obj{"type": "integer", "minimum": 0, "maximum": 63, "description": "Registered artifact index within the run"}
+	}
+	if name == "pluginNamespace" || name == "pluginIdentifier" {
+		return obj{"type": "string", "minLength": 1, "maxLength": 150}
+	}
 	if name == "formRef" {
 		return obj{"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9._:@-]+$"}
 	}
@@ -495,16 +626,20 @@ func tag(r router.Route) string {
 	switch {
 	case strings.HasPrefix(r.Path, "/internal/"):
 		return "internal"
+	case strings.Contains(r.Path, "/git-credentials"):
+		return "gitCredentials"
+	case strings.Contains(r.Path, "/projects/:pid/repository"):
+		return "repository"
 	case strings.HasPrefix(r.Path, "/api/v1/me"):
 		return "me"
-	case strings.Contains(r.Path, "/clones"):
-		return "clones"
 	case strings.Contains(r.Path, "/spaces"):
 		return "spaces"
 	case strings.Contains(r.Path, "/workflows"):
 		return "workflows"
 	case strings.Contains(r.Path, "/workspaces"):
 		return "workspaces"
+	case strings.Contains(r.Path, "/scheduled-tasks"):
+		return "scheduledTasks"
 	case strings.Contains(r.Path, "/projects"):
 		return "projects"
 	case strings.Contains(r.Path, "/members"):
@@ -524,17 +659,29 @@ func snapshotFormPath(path string) bool {
 }
 
 func isList(r router.Route) bool {
-	if r.Path == "/api/v1/me/model-connections" || r.Path == router.AgentSessionsPath || r.Path == router.SessionModelCallsPath {
+	if isRepositoryRoute(r) {
+		return repositoryList(r)
+	}
+	if r.Path == "/api/v1/me/model-connections" || r.Path == router.AgentSessionsPath || r.Path == router.SessionModelCallsPath || r.Path == router.WorkflowModelCallsPath || r.Path == "/api/v1/me/executor-slot-mappings" {
 		return r.Method == "GET"
 	}
-	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/clones"))
+	return r.Method == "GET" && (strings.HasSuffix(r.Path, "/tenants") || strings.HasSuffix(r.Path, "/members") || strings.HasSuffix(r.Path, "/projects") || strings.HasSuffix(r.Path, "/workspaces") || strings.HasSuffix(r.Path, "/spaces") || strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/issue-statuses") || strings.HasSuffix(r.Path, "/labels") || strings.HasSuffix(r.Path, "/issue-views") || strings.HasSuffix(r.Path, "/workflows") || strings.HasSuffix(r.Path, "/snapshots") || strings.HasSuffix(r.Path, "/runs") || strings.HasSuffix(r.Path, "/comments") || strings.HasSuffix(r.Path, "/subscribers") || strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests"))
 }
 
 func responseSchema(r router.Route) (schema obj, status string) {
-	if r.Path == router.SessionStatisticsPath {
+	if personalAgentPath(r.Path) {
+		if r.Method == "GET" {
+			return ref("PersonalAgentConfigurationContext"), "200"
+		}
+		return object(obj{"resource": ref("PersonalAgentConfiguration")}, "resource"), "200"
+	}
+	if isRepositoryRoute(r) {
+		return repositoryResponse(r)
+	}
+	if r.Path == router.SessionStatisticsPath || r.Path == router.WorkflowStatisticsPath {
 		return ref("SessionModelStatistics"), "200"
 	}
-	if r.Path == router.SessionModelCallsPath {
+	if r.Path == router.SessionModelCallsPath || r.Path == router.WorkflowModelCallsPath {
 		return object(obj{"items": array(ref("SessionModelAttempt")), "nextCursor": str()}, "items", "nextCursor"), "200"
 	}
 	if r.Path == router.AgentSessionsPath {
@@ -558,6 +705,12 @@ func responseSchema(r router.Route) (schema obj, status string) {
 			status = "201"
 		}
 		return object(obj{"resource": ref("ModelConnection")}, "resource"), status
+	}
+	if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+		if isList(r) {
+			return object(obj{"items": array(ref("SlotMapping")), "nextCursor": str()}, "items", "nextCursor"), "200"
+		}
+		return object(obj{"resource": ref("SlotMapping")}, "resource"), "200"
 	}
 	if r.Path == "/api/v1/me/git-identity" {
 		return ref("GitIdentity"), "200"
@@ -583,6 +736,21 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		default:
 			return ref("Operation"), "200"
 		}
+	}
+	if strings.Contains(r.Path, "/scheduled-tasks") {
+		if strings.HasSuffix(r.Path, "/history") {
+			return ref("ScheduledTaskHistory"), "200"
+		}
+		if r.Method == "GET" && strings.HasSuffix(r.Path, "/scheduled-tasks") {
+			return ref("ScheduledTaskList"), "200"
+		}
+		if r.Method == "GET" {
+			return ref("ScheduledTask"), "200"
+		}
+		if r.Method == "DELETE" {
+			return object(obj{"taskId": uuid()}, "taskId"), "200"
+		}
+		return object(obj{"resource": ref("ScheduledTask")}, "resource"), "200"
 	}
 	if r.Path == "/api/v1/tenants/:tid/people" {
 		return object(obj{"items": array(ref("DirectoryPerson"))}, "items"), "200"
@@ -709,6 +877,19 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		if strings.HasSuffix(r.Path, "/restore") {
 			return ref("Workflow"), "200"
 		}
+		if strings.HasSuffix(r.Path, "/resume") {
+			// The run-resume request has no success representation in this phase: every valid
+			// request is refused with the named 501, so that refusal is the operation's only
+			// response instead of a success arm no caller can obtain. The arm must come before
+			// /runs for the same reason the core dispatcher matches it first.
+			return ref("Error"), "501"
+		}
+		if strings.HasSuffix(r.Path, "/cancel") {
+			// The workflow-run cancellation request answers the recorded instant, exactly like the
+			// IssueRun request; the branch must come before the /runs arm for the same reason the
+			// core dispatcher matches it first.
+			return object(obj{"cancelRequestedAt": timestamp()}, "cancelRequestedAt"), "202"
+		}
 		if strings.Contains(r.Path, "/runs") {
 			// Workflow runs branch before snapshots/detail: the run paths carry no `:snapshotId`
 			// and must not be read as Workflow resources.
@@ -748,12 +929,24 @@ func responseSchema(r router.Route) (schema obj, status string) {
 		// Appending a user turn returns the entry it created, not the run: the caller already has
 		// the run and the message is the new resource.
 		return object(obj{"resource": ref("ThreadEntry")}, "resource"), "201"
+	case strings.HasSuffix(r.Path, "/conversation/messages"):
+		return object(obj{"resource": ref("TaskConversationMessage")}, "resource"), "201"
+	case strings.Contains(r.Path, "/conversation/messages/") && (strings.HasSuffix(r.Path, "/cancel") || strings.HasSuffix(r.Path, "/retry")):
+		return object(obj{"resource": ref("TaskConversationMessage")}, "resource"), "200"
+	case strings.HasSuffix(r.Path, "/conversation/resume"), strings.HasSuffix(r.Path, "/conversation/discard"):
+		return object(obj{"acknowledgedRunId": uuid()}, "acknowledgedRunId"), "200"
+	case strings.HasSuffix(r.Path, "/conversation/stop"):
+		return object(obj{"runId": uuid(), "state": enumeration("stopping")}, "runId", "state"), "202"
+	case strings.HasSuffix(r.Path, "/conversation"):
+		return object(obj{"items": array(ref("TaskConversationMessage")), "nextCursor": optional(obj{"type": "integer", "format": "int64"}), "prevCursor": optional(obj{"type": "integer", "format": "int64"}), "activeRunId": optional(uuid()), "pausedRunId": optional(uuid()), "blockedRunId": optional(uuid()), "canStop": boolean(), "agentReadiness": array(ref("TaskAgentReadiness"))}, "items", "nextCursor", "prevCursor"), "200"
 	case strings.HasSuffix(r.Path, "/thread/end"):
 		// Ending a Thread returns the Thread's new state, not a resource: the endpoint creates
 		// nothing to point at, and the caller's next move is to watch `threadState` reach `ended`.
 		// 202 because the request is accepted for asynchronous shutdown — the session is asked to
 		// stop, it has not stopped.
 		return object(obj{"threadState": enumeration("ending")}, "threadState"), "202"
+	case strings.HasSuffix(r.Path, "/thread/preview"):
+		return ref("ThreadPreviewSnapshot"), "200"
 	case strings.HasSuffix(r.Path, "/thread"):
 		// Reading a Thread returns one ascending-by-seq window of entries plus the run's Thread
 		// state and idle instant, all from one snapshot. `threadState` and `idleSince` are projected
@@ -771,6 +964,12 @@ func responseSchema(r router.Route) (schema obj, status string) {
 			"nextCursor":      obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's last seq, to be sent back as `after`. Null for an empty window."},
 			"prevCursor":      obj{"type": "integer", "format": "int64", "nullable": true, "description": "The window's first seq, to be sent back as `before`. Null for an empty window."},
 		}, "items", "threadState", "idleSince", "nextCursor", "prevCursor", "initiatorUserId", "model", "canAppend", "canEnd"), "200"
+	case strings.HasSuffix(r.Path, "/runs/:rid/cancel"):
+		return object(obj{"cancelRequestedAt": timestamp()}, "cancelRequestedAt"), "202"
+	case strings.HasSuffix(r.Path, "/runs/:rid/artifacts/:aidx"):
+		return obj{"type": "string", "format": "binary"}, "200"
+	case strings.HasSuffix(r.Path, "/runs/:rid/artifacts"):
+		return ref("ScheduledArtifactList"), "200"
 	case strings.Contains(r.Path, "/runs"):
 		if r.Method == "GET" && strings.HasSuffix(r.Path, "/runs") {
 			return object(obj{"items": array(ref("IssueRun")), "nextCursor": str()}, "items", "nextCursor"), "200"
@@ -795,15 +994,6 @@ func responseSchema(r router.Route) (schema obj, status string) {
 			return object(obj{"items": array(ref("Issue")), "nextCursor": str()}, "items", "nextCursor"), "200"
 		}
 		return ref("Issue"), "200"
-	case strings.Contains(r.Path, "/clones"):
-		switch {
-		case isList(r):
-			return object(obj{"items": array(ref("CloneOperation")), "nextCursor": str()}, "items", "nextCursor"), "200"
-		case r.Method == "GET":
-			return ref("CloneOperation"), "200"
-		default:
-			return ref("CloneOperation"), "202"
-		}
 	case r.Path == "/api/v1/tenants" && r.Method == "POST":
 		return ref("TenantCreated"), "201"
 	}
@@ -864,6 +1054,19 @@ func responseSchema(r router.Route) (schema obj, status string) {
 }
 
 func optionalField(name string, r router.Route) bool {
+	if personalAgentPath(r.Path) {
+		return name == "connectionId" || name == "modelId"
+	}
+	if isRepositoryRoute(r) {
+		return repositoryOptional(name, r)
+	}
+	if strings.Contains(r.Path, "/scheduled-tasks") {
+		// A disabled create is a draft and therefore carries no unattended consent. Enable accepts
+		// approval only when a prior revoke cleared it, while an already-consented task can be
+		// enabled without re-sending the historical grant. Model selection is optional and falls
+		// back to the creator's current default when omitted.
+		return name == "enabled" || name == "approval" || name == "model" || (r.Method == "PATCH" && name != "version")
+	}
 	if strings.HasPrefix(r.Path, "/api/v1/me/model-") {
 		return name == "enabled"
 	}
@@ -891,11 +1094,17 @@ func optionalField(name string, r router.Route) bool {
 	case "values":
 		// Confirm must state what it is confirming; assist may be asked with a still-empty form.
 		return strings.HasSuffix(r.Path, "/assist")
+	case "mode":
+		// Resume defaults to keep: an omitted mode and an explicit keep ask for the same thing.
+		return strings.Contains(r.Path, "/workflows") && strings.HasSuffix(r.Path, "/resume")
 	}
 	return name == "version" && r.Method == "POST" && strings.HasSuffix(r.Path, "/plugins") || name == "credentialRefId" || name == "role" && strings.HasSuffix(r.Path, "/members/huawei") || name == "version" && r.Method == "PUT" || name == "epoch" && r.Action == "access" || name == "workspaceId" && r.Action == "plan" || name == "externalId" && r.Action == "effect_result"
 }
 
 func inputSchema(name string, r router.Route) obj {
+	if schema, ok := repositoryInput(name); ok && isRepositoryRoute(r) {
+		return schema
+	}
 	switch name {
 	case "models":
 		return array(ref("ModelDefinition"))
@@ -911,13 +1120,22 @@ func inputSchema(name string, r router.Route) obj {
 		return obj{"type": "string", "minLength": 1, "maxLength": 8192, "writeOnly": true, "description": "Handled exclusively by model-gateway; never returned or sent to Cloud HTTP."}
 	case "modelId":
 		return obj{"type": "string", "minLength": 1, "maxLength": 500}
-	case "version", "epoch", "admissionEpoch":
+	case "version", "revision", "selectionVersion", "epoch", "admissionEpoch":
 		return obj{"type": "integer", "format": "int64", "minimum": 0}
+	case "declarationFingerprint":
+		return obj{"type": "string", "pattern": "^[a-f0-9]{64}$"}
+	case "settings":
+		return obj{"type": "object", "additionalProperties": obj{"oneOf": []any{str(), obj{"type": "number"}, boolean()}}}
 	case "retrySeconds":
 		return obj{"type": "integer", "minimum": 1, "maximum": 3600}
+	case "mode":
+		// The closed set the run-resume contract defines; the endpoint validates it now even
+		// though every accepted value ends in the same named 501. An absent mode means `keep`;
+		// a present value outside this set is the route's own invalid_field_value.
+		return enumeration("keep", "node_files", "checkpoint")
 	case "protocolVersion":
 		return obj{"type": "integer", "enum": []int{1}}
-	case "initialized", "idle", "impactConfirmed":
+	case "initialized", "idle", "impactConfirmed", "acknowledgeLostWork":
 		return boolean()
 	case "result":
 		return ref("EffectResult")
@@ -956,8 +1174,16 @@ func inputSchema(name string, r router.Route) obj {
 		return uuid()
 	case "category":
 		return enumeration("unstarted", "started", "done", "closed")
-	case "labelId", "userId", "assigneeId", "executorId", "refId", "parentId", "projectRef", "targetId":
+	case "labelId", "userId", "assigneeId", "executorId", "refId", "parentId", "projectRef", "targetId", "agentId", "runId", "issueId":
 		return uuid()
+	case "schedule":
+		return ref("ScheduledTaskSchedule")
+	case "approval":
+		return ref("ScheduledTaskApproval")
+	case "timezone":
+		return obj{"type": "string", "minLength": 1, "maxLength": 64, "description": "IANA timezone name the schedule evaluates in (e.g. Asia/Shanghai)."}
+	case "projectId":
+		return obj{"type": "string", "format": "uuid", "description": "The Project the run's Workspace provisions in. Required: a run that names none is refused with 409 workflow_run_project_required, never persisted without one. Frozen at creation for the run's whole lifetime. Authorized against the caller's own collaboration space: an unknown, archived or foreign Project is 404."}
 	case "ids":
 		return array(uuid())
 	case "filter", "properties", "input", "values", "graph":
@@ -992,11 +1218,20 @@ func summary(r router.Route) string {
 }
 
 func description(r router.Route) string {
+	if isRepositoryRoute(r) {
+		return repositoryDescription(r)
+	}
 	if r.Path == router.SessionStatisticsPath {
 		return "Read-only active-member model statistics for an Agent run. Covers all recorded model-gateway HTTP attempts, independently of archive availability or request-page pagination. This is not a historical request backfill or billing ledger. Each metric exposes its own known/total coverage; absent values remain null, including a run with no observations. Input/cache semantics follow the source protocol; reasoning is an output subset. No query parameters accepted; private, no-store."
 	}
 	if r.Path == router.SessionModelCallsPath {
 		return "Read-only active-member content-free model HTTP attempts for an Agent run, ascending (startedAt, id). after must identify an attempt in this run. Only singleton nonempty limit and after parameters accepted. Request/response bodies, credentials, headers, provider messages and storage paths are never returned. firstOutputMs measures the gateway-observed first effective output, not model TTFT. A started attempt may represent an ongoing request or missing final observation. private, no-store."
+	}
+	if r.Path == router.WorkflowStatisticsPath {
+		return "Read-only active-member model statistics for a WorkflowRun. Covers all recorded model-gateway HTTP attempts owned by this WorkflowRun, independently of request-page pagination. The run must belong to the named workflow and be live; any active tenant member who can read the run can read its statistics. This is not a historical request backfill or billing ledger. Each metric exposes its own known/total coverage; absent values remain null, including a run with no observations. Input/cache semantics follow the source protocol; reasoning is an output subset. No query parameters accepted; private, no-store."
+	}
+	if r.Path == router.WorkflowModelCallsPath {
+		return "Read-only active-member content-free model HTTP attempts for a WorkflowRun, ascending (startedAt, id). after must identify an attempt owned by this run. Only singleton nonempty limit and after parameters accepted. Request/response bodies, credentials, headers, provider messages and storage paths are never returned. firstOutputMs measures the gateway-observed first effective output, not model TTFT. A started attempt may represent an ongoing request or missing final observation. private, no-store."
 	}
 	if r.Path == router.AgentSessionsPath {
 		return "Read-only active-member session index. Agent IssueRuns only, newest (createdAt, id) first. Filters: projectId, exact agent plugin identifier, status, inclusive from and exclusive to RFC3339 instants. after must identify an accessible Agent run in this tenant. No log bodies or model credentials are included. Unknown, empty or repeated query parameters are rejected."
@@ -1012,6 +1247,9 @@ func description(r router.Route) string {
 	}
 	if r.Path == "/api/v1/me/model-default" {
 		return "Reads or selects the verified user's default connection and model. An unset default has empty connectionId/modelId and version 0; replacing a selection requires its current version. The connection must be owned, enabled and contain the selected model. OpenCode run creation requires a usable default and credential and rejects atomically with model_default_required, model_credential_required or model_connection_unavailable before the comment/run persists."
+	}
+	if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+		return "Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0)."
 	}
 	switch r.Path {
 	case "/api/v1/me/spaces":
@@ -1047,13 +1285,13 @@ func description(r router.Route) string {
 	case "lease_acquire", "lease_renew", "lease_release":
 		return "Controller subject is holderId. Global lease lasts 30 seconds using PostgreSQL clock_timestamp(); renew every 10 seconds. Expired acquisition increments epoch, active same-holder acquisition returns current lease. Release and renew require exact live holder+epoch."
 	case "claim":
-		return base + "Claims queued/due retry/any running operation; reclaiming with the same epoch increments the operation version and fences stale in-memory workers. Returns a full scoped recovery snapshot. Reconcile every existing effect with Substrate by stable ID before planning or advancing. No automatic prompt replay."
+		return base + "Claims queued/due retry/any running operation; reclaiming with the same epoch increments the operation version and fences stale in-memory workers. Returns a full scoped recovery snapshot. Reconcile every existing effect with Substrate by stable ID before planning or advancing. No automatic prompt replay. A clone step is handed out only with its cloneInput, frozen once per operation from the Project's current Binding snapshot; without a snapshot the operation is parked as retry_wait snapshot_not_ready while the Binding's latest sync is unfinished, fails as repository_sync_failed once it ended unsuccessfully, and is blocked as git_server_unconfigured without a Git Server. delete_project is not handed out to quiesce while a sync or publish of the Project is unfinished (retry_wait repository_operation_running). A parked operation never empties the claim: the next claimable one is returned."
 	case "plan":
 		return base + "Only the effect kind appropriate to the current step is allowed. Scope is restricted to operation workspaces. Plan persists BEFORE dispatch; sandbox plan atomically increments generation and allocates a unique live instance. Old instance must be confirmed terminated. Same plan returns the same effect ID."
 	case "effect_result":
 		return base + "Reports/reconciles one scoped external effect. External ID cannot change; succeeded evidence is immutable. absent is allowed only for a planned effect. Sandbox success requires its preallocated instance ID and the nodeId its Node will present; termination requires terminated; Workspace data deletion requires removed. This endpoint trusts the authenticated controller's Substrate observation, not client-supplied status."
 	case "advance":
-		return base + "Derives the next step server-side. Requires current-epoch successful effects. Create goes sandbox, node, clone; start goes sandbox, node. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. The clone step requires the operation's latest clone execution (registered over gRPC) to have succeeded on the current Node; it records the baseline commit and commits Workspace Ready/admission with operation success, re-checking the fresh initialized current Node. start commits the same readiness at its node step. Workspace data deletion is planned and completed only after termination confirmation."
+		return base + "Derives the next step server-side. Requires current-epoch successful effects. Create goes sandbox, node, clone; start goes sandbox, node. quiesce requires all tickets finished and fresh exact-epoch idle proof from each live Node. Entering the clone step freezes its cloneInput, or parks or fails the operation as claim does. The clone step requires the operation's latest clone execution (registered over gRPC with exactly the frozen input) to have succeeded on the current Node with exactly the input's baseCommit; it records that commit as the baseline and commits Workspace Ready/admission with operation success, re-checking the fresh initialized current Node. start commits the same readiness at its node step. Workspace data deletion is planned and completed only after termination confirmation."
 	case "defer":
 		return base + "Preserves operation/effect/resource references and current step; sets blocked or retry_wait with bounded retry delay. Never reports cleanup success on timeout."
 	case "node_register", "node_status", "node_idle", "node_finish":
@@ -1080,18 +1318,35 @@ func description(r router.Route) string {
 	if r.Path == "/api/v1/tenants" && r.Method == "POST" {
 		base = "Public requests require a gateway service credential plus a caller-bound user credential. The verified identity authorizes self-service provisioning without prior membership. Atomically creates a tenant and its sole visible collaboration space with the same name and the given globally unique, immutable slug; the caller becomes its first administrator. The idempotency key is matched per user across tenants and recorded under the new tenant. "
 	}
-	if strings.Contains(r.Path, "/clones") {
-		base += "Unscoped clone submission is retired in production and returns 410 runtime_scope_required; existing requests remain readable by their original submitter. An explicit development store can exercise the legacy coordination fixture without enabling a production bypass. requestId is the caller's durable request identity: repeating it with the same repository and branch returns the original request, a different input is 409 idempotency_conflict. repository must be an https or ssh URL the Controller can clone; branch is a short branch name, never HEAD. executionId and nodeId are null until a dispatch is recorded; a pending state means awaiting reconciliation, never failure. "
-	}
 	if strings.HasSuffix(r.Path, "/thread/messages") {
 		// The Thread POST's own fault vocabulary. It is stated here rather than added to the shared
 		// per-status descriptions, which every unrelated route also carries.
-		base += "Appends one user turn to an agent run's Thread and returns the entry that was created, with the Cloud-generated turnId the Node will echo back. Authorized like a comment: any active tenant member who can read the Issue. content accepts text blocks only and their total text must not exceed 64 KiB, otherwise 400 content_too_large; an unrecognized block type is 400 invalid_field_type, never a silent drop. Accepted while the Thread is pending, active or idle and no cancellation has been requested; a Thread that is ending or ended, and a run whose cancellation request is already recorded, both answer 409 thread_closed — a turn accepted after a cancellation would be persisted and never executed. The entry and the delivery command for it commit together with the idempotency record, so a failure anywhere in that transaction leaves nothing behind and the same key may be retried as a first request. A missing or mismatched tenant, Issue or run is 404 not_found. "
+		base += "Appends one user turn to an agent run's Thread and returns the entry that was created, with the Cloud-generated turnId the Node will echo back. Authorized like a comment: any active tenant member who can read the Issue. content accepts text blocks only and their total text must not exceed 64 KiB, otherwise 400 content_too_large; an unrecognized block type is 400 invalid_field_type, never a silent drop. Accepted while the Thread is pending, active or idle and no cancellation has been requested; a Thread that is ending or ended, and a run whose cancellation request is already recorded, both answer 409 thread_closed — a turn accepted after a cancellation would be persisted and never executed. Task handoff barriers also apply to this endpoint: a waiting message for another Agent or initiator returns 409 task_handoff_pending, and a persisted task pause or earlier failed task message returns 409 task_paused. Neither rejection creates a Thread entry or command; later input must use the task conversation queue. The entry and the delivery command for it commit together with the idempotency record, so a failure anywhere in that transaction leaves nothing behind and the same key may be retried as a first request. A missing or mismatched tenant, Issue or run is 404 not_found. "
+	}
+	if r.Method == "POST" && strings.Contains(r.Path, "/issues/") && strings.HasSuffix(r.Path, "/runs") {
+		base += "Real Space Agent starts share task admission with conversation input. A persisted task pause or unresolved failed task message returns 409 task_paused; an accepted waiting task message returns 409 task_handoff_pending. Rejected starts create no Run and do not consume the pending-executor slot. The dispatcher rechecks task ordering, prior results and confirmed release before provisioning. "
 	}
 	if strings.HasSuffix(r.Path, "/thread/end") {
 		// The user-initiated end's own fault vocabulary, stated here rather than in the shared
 		// per-status descriptions that unrelated routes also carry.
 		base += "Ends an agent run's Thread at the user's request, which is what makes the Thread's upper lifecycle reachable from the UI rather than only from an expired idle window or a cancellation. The body is an empty JSON object and any field is 400 unknown_field. Accepted while the Thread is pending, active or idle, answering 202 with the Thread's new state ending; a Thread already ending or ended answers 409 thread_closed. The transition and the EndSession command it releases commit together with the idempotency record, so a failure anywhere in that transaction leaves nothing behind and the same key may be retried as a first request. This endpoint never advances the Thread to ended, never marks a queued turn discarded and never touches the run's phase, status, result or Workspace: ending a Thread asks the session to stop and the session's own terminal state decides what follows. Authorized like a comment: any active tenant member who can read the Issue; a missing or mismatched tenant, Issue or run, a soft-deleted run, a run that is not an agent run, and a run whose session has not been declared yet are all 404 not_found. "
+	}
+	if strings.HasSuffix(r.Path, "/runs/:rid/cancel") && !strings.Contains(r.Path, "/workflows") {
+		// The cancellation request's own fault vocabulary, stated here rather than in the shared
+		// per-status descriptions that unrelated routes also carry. The path is spelled out because
+		// the task-conversation message cancel also ends in `/cancel` and has its own contract.
+		base += "Records the user's cancellation request on a live agent run and answers 202 with the instant it was recorded, so the run page can show that a cancellation is pending. The body is an empty JSON object and any field is 400 unknown_field. Cancellation is a request and not a transition: this endpoint never moves the run's phase, status, Thread or Workspace, never settles a Revision and never deletes anything — the run's session shuts down on its own evidence, its Thread reaches ending on the next reconciliation, and delivery and release proceed as they otherwise would. Accepted for a run that is queued, or in provisioning, starting or running; a run that has already left those phases answers 409 run_not_cancellable, because its session is over and what remains is delivery and release rather than a live conversation. Repeating the request is a no-op that returns the instant the first one recorded, whether or not the run has since moved on, so the recorded instant is never replaced. Authorized like ending the Thread, except that on a run carrying a model Binding only that Binding's initiator and the tenant's administrators may cancel: an active tenant member who is neither answers 403 model_run_cancel_forbidden. A missing or mismatched tenant, Issue or run, a soft-deleted run, and a run that is not an agent run are all 404 not_found. "
+	}
+	if strings.HasSuffix(r.Path, "/runs/:rid/cancel") && strings.Contains(r.Path, "/workflows") {
+		// The WorkflowRun cancellation request's own contract. It is separate from the IssueRun
+		// request above because the run kinds differ in what a request means and who may make one.
+		base += "Records the user's cancellation request on a live workflow run and answers 202 with the instant it was recorded, so the run page can show that a cancellation is pending. The body is an empty JSON object and any field is 400 unknown_field. Cancellation is a request and not a transition: this endpoint never changes the run's status or node states and never touches its session or Workspace — the Cloud-side scheduler reacts on its next pass, settling the run cancelled without dispatching another node, stopping an in-flight session through the existing EndSession relay within the same bounded confirmation window an idle session gets, and declaring the Workspace deletion (see the workflow scheduling documentation). Accepted only while the run is pending or running; any other status answers 409 run_not_cancellable. Repeating the request is a no-op that returns the instant the first one recorded, whether or not the run has since settled, so the recorded instant is never replaced. Authorized for the run's initiator and the tenant's administrators on a run carrying frozen executor bindings; an active tenant member who is neither answers 403 workflow_run_cancel_forbidden. A missing or mismatched tenant, workflow or run, and a soft-deleted run are all 404 not_found. "
+	}
+	if strings.HasSuffix(r.Path, "/runs/:rid/resume") && strings.Contains(r.Path, "/workflows") {
+		// The run-resume contract is registered before its implementation exists. This paragraph
+		// states the whole request vocabulary now so a client can integrate against the final
+		// shape and can tell "not available" apart from "wrong path".
+		base += "Resumes a terminal failed workflow run inside the same run identity. The route is registered against its final request contract, but no resume mode can run in this phase: every valid request answers 501 workflow_run_resume_unavailable, changes no run, node or Workspace state, and records no idempotency entry, so repeating the request returns the same refusal instead of a replay. mode selects how much Workspace state rolls back — keep (the default when omitted), node_files or checkpoint — and any other value is 400 invalid_field_value; the body carries only mode, and any other field is 400 unknown_field. Authorization is exactly the cancellation request's: the run's initiator and the tenant's administrators on a run carrying frozen executor bindings, and an active tenant member who is neither answers 403 workflow_run_resume_forbidden. A missing or mismatched tenant, workflow or run, and a soft-deleted run are all 404 not_found. "
 	}
 	if strings.HasSuffix(r.Path, "/thread") {
 		// The Thread GET's own fault vocabulary and cursor semantics, stated here rather than in the
@@ -1118,10 +1373,10 @@ func description(r router.Route) string {
 		base += "Requires matching resource version and no active project operation. Atomically closes new execution admission. Active tickets return 409 resource_in_use without changing admission. Unknown Node activity requires later proof and remains pending/blocked. main Workspace cannot be independently deleted. "
 	}
 	if strings.HasSuffix(r.Path, "/projects") && r.Method == "POST" {
-		base += "Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl allows HTTPS or SSH with no password/query/fragment. defaultBranch is required and must name a branch, not HEAD (Cloud never reads the remote repository); credentialRefId must belong to tenant and owner. Sandbox, Node and clone initialization is asynchronous. "
+		base += "Creates Project/main Workspace/operation atomically in the tenant's sole collaboration space. repositoryUrl must be HTTPS with no user information, query or fragment; it becomes the Project's Binding together with defaultBranch, the one branch phase one synchronizes (required, a branch name, not HEAD). credentialRefId is optional (public repositories need none); a personal credential may be bound only by its owner and a team one only by an admin, and it must be stored, available and scoped to the repository. The same transaction records the first sync, which must succeed before any Workspace can clone. Sandbox, Node and clone initialization is asynchronous; the main Workspace clones the Binding's first snapshot and waits for it. "
 	}
 	if strings.HasSuffix(r.Path, "/workspaces") && r.Method == "POST" {
-		base += "Creates one isolated Workspace and Task display identity. title/baseRef required; baseRef becomes the Workspace's requestedRef, which its Node clones; HEAD means the Project's defaultBranch. "
+		base += "Creates one isolated Workspace and Task display identity. title is required. The Workspace clones the Project's current snapshot of its Binding branch: baseRef may be omitted, empty, HEAD or that branch, and any other value is 400 base_ref_not_synced with nothing recorded. The branch becomes the Workspace's requestedRef, the short name of its Git Server branch refs/heads/workspaces/<workspaceId>/<requestedRef>. "
 	}
 	pagination := "Lists use ascending UUID pagination."
 	if r.Path == "/api/v1/me/tenants" {
@@ -1146,6 +1401,8 @@ func errorDescription(code string) string {
 		return "Version/idempotency conflict, resource_in_use, closed admission, stale epoch/Node/sandbox, incomplete effect, invalid transition, unconfirmed termination/idle, last_admin, space_last_owner, space_slug_conflict, or default_space_protected"
 	case "428":
 		return "Version precondition required"
+	case "501":
+		return "The request is valid but the operation is not available in this deployment (e.g. workflow_run_resume_unavailable)"
 	case "503":
 		return "External capability not wired in this deployment (a port is Unavailable), e.g. form_descriptor_unavailable or assist_unavailable"
 	default:

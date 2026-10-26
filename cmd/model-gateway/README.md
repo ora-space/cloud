@@ -16,6 +16,6 @@
 | `MODEL_GATEWAY_MASTER_KEY_FILE` / `MASTER_KEY_ID` | `/etc/ora-model-secrets/master-key` / `v1` |
 
 `-healthcheck` 正常验证 HTTPS 和公开 CA，只检查数据库就绪，不读取用户 Key 或主密钥。
-仅独立开发验收可以同时配置 `MODEL_GATEWAY_DEVELOPMENT=true` 和精确的
-`MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS`；生产默认不允许私网模型服务。
-运行包测试、Cloud 的 `task check`、`task test:race` 及 `task build`；真实 CLI 验收见 cluster M4。
+public 模式的私网 fixture 例外需同时设置 `MODEL_GATEWAY_DEVELOPMENT=true` 和精确的
+`MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS`；enterprise 模式按部署目标准入。
+出网文件与 DNS 配置见 [共享出网配置](../../docs/operations/deployment-egress.md)，内部实现与测试见 [modelgateway](../../internal/modelgateway/README.md)。

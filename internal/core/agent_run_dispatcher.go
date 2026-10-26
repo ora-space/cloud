@@ -9,6 +9,41 @@ import (
 // without starving; runs beyond the bound are claimed on the next tick.
 const agentDispatchBatchSize = 100
 
+// Every Agent claim path uses the same issue-scoped admission predicate. It bars a newer run
+// behind earlier queued work, any run that still owns execution or cleanup, and a previous failure
+// requiring explicit recovery. A business terminal status is insufficient: a residual Workspace
+// can remain after release gave up, and a delivery failure must not silently restore older work.
+const agentRunTaskClaimGuard = `
+	AND NOT EXISTS (SELECT 1 FROM task_conversations paused WHERE paused.issue_id=ir.issue_id AND paused.paused_run_id IS NOT NULL)
+	AND NOT EXISTS (SELECT 1 FROM task_conversation_messages m WHERE m.issue_id=ir.issue_id AND m.state='failed')
+	AND NOT EXISTS (
+	  SELECT 1 FROM issue_runs peer
+	  WHERE peer.issue_id=ir.issue_id AND peer.id<>ir.id
+	    AND peer.executor_type='agent' AND peer.deleted_at IS NULL
+	    AND (
+	      peer.status IN ('dispatched','running')
+	      OR (peer.phase IS NOT NULL AND peer.phase<>'done')
+	      OR ((peer.created_at,peer.id)<(ir.created_at,ir.id) AND (
+	        peer.status IN ('queued','deferred')
+	        OR (peer.status IN ('failed','cancelled') AND NOT EXISTS (
+	          SELECT 1 FROM task_conversations c
+	          JOIN issue_runs acknowledged ON acknowledged.id=c.acknowledged_run_id
+	          WHERE c.issue_id=ir.issue_id
+	            AND (peer.created_at,peer.id)<=(acknowledged.created_at,acknowledged.id)
+	        ))
+	        OR (peer.result->>'deliveryState' IN ('failed','skipped') AND NOT EXISTS (
+	          SELECT 1 FROM task_conversations c
+	          JOIN issue_runs acknowledged ON acknowledged.id=c.acknowledged_run_id
+	          WHERE c.issue_id=ir.issue_id
+	            AND (peer.created_at,peer.id)<=(acknowledged.created_at,acknowledged.id)
+	        ))
+	        OR (peer.workspace_id IS NOT NULL AND EXISTS (
+	          SELECT 1 FROM workspaces w WHERE w.id=peer.workspace_id AND w.deleted_at IS NULL
+	        ))
+	      ))
+	    )
+	)`
+
 // AgentRunDispatcher is the B-side Claim owner of a queued real Space Agent IssueRun (IssueRun D6,
 // B→A). It runs one short claim transaction that re-validates the run is claimable and then hands the
 // run to the control plane's own in-transaction create seam, advancing the run only when that seam
@@ -61,7 +96,7 @@ func (d *AgentRunDispatcher) Dispatch(ctx context.Context, runID string) error {
 			  AND ir.deleted_at IS NULL
 			  AND EXISTS (
 			    SELECT 1 FROM space_agents sa WHERE sa.id = ir.executor_id AND sa.tenant_id = ir.tenant_id
-			  )`, runID)
+			  )`+agentRunTaskClaimGuard, runID)
 		if o == nil {
 			// Not a claimable real Space Agent run: leave it untouched, no Workspace, no transition.
 			return Object{}
@@ -92,7 +127,7 @@ func (s *Store) scanQueuedAgentRuns(ctx context.Context, limit int) ([]string, e
 		  AND ir.status = 'queued'
 		  AND ir.phase IS NULL
 		  AND ir.deleted_at IS NULL
-		  AND EXISTS (SELECT 1 FROM space_agents sa WHERE sa.id = ir.executor_id AND sa.tenant_id = ir.tenant_id)
+		  AND EXISTS (SELECT 1 FROM space_agents sa WHERE sa.id = ir.executor_id AND sa.tenant_id = ir.tenant_id)`+agentRunTaskClaimGuard+`
 		ORDER BY ir.created_at, ir.id
 		LIMIT $1`, limit)
 	if err != nil {
@@ -118,6 +153,9 @@ func (s *Store) scanQueuedAgentRuns(ctx context.Context, limit int) ([]string, e
 func (s *Store) DispatchQueuedAgentRunsOnce(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if err := s.DispatchTaskConversationsOnce(ctx); err != nil {
+		return err
 	}
 	ids, err := s.scanQueuedAgentRuns(ctx, agentDispatchBatchSize)
 	if err != nil {

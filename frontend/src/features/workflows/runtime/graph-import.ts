@@ -302,6 +302,11 @@ function toDefinitionInputNode(node: Node, data: WorkflowNodeData): WorkflowDefi
     position: { x: node.position.x, y: node.position.y },
     data,
   }
+  if (typeof node.parentId === 'string') input.parentId = node.parentId
+  if (typeof node.initialWidth === 'number' && Number.isFinite(node.initialWidth))
+    input.initialWidth = node.initialWidth
+  if (typeof node.initialHeight === 'number' && Number.isFinite(node.initialHeight))
+    input.initialHeight = node.initialHeight
   if (node.type !== undefined) {
     input.type = node.type
   }

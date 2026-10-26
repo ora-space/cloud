@@ -42,3 +42,11 @@ func deliverySettled(t *transaction, run, execution string, settled Object) {
 		}
 	}
 }
+
+func scheduledArtifactsSettled(t *transaction, run, execution string, settled Object) {
+	if t.onScheduledArtifactsSettled != nil {
+		if err := t.onScheduledArtifactsSettled(t.ctx, t.tx, run, execution, settled); err != nil {
+			reject(409, "business_hook_failed")
+		}
+	}
+}

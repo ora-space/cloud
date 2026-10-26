@@ -160,12 +160,15 @@ export function threadPollInterval(snapshot: ThreadSnapshot | undefined): number
  * (poll, space event, mutation) fetches only entries after the cached window,
  * so an entry is never duplicated and a concurrent append is never skipped.
  */
-export function useThread(ref: ThreadRef) {
+export function useThread(ref: ThreadRef, runSettled = false) {
   const queryClient = useQueryClient()
   return useQuery({
     queryKey: threadQueryKey(ref),
     queryFn: ({ signal }) => readThread(ref, queryClient, signal),
-    refetchInterval: (query) => threadPollInterval(query.state.data),
+    refetchInterval: (query) =>
+      runSettled && query.state.data?.declared === false
+        ? false
+        : threadPollInterval(query.state.data),
   })
 }
 
@@ -238,6 +241,8 @@ export function useEndThread(ref: ThreadRef) {
 
 const SEND_FAULTS: Record<string, string> = {
   thread_closed: '会话已结束，无法继续发送',
+  task_handoff_pending: '正在等待 Agent 交接，请在任务对话中发送后续消息',
+  task_paused: '任务已暂停，请先在任务对话中处理暂停或失败的消息',
   content_too_large: '消息过长',
   forbidden: '没有发送此消息的权限',
   model_run_initiator_required: '只有运行发起者可以继续发送模型请求',

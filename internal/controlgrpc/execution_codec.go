@@ -2,10 +2,11 @@ package controlgrpc
 
 import (
 	"math"
+	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wanglongan587/cloud/internal/controlpb"
@@ -17,14 +18,11 @@ import (
 
 func inputObject(in *controlpb.ExecutionInput) (core.Object, error) {
 	if in == nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 	switch spec := in.GetSpec().(type) {
 	case *controlpb.ExecutionInput_Clone:
-		if spec.Clone.GetRepository() == "" || spec.Clone.GetBranch() == "" {
-			return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
-		}
-		return core.Object{"kind": "clone", "repositoryUrl": spec.Clone.GetRepository(), "branch": spec.Clone.GetBranch()}, nil
+		return cloneObject(spec.Clone)
 	case *controlpb.ExecutionInput_InstallPlugins:
 		return core.Object{"kind": "install_plugins", "plugins": installObjects(spec.InstallPlugins.GetPlugins())}, nil
 	case *controlpb.ExecutionInput_RemovePlugins:
@@ -33,8 +31,10 @@ func inputObject(in *controlpb.ExecutionInput) (core.Object, error) {
 		return sessionObject(spec.AgentSession)
 	case *controlpb.ExecutionInput_DeliverRevision:
 		return deliveryObject(spec.DeliverRevision)
+	case *controlpb.ExecutionInput_DeliverScheduledArtifacts:
+		return scheduledArtifactsObject(spec.DeliverScheduledArtifacts)
 	default:
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 }
 
@@ -48,9 +48,36 @@ func input(o core.Object) *controlpb.ExecutionInput {
 		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_AgentSession{AgentSession: sessionMessage(o)}}
 	case "deliver_revision":
 		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_DeliverRevision{DeliverRevision: deliveryMessage(o)}}
+	case "deliver_scheduled_artifacts":
+		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_DeliverScheduledArtifacts{DeliverScheduledArtifacts: &controlpb.DeliverScheduledArtifactsSpec{SessionExecutionId: o.S("sessionExecutionId")}}}
 	default:
-		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{Repository: o.S("repositoryUrl"), Branch: o.S("branch")}}}
+		return &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: cloneMessage(o)}}
 	}
+}
+
+// cloneObject is the durable form of a Workspace clone input: a Git Server snapshot. Its shape is
+// checked here so a malformed input never reaches the registry, where it could only conflict with
+// the operation's frozen input (contract D1).
+func cloneObject(spec *controlpb.CloneSpec) (core.Object, error) {
+	snapshot, snapshotOK := core.ParseGitRef(spec.GetSnapshotRef())
+	workspace, workspaceOK := core.ParseGitRef(spec.GetWorkspaceRef())
+	if !gitRepositoryURL(spec.GetRepositoryUrl()) || !core.GitObjectID(spec.GetBaseCommit()) ||
+		!snapshotOK || snapshot.Namespace != core.GitUpstreamSnapshot || snapshot.Name != spec.GetBaseCommit() ||
+		!workspaceOK || workspace.Namespace != core.GitWorkspaceBranch || workspace.Name == "HEAD" {
+		return nil, invalidInput("invalid_dispatch")
+	}
+	return core.Object{"kind": "clone", "repositoryUrl": spec.GetRepositoryUrl(), "snapshotRef": spec.GetSnapshotRef(), "baseCommit": spec.GetBaseCommit(), "workspaceRef": spec.GetWorkspaceRef()}, nil
+}
+
+func cloneMessage(o core.Object) *controlpb.CloneSpec {
+	return &controlpb.CloneSpec{RepositoryUrl: o.S("repositoryUrl"), SnapshotRef: o.S("snapshotRef"), BaseCommit: o.S("baseCommit"), WorkspaceRef: o.S("workspaceRef")}
+}
+
+// gitRepositoryURL accepts the Git Server repository addresses Cloud writes into inputs: https,
+// with a host, and no userinfo, query or fragment for a credential or option to hide in.
+func gitRepositoryURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && strings.HasSuffix(u.Path, ".git")
 }
 
 func installObjects(plugins []*controlpb.PluginInstall) []core.Object {
@@ -67,6 +94,9 @@ func installObjects(plugins []*controlpb.PluginInstall) []core.Object {
 			}
 			item["targets"] = targets
 		}
+		if agent := plugin.GetAgentConfiguration(); agent != nil {
+			item["agentConfiguration"] = core.Object{"schemaVersion": agent.GetSchemaVersion(), "declarationSha256": agent.GetDeclarationSha256()}
+		}
 		out = append(out, item)
 	}
 	return out
@@ -81,6 +111,9 @@ func installMessages(plugins []core.Object) []*controlpb.PluginInstall {
 		}
 		for _, target := range rows(plugin["targets"]) {
 			item.Targets = append(item.Targets, &controlpb.PluginTargetDownload{Target: target.S("target"), Download: &controlpb.PluginDownload{Url: target.S("url"), Sha256: target.S("sha256")}})
+		}
+		if agent, declared := core.PluginAgentConfiguration(plugin); declared {
+			item.AgentConfiguration = &controlpb.PluginAgentConfiguration{SchemaVersion: boundedSchemaVersion(agent.N("schemaVersion")), DeclarationSha256: agent.S("declarationSha256")}
 		}
 		out = append(out, item)
 	}
@@ -105,7 +138,7 @@ func removalMessages(plugins []core.Object) []*controlpb.PluginRemoval {
 
 func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 	if spec.GetAgentPluginId() == "" || spec.GetCheckoutExecutionId() == "" || spec.GetGitIdentity().GetName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+		return nil, invalidInput("invalid_dispatch")
 	}
 	turn := spec.GetInitialTurn()
 	out := core.Object{
@@ -117,17 +150,55 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 	if id := spec.GetModelBindingId(); id != "" {
 		out["modelBindingId"] = id
 	}
+	if configuration := spec.GetAgentConfiguration(); configuration != nil {
+		frozen, err := agentConfigurationObject(configuration)
+		if err != nil {
+			return nil, err
+		}
+		out["agentConfiguration"] = frozen
+	}
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
+	}
+	if listings := spec.GetWorkspaceDirectory(); len(listings) > 0 {
+		directory := make([]core.Object, 0, len(listings))
+		for _, l := range listings {
+			listing := core.Object{"workspaceId": l.GetWorkspaceId(), "kind": l.GetKind()}
+			if l.GetIssueRunId() != "" {
+				listing["issueId"], listing["issueTitle"], listing["issueRunId"], listing["runStatus"] = l.GetIssueId(), l.GetIssueTitle(), l.GetIssueRunId(), l.GetRunStatus()
+			}
+			directory = append(directory, listing)
+		}
+		out["workspaceDirectory"] = directory
+	}
+	// The admission is part of the frozen input: a dispatch that disagrees with the work item about
+	// whether this run is a scheduled occurrence conflicts like any other changed field.
+	switch spec.GetTrigger() {
+	case controlpb.AgentSessionTrigger_AGENT_SESSION_TRIGGER_UNSPECIFIED:
+	case controlpb.AgentSessionTrigger_AGENT_SESSION_TRIGGER_SCHEDULED:
+		out["trigger"] = "scheduled"
+	default:
+		return nil, invalidInput("invalid_dispatch")
 	}
 	return out, nil
 }
 
-// priorObject is the durable form of a PriorRevision; a delivery spec's has no bundle.
+// scheduledArtifactsObject is the durable form of the artifact-upload input: it names the ended
+// session whose declaration Cloud persisted and never a location. Object keys belong to Cloud and
+// reach the Node only through an upload grant.
+func scheduledArtifactsObject(spec *controlpb.DeliverScheduledArtifactsSpec) (core.Object, error) {
+	if spec.GetSessionExecutionId() == "" {
+		return nil, invalidInput("invalid_dispatch")
+	}
+	return core.Object{"kind": "deliver_scheduled_artifacts", "sessionExecutionId": spec.GetSessionExecutionId()}, nil
+}
+
+// priorObject is the durable form of a PriorRevision. A session spec's names where the Node fetches
+// it and what it was based on; a delivery spec's carries only the identity and final commit.
 func priorObject(prior *controlpb.PriorRevision) core.Object {
 	out := core.Object{"revisionId": prior.GetRevisionId(), "finalCommit": prior.GetFinalCommit()}
-	if prior.GetBundle() != nil {
-		out["bundle"] = storedObject(prior.GetBundle())
+	if prior.GetGitRepositoryUrl() != "" || prior.GetDeliveryRef() != "" || prior.GetBaseCommit() != "" {
+		out["gitRepositoryUrl"], out["deliveryRef"], out["baseCommit"] = prior.GetGitRepositoryUrl(), prior.GetDeliveryRef(), prior.GetBaseCommit()
 	}
 	return out
 }
@@ -136,11 +207,15 @@ func priorMessage(o core.Object) *controlpb.PriorRevision {
 	if o.S("revisionId") == "" {
 		return nil
 	}
-	prior := &controlpb.PriorRevision{RevisionId: o.S("revisionId"), FinalCommit: o.S("finalCommit")}
-	if bundle := o.O("bundle"); len(bundle) > 0 {
-		prior.Bundle = storedMessage(bundle)
+	return &controlpb.PriorRevision{RevisionId: o.S("revisionId"), FinalCommit: o.S("finalCommit"), GitRepositoryUrl: o.S("gitRepositoryUrl"), DeliveryRef: o.S("deliveryRef"), BaseCommit: o.S("baseCommit")}
+}
+
+func directoryMessages(rows []core.Object) []*controlpb.WorkspaceListing {
+	out := make([]*controlpb.WorkspaceListing, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &controlpb.WorkspaceListing{WorkspaceId: row.S("workspaceId"), Kind: row.S("kind"), IssueId: row.S("issueId"), IssueTitle: row.S("issueTitle"), IssueRunId: row.S("issueRunId"), RunStatus: row.S("runStatus")})
 	}
-	return prior
+	return out
 }
 
 func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
@@ -148,11 +223,23 @@ func sessionMessage(o core.Object) *controlpb.AgentSessionSpec {
 	turn := o.O("initialTurn")
 	return &controlpb.AgentSessionSpec{
 		AgentPluginId: o.S("agentPluginId"), AgentPluginVersion: o.S("agentPluginVersion"), CheckoutExecutionId: o.S("checkoutExecutionId"),
-		ModelBindingId: o.S("modelBindingId"),
-		GitIdentity:    &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
-		InitialTurn:    &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
-		PriorRevision:  priorMessage(o.O("priorRevision")),
+		ModelBindingId:     o.S("modelBindingId"),
+		AgentConfiguration: agentConfigurationMessage(o.O("agentConfiguration")),
+		GitIdentity:        &controlpb.GitIdentity{Name: git.S("name"), Email: git.S("email")},
+		InitialTurn:        &controlpb.UserTurn{TurnId: turn.S("turnId"), Content: contentMessages(rows(turn["content"]))},
+		PriorRevision:      priorMessage(o.O("priorRevision")),
+		WorkspaceDirectory: directoryMessages(rows(o["workspaceDirectory"])),
+		Trigger:            sessionTriggerMessage(o),
 	}
+}
+
+// sessionTriggerMessage is the admission Cloud froze for this session. An absent field is a manual
+// IssueRun, which is also how every session released before the field existed reads.
+func sessionTriggerMessage(o core.Object) controlpb.AgentSessionTrigger {
+	if o.S("trigger") == "scheduled" {
+		return controlpb.AgentSessionTrigger_AGENT_SESSION_TRIGGER_SCHEDULED
+	}
+	return controlpb.AgentSessionTrigger_AGENT_SESSION_TRIGGER_UNSPECIFIED
 }
 
 func contentObjects(blocks []*controlpb.ContentBlock) []core.Object {
@@ -172,12 +259,16 @@ func contentMessages(blocks []core.Object) []*controlpb.ContentBlock {
 }
 
 func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
-	if spec.GetSessionExecutionId() == "" || spec.GetBundleKey() == "" || spec.GetHistoryKey() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_dispatch")
+	delivery, deliveryOK := core.ParseGitRef(spec.GetDeliveryRef())
+	workspace, workspaceOK := core.ParseGitRef(spec.GetWorkspaceRef())
+	if spec.GetSessionExecutionId() == "" || spec.GetHistoryKey() == "" || !gitRepositoryURL(spec.GetGitRepositoryUrl()) ||
+		!deliveryOK || delivery.Namespace != core.GitDelivery || !workspaceOK || workspace.Namespace != core.GitWorkspaceBranch {
+		return nil, invalidInput("invalid_dispatch")
 	}
 	out := core.Object{
 		"kind": "deliver_revision", "sessionExecutionId": spec.GetSessionExecutionId(), "checkoutExecutionId": spec.GetCheckoutExecutionId(),
-		"baseCommit": spec.GetBaseCommit(), "revisionRef": spec.GetRevisionRef(), "bundleKey": spec.GetBundleKey(), "historyKey": spec.GetHistoryKey(),
+		"baseCommit": spec.GetBaseCommit(), "revisionRef": spec.GetRevisionRef(), "historyKey": spec.GetHistoryKey(),
+		"gitRepositoryUrl": spec.GetGitRepositoryUrl(), "deliveryRef": spec.GetDeliveryRef(), "workspaceRef": spec.GetWorkspaceRef(),
 	}
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
@@ -188,7 +279,8 @@ func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
 func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
 	return &controlpb.DeliverRevisionSpec{
 		SessionExecutionId: o.S("sessionExecutionId"), CheckoutExecutionId: o.S("checkoutExecutionId"), BaseCommit: o.S("baseCommit"),
-		RevisionRef: o.S("revisionRef"), BundleKey: o.S("bundleKey"), HistoryKey: o.S("historyKey"),
+		RevisionRef: o.S("revisionRef"), HistoryKey: o.S("historyKey"),
+		GitRepositoryUrl: o.S("gitRepositoryUrl"), DeliveryRef: o.S("deliveryRef"), WorkspaceRef: o.S("workspaceRef"),
 		PriorRevision: priorMessage(o.O("priorRevision")),
 	}
 }
@@ -196,7 +288,7 @@ func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
 func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {
 	node := res.GetNode()
 	if node == nil || node.GetNodeId() == "" || node.GetNodeIncarnationId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "invalid_result")
+		return nil, invalidInput("invalid_result")
 	}
 	out := core.Object{"node": core.Object{"nodeId": node.GetNodeId(), "nodeIncarnationId": node.GetNodeIncarnationId()}}
 	switch outcome := res.GetOutcome().(type) {
@@ -214,23 +306,90 @@ func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {
 		out["outcome"], out["reason"] = "plugins_failed", shortEnum(outcome.PluginsFailed.GetReason().String(), "PLUGINS_FAILURE_REASON_")
 	case *controlpb.ExecutionResult_AgentSessionEnded:
 		out["outcome"], out["reason"] = "agent_session_ended", shortEnum(outcome.AgentSessionEnded.GetReason().String(), "AGENT_SESSION_END_REASON_")
-		if outcome.AgentSessionEnded.Detail != nil {
-			out["detail"] = outcome.AgentSessionEnded.GetDetail()
+		ended := outcome.AgentSessionEnded
+		if ended.Detail != nil {
+			out["detail"] = ended.GetDetail()
+		}
+		// The business verdict stays a structured value Cloud only validates: it is never derived
+		// from the Thread, the end reason or the execution status, and it travels only when the
+		// executor reported it (an unspecified verdict is a malformed report, not "not reported").
+		if result := ended.GetScheduledResult(); result != nil {
+			if result.GetVerdict() == controlpb.ScheduledVerdict_SCHEDULED_VERDICT_UNSPECIFIED {
+				return nil, invalidInput("invalid_result")
+			}
+			scheduled := core.Object{"verdict": shortEnum(result.GetVerdict().String(), "SCHEDULED_VERDICT_")}
+			if result.VerdictDetail != nil {
+				if utf8.RuneCountInString(result.GetVerdictDetail()) > core.MaxScheduledRunVerdictDetailRunes {
+					return nil, invalidInput("invalid_result")
+				}
+				scheduled["verdictDetail"] = result.GetVerdictDetail()
+			}
+			out["scheduledResult"] = scheduled
+		}
+		// The declaration is the executor's report of what it will upload; it travels with the
+		// terminal event so Cloud can freeze the window and hand out grants. Dropping it here would
+		// lose the run's artifacts silently - the settlement would see an empty manifest and stop -
+		// so the boundary either carries it whole or refuses it.
+		if declared := ended.GetArtifactManifest(); declared != nil {
+			items := make([]core.Object, 0, len(declared.GetItems()))
+			for _, item := range declared.GetItems() {
+				if item.GetSizeBytes() > math.MaxInt64 {
+					return nil, invalidInput("invalid_result")
+				}
+				kind := shortEnum(item.GetKind().String(), "SCHEDULED_ARTIFACT_KIND_")
+				if kind == "" {
+					return nil, invalidInput("invalid_result")
+				}
+				items = append(items, core.Object{
+					// The durable object stores plain integers: N() reads float64/int64, so a uint32 or
+					// uint64 kept as-is would read back as zero and silently lose the index or size.
+					"index": int64(item.GetIndex()), "displayName": item.GetDisplayName(), "kind": kind,
+					"sizeBytes": int64(item.GetSizeBytes()), "sha256": item.GetSha256(), // #nosec G115 -- values above MaxInt64 are refused above.
+				})
+			}
+			rejections := make([]core.Object, 0, len(declared.GetRejections()))
+			for _, rejection := range declared.GetRejections() {
+				reason := shortEnum(rejection.GetReason().String(), "SCHEDULED_ARTIFACT_REJECTION_REASON_")
+				if reason == "" {
+					return nil, invalidInput("invalid_result")
+				}
+				rejections = append(rejections, core.Object{"displayName": rejection.GetDisplayName(), "reason": reason})
+			}
+			out["artifactManifest"] = core.Object{"items": items, "rejections": rejections}
+			if declared.GetOmittedRejections() != 0 {
+				out.O("artifactManifest")["omittedRejections"] = int64(declared.GetOmittedRejections())
+			}
+			if declared.GetWalkTruncated() {
+				out.O("artifactManifest")["walkTruncated"] = true
+			}
 		}
 	case *controlpb.ExecutionResult_RevisionDelivered:
 		out["outcome"] = "revision_delivered"
 		delivered := outcome.RevisionDelivered
 		out["finalCommit"], out["baseCommit"], out["revisionRef"] = delivered.GetFinalCommit(), delivered.GetBaseCommit(), delivered.GetRevisionRef()
-		out["bundle"], out["history"] = storedObject(delivered.GetBundle()), storedObject(delivered.GetHistory())
+		out["history"] = storedObject(delivered.GetHistory())
 	case *controlpb.ExecutionResult_RevisionUnchanged:
 		out["outcome"] = "revision_unchanged"
 		unchanged := outcome.RevisionUnchanged
 		out["finalCommit"], out["baseCommit"], out["revisionRef"] = unchanged.GetFinalCommit(), unchanged.GetBaseCommit(), unchanged.GetRevisionRef()
 		out["history"] = storedObject(unchanged.GetHistory())
+	case *controlpb.ExecutionResult_ScheduledArtifactsDelivered:
+		out["outcome"] = "scheduled_artifacts_delivered"
+		artifacts := outcome.ScheduledArtifactsDelivered.GetArtifacts()
+		uploaded := make([]core.Object, 0, len(artifacts))
+		for _, artifact := range artifacts {
+			if artifact == nil || artifact.GetSize() > math.MaxInt64 {
+				return nil, invalidInput("invalid_result")
+			}
+			uploaded = append(uploaded, storedObject(artifact))
+		}
+		out["artifacts"] = uploaded
+	case *controlpb.ExecutionResult_ScheduledArtifactsFailed:
+		out["outcome"], out["reason"] = "scheduled_artifacts_failed", shortEnum(outcome.ScheduledArtifactsFailed.GetReason().String(), "SCHEDULED_ARTIFACTS_FAILURE_REASON_")
 	case *controlpb.ExecutionResult_RevisionFailed:
 		out["outcome"], out["reason"] = "revision_failed", shortEnum(outcome.RevisionFailed.GetReason().String(), "REVISION_FAILURE_REASON_")
 	default:
-		return nil, status.Error(codes.InvalidArgument, "invalid_result")
+		return nil, invalidInput("invalid_result")
 	}
 	return out, nil
 }
@@ -279,13 +438,58 @@ func result(o core.Object) *controlpb.ExecutionResult {
 		if detail := o.S("detail"); detail != "" {
 			ended.Detail = &detail
 		}
+		// A stored verdict returns to the Controller as the same structured value it reported, so a
+		// recovered execution is queried with the business result it actually carried.
+		if scheduled := o.O("scheduledResult"); len(scheduled) > 0 {
+			reported := &controlpb.ScheduledRunResult{Verdict: controlpb.ScheduledVerdict(enum(controlpb.ScheduledVerdict_value, "SCHEDULED_VERDICT_", scheduled.S("verdict")))}
+			if detail := scheduled.S("verdictDetail"); detail != "" {
+				reported.VerdictDetail = &detail
+			}
+			ended.ScheduledResult = reported
+		}
+		// A stored declaration returns to the Controller as the same structure it reported, so a
+		// recovered session is queried with the artifacts it actually carried.
+		if declared := o.O("artifactManifest"); len(declared) > 0 {
+			manifest := &controlpb.ScheduledArtifactManifest{
+				OmittedRejections: boundedSchemaVersion(declared.N("omittedRejections")), WalkTruncated: declared.B("walkTruncated"),
+			}
+			for _, item := range objectsOf(declared["items"]) {
+				index, size := item.N("index"), item.N("sizeBytes")
+				if index < 0 || index > math.MaxUint32 {
+					index = 0
+				}
+				if size < 0 {
+					size = 0
+				}
+				manifest.Items = append(manifest.Items, &controlpb.ScheduledArtifactItem{
+					Index: uint32(index), DisplayName: item.S("displayName"), // #nosec G115 -- bounded above.
+					Kind:      controlpb.ScheduledArtifactKind(enum(controlpb.ScheduledArtifactKind_value, "SCHEDULED_ARTIFACT_KIND_", item.S("kind"))),
+					SizeBytes: uint64(size), Sha256: item.S("sha256"), // #nosec G115 -- nonnegative above.
+				})
+			}
+			for _, rejection := range objectsOf(declared["rejections"]) {
+				manifest.Rejections = append(manifest.Rejections, &controlpb.ScheduledArtifactRejection{
+					DisplayName: rejection.S("displayName"),
+					Reason:      controlpb.ScheduledArtifactRejectionReason(enum(controlpb.ScheduledArtifactRejectionReason_value, "SCHEDULED_ARTIFACT_REJECTION_REASON_", rejection.S("reason"))),
+				})
+			}
+			ended.ArtifactManifest = manifest
+		}
 		out.Outcome = &controlpb.ExecutionResult_AgentSessionEnded{AgentSessionEnded: ended}
 	case "revision_delivered":
-		out.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), Bundle: storedMessage(o.O("bundle")), History: storedMessage(o.O("history"))}}
+		out.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), History: storedMessage(o.O("history"))}}
 	case "revision_unchanged":
 		out.Outcome = &controlpb.ExecutionResult_RevisionUnchanged{RevisionUnchanged: &controlpb.RevisionUnchanged{FinalCommit: o.S("finalCommit"), BaseCommit: o.S("baseCommit"), RevisionRef: o.S("revisionRef"), History: storedMessage(o.O("history"))}}
 	case "revision_failed":
 		out.Outcome = &controlpb.ExecutionResult_RevisionFailed{RevisionFailed: &controlpb.RevisionFailed{Reason: controlpb.RevisionFailureReason(enum(controlpb.RevisionFailureReason_value, "REVISION_FAILURE_REASON_", o.S("reason")))}}
+	case "scheduled_artifacts_delivered":
+		delivered := &controlpb.ScheduledArtifactsDelivered{}
+		for _, artifact := range rows(o["artifacts"]) {
+			delivered.Artifacts = append(delivered.Artifacts, storedMessage(artifact))
+		}
+		out.Outcome = &controlpb.ExecutionResult_ScheduledArtifactsDelivered{ScheduledArtifactsDelivered: delivered}
+	case "scheduled_artifacts_failed":
+		out.Outcome = &controlpb.ExecutionResult_ScheduledArtifactsFailed{ScheduledArtifactsFailed: &controlpb.ScheduledArtifactsFailed{Reason: controlpb.ScheduledArtifactsFailureReason(enum(controlpb.ScheduledArtifactsFailureReason_value, "SCHEDULED_ARTIFACTS_FAILURE_REASON_", o.S("reason")))}}
 	default:
 		failed := &controlpb.CloneFailed{Reason: controlpb.CloneFailureReason(controlpb.CloneFailureReason_value[o.S("reason")])}
 		if retained, ok := o["retainedPath"].(string); ok {
@@ -349,4 +553,44 @@ func grantMessage(o core.Object) *controlpb.UploadGrant {
 		grant.ExpiresAt = timestamppb.New(exp)
 	}
 	return grant
+}
+
+// invalidInput rejects a malformed execution input or result before it reaches the registry. It is
+// a 400 Fault mapped in fault.go, so the status carries ErrorDetail INVALID_INPUT like every other
+// invalid argument the contract reports.
+func invalidInput(code string) error {
+	return toStatus(&core.Fault{Code: code, Status: 400, Params: core.Object{}})
+}
+
+// boundedSchemaVersion converts the durable plan's schema version without overflowing: a value
+// outside u32 cannot have passed the sync's validation, so mapping it to zero keeps the wire
+// input unequal to the frozen plan and the dispatch is refused rather than truncated.
+func boundedSchemaVersion(value int64) uint32 {
+	if value < 0 || value > math.MaxUint32 {
+		return 0
+	}
+	return uint32(value) // #nosec G115 -- bounded above.
+}
+
+// objectsOf decodes an array of objects out of a stored result. The value arrives either as the typed
+// slice the codec just built or as the generic form jsonb returns, so both are accepted rather than
+// making one caller reshape what the other produced.
+func objectsOf(value any) []core.Object {
+	switch rows := value.(type) {
+	case []core.Object:
+		return rows
+	case []any:
+		out := make([]core.Object, 0, len(rows))
+		for _, row := range rows {
+			switch item := row.(type) {
+			case core.Object:
+				out = append(out, item)
+			case map[string]any:
+				out = append(out, core.Object(item))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

@@ -63,7 +63,6 @@ export function makeProject(id: string, overrides: Partial<Project> = {}): Proje
     repositoryUrl: 'https://example.invalid/repository.git',
     defaultBranch: 'main',
     credentialRefId: null,
-    repositoryCredentialRefId: null,
     deletedAt: null,
     ownerUserId: 'u1',
     lifecycle: 'active',

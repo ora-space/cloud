@@ -56,6 +56,7 @@ describe('AUTHORABLE_NODE_KINDS', () => {
       'start',
       'agent',
       'condition',
+      'aggregator',
       'loop',
       'iteration',
       'output',
@@ -197,8 +198,9 @@ describe('createWorkflowLoopGroup', () => {
     expect(loop?.initialWidth).toBe(WORKFLOW_LOOP_NODE_WIDTH)
     expect(loop?.initialHeight).toBe(WORKFLOW_LOOP_NODE_HEIGHT)
     expect(childStart?.data.containerId).toBe('loop-2')
-    expect(childStart?.parentId).toBeUndefined()
+    expect(childStart?.parentId).toBe('loop-2')
     expect(childAgent?.data.containerId).toBe('loop-2')
+    expect(childAgent?.parentId).toBe('loop-2')
   })
 
   it('wires the loop so the Agent reads the carried variable on its first probe', () => {

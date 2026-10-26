@@ -60,8 +60,8 @@ idle ───────────────▶ acquiring ─────�
 - 幂等重放返回历史响应，但不会让已撤回的资格复活。每次状态变化都写入 `runtime_control_events`，保留持有者和原会话。
 
 **生命周期操作与资格共用同一个写边界。** 生命周期操作一旦登记，就把资格置为 `maintenance`（记录操作 ID，控制代次加一），
-页面会话在此期间不能操作；操作结束后资格进入 `draining`，按上面的规则结清。Agent 运行的运行 Workspace 创建成功后，资格转为
-属于该运行的 `maintenance`，之后的会话和交付都以它为边界。
+页面会话在此期间不能操作；操作结束后资格进入 `draining`，按上面的规则结清。运行 Workspace 的创建操作成功后，资格转为属于创建它的那次运行的
+`maintenance`（预留记录运行 ID，IssueRun 与 WorkflowRun 都认），之后的会话和交付都以它为边界。
 
 管理员的普通操作不能抢占别人持有的资格；需要立即打断时使用强停。
 
@@ -101,8 +101,8 @@ Controller 租约到期不能由缓存的许可延长。
 ## 尚未开放的入口
 
 云端的文件、终端和完整 Agent 产品入口没有开放；它们必须先接入同样的使用权限、独占资格和执行许可边界。插件的真实执行已经由
-Node 承担（见 [插件市场](../plugins/marketplace.md)），但需要项目凭据的私有仓库访问仍未开放（见
-[Workspace 生命周期](workspaces.md#workspace-的公开接口)）。
+Node 承担（见 [插件市场](../plugins/marketplace.md)）。Node 只与 Git Server 通信，不使用仓库凭据；外部仓库由仓库外的 Repo Executor
+同步（见 [Workspace 生命周期](workspaces.md#workspace-的公开接口) 与 [Git Server](../repositories/git-server.md)）。
 
 ## 相关决策
 

@@ -50,10 +50,12 @@ func presetDB(t *testing.T) *sql.DB {
 	return pool
 }
 
-// seedProject inserts one active Project with its Binding and main Workspace.
+// seedProject inserts one active Project with its Binding, its credential and its main Workspace.
+// The credential is stored and scoped to the Binding's repository, which is what a preset publish
+// needs to name and what keeps check from reporting a credential problem.
 func seedProject(t *testing.T, db *sql.DB) (tenant, project, binding string) {
 	t.Helper()
-	user, space := uuid.NewString(), uuid.NewString()
+	user, space, credential := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	tenant, project, binding = uuid.NewString(), uuid.NewString(), uuid.NewString()
 	tx, err := db.Begin()
 	if err != nil {
@@ -68,7 +70,8 @@ func seedProject(t *testing.T, db *sql.DB) (tenant, project, binding string) {
 		{"INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')", []any{tenant, user}},
 		{"INSERT INTO collab_workspaces(id,tenant_id,name,slug,created_by) VALUES($1,$2,'s','s',$3)", []any{space, tenant, user}},
 		{"INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle) VALUES($1,$2,$3,$4,'p','active')", []any{project, tenant, user, space}},
-		{"INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch) VALUES($1,$2,$3,'https://example.invalid/r.git','main')", []any{binding, tenant, project}},
+		{"INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,name,repository_scope,secret_state,store_version) VALUES($1,$2,$3,'git','controlled-reference-only','preset','https://example.invalid/r.git','stored',1)", []any{credential, tenant, user}},
+		{"INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch,credential_ref_id) VALUES($1,$2,$3,'https://example.invalid/r.git','main',$4)", []any{binding, tenant, project, credential}},
 		{"INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'main','running','ready','main')", []any{uuid.NewString(), tenant, user, project}},
 	} {
 		if _, err := tx.Exec(q.query, q.args...); err != nil {
@@ -190,6 +193,50 @@ func TestRefAndOperationPresets(t *testing.T) {
 		if _, err := p.Operation(ctx, project, c.kind, c.state, ""); !errors.As(err, &usage) {
 			t.Errorf("%s %s: err = %v, want a usage error", c.kind, c.state, err)
 		}
+	}
+}
+
+// A Project's unfinished sync, such as the one every new Project starts with, is the sync a preset
+// ends: snapshot completes it and a terminal sync state ends it, instead of adding a second row
+// beside a sync that would then never finish.
+func TestPresetsAdvanceTheUnfinishedSync(t *testing.T) {
+	p, tenant, project, binding := newPreset(t)
+	ctx := context.Background()
+	pending := func() string {
+		t.Helper()
+		var id string
+		if err := p.DB.QueryRow(`INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger) VALUES(gen_random_uuid(),'repository_sync',$1,$2,$3,'pending','project_created') RETURNING id`, tenant, project, binding).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	state := func(id string) (string, string) {
+		t.Helper()
+		var s, code string
+		if err := p.DB.QueryRow(`SELECT state,COALESCE(error_code,'') FROM repository_operations WHERE id=$1`, id).Scan(&s, &code); err != nil {
+			t.Fatal(err)
+		}
+		return s, code
+	}
+	first := pending()
+	snapshot := (expect{t}).ok(p.Snapshot(ctx, project, "", 2))
+	if snapshot["operationId"] != first {
+		t.Fatalf("snapshot recorded sync %v, want the pending one %s", snapshot["operationId"], first)
+	}
+	if s, _ := state(first); s != "succeeded" {
+		t.Fatalf("the pending sync is %s, want succeeded", s)
+	}
+	second := pending()
+	failed := (expect{t}).ok(p.Operation(ctx, project, "sync", "failed", "credential_rejected"))
+	if failed["operationId"] != second {
+		t.Fatalf("failing a sync wrote %v, want the pending one %s", failed["operationId"], second)
+	}
+	if s, code := state(second); s != "failed" || code != "credential_rejected" {
+		t.Fatalf("the pending sync is %s/%s, want failed/credential_rejected", s, code)
+	}
+	var syncs int
+	if err := p.DB.QueryRow(`SELECT count(*) FROM repository_operations WHERE project_id=$1`, project).Scan(&syncs); err != nil || syncs != 2 {
+		t.Fatalf("presets added rows beside the syncs they ended: %d %v", syncs, err)
 	}
 }
 

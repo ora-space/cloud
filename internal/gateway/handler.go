@@ -105,6 +105,12 @@ func (h *handler) recovery(c *gin.Context) {
 	c.Header("X-Request-Id", id)
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			// ReverseProxy uses this sentinel after streaming headers when the client
+			// disconnects. net/http owns the abort and suppresses its ordinary log;
+			// writing a JSON 500 here would corrupt the committed event stream.
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
 			h.Log.Error("request panic", zap.String("requestId", id), zap.Any("panic", recovered), zap.ByteString("stack", debug.Stack()))
 			h.fail(c, fault{"internal_error", http.StatusInternalServerError})
 		}

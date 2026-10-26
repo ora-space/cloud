@@ -8,13 +8,19 @@ import {
 } from './api'
 import { ConnectionChoice } from './fields'
 
-/** Versioned default selector; only enabled, credential-backed connections are offered. */
+/**
+ * Versioned default selector; only enabled, credential-backed connections are offered.
+ * The optional callback reports the connection the draft now points at, so a plugin
+ * entry can offer credential controls for the same shared default without copying it.
+ */
 export function ModelDefaultForm({
   connections,
   selection,
+  onConnectionChange,
 }: {
   connections: ModelConnection[]
   selection: ModelDefault
+  onConnectionChange?: (connectionId: string) => void
 }) {
   const ready = connections.filter(
     (connection) => connection.enabled && connection.credentialConfigured,
@@ -30,6 +36,7 @@ export function ModelDefaultForm({
   }
   const [connectionId, setConnectionId] = useState(selection.connectionId)
   const [modelId, setModelId] = useState(selection.modelId)
+  const [version, setVersion] = useState(selection.version)
   const models = ready.find((connection) => connection.id === connectionId)?.models ?? []
   const save = useSaveModelDefault()
   const valid = models.some((model) => model.id === modelId)
@@ -38,7 +45,13 @@ export function ModelDefaultForm({
       className="space-y-3 rounded-lg border p-4"
       onSubmit={(event) => {
         event.preventDefault()
-        if (valid) save.mutate({ connectionId, modelId, version: selection.version })
+        if (valid)
+          save.mutate(
+            { connectionId, modelId, version },
+            {
+              onSuccess: (saved) => setVersion(saved.version),
+            },
+          )
       }}
     >
       <h3 className="font-medium">默认模型</h3>
@@ -59,6 +72,7 @@ export function ModelDefaultForm({
             onChange={(id) => {
               setConnectionId(id)
               setModelId('')
+              onConnectionChange?.(id)
             }}
           />
           <ConnectionChoice
@@ -80,11 +94,30 @@ export function ModelDefaultForm({
           {modelConnectionFailure(save.error)}
         </p>
       )}
+      {version !== selection.version && (
+        <DefaultReconciliation
+          onConfirm={() => {
+            setVersion(selection.version)
+            save.reset()
+          }}
+        />
+      )}
       {save.isSuccess && (
         <p role="status" className="text-xs">
           默认模型已保存
         </p>
       )}
     </form>
+  )
+}
+
+function DefaultReconciliation({ onConfirm }: { onConfirm: () => void }) {
+  return (
+    <div className="space-y-2 text-xs">
+      <p>服务器的默认选择已更新。当前选择草稿仍保留，请先核对上方最新默认值。</p>
+      <Button type="button" variant="outline" size="sm" onClick={onConfirm}>
+        已核对，保留草稿继续编辑
+      </Button>
+    </div>
   )
 }

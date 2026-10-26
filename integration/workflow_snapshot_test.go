@@ -196,3 +196,57 @@ func TestWorkflowSnapshotTenantIsolation(t *testing.T) {
 	f.call("PUT", f.path("/workflows/"+wfid+"/snapshots/"+snap.S("id")+"/restore"), core.Object{"version": 1}, "", 403)
 	f.tid = original
 }
+
+// TestWorkflowSnapshotPublishNormalizesFileGlobals covers the publish-time rewrite of file and
+// array[file] globals: a declaration whose value is a legacy path string freezes with the canonical
+// {kind: "workspace_file", path} reference, so a condition reading the snapshot sees the same shape
+// desktop's into_global_variables produces. The live workflow document keeps the authored string —
+// only the frozen snapshot is normalized.
+func TestWorkflowSnapshotPublishNormalizesFileGlobals(t *testing.T) {
+	f := setup(t)
+	graph := core.Object{
+		"nodes": []any{core.Object{
+			"id": "start", "type": "workflow", "deletable": false,
+			"position": core.Object{"x": 0, "y": 0},
+			"data":     core.Object{"kind": "start", "title": "开始", "description": ""},
+		}},
+		"edges": []any{},
+		"globalVariables": []any{
+			core.Object{"name": "f.report", "valueType": "file", "value": "docs/report.md"},
+			core.Object{"name": "f.reports", "valueType": "array[file]", "value": []any{"docs/a.md", "docs/b.md"}},
+		},
+	}
+	wf := f.call("POST", f.path("/workflows"), core.Object{
+		"name": "File globals", "graph": graph,
+	}, "snap-file", 200).O("resource")
+	wfid := wf.S("id")
+
+	snap := f.call("POST", f.path("/workflows/"+wfid+"/publish"), core.Object{}, "snap-file-pub", 200).O("resource")
+	globals, _ := snap.O("graph")["globalVariables"].([]any)
+	if len(globals) != 2 {
+		t.Fatalf("snapshot froze %d globals, want 2: %v", len(globals), globals)
+	}
+	report := globals[0].(map[string]any)["value"].(map[string]any)
+	if report["kind"] != "workspace_file" || report["path"] != "docs/report.md" {
+		t.Fatalf("file global value = %v; want {kind: workspace_file, path: docs/report.md}", report)
+	}
+	reports := globals[1].(map[string]any)["value"].([]any)
+	wantPaths := []string{"docs/a.md", "docs/b.md"}
+	if len(reports) != len(wantPaths) {
+		t.Fatalf("array[file] global froze %d values, want %d: %v", len(reports), len(wantPaths), reports)
+	}
+	for i, want := range wantPaths {
+		ref := reports[i].(map[string]any)
+		if ref["kind"] != "workspace_file" || ref["path"] != want {
+			t.Fatalf("array[file] global value[%d] = %v; want {kind: workspace_file, path: %s}", i, ref, want)
+		}
+	}
+
+	// The live workflow document keeps the authored legacy string; publishing rewrites only the
+	// snapshot it freezes, never the document the author keeps editing.
+	live := f.call("GET", f.path("/workflows/"+wfid), nil, "", 200)
+	liveGlobals, _ := live.O("graph")["globalVariables"].([]any)
+	if got := liveGlobals[0].(map[string]any)["value"]; got != "docs/report.md" {
+		t.Fatalf("live graph value = %v; the authored string must not be rewritten", got)
+	}
+}

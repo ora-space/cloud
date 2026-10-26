@@ -33,6 +33,12 @@ The Cloud server maintains the catalog itself (`internal/pluginmarket`): it sync
   version, kind, identifier syntax, text policy, SHA-256 format, the mutual exclusion of download URL and
   targets, and so on). Broken entries are skipped one by one; when a Plugin ID appears several times the first in
   path order wins; entries with `marketplace_visible=false` stay out of the catalog.
+- A `kind = agent` listing may declare an `[agent_configuration]` publication association: the sync reads the
+  static declaration copy inside the entry directory of the controlled checkout and validates it — no segment
+  of its path may be a symlink, and it must be a regular file, bounded, UTF-8, with a SHA-256 matching the association, compiling cleanly at the
+  association's schema version. A valid association enters the catalog snapshot together with its byte-exact
+  copy; an invalid one records a bounded reason on the entry, produces no consumable declaration, and does not
+  make the package uninstallable (see [Agent declaration snapshots and freezing](#agent-declaration-snapshots-and-freezing)).
 - A successful sync replaces the source's whole catalog in one transaction, so readers never see an intermediate
   state; a failure keeps the previous snapshot, records the reason on the source, and the next pass retries.
 - **Reading the catalog never leaves the database**: `GET .../spaces/:spaceId/plugins/catalog` reads only this table
@@ -44,6 +50,8 @@ URL must be an `https` Git URL without query or fragment and the branch name mus
 to start.
 
 ## Installing and removing
+
+The summary's optional `kind` comes from the selected release, never the latest catalog. The web screen uses it to offer My Configuration for selected Agents. Current members edit their own values; space installation/removal still requires administrator authority.
 
 | Endpoint | Description |
 |---|---|
@@ -70,7 +78,9 @@ Installing and removing plugins are Node executions that happen in the `plugin` 
   wants installed at that moment; `install_plugin` and `remove_plugin` maintenance operations contain just that one
   plugin. An empty set skips the step. Plugins selected after the freeze are not part of this set.
 - Each item is a **self-contained payload** assembled from the catalog snapshot: Plugin ID, version, download URL,
-  SHA-256 or targets. The Node needs no marketplace lookup and verifies the SHA-256 before writing to disk.
+  SHA-256 or targets. The Node needs no marketplace lookup and verifies the SHA-256 before writing to disk. An
+  agent plugin's install item additionally carries its frozen declaration association (see
+  [Agent declaration snapshots and freezing](#agent-declaration-snapshots-and-freezing)).
 - The Controller registers one `install_plugins` or `remove_plugins` execution with `RecordDispatch`; the target must
   be the runtime's current-generation Node and the input must equal the frozen set.
 - **Per-item results**: an installed version must equal the planned one, or the whole result is refused; failed
@@ -100,6 +110,32 @@ unfinished it is `installing` or `removing`; once all have finished (or there is
 or `removed`. Instances on run Workspaces are only execution facts of that run and do not take part in the space
 aggregate.
 
+## Agent declaration snapshots and freezing
+
+A `kind = agent` plugin publishes its Agent declaration through the manifest's `[agent_configuration]` association,
+so a declaration can be read without ever running the plugin. The declaration format belongs to the specs
+[Agent declaration decision](https://github.com/ora-space/specs/blob/main/decisions/desktop/plugin/manifest/20261017-agent-configuration-declarations.md);
+Cloud's distribution semantics are the
+[Agent configuration metadata decision](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md).
+Cloud does exactly three things on this chain:
+
+- **A self-contained snapshot**: once the sync validates the copy, the declaration association (schema version,
+  declaration digest, copy path) and its byte-exact copy persist in `plugin_catalog_entries`; catalog reads serve
+  them from the snapshot without downloading any `.orax`, running plugin code, or making model requests.
+- **Selection freezes**: an administrator's version selection freezes the release under the existing rules, and
+  the declaration association is frozen with the whole entry; later catalog updates — new versions or new
+  declarations — never rewrite the frozen selection or the install plans it feeds to runtimes.
+- **Dispatch carries identity only**: an agent plugin's self-contained install item additionally carries the
+  frozen association's identity fields (schema version and declaration digest), so `RecordDispatch`'s
+  input-equality gate refuses dispatches that lose or tamper with the association; the static copy never leaves
+  Cloud.
+
+"Not declared" and "declared but invalid" are different facts: the former carries no association fields, the
+latter records a bounded reason on the entry and still leaves the package installable.
+Reasons use fixed diagnostics without echoing declaration values or server paths. Control characters
+are removed and UTF-8 remains valid before persistence, so one malformed declaration cannot block
+the other entries in a source sync.
+
 ## The Agent roster
 
 When the space aggregate of a `kind = agent` plugin becomes `installed`, Cloud creates (or restores) one
@@ -117,3 +153,4 @@ before the run is ready Cloud also checks that the run's pinned Agent plugin was
 - [Administrators store the space's plugin intent; per-runtime maintenance waits for idleness and uses the same exclusive boundary](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20260927-admin-selection-and-idle-maintenance.md)
 - [Plugin installation and removal are executed by the Node; new Workspaces install the Space's plugins automatically](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20260928-node-executes-plugin-installs.md)
 - [Workflow plugin assets are fetched by Cloud and imported document by document as editable copies](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261016-workflow-plugin-assets.md)
+- [Cloud reads Agent declarations from publication metadata; configuration and installs stay bound to the same release](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md)

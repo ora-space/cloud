@@ -13,6 +13,18 @@ Driven by `config.toml` (copied from `config.toml.template`, ignored by Git), it
 - Writes `.local/dev.env` (`-env` overrides): `CLOUD_DATABASE_DSN`, `GATEWAY_DATABASE_DSN` and `TEST_DATABASE_URL` from `[database].dsn`, `GATEWAY_LOGIN_PROVIDER` from whichever section is filled (`github` / `huawei-idaas` / empty), `GATEWAY_GITHUB_CLIENT_ID` from `[github]`, `GATEWAY_IDAAS_BASE_URL` / `GATEWAY_IDAAS_CLIENT_ID` / `GATEWAY_IDAAS_DISPLAY_NAME_FIELD` from `[idaas]`. `Taskfile.yml` loads it through `dotenv` for every task, so `task dev`, `task migrate`, `task test` and `task check` share one set of values; variables already set in the shell take precedence.
 - Applies the database migrations with the same DSN, through the same path as `cloudctl migrate`.
 
+Control listener mTLS materials live under `.local/control/` (the `control/` directory beside the `-env` file):
+`ca.key`/`ca.pem` are the local CA, `server.key`/`server.pem` are the Cloud server identity, and
+`controller.key`/`controller.pem` are the Controller client identity. Server SANs cover `localhost`, `cloud`, `127.0.0.1`
+and `::1`; the client URI is `spiffe://ora.local/controller/local-controller`. The CA lasts ten years and leaf certificates one year.
+`.local/dev.env` also sets `CLOUD_CONTROL_CERTIFICATE_FILE`, `CLOUD_CONTROL_PRIVATE_KEY_FILE`, `CLOUD_CONTROL_CLIENT_CA_FILE`
+and `CLOUD_CONTROL_CONTROLLER_IDENTITY`. Reruns preserve complete bundles. Partial bundles fail: restore the original
+files or remove the whole bundle to regenerate. Before reuse, setup validates key matching, CA chains, purposes, SANs,
+Controller identity and validity. Invalid or expired bundles fail without rewriting files and require explicit repair or
+regeneration and updating the peer.
+A local Controller uses `controller.pem`, `controller.key` and `ca.pem` with ID `local-controller`; never distribute the
+CA private key. This only supplies development configuration; the server's TLS 1.3 mutual authentication remains mandatory.
+
 `configs/config.yaml` and `configs/gateway.yaml` remain the authoritative service configuration; `config.toml` only supplies the per-machine values, and only through the environment overrides and secret file the services already accept.
 
 ## Boundaries and invariants

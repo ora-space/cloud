@@ -56,8 +56,45 @@ func pluginSnapshot(t *transaction, o Object) (plugins, meta []Object) {
 			plugins = append(plugins, item)
 			meta = append(meta, Object{"pluginId": item.S("pluginId"), "desiredRevision": row.N("desiredRevision")})
 		}
+		plugins, meta = frozenAgentPluginSnapshot(t, o, plugins, meta)
+		return frozenWorkflowRunPluginSnapshot(t, o, plugins, meta)
+	}
+}
+
+// frozenWorkflowRunPluginSnapshot puts the Agent CLI package a WorkflowRun froze at creation in place of
+// the Space's current selection for that plugin (D3: an in-flight upgrade must not change what an
+// already-created run executes). The release is frozen on the run row in the same transaction that
+// froze plugin_version, so a run whose Space moved on between creation and the Workspace's plugin step
+// installs the version its own session will require instead of one the Node rejects as
+// `agent_plugin_unavailable`. Every other plugin keeps the Space's current selection: the run freezes
+// only the Agent CLI identity its session dispatches.
+//
+// It replaces, never appends. A plugin the Space no longer selects is not installed for a run created
+// before the removal: reinstalling it would undo an administrator's decision for a run that has not
+// started yet, and the start gate already reports that bounded failure as `agent_plugin_unavailable`.
+// A run with no frozen release (one created before the release was frozen, or whose selection named
+// another version) keeps the plain Space snapshot for the same reason it has no honest package to use.
+func frozenWorkflowRunPluginSnapshot(t *transaction, operation Object, plugins, meta []Object) (frozenPlugins, frozenMeta []Object) {
+	frozen := t.one(`SELECT r.plugin_release FROM workflow_runs r JOIN workspaces w ON w.workflow_run_id=r.id
+		WHERE w.id=$1`, operation.S("workspaceId"))
+	if frozen == nil || frozen["pluginRelease"] == nil {
 		return plugins, meta
 	}
+	release := frozen.O("pluginRelease")
+	if release.S("version") == "" {
+		return plugins, meta
+	}
+	payload := pluginPayload(release)
+	if payload.S("pluginId") == "" {
+		payload["pluginId"] = opencodeAgentCLI
+	}
+	for i, plugin := range plugins {
+		if plugin.S("pluginId") == payload.S("pluginId") {
+			plugins[i] = payload
+			return plugins, meta
+		}
+	}
+	return plugins, meta
 }
 
 func pluginPayload(release Object) Object {
@@ -68,7 +105,33 @@ func pluginPayload(release Object) Object {
 	if targets := objectsOf(release["targets"]); len(targets) > 0 {
 		item["targets"] = targets
 	}
+	// The frozen declaration association travels with the plan so the Node can prove the package's
+	// in-archive declaration bytes against it. Only the identity fields travel: the static copy
+	// and its path are Cloud-side evidence the Node re-derives from the actual package.
+	// An undeclared release carries no key at all: the Node reads a present association as a
+	// declaration to prove, so an empty one would fail every undeclared install.
+	if association, declared := PluginAgentConfiguration(release); declared {
+		item["agentConfiguration"] = Object{
+			"schemaVersion":     association.N("schemaVersion"),
+			"declarationSha256": association.S("declarationSha256"),
+		}
+	}
 	return item
+}
+
+// PluginAgentConfiguration returns the Agent declaration association a frozen release or plugin
+// plan item carries, and whether it carries one at all. Only an object value counts: the catalog
+// stores an undeclared listing's association as SQL NULL, which a frozen selection keeps as a JSON
+// null, and older selections lack the key. Object.O cannot make this distinction because it
+// returns an empty object for an absent field.
+func PluginAgentConfiguration(item Object) (Object, bool) {
+	switch v := item["agentConfiguration"].(type) {
+	case map[string]any:
+		return Object(v), true
+	case Object:
+		return v, true
+	}
+	return nil, false
 }
 
 func pluginRevision(meta []Object, pluginID string) int64 {

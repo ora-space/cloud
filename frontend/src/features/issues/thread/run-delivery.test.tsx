@@ -19,25 +19,31 @@ const revision = {
   id: 'rev-1',
   baseCommit: 'a'.repeat(40),
   finalCommit: '1234567890abcdef1234567890abcdef12345678',
-  bundleSize: 2048,
+  bundleSize: null,
   historySize: 512,
   createdAt: '2026-10-09T00:00:00Z',
 }
 
 describe('deliverySummary', () => {
-  it('names the short final commit and the bundle size of a changed Revision', () => {
+  it('names the short final commit of a Git-delivered changed Revision without any size', () => {
     expect(deliverySummary({ ...base, revision: { ...revision, changed: true } }, true)).toBe(
-      '已保存 Revision 1234567（含改动，bundle 2.0 KB）',
+      '已保存 Revision 1234567（含改动）',
     )
   })
 
-  it('says an unchanged Revision saved no file changes', () => {
+  it('never shows a bundle size, even for a legacy Revision that reports one', () => {
     expect(
       deliverySummary(
-        { ...base, revision: { ...revision, changed: false, bundleSize: null } },
+        { ...base, revision: { ...revision, changed: true, bundleSize: 2048 } },
         true,
       ),
-    ).toBe('已保存 Revision 1234567（无文件改动）')
+    ).toBe('已保存 Revision 1234567（含改动）')
+  })
+
+  it('says an unchanged Revision saved no file changes', () => {
+    expect(deliverySummary({ ...base, revision: { ...revision, changed: false } }, true)).toBe(
+      '已保存 Revision 1234567（无文件改动）',
+    )
   })
 
   it('says a resumed run without new commits reused the resumed Revision', () => {
@@ -45,7 +51,7 @@ describe('deliverySummary', () => {
       deliverySummary(
         {
           ...base,
-          revision: { ...revision, changed: false, bundleSize: null, priorRevisionId: 'rev-0' },
+          revision: { ...revision, changed: false, priorRevisionId: 'rev-0' },
         },
         true,
       ),

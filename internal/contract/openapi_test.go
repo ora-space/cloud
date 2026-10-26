@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -112,5 +113,34 @@ func TestPluginRoutesInDocument(t *testing.T) {
 	deleteRequired := deleteBody["required"].([]string)
 	if len(deleteRequired) != 2 {
 		t.Fatalf("DELETE plugins required fields = %v", deleteRequired)
+	}
+}
+
+// A direct run states the Project it freezes, and the document has to say so: the runtime refuses a
+// run that names none with 409 workflow_run_project_required, so a schema that let a client omit
+// projectId would describe a request the service always rejects. The other three fields stay
+// optional — a run defaults its name to the workflow's, pins the latest snapshot when none is given,
+// and may carry no input — which is why the assertion is the exact set rather than membership.
+func TestWorkflowRunRouteRequiresProject(t *testing.T) {
+	paths := Document()["paths"].(map[string]any)
+	post := paths["/api/v1/tenants/{tid}/workflows/{wfid}/runs"].(map[string]any)["post"].(map[string]any)
+	body := post["requestBody"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	required := body["required"].([]string)
+	if len(required) != 1 || required[0] != "projectId" {
+		t.Fatalf("POST workflow runs required fields = %v; want [projectId]", required)
+	}
+}
+
+// TestWorkflowRunStatusKeepsReservedStateOutOfTheContract pins the public run status set. The
+// storage CHECK retains awaiting_input for forward compatibility, but no writer produces it and
+// the approved phase-one scope defers HITL; a public enum that listed it would present an
+// unreachable state as selectable.
+func TestWorkflowRunStatusKeepsReservedStateOutOfTheContract(t *testing.T) {
+	schemas := Document()["components"].(map[string]any)["schemas"].(map[string]any)
+	status := schemas["WorkflowRun"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)
+	enum := status["enum"].([]string)
+	want := []string{"pending", "running", "succeeded", "failed", "cancelled"}
+	if !slices.Equal(enum, want) {
+		t.Fatalf("WorkflowRun.status enum = %v; want %v", enum, want)
 	}
 }

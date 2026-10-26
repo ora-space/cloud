@@ -336,6 +336,72 @@ func TestWorkflowAssetImportFromInstalledPlugin(t *testing.T) {
 	}
 }
 
+// TestWorkflowAssetImportNormalizesFileGlobals covers the import write path the publish gate shares:
+// a packaged document whose file and array[file] globals carry legacy path strings freezes with the
+// canonical {kind: "workspace_file", path} reference, so a condition reading the imported snapshot
+// sees the same shape desktop's into_global_variables produces. The live copy keeps the authored
+// strings, and a document without file globals still freezes byte-for-byte — only the documents that
+// need the rewrite are re-encoded.
+func TestWorkflowAssetImportNormalizesFileGlobals(t *testing.T) {
+	f := setup(t)
+	repo := workflowMarketplace(t, f.root)
+	fileDoc := executableDocument("File Kit", `"globalVariables":[{"name":"f.report","valueType":"file","value":"docs/report.md"},{"name":"f.reports","valueType":"array[file]","value":["docs/a.md","docs/b.md"]}]`)
+	plainDoc := executableDocument("Plain Kit", `"description":"no file globals"`)
+	pkg := workflowPackage(t, map[string]string{
+		"file.json":  fileDoc,
+		"plain.json": plainDoc,
+	})
+	packages := newWorkflowPackages(t, map[string][]byte{"/packages/file-kit-1.0.0.orax": pkg})
+	publishWorkflowRelease(t, repo, "file-kit", "1.0.0", packages.server.URL+"/packages/file-kit-1.0.0.orax", pkg)
+	f.syncMarketplace(t, repo)
+	f.store.WorkflowAssets = workflowasset.NewFetcher(nil, packages.server.Client().Transport)
+
+	sid := f.defaultSpaceID()
+	f.installWorkflowPlugin(t, sid, "official/file-kit", "")
+	must(t, f.importWorkflowAssets(t))
+
+	documents := assetDocuments(f.assetImport(t, sid, "official/file-kit"))
+	fileID := documents["assets/workflows/file.json"].S("workflowId")
+	plainID := documents["assets/workflows/plain.json"].S("workflowId")
+	if fileID == "" || plainID == "" {
+		t.Fatalf("both documents must import: %v", documents)
+	}
+
+	// The frozen snapshot stores canonical references; the live document keeps the authored strings.
+	snapshots := f.call("GET", f.path("/workflows/"+fileID+"/snapshots"), nil, "", 200)
+	snapshot := core.Object(snapshots["items"].([]any)[0].(map[string]any))
+	globals, _ := snapshot.O("graph")["globalVariables"].([]any)
+	if len(globals) != 2 {
+		t.Fatalf("snapshot froze %d globals, want 2: %v", len(globals), globals)
+	}
+	report := globals[0].(map[string]any)["value"].(map[string]any)
+	if report["kind"] != "workspace_file" || report["path"] != "docs/report.md" {
+		t.Fatalf("file global value = %v; want {kind: workspace_file, path: docs/report.md}", report)
+	}
+	reports := globals[1].(map[string]any)["value"].([]any)
+	for i, want := range []string{"docs/a.md", "docs/b.md"} {
+		ref := reports[i].(map[string]any)
+		if ref["kind"] != "workspace_file" || ref["path"] != want {
+			t.Fatalf("array[file] global value[%d] = %v; want {kind: workspace_file, path: %s}", i, ref, want)
+		}
+	}
+
+	live := f.liveWorkflows(t)["File Kit"]
+	liveGlobals, _ := live.O("graph")["globalVariables"].([]any)
+	if got := liveGlobals[0].(map[string]any)["value"]; got != "docs/report.md" {
+		t.Fatalf("live graph value = %v; the authored string must not be rewritten", got)
+	}
+
+	// A document without file globals must freeze byte-for-byte: the snapshot stores the same text
+	// the live copy does, not a re-encoded graph.
+	var livePlain, snapshotPlain string
+	must(t, f.store.Pool.QueryRow("SELECT graph::text FROM workflows WHERE id=$1", plainID).Scan(&livePlain))
+	must(t, f.store.Pool.QueryRow("SELECT graph::text FROM workflow_snapshots WHERE workflow_id=$1 AND version=1", plainID).Scan(&snapshotPlain))
+	if snapshotPlain != livePlain {
+		t.Fatalf("a document without file globals must freeze verbatim: live=%s snapshot=%s", livePlain, snapshotPlain)
+	}
+}
+
 // TestWorkflowAssetImportDocumentFailuresAreIndependent covers the four bounded document codes:
 // one document failing never aborts the package, failures are retried on the next administrator
 // trigger, and a successful path is never revisited even when the package changes.

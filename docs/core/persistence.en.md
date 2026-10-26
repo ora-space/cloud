@@ -20,18 +20,16 @@ HTTP conventions are in [HTTP API conventions](http-api.en.md).
   tables and runs no migrations. GORM is used solely to open the pool (`internal/repository`);
   every business query is hand-written, parameterized SQL.
 - The `Store` carries the collaborators needed at run time: the object storage configuration
-  `ObjectStore`, the workflow asset downloader `WorkflowAssets`, the collaboration ports
+  `ObjectStore`, the Git Server repository address and ref query `GitServer`, the workflow asset downloader `WorkflowAssets`, the collaboration ports
   (`Directory`, `Forms` and others, see [Issue collaboration](../collaboration/interactions.en.md)),
   the IssueRun business hooks and window settings, the SSE event hub `Events` and the Controller
   signal hub `Signals`. `cmd/*` assembles them at startup; core never reads configuration or
   environment variables itself.
-- `core.NewDevelopmentStore` exists only for test fixtures and the in-process simulator. It
-  additionally opens a retired, unscoped clone contract and must never be used by the production
-  server.
 
-## Transactions: `transact`
+## Transactions: `transact` and `transactWorkflowRun`
 
-Every read and write goes through `Store.transact`:
+Ordinary reads and writes go through `Store.transact`; a WorkflowRun's advance, release and
+reconciliation go through `Store.transactWorkflowRun`:
 
 ```text
 BeginTx
@@ -39,13 +37,46 @@ BeginTx
   fn(t)                                     ← business logic, database work only
 Commit
   publish post-commit hints: Controller signals, SSE events
+
+BeginTx
+  SELECT pg_advisory_xact_lock_shared(67420911)             ← the global lock in shared mode
+  SELECT pg_try_advisory_xact_lock(67420911, hash(runId))   ← this WorkflowRun's exclusive transaction lock
+  [SELECT pg_advisory_xact_lock(67420913, hash(issueId))]   ← when the run is linked to an Issue
+  [SELECT pg_advisory_xact_lock(67420912, hash(projectId))] ← only when deciding a Project-level invariant
+  fn(t)
+Commit
 ```
 
-**The global lock.** Every transaction first takes the same transaction-scoped advisory lock, so
-all core transactions — read-only requests included — run serially in the database. This is a
-deliberate trade: write throughput is exchanged for a simple, auditable lock order, and cross-table
+**The global lock.** Every ordinary transaction first takes the same transaction-scoped advisory
+lock, so ordinary core transactions — read-only requests included — run serially in the database and
+are mutually exclusive with every WorkflowRun transaction. This is
+a deliberate trade: write throughput is exchanged for a simple, auditable lock order, and cross-table
 invariants need no per-row locking design. The lock is released automatically on commit or
 rollback and is never held across requests.
+
+**A WorkflowRun's exclusive right to execute.** A WorkflowRun transaction first takes the global
+lock in shared mode, so it is still mutually exclusive with every ordinary transaction; then it
+tries to take that run's exclusive lock. Not getting it means another replica is executing the same
+run right now: this tick exits without forming a decision, writing, or publishing a hint, and the
+next tick retries. The lock is the transaction itself, released by PostgreSQL on commit, rollback,
+or the disconnect of a crashed replica — there is no renewal, no expiry window, and no process-local
+state, so replicas that never saw each other still cannot advance the same run concurrently.
+Different runs' locks do not conflict, so several replicas can advance different runs in parallel. A
+hash collision only makes two runs share one lock (some extra serialization); it never gives one run
+two executors.
+
+**Ordering Issue Timeline writes.** A Timeline `seq` is `MAX+1` per Issue, shared by `issue_comments`
+and `issue_activities`; two concurrent writers of the same Issue would read the same maximum, and the
+one that writes second would violate `UNIQUE(issue_id, seq)` and lose its whole transaction. The run
+lock is per run by design and cannot express this, so after taking the run lock a transaction also
+takes the Issue's transaction lock (`pg_advisory_xact_lock`) when the run is linked to an IssueRun.
+A direct run with no Issue writes no Timeline and takes no such lock. Ordinary transactions are
+serialized by the exclusive global lock, WorkflowRun transactions by this Issue lock; together they
+keep one Issue's `seq` monotonic and duplicate-free.
+
+Project-level invariants ("a Project has at most one live operation") span runs and cannot be
+expressed by a run lock, so creating a run Workspace or declaring its deletion also takes the
+Project lock. Both paths use the same order — global, run, Issue, Project — so it cannot cycle.
 
 **Transactions do database work only.** A transaction never sends HTTP, runs Git, touches object
 storage, reads or writes files, or waits on a Node. Flows that need external I/O are split into
@@ -90,7 +121,7 @@ discarded on rollback:
 | Collected item | Action after commit |
 |---|---|
 | A newly queued or retried Workspace operation | `ControlHub` sends `OperationAvailable` |
-| A new clone request or execution work item | `ControlHub` sends `WorkAvailable` |
+| A new execution work item (an Agent session or a Revision delivery) | `ControlHub` sends `WorkAvailable` |
 | A new Thread command | `ControlHub` sends `ThreadCommandAvailable` |
 | A business change inside a Space | `SpaceHub` sends an invalidation event to that Space's SSE subscribers |
 

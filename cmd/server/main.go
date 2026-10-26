@@ -23,10 +23,13 @@ import (
 	"github.com/wanglongan587/cloud/internal/config"
 	"github.com/wanglongan587/cloud/internal/controlgrpc"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/credentialstore"
+	"github.com/wanglongan587/cloud/internal/egress"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/modelgateway"
 	"github.com/wanglongan587/cloud/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/internal/repository"
+	"github.com/wanglongan587/cloud/internal/repoworker"
 	"github.com/wanglongan587/cloud/internal/workflowasset"
 )
 
@@ -61,7 +64,21 @@ func configureCollaboration(store *core.Store, developmentFixtures bool, log *za
 
 func run() (runErr error) {
 	configPath := flag.String("config", "", "configuration file")
+	egressPath := flag.String("deployment-egress", os.Getenv("ORA_DEPLOYMENT_EGRESS_FILE"), "shared deployment egress JSON file")
 	flag.Parse()
+	policy, e := egress.Load(*egressPath)
+	if e != nil {
+		return e
+	}
+	if policy.Enterprise() && os.Getenv("MODEL_GATEWAY_DEVELOPMENT_ALLOW_HOSTS") != "" {
+		return errors.New("enterprise egress conflicts with development hosts")
+	}
+	dns := egress.DeploymentDNSConfig()
+	upstream, e := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DNS: dns, Policy: policy})
+	if e != nil {
+		return e
+	}
+	defer upstream.CloseIdleConnections()
 	cfg, e := config.Load(*configPath)
 	if e != nil {
 		return e
@@ -82,11 +99,19 @@ func run() (runErr error) {
 		return e
 	}
 	defer func() { runErr = errors.Join(runErr, store.Pool.Close()) }()
+	store.ModelEgress = policy
 	store.ObjectStore, e = cfg.ObjectStore.Open()
 	if e != nil {
 		return e
 	}
+	store.GitServer, e = cfg.GitServer.Open()
+	if e != nil {
+		return e
+	}
 	configureCollaboration(store, cfg.Collaboration.DevelopmentFixtures, log)
+	if cfg.Plugins.PersonalAgentTarget != "" {
+		store.PersonalAgentRuntime = &core.PersonalAgentRuntime{Target: cfg.Plugins.PersonalAgentTarget, ContractVersion: 1, Protocols: []string{"openai-completions", "anthropic-messages"}}
+	}
 	// The B side of the Agent Run seam: Cloud's IssueRun/Thread lifecycle is driven by these five
 	// callbacks, each of which runs inside the control-plane transaction that just persisted the
 	// evidence it reacts to (controller-integration D6). They are the only writer of the B-side
@@ -129,12 +154,8 @@ func run() (runErr error) {
 	// Workflow asset import is triggered by the space's desired state, never by a Node install
 	// result: a space with no live runtime still receives its templates. Downloads run outside
 	// transactions; only results are written. The checked outbound client enforces the same
-	// public-address policy as the model gateway and never follows redirects.
+	// deployment policy as the model gateway and never follows redirects.
 	if cfg.Plugins.AssetImportEnabled {
-		upstream, clientErr := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DNS: modelgateway.DefaultDNSConfig()})
-		if clientErr != nil {
-			return clientErr
-		}
 		store.WorkflowAssets = workflowasset.NewFetcher(store.ObjectStore, upstream.Transport)
 		syncGroup.Add(1)
 		go func() {
@@ -199,7 +220,10 @@ func run() (runErr error) {
 	// delivery loops below.
 	{
 		const agentThreadEndInterval = 10 * time.Second
+		const scheduledTaskLoopInterval = 10 * time.Second
+		const scheduledTaskDeadlineLoopInterval = time.Minute
 		store.ThreadIdleTimeout = cfg.IssueRuns.ThreadIdleTimeout
+		store.ScheduledTaskAcceptanceEnabled = cfg.IssueRuns.ScheduledTaskAcceptanceEnabled
 		syncGroup.Add(1)
 		go func() {
 			defer syncGroup.Done()
@@ -209,6 +233,20 @@ func run() (runErr error) {
 		go func() {
 			defer syncGroup.Done()
 			pluginmarket.RunSyncLoop(ctx, store.ReactToCancelledAgentRunsOnce, agentThreadEndInterval, pluginmarket.ContextSleep, log)
+		}()
+		// Cloud Scheduled Task (specs decisions/cloud/scheduled-task): the evaluation pass
+		// admits due occurrences (D2/D3/D5) and the deadline pass writes the 60-minute
+		// cancellation request and its scheduled-layer fact (D4) for the shared G-026 writer
+		// machinery (the React loop above) to consume.
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, store.EvaluateScheduledTasksOnce, scheduledTaskLoopInterval, pluginmarket.ContextSleep, log)
+		}()
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			pluginmarket.RunSyncLoop(ctx, store.WriteScheduledTaskDeadlinesOnce, scheduledTaskDeadlineLoopInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
 	// Delivery/release loops. The first applies IssueRun D5's give-up limits to runs still
@@ -244,23 +282,66 @@ func run() (runErr error) {
 			defer syncGroup.Done()
 			pluginmarket.RunSyncLoop(ctx, store.GiveUpStaleWorkspaceReleasesOnce, agentDeliveryInterval, pluginmarket.ContextSleep, log)
 		}()
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			// A scheduled run's artifact window is fixed when its declaration is stored, so expiry is
+			// the same clock-driven pass as the others: one short transaction per run, no policy.
+			pluginmarket.RunSyncLoop(ctx, store.ExpireScheduledArtifactDeliveriesOnce, agentDeliveryInterval, pluginmarket.ContextSleep, log)
+		}()
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			// Retention applies D5's ten-run cost boundary per task; the object-store deletions happen
+			// between transactions, exactly like the reads.
+			pluginmarket.RunSyncLoop(ctx, store.PruneScheduledRunArtifactsOnce, agentDeliveryInterval, pluginmarket.ContextSleep, log)
+		}()
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			// The prefix sweep is the lifetime fallback for objects a presigned PUT wrote after Cloud
+			// stopped granting them: deterministic keys, no bucket listing, no receipt needed.
+			pluginmarket.RunSyncLoop(ctx, store.CollectScheduledArtifactObjectsOnce, agentDeliveryInterval, pluginmarket.ContextSleep, log)
+		}()
 	}
+	// Residual recovery remains independent of a run's business terminal state. Cloud consumes
+	// existing, identity-bound facts; a missing fact leaves its ledger open rather than treating
+	// a timer or reconnection as cleanup proof. This loop shares cancellation and shutdown joining
+	// with the delivery/release passes above and has no disable switch.
+	syncGroup.Add(1)
+	go func() {
+		defer syncGroup.Done()
+		pluginmarket.RunSyncLoop(ctx, store.ReconcileAgentRunResidualsOnce, cfg.IssueRuns.ResidualReconcileInterval, pluginmarket.ContextSleep, log)
+	}()
 	// Workflow advance loop: the Cloud-side scheduler (specs#99 D1 条件②/④, landing order step 3).
 	// A bounded rescan of pending and running workflow runs, each advanced in its own short
 	// transaction; the ready set is recomputed from committed state only, so the pass is idempotent
-	// and a replica that crashes mid-tick resumes exactly where the committed state says. In its
-	// first step it executes start/condition/output inline and settles runs honestly; agent nodes
-	// fail the run fast with an explicit reason until the execution wiring lands in the next step.
+	// and a replica that crashes mid-tick resumes exactly where the committed state says. start,
+	// condition and output execute inline; an agent node runs as a real session through the control
+	// plane and settles from that session's terminal evidence. The settlement reads the Node
+	// unreachability window the delivery loops above configure — the same `DeliveryUnreachableAfter`
+	// D5 and D8 judge, not a second limit — so an in-flight session whose Node is gone fails its node
+	// instead of holding the run in `running`, and an unconfigured window fails closed by holding it.
+	// A session whose Node is still there but which produces neither a result nor a successful turn
+	// end is bounded separately by cfg.Workflow.SessionTurnTimeout (circus#299 option A).
 	{
 		const workflowAdvanceInterval = 10 * time.Second
+		store.WorkflowSessionTurnTimeout = cfg.Workflow.SessionTurnTimeout
 		syncGroup.Add(1)
 		go func() {
 			defer syncGroup.Done()
 			pluginmarket.RunSyncLoop(ctx, store.AdvanceWorkflowRunsOnce, workflowAdvanceInterval, pluginmarket.ContextSleep, log)
 		}()
 	}
+	// The external Git line: the repository worker drives syncs, publishes and credential checks
+	// through the Repo Executor, and the Store gets the Credential Store and ref-query ports its
+	// credential and publish routes need. Owned like the loops above: ctx cancellation stops it
+	// and the WaitGroup waits for in-flight tasks to settle.
+	if err := wireRepository(ctx, &cfg.Repository, store, log, &syncGroup); err != nil {
+		return err
+	}
 	gin.SetMode(cfg.Server.Mode)
-	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router.New(store, auth, log, directory), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: egress.HealthMetadata(router.New(store, auth, log, directory), policy.Digest(dns)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: cfg.Server.ReadTimeout, WriteTimeout: cfg.Server.WriteTimeout, IdleTimeout: 60 * time.Second}
 	// The control listener is bound before serving so a taken port fails startup, not a Controller.
 	control, e := net.Listen("tcp", cfg.Control.GRPCAddr)
 	if e != nil {
@@ -313,4 +394,46 @@ func run() (runErr error) {
 		syncGroup.Wait()
 		return e
 	}
+}
+
+// credentialStoreManager adapts the Credential Store's management client to the port core
+// consumes, so core depends on no transport.
+type credentialStoreManager struct {
+	client *credentialstore.ManagementClient
+}
+
+func (m credentialStoreManager) CredentialVersion(ctx context.Context, id string) (core.StoredCredential, error) {
+	md, err := m.client.Get(ctx, id)
+	return core.StoredCredential{CurrentVersion: md.CurrentVersion, SubmissionID: md.SubmissionID, Revoked: md.Revoked}, err
+}
+
+func (m credentialStoreManager) RevokeCredential(ctx context.Context, id string) error {
+	return m.client.Revoke(ctx, id)
+}
+
+func wireRepository(ctx context.Context, cfg *config.RepositoryConfig, store *core.Store, log *zap.Logger, group *sync.WaitGroup) error {
+	opened, err := cfg.Open()
+	if err != nil || opened == nil {
+		if err == nil {
+			log.Warn("repository worker disabled: Projects are created but no sync runs and Git credentials cannot be submitted")
+		}
+		return err
+	}
+	store.GitSubmissions = &core.GitCredentialSubmissions{Key: opened.SubmissionKey, IngressURL: opened.IngressURL}
+	store.GitCredentialStore = credentialStoreManager{client: opened.CredentialStore}
+	store.GitRefs = opened.Refs
+	host, _ := os.Hostname()
+	worker, err := repoworker.New(&repoworker.Config{
+		Store: store, Executor: opened.Executor, Refs: opened.Refs, Key: opened.AuthorizationKey, Owner: "cloud:" + host,
+		Slots: cfg.Slots, Lease: cfg.Lease, SyncTimeout: cfg.SyncTimeout, PublishTimeout: cfg.PublishTimeout, Log: log.Named("repository"),
+	})
+	if err != nil {
+		return err
+	}
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		worker.Run(ctx)
+	}()
+	return nil
 }

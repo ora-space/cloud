@@ -81,8 +81,8 @@ func deliveryRetryBackoff(attempted int) time.Duration {
 //	                            with D5's backoff (a retry never creates a new logical delivery —
 //	                            the run, its Revision target and its Workspace are unchanged).
 //	skipped                  → releasing with deliveryState=skipped: the deployment has no object
-//	                            store, so no attempt could ever succeed and retrying would hold the
-//	                            Workspace against a limit that can never be reached.
+//	                            store or no Git Server, so no attempt could ever succeed and retrying
+//	                            would hold the Workspace against a limit that can never be reached.
 //
 // Identity is re-read, never taken from the caller: the run must be the one the registered delivery
 // execution was dispatched for, through execution → execution_work → run, and the work item must be
@@ -147,13 +147,13 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 		if !validID(revisionID) {
 			return fmt.Errorf("deliverySettled: run %s execution %s reports %s without a registered Revision", runID, executionID, outcome)
 		}
-		return s.releaseAfterDelivery(t, o, outcome, revisionID)
+		return s.settleRevisionForRun(t, o, outcome, revisionID)
 	case deliveryStateSkipped:
-		// No object store is configured, so no delivery attempt was ever declared and none ever will
+		// No object store or Git Server is configured, so no delivery attempt was ever declared and none ever will
 		// be: the control plane's enqueue recorded the skip instead of a work item. Release with
 		// deliveryState=skipped, which is D4's own spelling for "no delivery happened", rather than
 		// waiting on a give-up window that no attempt is running against.
-		return s.releaseAfterDelivery(t, o, deliveryStateSkipped, "")
+		return s.settleRevisionForRun(t, o, deliveryStateSkipped, "")
 	}
 
 	// A failure. The reason is either the wire's closed set or Cloud's own `verification_failed`
@@ -166,7 +166,7 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 		return fmt.Errorf("deliverySettled: run %s execution %s carries failure reason %q, outside the closed set", runID, executionID, reason)
 	}
 	if s.deliveryGivenUp(t, o) {
-		return s.releaseAfterDelivery(t, o, deliveryStateFailed, "")
+		return s.settleRevisionForRun(t, o, deliveryStateFailed, "")
 	}
 	// D5: the failure releases a new delivery execution and the run keeps `delivering` — the sandbox
 	// stays running because the Revision is not registered yet. The retry is a fresh work item whose
@@ -187,6 +187,6 @@ func (s *Store) settleDelivery(t *transaction, runID, executionID string, settle
 		JOIN execution_work w ON w.id = e.work_id
 		WHERE w.run_id=$1 AND w.kind='deliver_revision'`, runID).N("n")
 	availableAt := time.Now().UTC().Add(deliveryRetryBackoff(int(attempts)))
-	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), availableAt)
+	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), "", 0, availableAt)
 	return nil
 }

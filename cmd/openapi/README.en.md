@@ -6,7 +6,7 @@
 
 ## Responsibilities
 
-- **Contract compilation**: Calls `internal/contract.Document()`, which constructs the authoritative OpenAPI 3.0 document representing all 19 public endpoints, 15 internal control endpoints, and the health check endpoint.
+- **Contract compilation**: Calls `internal/contract.Document()` to construct the authoritative OpenAPI 3.0 document aligned with route definitions and retired management-entry responses.
 - **Artifact synchronization**: Serializes the document into indented JSON and writes it to `api/openapi.json`.
 - **Single Source of Truth (SSOT)**: Guarantees that `api/openapi.json`, `router.Routes()`, and `internal/contract` stay strictly aligned.
 

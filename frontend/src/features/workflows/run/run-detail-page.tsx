@@ -92,10 +92,10 @@ function WorkflowRunDetailBody({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2">
           <RunStatusBadge status={run.status} />
           <RunTimestamp label={t('workflows.run.created')} iso={run.createdAt} />
-          {run.startedAt !== null && (
+          {run.startedAt !== null && run.startedAt !== '' && (
             <RunTimestamp label={t('workflows.run.started')} iso={run.startedAt} />
           )}
-          {run.finishedAt !== null && (
+          {run.finishedAt !== null && run.finishedAt !== '' && (
             <RunTimestamp label={t('workflows.run.finished')} iso={run.finishedAt} />
           )}
           <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
@@ -103,7 +103,9 @@ function WorkflowRunDetailBody({
           </span>
         </div>
         <div className="flex min-h-0 flex-1">
-          <div className="min-w-0 flex-1">
+          {/* The canvas sizes itself with `h-full` inside a `flex-1` root, so its column must be a
+              flex container: a block column lets `flex-1` go inert and collapses the canvas to 0. */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <RunOverviewCanvas
               definitionSnapshot={run.definitionSnapshot}
               nodeStates={nodeStates}

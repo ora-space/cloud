@@ -177,10 +177,16 @@ describe('condition operator catalog', () => {
       'not_equals',
       'contains',
       'not_contains',
+      'starts_with',
+      'ends_with',
       'greater_than',
+      'greater_than_or_equal',
       'less_than',
+      'less_than_or_equal',
       'empty',
       'not_empty',
+      'exists',
+      'not_exists',
     ])
   })
 })

@@ -12,13 +12,13 @@ The signed-in user's private multi-connection, multi-model settings and default 
 | `fields.tsx` | Labelled metadata inputs and bounded choices |
 | `connection-form.tsx` | Metadata draft for two protocols, authentication modes and removable model rows |
 | `credential-form.tsx` | Password input, immediate clearing before submission and safe outcome text |
-| `default-form.tsx` | Offers only enabled connections with credentials and their models |
+| `default-form.tsx` | Offers only enabled connections with credentials and their models, and reports the draft's connection so a plugin entry can follow it |
 | `model-connections-page.tsx` | List, editing, deletion confirmation and page composition |
 | `model-connections-page.test.tsx` | Production generated-client/MSW tests for forms, requests, versions and credential cache exclusion |
 
 ## Dependencies and invariants
 
-Depends on generated `api/me`, idempotency helpers from `features/spaces/api`, fault/pagination adapters in `lib`, and UI primitives. Only application routes consume this module; lower layers must not depend on it. TanStack Query owns server state; resource versions remount editing drafts, while refused writes preserve drafts. Slash-containing model identifiers remain unchanged. Secret inputs are never prefilled or persisted in browser storage and never enter TanStack mutation variables. Inputs clear before submission, and HTTP failures retain only safe fault messages, avoiding Axios request configuration containing the original key. Disabled controls never substitute for server authorization.
+Depends on generated `api/me`, idempotency helpers from `features/spaces/api`, fault/pagination adapters in `lib`, and UI primitives. Application routes and the personal entry in `agent-configurations` consume it; connection forms can return safe metadata after saving. Lower layers must not depend on it. TanStack Query owns server state. Default-model drafts retain their editing version across refreshes and conflicts; explicit reconciliation advances that baseline. The default is a single shared resource: the plugin entry learns from a callback which connection the draft points at and offers that connection's credential controls without copying the selection. Slash-containing model identifiers remain unchanged. Secret inputs are never prefilled or persisted in browser storage and never enter TanStack mutation variables. Inputs clear before submission, and HTTP failures retain only safe fault messages, avoiding Axios request configuration containing the original key. Disabled controls never substitute for server authorization.
 
 Credential PUT also requires an idempotency key. The shared adapter generates it from safe connection/version metadata without retaining the secret as idempotency variables.
 

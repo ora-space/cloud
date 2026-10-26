@@ -81,6 +81,16 @@ issue_runs:
   delivery_give_up_after: 2h
   delivery_unreachable_after: 30m
 
+workflow:
+  # The initial turn's window for a workflow agent session (circus#299). A dispatched session that
+  # produces neither a committed result nor a successful `turnEnded` receipt while its execution's
+  # `created_at` is older than this settles failed as `session_turn_deadline_exceeded`. A deployment
+  # duration judged on database time and timed per execution row, so a retry's new execution row
+  # re-times while replay, restart and replica passes never reset it. The approved default is 2h;
+  # omitting the key (or setting it non-positive) selects that default. Override:
+  # CLOUD_WORKFLOW_SESSION_TURN_TIMEOUT.
+  session_turn_timeout: 2h
+
 plugins:
   # Plugin marketplace the cloud server syncs into its own catalog snapshot (git fetch + scan of
   # registry/**/orax.toml). The catalog API always reads the PostgreSQL snapshot and never the
@@ -121,3 +131,47 @@ object_store:
   access_key_id_file: ""
   secret_access_key_file: ""
   upload_grant_ttl: 15m
+
+git_server:
+  # The Git Server holding every Project repository (Revision D2). Workspaces clone Binding
+  # snapshots from it and Revisions are delivered to it; Cloud writes `repository_base_url` into
+  # clone, session and delivery inputs and verifies refs through the ref query listener with its own
+  # client certificate. Leaving `repository_base_url` empty runs without a Git Server: clone steps
+  # block as git_server_unconfigured and deliveries are skipped. The key is a file reference, never a
+  # value here.
+  # Overrides: CLOUD_GIT_SERVER_REPOSITORY_BASE_URL / _REF_QUERY_URL / _CA_FILE / _CLIENT_CERT_FILE /
+  # _CLIENT_KEY_FILE / _REF_QUERY_TIMEOUT.
+  repository_base_url: ""
+  ref_query_url: ""
+  ca_file: ""
+  client_cert_file: ""
+  client_key_file: ""
+  ref_query_timeout: 10s
+
+repository:
+  # The external Git line (cloud/repo-executor, identity-access Credential Store, cloud/project sync
+  # and publish). Disabled, Projects are created but no sync runs and Git credentials cannot be
+  # submitted. Every value is a file or address reference; keys and certificates are mounted files.
+  # Overrides: CLOUD_REPOSITORY_<KEY>, e.g. CLOUD_REPOSITORY_ENABLED, CLOUD_REPOSITORY_EXECUTOR_URL.
+  enabled: false
+  executor_url: "https://repo-executor:8471"
+  executor_ca_file: ""
+  dispatcher_cert_file: ""
+  dispatcher_key_file: ""
+  # Ed25519 (PKCS#8) key signing execution authorizations; distinct from submission_key_file.
+  authorization_key_file: ""
+  credential_store_url: "https://credential-store:8462"
+  credential_store_ca_file: ""
+  manager_cert_file: ""
+  manager_key_file: ""
+  submission_key_file: ""
+  # The Credential Store's browser origin; tokens go there from the browser, never to Cloud.
+  credential_ingress_url: ""
+  git_refs_url: "https://git-server:8446"
+  git_refs_ca_file: ""
+  git_refs_cert_file: ""
+  git_refs_key_file: ""
+  slots: 4
+  lease: 1m
+  sync_timeout: 30m
+  publish_timeout: 5m

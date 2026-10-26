@@ -118,7 +118,7 @@ func requireThreadAccepting(run Object) {
 // The response is built explicitly rather than by returning the stored row: the public contract
 // names seven fields, and the entry's Node columns (`node_execution_id`, `node_sequence`) are not
 // part of it. A user turn has no Node identity — that is the Node's, allocated when it echoes.
-func appendThreadMessage(t *transaction, s *Store, r *PublicRequest, uid string) Object {
+func appendThreadMessage(t *transaction, s *Store, r *PublicRequest, uid string, beforeTaskMessageSeq int64) Object {
 	// Authorization is the Issue read path's own (Thread D3: "same as comments"): the caller is an
 	// active tenant member — Public checked membership before dispatching here — and this resolves
 	// the Issue inside the caller's tenant, so a wrong tenant or Issue is a plain not-found.
@@ -131,11 +131,20 @@ func appendThreadMessage(t *transaction, s *Store, r *PublicRequest, uid string)
 	// outside that scope must not be distinguishable from one that does not exist.
 	run := t.one(`SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL`, r.RunID, r.TenantID, i.S("id"))
 	require(run != nil && run.S("executorType") == "agent", 404, "not_found")
+	// Scheduled occurrences are one-shot headless sessions. They can never take a user turn,
+	// including while their Thread still happens to be pending/active/idle, so the public result is
+	// the same closed-Thread response as an already-ending session.
+	if scheduledTaskRun(t, run.S("id")) {
+		reject(409, "thread_closed")
+	}
 	if binding := t.one("SELECT user_id,connection_id,revoked_at FROM run_model_bindings WHERE run_id=$1", run.S("id")); binding != nil {
 		require(binding.S("userId") == uid, 403, "model_run_initiator_required")
 		require(binding["revokedAt"] == nil, 409, "model_connection_unavailable")
 	}
 	requireThreadAccepting(run)
+	if code := taskThreadAppendBlocker(t, run, beforeTaskMessageSeq); code != "" {
+		reject(409, code)
+	}
 
 	runID := run.S("id")
 	// seq is the run-scoped conversation order, allocated from the same MAX(seq)+1 rule the takeover

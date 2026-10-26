@@ -190,3 +190,10 @@ describe('workflowPointInsideIterationFrame', () => {
     expect(workflowPointInsideIterationFrame([card], { x: 10, y: 10 })).toBe(false)
   })
 })
+
+it('projects legacy condition edges onto else without mutating the draft', () => {
+  const nodes = [node('c', 'condition'), node('a', 'agent')]
+  const edges = [{ id: 'old', source: 'c', target: 'a' }]
+  expect(buildIterationRegionGraph(nodes, edges).edges[0]?.sourceHandle).toBe('else')
+  expect(edges[0]).not.toHaveProperty('sourceHandle')
+})

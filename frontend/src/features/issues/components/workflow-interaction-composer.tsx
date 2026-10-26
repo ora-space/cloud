@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp, Sparkles, Workflow, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,10 +9,13 @@ import {
   useAssistWorkflow,
   useConfirmWorkflow,
   useFormDescriptor,
+  useWorkflowPublishedSnapshotIds,
+  useWorkflowSnapshotForm,
 } from '@/features/issues/api'
 import { AssistSuggestions } from '@/features/issues/components/assist-suggestions'
 import { ConfirmReview } from '@/features/issues/components/confirm-review'
 import { DynamicFormRenderer } from '@/features/issues/components/dynamic-form-renderer'
+import { faultCode, faultParam } from '@/lib/api-client'
 import type {
   AssistSuggestion,
   CollaborationTargetSummary,
@@ -22,14 +26,25 @@ import type {
 } from '@/features/issues/types'
 
 /** Seeds the editable values from the descriptor's declared defaults. */
-function seedValues(descriptor: FormDescriptor): FormValues {
+function seedValues(descriptor: FormDescriptor, snapshotId?: string): FormValues {
   const values: FormValues = {}
   for (const field of descriptor.fields) {
     if (field.defaultValue !== undefined && field.defaultValue !== null) {
       values[field.key] = field.defaultValue
     }
   }
+  if (snapshotId) values['snapshotId'] = snapshotId
   return values
+}
+
+// An author's snapshotId field suppresses platform injection, so its name and type are insufficient.
+function isSnapshotSelector(field: FormField, publishedIds: string[]): boolean {
+  return (
+    field.key === 'snapshotId' &&
+    field.type === 'select' &&
+    !!field.options?.length &&
+    field.options.every((option) => publishedIds.includes(option.value))
+  )
 }
 
 /** Required fields the user has not filled yet — the only client-side gate on Review (Issue collaboration D9). */
@@ -96,18 +111,11 @@ function mergeContextRefs(applied: ContextRefRef[], picked: ContextRefRef[]): Co
 }
 
 /** Editable form state for one Workflow interaction. Pure UI state — nothing here is persisted. */
-function useWorkflowForm(descriptor: FormDescriptor | undefined) {
-  const [values, setValues] = useState<FormValues>({})
+function useWorkflowForm(descriptor: FormDescriptor, snapshotId?: string) {
+  const [values, setValues] = useState<FormValues>(() => seedValues(descriptor, snapshotId))
   const [contextRefs, setContextRefs] = useState<ContextRefRef[]>([])
   const [suggestion, setSuggestion] = useState<AssistSuggestion | null>(null)
   const [appliedKeys, setAppliedKeys] = useState<string[]>([])
-  const seeded = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!descriptor || seeded.current === descriptor.formRef) return
-    seeded.current = descriptor.formRef
-    setValues(seedValues(descriptor))
-  }, [descriptor])
 
   function setField(key: string, next: unknown) {
     setValues((current) => ({ ...current, [key]: next }))
@@ -174,11 +182,16 @@ function WorkflowFormBody(props: {
   missing: FormField[]
   onAssist: () => void
   onReview: () => void
+  onFieldChange: (key: string, next: unknown) => void
 }) {
   const { descriptor, form } = props
   return (
     <div className="space-y-2">
-      <DynamicFormRenderer descriptor={descriptor} values={form.values} onChange={form.setField} />
+      <DynamicFormRenderer
+        descriptor={descriptor}
+        values={form.values}
+        onChange={props.onFieldChange}
+      />
       {form.suggestion ? (
         <AssistSuggestions
           descriptor={descriptor}
@@ -226,11 +239,13 @@ function WorkflowFormBody(props: {
 function ComposerHeader({
   title,
   collapsed,
+  pending,
   onToggle,
   onRemove,
 }: {
   title: string
   collapsed: boolean
+  pending: boolean
   onToggle: () => void
   onRemove: () => void
 }) {
@@ -255,6 +270,7 @@ function ComposerHeader({
         type="button"
         className="ml-auto rounded p-0.5 hover:bg-muted"
         onClick={onRemove}
+        disabled={pending}
         aria-label="取消"
       >
         <X className="size-4 text-muted-foreground" />
@@ -273,11 +289,12 @@ function ComposerBody(props: {
   assistPending: boolean
   confirmPending: boolean
   assistFailed: boolean
-  confirmFailed: boolean
+  confirmError: string | undefined
   onAssist: () => void
   onReview: () => void
   onBack: () => void
   onConfirm: () => void
+  onFieldChange: (key: string, next: unknown) => void
 }) {
   if (props.reviewing) {
     return (
@@ -292,8 +309,10 @@ function ComposerBody(props: {
           onBack={props.onBack}
           onConfirm={props.onConfirm}
         />
-        {props.confirmFailed ? (
-          <p className="text-xs text-destructive">确认失败，请重试。</p>
+        {props.confirmError ? (
+          <p role="alert" className="text-xs text-destructive">
+            {props.confirmError}
+          </p>
         ) : null}
       </>
     )
@@ -307,12 +326,172 @@ function ComposerBody(props: {
         missing={props.missing}
         onAssist={props.onAssist}
         onReview={props.onReview}
+        onFieldChange={props.onFieldChange}
       />
       {props.assistFailed ? (
         <p className="text-xs text-muted-foreground">AI 建议当前不可用。</p>
       ) : null}
     </>
   )
+}
+
+/** Keeps one interaction across retries and locks before React can render a second click. */
+function useWorkflowSubmission({
+  slug,
+  issueId,
+  target,
+  onConfirmed,
+}: {
+  slug: string
+  issueId: string
+  target: CollaborationTargetSummary
+  onConfirmed: () => void
+}) {
+  const interactionId = useRef<string | null>(null)
+  const [identity] = useState(() => ({ key: crypto.randomUUID(), body: `@${target.displayName}` }))
+  const locked = useRef(false)
+  const confirm = useConfirmWorkflow(slug, issueId)
+  const submission = useMutation({
+    mutationFn: async (input: { values: FormValues; contextRefs?: ContextRefRef[] }) => {
+      if (!interactionId.current) {
+        const interaction = await openWorkflowInteraction(slug, issueId, target.id, identity)
+        interactionId.current = interaction.id
+      }
+      return confirm.mutateAsync({ interactionId: interactionId.current, ...input })
+    },
+    onSuccess: onConfirmed,
+    onError: () => {
+      locked.current = false
+    },
+  })
+
+  function submit(input: { values: FormValues; contextRefs?: ContextRefRef[] }) {
+    if (locked.current) return
+    locked.current = true
+    submission.mutate(input)
+  }
+
+  return {
+    submit,
+    isPending: submission.isPending || submission.isSuccess,
+    error: submission.error,
+  }
+}
+
+/**
+ * Turns a refused confirm into a hint the user can act on. A field rejection names the failing key, so
+ * it is shown with the descriptor's label; any other failure stays generic, because its code has no
+ * counterpart the form can point at and retrying is the only remedy the surface can offer.
+ */
+function confirmErrorMessage(error: unknown, descriptor: FormDescriptor): string {
+  const code = faultCode(error)
+  const key = faultParam(error, 'field')
+  const failures: Record<string, string> = {
+    workflow_no_published_snapshot: '该工作流尚无已发布版本，请先发布后再执行。',
+    workflow_executor_unconfigured: '个人模型或执行器槽位尚未配置，请在个人设置中补齐后重试。',
+    workflow_version_reserved_field: '该发布版本包含不兼容字段，请选择其他版本。',
+    workflow_run_project_required: '请先为任务关联项目。',
+    forbidden: '你没有执行此工作流的权限。',
+    unauthorized: '登录已失效，请重新登录。',
+    not_found: '工作流、版本或任务已不可用，请重新选择。',
+  }
+  if (code && failures[code]) return failures[code]
+  if (!code || !key) return '确认失败，请重试。'
+  const label = descriptor.fields.find((field) => field.key === key)?.label ?? key
+  if (code === 'required_field_missing') return `请填写必填项：${label}`
+  if (code === 'invalid_field_value') return `字段「${label}」的取值不合法，请修改后重试。`
+  return '确认失败，请重试。'
+}
+
+/** The live field that may be the platform version selector: the platform's key and control type. */
+function isSnapshotIdSelect(field: FormField): boolean {
+  return field.key === 'snapshotId' && field.type === 'select'
+}
+
+/**
+ * The live descriptor's platform version field, confirmed against every published snapshot id, so an
+ * author's same-named control is never mistaken for the platform's.
+ */
+function platformVersionField(
+  descriptor: FormDescriptor | undefined,
+  publishedIds: string[] | undefined,
+): FormField | undefined {
+  if (!descriptor || !publishedIds) return undefined
+  return descriptor.fields.find((field) => isSnapshotSelector(field, publishedIds))
+}
+
+/** The version a platform selector opens on: the server fills it with the newest published snapshot. */
+function defaultSnapshotId(field: FormField | undefined): string | undefined {
+  const value = field?.defaultValue
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** Why the form cannot be drawn yet: the reads are still in flight, or one of them failed. */
+type FormBlocker = { kind: 'loading' } | { kind: 'failed'; error: unknown; retry: () => void }
+
+/** What the composer renders: a blocker, or the form itself. */
+type ChosenVersionForm =
+  | FormBlocker
+  | {
+      kind: 'ready'
+      descriptor: FormDescriptor
+      versionField: FormField | undefined
+      snapshotId: string | undefined
+      loading: boolean
+      chooseVersion: (id: string) => void
+    }
+
+/** The slice of a query a form read needs to decide whether it can contribute a descriptor. */
+interface FormRead {
+  isPending: boolean
+  isError: boolean
+  error: unknown
+  refetch: () => void
+}
+
+/**
+ * Reports the first read that blocks the form: a failure outranks a pending read because retrying it is
+ * the only way forward, and a read that has not started cannot be failed.
+ */
+function formBlocker(reads: FormRead[]): FormBlocker | undefined {
+  const failed = reads.find((read) => read.isError)
+  if (failed) return { kind: 'failed', error: failed.error, retry: () => failed.refetch() }
+  return reads.some((read) => read.isPending) ? { kind: 'loading' } : undefined
+}
+
+/**
+ * Resolves the form the composer shows. The live descriptor only locates the platform version field and
+ * the version it opens on; the rendered form itself comes from that version's snapshot, so the fields
+ * the user sees are exactly the ones a confirm validates (Issue collaboration D9). Choosing another
+ * version reloads the same way, which is why there is one code path for the default and a switch.
+ */
+function useChosenVersionForm(
+  slug: string,
+  workflowId: string,
+  issueId: string,
+  formRef: string | undefined,
+): ChosenVersionForm {
+  const live = useFormDescriptor(slug, formRef, issueId)
+  const candidate = live.data?.fields.find(isSnapshotIdSelect)
+  const published = useWorkflowPublishedSnapshotIds(slug, candidate ? workflowId : undefined)
+  const [chosenSnapshotId, setChosenSnapshotId] = useState<string>()
+  const selected =
+    chosenSnapshotId ?? defaultSnapshotId(platformVersionField(live.data, published.data))
+  const snapshot = useWorkflowSnapshotForm(slug, workflowId, selected, issueId)
+
+  const reads = [live, ...(candidate ? [published] : []), ...(selected ? [snapshot] : [])]
+  const blocked = formBlocker(reads)
+  if (blocked) return blocked
+  const descriptor = selected ? snapshot.data : live.data
+  if (!descriptor) return { kind: 'loading' }
+  return {
+    kind: 'ready',
+    descriptor,
+    versionField: platformVersionField(descriptor, published.data),
+    snapshotId: snapshot.data?.snapshotId,
+    loading: (selected ? snapshot : live).isFetching,
+    chooseVersion: setChosenSnapshotId,
+  }
 }
 
 /**
@@ -333,22 +512,73 @@ export function WorkflowInteractionComposer({
   onConfirmed: () => void
   onRemove: () => void
 }) {
-  const formRef = target.interactionDescriptor.formRef ?? undefined
-  const descriptorQuery = useFormDescriptor(slug, formRef, issueId)
+  const form = useChosenVersionForm(
+    slug,
+    target.id,
+    issueId,
+    target.interactionDescriptor.formRef ?? undefined,
+  )
+  const confirm = useWorkflowSubmission({ slug, issueId, target, onConfirmed })
+
+  if (form.kind === 'loading') return <Skeleton className="h-24 w-full" />
+  if (form.kind === 'failed') {
+    return (
+      <div className="space-y-2">
+        <p role="alert" className="rounded-md border px-2 py-1.5 text-sm text-muted-foreground">
+          无法加载工作流表单。{confirmErrorMessage(form.error, { fields: [], formRef: '' })}
+        </p>
+        <Button variant="outline" size="sm" onClick={form.retry}>
+          重试加载表单
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onRemove}>
+          取消
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <WorkflowInteractionForm
+      key={form.snapshotId ?? 'live'}
+      slug={slug}
+      issueId={issueId}
+      target={target}
+      descriptor={form.descriptor}
+      versionField={form.versionField}
+      snapshotId={form.snapshotId}
+      loading={form.loading}
+      confirm={confirm}
+      onSnapshotChange={form.chooseVersion}
+      onRemove={onRemove}
+    />
+  )
+}
+
+/** A fresh field draft per selected version; submission identity stays with the outer composer. */
+function WorkflowInteractionForm(props: {
+  slug: string
+  issueId: string
+  target: CollaborationTargetSummary
+  descriptor: FormDescriptor
+  versionField: FormField | undefined
+  snapshotId: string | undefined
+  loading: boolean
+  confirm: ReturnType<typeof useWorkflowSubmission>
+  onSnapshotChange: (id: string) => void
+  onRemove: () => void
+}) {
+  const { slug, issueId, target, descriptor, confirm, onRemove } = props
   const assist = useAssistWorkflow(slug, issueId)
-  const confirm = useConfirmWorkflow(slug, issueId)
   const [reviewing, setReviewing] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
-  const descriptor = descriptorQuery.data
-  const form = useWorkflowForm(descriptor)
+  const form = useWorkflowForm(descriptor, props.versionField ? props.snapshotId : undefined)
 
-  if (descriptorQuery.isPending) return <Skeleton className="h-24 w-full" />
-  if (descriptorQuery.isError || !descriptor) {
-    return (
-      <p className="rounded-md border px-2 py-1.5 text-sm text-muted-foreground">
-        当前部署无法加载该 Workflow 的表单（form descriptor 不可用）。
-      </p>
-    )
+  function setField(key: string, next: unknown) {
+    if (typeof next === 'string' && key === props.versionField?.key) {
+      props.onSnapshotChange(next)
+    } else {
+      form.setField(key, next)
+    }
   }
 
   const contextRefs = mergeContextRefs(
@@ -358,22 +588,12 @@ export function WorkflowInteractionComposer({
   const confirmInput =
     contextRefs.length > 0 ? { values: form.values, contextRefs } : { values: form.values }
 
-  /** Confirm is the first moment anything reaches the server: comment -> interaction -> run. */
-  async function submit() {
-    const interaction = await openWorkflowInteraction(
-      slug,
-      issueId,
-      target.id,
-      `@${target.displayName}`,
-    )
-    confirm.mutate({ interactionId: interaction.id, ...confirmInput }, { onSuccess: onConfirmed })
-  }
-
   return (
     <section className="space-y-2 rounded-md border bg-muted/30 p-2">
       <ComposerHeader
         title={descriptor.title ?? target.displayName}
         collapsed={collapsed}
+        pending={confirm.isPending}
         onToggle={() => setCollapsed((current) => !current)}
         onRemove={onRemove}
       />
@@ -381,7 +601,8 @@ export function WorkflowInteractionComposer({
       {!collapsed && descriptor.description ? (
         <p className="text-xs text-muted-foreground">{descriptor.description}</p>
       ) : null}
-      {!collapsed && (
+      {props.loading && <Skeleton className="h-24 w-full" />}
+      {!collapsed && !props.loading && (
         <ComposerBody
           descriptor={descriptor}
           form={form}
@@ -391,7 +612,7 @@ export function WorkflowInteractionComposer({
           assistPending={assist.isPending}
           confirmPending={confirm.isPending}
           assistFailed={assist.isError}
-          confirmFailed={confirm.isError}
+          confirmError={confirm.error ? confirmErrorMessage(confirm.error, descriptor) : undefined}
           onAssist={() =>
             assist.mutate(
               { targetId: target.id, values: form.values },
@@ -400,9 +621,8 @@ export function WorkflowInteractionComposer({
           }
           onReview={() => setReviewing(true)}
           onBack={() => setReviewing(false)}
-          onConfirm={() => {
-            void submit()
-          }}
+          onConfirm={() => confirm.submit(confirmInput)}
+          onFieldChange={setField}
         />
       )}
     </section>

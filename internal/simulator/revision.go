@@ -39,7 +39,6 @@ func (c *Controller) deliverRevision(ctx context.Context, record *controlpb.Exec
 		}
 		return result, nil
 	}
-	spec := record.GetInput().GetDeliverRevision()
 	result := &controlpb.ExecutionResult{Node: &controlpb.NodeIdentity{NodeId: record.GetNodeId(), NodeIncarnationId: "echo-fixture"}}
 	failure := func(reason controlpb.RevisionFailureReason) (*controlpb.ExecutionResult, error) {
 		// Controller shutdown does not terminate the Node execution. Leave its journal replayable.
@@ -72,29 +71,31 @@ func (c *Controller) deliverRevision(ctx context.Context, record *controlpb.Exec
 	if err := protojson.Unmarshal(journal.Delivery.Declaration, result); err != nil {
 		return nil, fmt.Errorf("decode prepared delivery evidence: %w", err)
 	}
-	var objects []*controlpb.StoredObject
+	var history *controlpb.StoredObject
+	var final string
 	if delivered := result.GetRevisionDelivered(); delivered != nil {
-		objects = append(objects, delivered.GetBundle(), delivered.GetHistory())
+		history, final = delivered.GetHistory(), delivered.GetFinalCommit()
 	} else if unchanged := result.GetRevisionUnchanged(); unchanged != nil {
-		objects = append(objects, unchanged.GetHistory())
+		history, final = unchanged.GetHistory(), unchanged.GetFinalCommit()
 	} else {
 		return nil, fmt.Errorf("invalid prepared delivery outcome")
 	}
-	for _, object := range objects {
-		name := "history.jsonl"
-		if object.GetKey() == spec.GetBundleKey() {
-			name = "revision.bundle"
-		}
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return nil, fmt.Errorf("read prepared delivery object: %w", err)
-		}
-		if !proto.Equal(storedBytes(object.GetKey(), data), object) {
-			return nil, fmt.Errorf("prepared delivery object changed")
-		}
-		if err := c.uploadRevisionObject(ctx, record.GetExecutionId(), object.GetKey(), data); err != nil {
-			return failure(controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_UPLOAD_FAILED)
-		}
+	data, err := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("read prepared delivery object: %w", err)
+	}
+	if !proto.Equal(storedBytes(history.GetKey(), data), history) {
+		return nil, fmt.Errorf("prepared delivery object changed")
+	}
+	// The code goes to the Git Server first, unchanged runs included: the delivery ref is what Cloud
+	// verifies and what a later run resumes from (Revision D1, D3).
+	if reason, err := c.pushDelivery(ctx, record, final); err != nil {
+		return nil, err
+	} else if reason != controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_UNSPECIFIED {
+		return failure(reason)
+	}
+	if err := c.uploadRevisionObject(ctx, record.GetExecutionId(), history.GetKey(), data); err != nil {
+		return failure(controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_UPLOAD_FAILED)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -148,34 +149,47 @@ func (c *Controller) prepareRevision(ctx context.Context, record *controlpb.Exec
 		return nil, err
 	}
 	historyObject := storedBytes(spec.GetHistoryKey(), history.Bytes())
-	if final == spec.GetBaseCommit() {
+	if final == spec.GetBaseCommit() || (spec.GetPriorRevision() != nil && final == spec.GetPriorRevision().GetFinalCommit()) {
 		result.Outcome = &controlpb.ExecutionResult_RevisionUnchanged{RevisionUnchanged: &controlpb.RevisionUnchanged{BaseCommit: spec.GetBaseCommit(), FinalCommit: final, RevisionRef: spec.GetRevisionRef(), History: historyObject}}
 	} else {
-		bundlePath := filepath.Join(dir, "revision.bundle")
-		if _, err = git(ctx, "-C", checkout.GetPath(), "bundle", "create", bundlePath, spec.GetRevisionRef(), "^"+spec.GetBaseCommit()); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, revisionPreparationError(controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_BUNDLE_FAILED)
-		}
-		if _, err = git(ctx, "-C", checkout.GetPath(), "bundle", "verify", bundlePath); err != nil {
-			return nil, revisionPreparationError(controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_BUNDLE_FAILED)
-		}
-		bundle, readErr := os.ReadFile(bundlePath)
-		if readErr != nil {
-			return nil, fmt.Errorf("read delivery bundle: %w", readErr)
-		}
-		if err := writePreparedObject(bundlePath, bundle); err != nil {
-			return nil, err
-		}
-		result.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{BaseCommit: spec.GetBaseCommit(), FinalCommit: final, RevisionRef: spec.GetRevisionRef(), Bundle: storedBytes(spec.GetBundleKey(), bundle), History: historyObject}}
+		result.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{BaseCommit: spec.GetBaseCommit(), FinalCommit: final, RevisionRef: spec.GetRevisionRef(), History: historyObject}}
 	}
+
 	declaration, err := protojson.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("encode prepared delivery evidence: %w", err)
 	}
 	prepared = true
 	return &revisionPlan{Directory: filepath.Base(dir), Declaration: declaration}, nil
+}
+
+// pushDelivery pushes the final commit to the delivery's own ref on the Git Server double, then
+// tries to fast-forward the run Workspace's branch to it (contract D6). Only the delivery ref decides
+// the delivery: a refused or failed branch update is ignored. A push that already landed, for example
+// before a restart, finds the ref at the same commit and succeeds again.
+func (c *Controller) pushDelivery(ctx context.Context, record *controlpb.ExecutionRecord, final string) (controlpb.RevisionFailureReason, error) {
+	spec := record.GetInput().GetDeliverRevision()
+	clone, err := c.Executions.GetDispatch(ctx, &controlpb.GetDispatchRequest{ExecutionId: spec.GetCheckoutExecutionId()})
+	if err != nil {
+		return 0, err
+	}
+	checkout := clone.GetRecord().GetResult().GetCloneReady().GetPath()
+	var remote string
+	ok := false
+	if c.Git != nil {
+		remote, ok = c.Git.Repository(spec.GetGitRepositoryUrl())
+	}
+	if !ok || checkout == "" {
+		return controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_PUSH_REJECTED, nil
+	}
+	if _, err := git(ctx, "-C", checkout, "push", "--quiet", "--", remote, final+":"+spec.GetDeliveryRef()); err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_PUSH_FAILED, nil
+	}
+	_, _ = git(ctx, "-C", checkout, "push", "--quiet", "--", remote, final+":"+spec.GetWorkspaceRef())
+	return controlpb.RevisionFailureReason_REVISION_FAILURE_REASON_UNSPECIFIED, nil
 }
 
 func (c *Controller) saveRevisionResult(execution string, journal *agentJournal, result *controlpb.ExecutionResult) error {

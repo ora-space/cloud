@@ -15,6 +15,7 @@ Cloud 校验并登记之后删除运行 Workspace，释放沙盒和数据。
 | 怎么创建（@Agent、Project 关口、输入快照） | [Issue 协作](../collaboration/interactions.md#task-modeagent) |
 | Thread 条目、用户轮次、空闲与结束 | [Thread](threads.md) |
 | 启动的等待上限与未知结果收尾 | [有界启动](startup-settlement.md) |
+| D4/D5 残留账本、系统清理责任与证据边界 | [残留回收](residual-reclamation.md) |
 | 对象存储、上传授权、Revision 登记与续接 | [Revision](revisions.md) |
 | 会话列表、归档与模型请求统计 | [会话读取](session-reads.md) |
 
@@ -39,11 +40,19 @@ Cloud 在接管上一阶段证据的事务里写入。
   Workspace 就绪但固定的 Agent 插件没有装上时同样进入 `releasing`，原因为 `agent_plugin_unavailable`。
 - 创建操作停在 `blocked` 超过上限时，运行按 `failed`、`done` 收尾并保留残留责任，原创建操作失败、释放 Project 的操作槽（见 [创建 blocked 的有界放弃](startup-settlement.md#创建-blocked-的有界放弃)）。
 - **`done` 不代表运行 Workspace 已经删除**，只有删除操作成功才是（见 [删除侧的上限](#上限)）。
+- Run 进入 `releasing`、`done` 或被软删除后，未登记的会话和交付工作不再被 `ClaimWork` 返回，避免旧工作挡住后继运行。
+  新 `RecordDispatch` 在业务事务锁内重新核验资格，收尾前领取的快照不能绕过检查。工作与执行记录不删除，已有执行仍按原身份
+  走既有恢复路径及其检查；这不等于 Node 已终止或 Workspace 已回收。接口语义见 [Controller 契约](../runtime/controller-integration.md#服务)。
 
-运行 Workspace 只属于这一次运行（`workspaces.issue_run_id` 与 `issue_runs.workspace_id` 互相唯一引用），以触发运行的用户为创建者
+运行 Workspace 只属于这一次运行（`workspaces.issue_run_id` 与 `issue_runs.workspace_id` 互相唯一引用；一次 WorkflowRun 的运行 Workspace 同样只属于它，
+见 [工作流](../workflows/workflows.md#运行)），以触发运行的用户为创建者
 和操作发起者，从 Project 默认分支克隆，不出现在任何公开的 Workspace 列表或接口里，也不接受其他运行或交互式会话。
 
 ## 后台循环
+
+D4/D5 业务收尾后的残留由独立账本对账继续处理，证据足够才授予一份持久的系统 owned-delete 责任；重试保持同一 operation，
+完成回收不重新结算 Run。部署运维可用 `cloudctl residual` 显式登记受控回收（只终止并保留数据、单独删数据或外部确认），
+也可以接管 D8 历史残留，见[残留回收](residual-reclamation.md)。`done` 或对账已运行均不证明资源已回收。
 
 除了接管证据时的同步转换，Cloud server 进程里有一组每 10 秒执行一次的循环，负责那些没有外部事件可跟随的推进和收尾：
 
@@ -73,7 +82,7 @@ Cloud 在接管上一阶段证据的事务里写入。
 | `agent_failed`（Agent 失败）、`interrupted`（Node 中断或结果未知） | `failed` |
 
 成果是否保存由 `result.deliveryState` 表达：`saved`（登记了有改动的 Revision）、`unchanged`（登记了没有改动的 Revision）、
-`failed`（交付被放弃）、`skipped`（部署没有对象存储，或会话开始前就被取消）。`failed` 和 `cancelled` 的运行同样会尽量保存成果，
+`failed`（交付被放弃）、`skipped`（部署没有对象存储或 Git Server，或会话开始前就被取消）。`failed` 和 `cancelled` 的运行同样会尽量保存成果，
 也可以有 Revision。
 
 时间线上，Agent 运行有一条 `run.enqueued` 活动，进入 `releasing` 时再追加 `run.completed`、`run.failed` 或 `run.cancelled`，
@@ -132,3 +141,9 @@ Agent 运行额外带两部分投影：
 - [Agent 运行的对话记为 Thread](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/0-durable-agent-thread-with-user-turns.md)
 - [Workspace 创建与启动增加 plugin 步骤；IssueRun 的运行 Workspace 由 Cloud 发起建删](https://github.com/ora-space/specs/blob/main/decisions/cloud/operation/20260928-plugin-step-and-run-workspace-release.md)
 - [用户可在 Cloud 配置 git 提交身份](https://github.com/ora-space/specs/blob/main/decisions/cloud/identity-access/20260928-user-git-commit-identity.md)
+
+## 任务消息与直接启动的顺序
+
+失败或取消发生在准备阶段时，运行可能没有 `result.deliveryState`。这仍然形成失败暂停；待资源释放并进入 `done` 后，发起者或管理员可通过已有的放弃未交付成果操作明确确认，再继续等待中的消息。没有交付结果不等于已保存成果，不自动恢复，也不改写原运行终态。
+
+真实 Space Agent 的手动运行和评论 target 在同一创建事务检查任务暂停、未解决的 failed 消息和已接受的 waiting 消息：暂停/失败返回 `409 task_paused`，待执行输入返回 `409 task_handoff_pending`，拒绝不占用 pending Run 名额。任务队列按已接受的消息顺序取得新运行资格；实际领取和周期扫描再次检查暂停、消息顺序与旧运行的成果/释放屏障，不能靠另一入口绕过。已准入的运行先排空，再由任务队列按消息序号创建后续运行；不以跨事务的创建时间推断消息与运行的接收顺序。

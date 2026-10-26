@@ -2,8 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-独立于 Cloud 业务进程运行，组合 `internal/gitserver`、Core 和 PostgreSQL（`proposed` 的 ADR
-`cloud/git-server/0`）。只读取 Cloud 配置中的数据库和本服务 TLS 的部署文件引用，不保存任何授权状态。
+独立于 Cloud 业务进程运行，组合 `internal/gitserver`、Core 和 PostgreSQL；跨模块契约见 [Git Server](../../docs/repositories/git-server.md)。只读取 Cloud 配置中的数据库和本服务 TLS 的部署文件引用，不保存任何授权状态。
 启动先验证迁移；停止时先排空三个监听，再关闭 pre-receive hook 通道。Git 也以 `-pre-receive` 把本程序作为
 pre-receive hook 运行。
 

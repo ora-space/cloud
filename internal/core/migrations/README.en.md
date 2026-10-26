@@ -1,116 +1,120 @@
-# Database Migrations Module
+# Database migration directory
 
 [中文](README.md) | [English](README.en.md)
 
-This module contains Ora Cloud's linear, forward-only PostgreSQL schema migration catalog. Migrations are embedded directly into the Go application binary using `embed.FS` and applied deterministically by `cloudctl migrate`.
+SQL is embedded in the binary through `embed.FS` in `core/store.go`. `Store.Migrate` executes unapplied files in lexicographic order of complete filenames under a transaction advisory lock. `schema_migrations` stores complete filenames, SHA-256 and application times. Numeric prefixes are not unique identities: both `0027` files and both `0033` files apply independently.
 
-## Migration catalog
+## File index
 
-Migrations are executed in ascending numerical sequence. The sequence is **append-only**: `0001–0007` is the upstream baseline (byte-identical to `upstream/main`, never modified), `0008–0012` are the local Issue migrations, and `0013` onward are follow-up compatibility migrations.
+There are currently 72 SQL files.
 
-- **`0001_core.sql`** (upstream): Foundational domain schema:
-  - Identity & Access: `users`, `user_identities`, `tenants`, `tenant_memberships`, `credential_refs`.
-  - Projects & Workspaces: `projects`, `project_storage`, `workspaces`, `workspace_worktrees`, `tasks`.
-  - Execution runtime: `sandbox_instances`, `workspace_nodes`, `sessions`.
-  - Control plane: `effects`, `operations`, `tickets`, `controller_leases`, `idempotency_keys`.
-  - Invariants: Partial unique index `one_main` ensures at most one active `main` workspace per project. Foreign keys strictly enforce tenant and owner containment across all hierarchy tiers.
-- **`0002_aggregate_guards.sql`** (upstream): Concurrency and mutual exclusion guards:
-  - Prevents concurrent lifecycle mutations on the same project aggregate.
-  - Ensures soft-deleted ancestors prevent active child state transitions.
-- **`0003_resource_versions.sql`** (upstream): Optimistic concurrency controls:
-  - Enforces `version` incrementing rules across mutable entities (`projects`, `workspaces`, `tasks`, `nodes`, `operations`).
-  - Guards against lost updates in concurrent API operations.
-- **`0004_effect_intent_and_ticket_scope.sql`** (upstream): Execution intent and ticket constraints:
-  - Enforces strict scoping of execution tickets to active workspace nodes and valid admission epochs.
-  - Binds durable effect declarations to specific operation phases.
-- **`0005_gateway_auth.sql`** (upstream): Gateway authentication tables (accessed at runtime only by `cmd/gateway`):
-  - `gateway_login_attempts`: one-shot login attempts; stores only SHA-256 digests of the attempt secret and `state`, rejects absolute, `//` and `/\` `return_to` values at the database layer, bounds the lifetime to one hour, and uses `consumed_at` to guarantee at most one session per attempt.
-  - `gateway_sessions`: browser sessions; stores only the token digest, requires a non-null `expires_at` no later than 90 days after creation, keeps revocation time and the bounded `revoked_reason` together, and indexes identity revocation and bounded cleanup.
-- **`0006_collab_spaces.sql`** (upstream, byte-identical to `upstream/main`): Collaboration Space schema:
-  - `collab_workspaces`: tenant-scoped collaboration and visibility boundary (name, immutable slug, archive time, optimistic version). Archiving is a soft delete and does not release the slug: `UNIQUE(tenant_id, slug)` covers live and archived rows alike.
-  - `collab_workspace_members`: members with roles (owner/admin/member), status (active/disabled), and optimistic version.
-  - Strictly separated from the runtime `workspaces` table (Runtime Workspace, execution environments).
-- **`0007_project_space_scope.sql`** (upstream, byte-identical to `upstream/main`): Project-to-Space association (**upstream semantics: mandatory**):
-  - Creates a default Space (slug=`default`) for every existing tenant, including deleted tenants that still own projects.
-  - Adds existing active tenant members to the default Space (admin maps to owner, member maps to member).
-  - Adds `projects.space_id uuid NOT NULL` and binds every existing project to its tenant's default Space.
-  - A composite foreign key `(space_id, tenant_id) REFERENCES collab_workspaces(id, tenant_id)` rejects cross-tenant ownership at the SQL level, and the `project_space_list(space_id, id)` index supports listing Projects by Space.
-- **`0008_issues.sql`**: the `issues` (board) base table (formerly `0006_issues.sql`; forward-renumbered in the migration reconciliation so upstream `0001–0007` stay byte-identical).
-- **`0009_issue_extensions.sql`**: `issue_statuses`, `issue_comments`, `labels`, `issue_labels`, `issue_subscribers`, `issue_views` + `issues` ALTERs (`number`, `properties`, status format check). (formerly `0007_issue_extensions.sql`)
-- **`0010_issue_collaboration.sql`**: `issues` ALTERs (`assignee_type`/`assignee_id`/`project_ref` + backfill), `issue_comments` ALTERs (`parent_id`/`author_type`/`author_id`/`seq` + backfill + `UNIQUE(issue_id,seq)`), new tables `issue_runs`, `issue_activities`, `issue_context_refs`. (formerly `0008_issue_collaboration.sql`)
-- **`0011_issue_interactions.sql`**: new table `issue_interactions` (the `@` interaction spine) — one row per selected collaboration target: `id, tenant_id, issue_id, comment_id, target_type, target_id, mode, task, run_id, created_at`. (formerly `0009_issue_interactions.sql`)
-- **`0012_issue_interaction_input.sql`**: one generic additive column: `ALTER TABLE issue_interactions ADD COLUMN input jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(input)='object')` — the confirmed form values. Deliberately excludes `version`, a `status` enum, `confirmed_at` and a separate inputs table; `0011` is not modified. (formerly `0010_issue_interaction_input.sql`)
-- **`0013_project_space_optional.sql`** (append-only compatibility migration): `projects.space_id` back to **NULLABLE** — upstream `0007` imposed `NOT NULL` + full project binding; the product design at the time kept a Space an *optional* grouping. `0013` only relaxes the constraint; it deliberately **does NOT unbind** the projects `0007` already assigned to their default Space (no data change, no scope shrink). That design was superseded by `0017`, which makes the project space association mandatory again.
-- **`0014_clone_coordination.sql`** (append-only, after upstream `0008–0013`): clone coordination through the internal control contract (independent of the Effect-level `operations` model):
-  - `clone_requests`: work Cloud accepted in its own business transaction, idempotent on `(tenant, user, request_id)`, state `queued→dispatched→succeeded/failed`.
-  - `clone_executions`: executions a Controller registers before dispatching (exactly one per request, Controller-chosen opaque identities), their input, terminal result and the lease epoch at registration.
-  - `clone_event_receipts`: exact receipts `(execution, sequence, event)` of Node events, the only basis for acknowledging a Node.
-  - `control_submissions`: identity, request digest and recorded response of every state-changing submission; the same identity with the same content replays the response instead of reapplying.
-- **`0015_plugins.sql`**: the plugin marketplace's three tables plus enum widening:
-  - `plugin_sources` (deployment-global source, default `official` namespace), `plugin_catalog_entries` (catalog snapshot; reads never leave the database), `space_plugins` (authoritative per-space selection, `UNIQUE(space_id, source_namespace, identifier)`), `workspace_plugin_instances` (fan-out execution facts with tenant/owner/project/workspace composite foreign keys).
-  - Widens `operations.kind` (+install_plugin/remove_plugin), `operations.step` (+plugin), `external_effects.kind` (+plugin_ensure/plugin_delete); the original CHECKs live in 0001 (PG names them table_column_check), dropped and rebuilt with the extended sets.
-- **`0016_workspace_runtime_follows_node.sql`**: Retires storage/worktree provisioning and uses independent Workspace data, Node and clone initialization. Historical records remain readable.
-- **`0017_tenant_membership_and_join.sql`**: Consolidates one space per tenant with tenant membership as the sole authority; restores mandatory project space association, reserves slugs globally even after archiving, and adds durable IDaaS identity association, invitation and join-request records. Incompatible test data with multiple spaces, unscoped projects, reused slugs or divergent tenant and space names must be rebuilt; the migration never silently splits or renames data.
-- **`0027_workflows.sql`** (append-only, workflow editor port): the workflow graph document `workflows` — the whole tenant-owned graph (`graph jsonb`: nodes / edges / viewport / annotations / global variables). Deliberately one table and one graph column: the graph is a document, not a relational aggregate, so there are no per-node or per-edge tables and no draft/published split.
-- **`0028_workflow_snapshots.sql`**: immutable versioned captures, `workflow_snapshots`. Publishing freezes the live graph into a row under the next per-workflow version; restoring writes a chosen snapshot back over the live graph. Snapshots are append-only — an edit never rewrites one.
-- **`0029_workflow_runs.sql`**: `workflow_runs`, one execution against one frozen snapshot. The run viewer needs only the snapshot graph (the canvas) and per-node states (the coloring); the graph itself is read through `snapshot_id` from `workflow_snapshots.graph` rather than copied. Cloud has no workflow engine: a created run stays `pending`, and only development fixtures explicitly wired through `Store.WorkflowRunSimulator` advance it — the same "never claim real work ran" convention as `issue_runs`.
+| SQL file | Schema change |
+|---|---|
+| [0001_core.sql](0001_core.sql) | Base domain tables |
+| [0002_aggregate_guards.sql](0002_aggregate_guards.sql) | Aggregate ownership constraints |
+| [0003_resource_versions.sql](0003_resource_versions.sql) | Resource versions |
+| [0004_effect_intent_and_ticket_scope.sql](0004_effect_intent_and_ticket_scope.sql) | Effect intent and Ticket scope |
+| [0005_gateway_auth.sql](0005_gateway_auth.sql) | Gateway login and sessions |
+| [0006_collab_spaces.sql](0006_collab_spaces.sql) | Collaboration spaces and members |
+| [0007_project_space_scope.sql](0007_project_space_scope.sql) | Default space and Project scope |
+| [0008_issues.sql](0008_issues.sql) | Issue baseline |
+| [0009_issue_extensions.sql](0009_issue_extensions.sql) | Issue statuses, comments, labels and views |
+| [0010_issue_collaboration.sql](0010_issue_collaboration.sql) | Collaboration targets, runs, activities and references |
+| [0011_issue_interactions.sql](0011_issue_interactions.sql) | Collaboration interactions |
+| [0012_issue_interaction_input.sql](0012_issue_interaction_input.sql) | Confirmed interaction input |
+| [0013_project_space_optional.sql](0013_project_space_optional.sql) | Nullable space scope (superseded by 0017) |
+| [0014_clone_coordination.sql](0014_clone_coordination.sql) | Clone requests, executions and receipts |
+| [0015_plugins.sql](0015_plugins.sql) | Plugin catalog, selection and instances |
+| [0016_workspace_runtime_follows_node.sql](0016_workspace_runtime_follows_node.sql) | Workspace-local data and Node clone |
+| [0017_tenant_membership_and_join.sql](0017_tenant_membership_and_join.sql) | One space per tenant and join flows |
+| [0018_runtime_creators.sql](0018_runtime_creators.sql) | Runtime creators |
+| [0019_runtime_control.sql](0019_runtime_control.sql) | Control sessions and epochs |
+| [0020_force_stop_and_restart.sql](0020_force_stop_and_restart.sql) | Force-stop and restart |
+| [0021_node_execution_identity.sql](0021_node_execution_identity.sql) | Node execution identity |
+| [0022_plugin_maintenance_pending.sql](0022_plugin_maintenance_pending.sql) | Pending plugin maintenance intent |
+| [0023_repository_credential_continuity.sql](0023_repository_credential_continuity.sql) | Repository credential continuity |
+| [0024_agent_run_control_plane.sql](0024_agent_run_control_plane.sql) | Agent control plane |
+| [0025_agent_control_integrity.sql](0025_agent_control_integrity.sql) | Command ordinals and session constraints |
+| [0026_run_runtime_control.sql](0026_run_runtime_control.sql) | Independent run maintenance binding |
+| [0027_verified_revisions.sql](0027_verified_revisions.sql) | Revision registration and verification |
+| [0027_workflows.sql](0027_workflows.sql) | Workflow graphs |
+| [0028_workflow_snapshots.sql](0028_workflow_snapshots.sql) | Published snapshots |
+| [0029_workflow_runs.sql](0029_workflow_runs.sql) | Workflow run records |
+| [0030_agent_run_business_lifecycle.sql](0030_agent_run_business_lifecycle.sql) | Agent business lifecycle |
+| [0031_agent_run_thread_entries.sql](0031_agent_run_thread_entries.sql) | Thread entries |
+| [0032_user_git_identities.sql](0032_user_git_identities.sql) | User Git identities |
+| [0033_personal_model_connections.sql](0033_personal_model_connections.sql) | Personal model connections and bindings |
+| [0033_revision_resume.sql](0033_revision_resume.sql) | Revision resume |
+| [0034_agent_startup_windows.sql](0034_agent_startup_windows.sql) | Startup windows and residuals |
+| [0035_model_attempt_statistics.sql](0035_model_attempt_statistics.sql) | Model request observations |
+| [0036_workflow_asset_imports.sql](0036_workflow_asset_imports.sql) | Workflow asset imports |
+| [0037_repository_bindings_and_operations.sql](0037_repository_bindings_and_operations.sql) | Repository Bindings, Operations and snapshots |
+| [0038_agent_workspace_blocked_deadline.sql](0038_agent_workspace_blocked_deadline.sql) | Workspace blocked deadlines |
+| [0039_workflow_run_identity.sql](0039_workflow_run_identity.sql) | WorkflowRun identity |
+| [0040_executor_slot_bindings.sql](0040_executor_slot_bindings.sql) | Executor slots and bindings |
+| [0041_workflow_execution_node.sql](0041_workflow_execution_node.sql) | Execution workflow-node ownership |
+| [0042_workflow_run_plugin_version.sql](0042_workflow_run_plugin_version.sql) | Frozen run plugin version |
+| [0043_external_git_line.sql](0043_external_git_line.sql) | Independent credentials and external Git line |
+| [0044_model_attempt_workflow_run.sql](0044_model_attempt_workflow_run.sql) | WorkflowRun model request registration |
+| [0045_agent_configuration_catalog.sql](0045_agent_configuration_catalog.sql) | Agent declaration association, static copy and validation issues in the plugin catalog |
+| [0046_task_agent_conversations.sql](0046_task_agent_conversations.sql) | Task-level Agent conversations, message queue and Thread visible text |
+| [0047_thread_preview_positions.sql](0047_thread_preview_positions.sql) | Node history positions for settled Thread entries |
+| [0048_task_conversation_manual_pause.sql](0048_task_conversation_manual_pause.sql) | Manual pause for task conversations |
+| [0049_thread_commands_workflow_run.sql](0049_thread_commands_workflow_run.sql) | WorkflowRun session-command ownership and node scope |
+| [0050_personal_agent_configurations.sql](0050_personal_agent_configurations.sql) | Persistent personal Agent configuration revisions and private run snapshots |
+| [0051_workflow_run_cancel.sql](0051_workflow_run_cancel.sql) | WorkflowRun cancellation requests |
+| [0052_legacy_workflow_issue_run_settlement.sql](0052_legacy_workflow_issue_run_settlement.sql) | One-time settlement of legacy queued workflow IssueRuns |
+| [0053_retire_tenant_level_clones.sql](0053_retire_tenant_level_clones.sql) | Retire tenant-level clones |
+| [0054_git_delivery_refs.sql](0054_git_delivery_refs.sql) | Revisions delivered over Git |
+| [0055_workflow_run_workspace_release.sql](0055_workflow_run_workspace_release.sql) | Workspace release facts for WorkflowRuns |
+| [0056_workflow_invocation_reference.sql](0056_workflow_invocation_reference.sql) | Invocation reference from workflow IssueRuns to WorkflowRuns |
+| [0057_agent_run_residual_reclamation.sql](0057_agent_run_residual_reclamation.sql) | Residual reclamation responsibility, appended evidence and disposition |
+| [0058_agent_run_controlled_reclamation.sql](0058_agent_run_controlled_reclamation.sql) | Deployment-controlled reclamation intents, dependent data deletion and per-target termination |
+| [0059_agent_restore_stop_evidence.sql](0059_agent_restore_stop_evidence.sql) | Named unconfirmed-stop evidence without changing residual responsibility or reclaim authority |
+| [0060_node_model_adapter.sql](0060_node_model_adapter.sql) | Plugin model-adapter capability declared by a Node instance at registration |
+| [0061_scheduled_tasks.sql](0061_scheduled_tasks.sql) | Scheduled task definitions, idempotent admission ledger and deadline-cancellation facts |
+| [0062_workflow_run_plugin_release.sql](0062_workflow_run_plugin_release.sql) | Frozen run plugin release package |
+| [0063_scheduled_run_results.sql](0063_scheduled_run_results.sql) | Scheduled-run business verdict with its frozen task identity and occurrence audit reference |
+| [0064_scheduled_run_artifacts.sql](0064_scheduled_run_artifacts.sql) | Artifact delivery windows, verified objects, rejections and one unregistered work item per run and kind |
+| [0065_scheduled_artifact_execution_kind.sql](0065_scheduled_artifact_execution_kind.sql) | Artifact execution registration and one pending execution per run and kind, preserving plugin kinds |
+| [0066_scheduled_artifact_recurring_gc.sql](0066_scheduled_artifact_recurring_gc.sql) | Recurring sweeps of settled runs for late PUTs and pruned successful deliveries |
+| [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | Accept zero-length artifacts in verified registration |
+| [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | Persist omitted rejection counts and walk truncation facts |
+| [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | Per-attempt identity for workflow node work items, executions and end requests |
+| [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | Explicit D8 missing-delete provenance and mutually exclusive identity constraints |
+| [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | Optional selected model on scheduled tasks |
 
-> Numbering note: these three were `0014–0016` and collided with upstream's same-numbered migrations (`0014_clone_coordination` / `0015_plugins` / `0016_workspace_runtime_follows_node`), so merging `upstream/main` moved them to `0024–0026` per the append-only rule. Upstream then added its own `0024_agent_run_control_plane` / `0025_agent_control_integrity` / `0026_run_runtime_control`, so they moved once more to `0027–0029`, after `0026`. `schema_migrations.version` is the **full file name**, so every rename changes a migration's identity: a database that already applied the old names must be rebuilt or have `schema_migrations` updated by hand, otherwise `CheckSchema` refuses to boot with "embedded migration is missing".
+0050 copies no personal connection or key and backfills no historical run. Clearing configuration retains its revision; run options are stored separately from shared run input.
 
-## Checksum integrity and immutability
+## Immutability and upgrades
 
-- **`schema_migrations` table**: Tracks applied versions, their SHA256 checksums, and application timestamps (`version`, `checksum`, `applied_at`). **`version` is the full filename** (e.g. `0010_issue_collaboration.sql`), so renaming an applied migration changes its identity and breaks existing databases — once applied, a migration must never be modified; add a new file instead.
-- **Server startup check**: At startup, `cmd/server` runs `store.CheckSchema`, verifying that:
-  1. All embedded `.sql` migration files exist in `schema_migrations`.
-  2. The SHA256 checksum of each embedded file matches the recorded checksum in the database.
-  3. No unknown or extraneous migration versions exist in the database.
-  If any mismatch or unapplied migration is found, the server terminates immediately.
-- **No AutoMigrate**: The production server daemon **never** executes DDL or modifies table structures at startup. Migrations must be applied using `cloudctl migrate` under dedicated database administrator credentials.
+0070 adds the default-off `legacy_delete_operation_missing` marker to controlled reclamation intents. Existing D8 intents with original deletion identities and residual-ledger intents retain their values. Only an explicitly selected missing-delete variant records the absence; no Run history is backfilled or changed. Fresh schemas, preceding-schema upgrades, repeated migration, and rejection of contradictory provenance are covered by `TestControlledD8MissingDeleteMigrationUpgradesAndRepeats`.
 
-See [core overview](../README.en.md), [cloudctl CLI](../../../cmd/cloudctl/README.en.md), and [Authoritative persistence](../../../docs/core/persistence.en.md).
+0071 adds a nullable `model` to `scheduled_tasks`. The upgrade never guesses a model for existing definitions; each admission resolves the selected value through the creator's then-usable connection and freezes that resolution into the new IssueRun. A null value continues to mean the creator's default model at admission. Upgrade and replay coverage is `TestMigration0071ScheduledTaskModelUpgradeAndReplay`.
 
-## Append-only multiplayer runtime migrations
+- Never edit or rename applied SQL; corrections use new forward migrations. Repeated application skips applied files with matching checksums.
+- `CheckSchema` only reads and rejects missing migrations, checksum mismatches and unknown database versions. Production services do not run DDL; operators migrate through [cloudctl](../../../cmd/cloudctl/README.en.md).
+- Files describe their application-time changes, not the final schema alone. For example, 0017 supersedes 0013's nullable space scope; 0016 retains old storage/worktree records while retiring their steps.
+- 0017 does not silently split multiple spaces or rename duplicate slugs; data violating one-space-per-tenant constraints needs prior handling.
+- 0042 does not invent plugin versions for historical runs; code rejects execution without a frozen version. 0043 revokes old credential references and retains audit without treating old secret references as redeemable.
+- 0045 adds `agent_configuration` (association and byte-exact static copy) and `agent_configuration_issue` (bounded reason) without backfilling existing rows. Only validated declarations are consumable; absence and invalid declarations are distinct, and invalid declarations do not block package installation. See [Plugin marketplace](../../../docs/plugins/marketplace.en.md) and `TestMigration0045AgentConfigurationCatalogAppliesFreshAndUpgrades` for fresh/upgrade/repeat coverage.
+- 0046–0048 backfill no old messages, Threads, history positions or pause state; `visible_text` is stored separately from the raw `record`, and old tasks are not paused automatically. Fresh, upgrade and repeated application are covered by `TestMigration0046TaskConversationFreshAndUpgrade` and the integration migration tests.
+- 0049 lets `thread_commands` accept a WorkflowRun owner and requires a graph node on workflow commands; each node holds at most one `end_session`, so the scheduler can replay it safely. Every old row carries `run_id` and is not backfilled. Semantics are in [workflows](../../../docs/workflows/workflows.en.md); coverage is in the `TestWorkflowSessionEndsAfterSuccessfulTurn` DB tests.
+- 0051 adds the cancellation-request instant to `workflow_runs` and backfills no old row; the request records intent only and is settled by the scheduler on later passes. Semantics are in [workflows](../../../docs/workflows/workflows.en.md#scheduling); coverage is in the `TestWorkflowRunCancelBeforeStartNeverStarts` DB tests.
+- 0052 settles the live `executor_type='workflow'` IssueRuns still `queued`/`dispatched` at upgrade time: they have no executor and no frozen workflow identity, so the ADR's D3 marks them failed with `failure_reason='workflow_execution_unavailable'` instead of migrating them. Other runs and soft-deleted rows are untouched. Rows of that shape stop being produced only once the workflow launch gate binds a manual run to a real WorkflowRun; until that gate (circus#71) lands, `createRun` keeps producing new ones, and this migration runs once at upgrade time and does not settle them. Coverage is `TestMigration0052LegacyWorkflowIssueRunSettlementAppliesFreshAndUpgrades`.
+- 0053 is the switch to Workspaces cloned from Git Server snapshots and migrates no data: clone executions that belong to no Workspace and their receipts are deleted, `clone_executions.clone_request_id` and the `one_request_execution` index are dropped, `clone_executions.workspace_id` becomes NOT NULL, and `clone_requests` is dropped; Workspace clone executions and their receipts stay, and it is retry-safe. See [Workspaces](../../../docs/runtime/workspaces.en.md); upgrading a database that still holds tenant-level clones is covered by `TestMigration0053RetiresTenantLevelClonesKeepingWorkspaceClones`.
+- 0054 is the switch to Revisions delivered over Git and migrates no data: `revisions` gains `delivery_ref`, and `revisions_bundle_shape` is replaced by `revisions_shape` (with a NULL `delivery_ref` a row keeps a legacy bundle shape; with one it must be a well-formed `refs/ora/deliveries/<UUID>` and carry no bundle column); the partial unique index `revisions_delivery_ref` lets one delivery ref belong to one Revision only. Existing bundle rows are never rewritten, and it is retry-safe. See [Revisions](../../../docs/agent-runs/revisions.en.md); the constraints are covered by `TestRevisionShapeKeepsGitAndBundleRowsApart`.
+- 0055 adds the forward-only `workspace_release_state` (`pending`/`releasing`/`released`/`abandoned`/`not_required`), `workspace_release_error` and `workspace_released_at` to `workflow_runs`, and backfills by upgrade-time state: non-terminal rows stay `pending`; terminal rows with no Workspace become `not_required`, those whose Workspace is already soft-deleted become `released` (using that row's `deleted_at`), and the rest become `releasing`. Two CHECK constraints require a release instant for `released` and a reason for `abandoned`. Only `released` means Cloud observed the Workspace deleted; `abandoned` keeps the Workspace row and writes no release instant. Semantics are in [workflows](../../../docs/workflows/workflows.en.md#scheduling); coverage is `TestMigration0055WorkflowRunWorkspaceReleaseAppliesFreshAndUpgrades` and `internal/core/workflow_run_release_db_test.go`.
+- 0056 first settles every unlinked non-terminal historical workflow IssueRun (including running and deferred) as failed with `workflow_execution_unavailable_before_invocation_linkage`, preserving its input and outcome without inventing an execution. It then adds the `(workflow_invocation_ref, tenant_id)` → `workflow_runs(id, tenant_id)` composite foreign key (targeting the `workflow_run_tenant_identity` unique constraint 0044 already added, without duplicating it), a unique reference, and a CHECK that non-terminal workflow rows carry a reference while other executors carry none, all unconditionally validated. Historical terminal workflow rows may keep a NULL reference. Fresh, seeded upgrade, repeated application and constraint validation coverage is in `integration/workflow_invocation_migration_test.go`.
+- 0057 only adds residual-ledger columns: defaults initialize existing D4/D5 rows as `reconciling`, without backfilling targets or evidence, rewriting old `reason`, `responsibility` or business settlement, or backfilling D8. Legacy rows with non-null `cleared_at` cause an explicit migration error and rollback pending compatibility handling (A2). Reentrant DDL preserves progressed rows. The schema accepts `released`, `terminated_data_retained` and `externally_confirmed`; this step's automatic path implements only `released`, leaving the other dispositions to later controlled entry points. The authorization transaction checks the operation's tenant and Workspace relationships; a UUID foreign key alone does not establish resource scope. See [agent_run_residual_reclaim_migration_test.go](../../../integration/agent_run_residual_reclaim_migration_test.go) for fresh, upgrade, DDL replay and constraint coverage.
+- 0058 preserves 0057 history, responsibility, evidence, disposition and first `cleared_at`, and never backfills D8. Only an explicit root intent owns protection and evidence for ledgerless D8. Root termination and dependent data deletion each have three states; each resource has one root, at most one deletion intent and one fixed deletion operation. Command keys are unique throughout a tenant. Successful targets require both boolean confirmations, so a missing JSON field cannot pass through SQL NULL. Fresh, 0057-upgrade and constraint coverage is in [agent_run_controlled_reclaim_migration_test.go](../../../integration/agent_run_controlled_reclaim_migration_test.go).
+- 0059 only adds `stop_evidence`, initially empty for existing rows; no historical stop observation is invented. Covered by `TestMigration0059RestoreStopEvidenceFreshUpgradeAndRepeat`.
+- 0060 adds `model_adapter` to `node_instances` (a jsonb object, default `{}`) recording the plugin model-adapter capability a Node instance declares at registration. Nothing is backfilled: existing instances count as having no capability and receive no session that needs an adapter until they register again with a newer version. Fresh and upgrade coverage is in `TestMigration0060ModelAdapterFreshAndUpgrade`.
+- 0061 adds `scheduled_tasks` (frozen prompt, agent ref, `schedule` jsonb, IANA timezone, unattended consent and soft-delete tombstone) and `scheduled_task_occurrences` (an idempotent admission ledger keyed by `(task_id, scheduled_at)`, holding the deadline instant and deadline-cancellation fact); it backfills no historical row. Admission creates an agent IssueRun under the bound issue in the same transaction, and the plugin version is snapshotted from the Space at admission rather than frozen on the definition. Semantics are in the specs root decision `decisions/cloud/scheduled-task`; fresh/upgrade/repeat integration coverage lands with the Web and end-to-end acceptance commit.
+- 0062 adds a nullable `plugin_release` (jsonb) to `workflow_runs` recording the Agent plugin release package the creation transaction froze; it is written only when the Space's `selected_release` version equals the frozen `plugin_version`, and stays NULL otherwise. The run Workspace's `plugin` step uses it in place of the Space's current selection for that plugin; a plugin the Space already removed is not appended, and the start gate fails the run as `agent_plugin_unavailable`. Semantics are in [workflows](../../../docs/workflows/workflows.en.md#scheduling); coverage is `internal/core/workflow_run_plugin_db_test.go`.
+- 0063 gives `scheduled_task_occurrences` a surrogate `id` (with a default, so the existing admission transaction needs no change) and adds `scheduled_run_results`: `issue_run_id` is the identity, `verdict` comes from the closed set, `verdict_detail` is at most 2000 characters, `task_id` and `scheduled_at` are the task ownership and planned instant frozen at write time, and `occurrence_id` is an audit reference only, nulled when the occurrence is trimmed. No historical run is backfilled. Semantics are in the specs decision `decisions/cloud/scheduled-task/20261022-run-verdict-and-artifacts.md`; coverage is in `TestSessionEndedWritesTheScheduledVerdict`, `TestScheduledRunResultIsWrittenOncePerRun`, `TestScheduledRunResultRefusesUnattributableReports` and `TestScheduledRunResultSurvivesOccurrenceTrim`.
+- 0064 adds the three scheduled-artifact tables: the delivery state with its non-renewable ten-minute window (and its prefix-cleanup marker), the verified object index and the rejection list; all three freeze `task_id`/`scheduled_at` and keep `occurrence_id` as an audit reference only. It also narrows `execution_work`'s unregistered uniqueness from "one per run" to "one per run and kind" and adds `deliver_scheduled_artifacts` to the kind set: a scheduled run holds its Revision delivery and its artifact upload at the same time. Coverage is in `TestScheduledArtifactsSkipWithoutObjectStorage`, `TestScheduledArtifactManifestIsValidatedBeforeStorage`, `TestCollectScheduledArtifactObjectsRemovesOnlyUnregisteredKeys` and `TestPruneScheduledRunArtifactsKeepsTheTenNewestRuns`.
+- 0069 adds `workflow_node_attempt` to `execution_work`, `node_executions` and `thread_commands` (integer, NOT NULL, default 1) and re-keys the `one_session_per_workflow_node` and `one_workflow_session_end` partial unique indexes on the attempt, so retrying an agent node can register a second session and its own end request without reusing the first attempt's evidence. Every existing row belongs to its node's first attempt, so nothing is backfilled. Fresh, 0068-upgrade, repeated application and constraint coverage is in `TestMigration0069WorkflowNodeAttemptAppliesFreshAndUpgrades`.
+- New migrations must verify fresh databases, upgrades from the preceding schema, repeated application and key constraints. See [migration_upgrade_path_test.go](../../../integration/migration_upgrade_path_test.go) and domain upgrade tests in integration.
 
-0025 adds a monotonic Thread-command acceptance ordinal, preserving the old created_at/id order on upgrade, and enforces one session per run lifetime. 0026 retains a separate IssueRun maintenance binding after Workspace initialization so session/delivery permits do not occupy the Project operation slot. User control and run ownership remain exclusive. `integration/agent_control_upgrade_test.go` covers the real 0024 upgrade and repeated migration.
-
-0018–0024 follow published 0017 without rewriting it: 0018 records only provable creators, otherwise NULL; 0019 persists PostgreSQL control sessions, epochs and audit; 0020 independent force-stop targets and restart phases; 0021 separates Node operation IDs from Cloud operation IDs and retains retries; 0022 plugin requester, pinned release and durable pending intent; 0023 credential ownership evidence, availability, scope, capabilities and version; 0024 adds run-workspace association, plugin/session/delivery execution registration, Thread commands and Space Agent rows, and refuses new plugin effects. Existing owner FKs, credential associations and operation history remain intact. Personal/unknown references associated with inactive members freeze on upgrade; team attribution and effective binding are never guessed.
-
-Real PostgreSQL fresh/0017-upgrade evidence is in integration/runtime_upgrade_test.go, runtime_control_test.go, repository_credentials_test.go and plugin_pending_test.go. Transactions contain database work only; Node recovery logs are not a second business authority.
-
-0027 only adds Revision, verification verdicts and unconfigured-storage skips, preserving raw Node evidence. Composite foreign keys enforce tenant/run/Workspace/project scope; changed and unchanged metadata are exclusive. revision_upgrade_test.go covers real 0026 and repeated upgrades; agent_plugin_upgrade_test.go covers retained 0023 in-flight plugin effects and restarted Node steps.
-
-Merging current upstream preserves the complete filenames and original SQL of `0027_verified_revisions.sql`, `0027_workflows.sql` and `0028–0029`. Equal numeric prefixes do not imply equal identities: the runner tracks each applied migration by its complete filename and checksum. `TestRevisionUpgradePreservesPublishedWorkflowSchema` directly verifies adding Revision tables to a database that already applied upstream workflow migrations; repeated migration preserves complete workflow documents, snapshots, runs and the existing migration ledger.
-
-0030–0031 follow published 0029 and are the **only** schema this repository adds when the B-side business lifecycle moves onto the upstream control plane: the parts functionB had already gained upstream (the execution side of 0024–0029) are not re-created. 0030 adds business columns to `issue_runs` alone (`phase`, `workspace_id`, `cancel_requested_at`, `thread_state`, `idle_since`), the agent-only column constraint, the exclusive `workspace_id` binding and the partial idle-thread index; 0031 creates `thread_entries` (primary key `(run_id,seq)`, Node-sourced entries idempotent on `(node_execution_id,node_sequence)`, user entries always carrying a turn lifecycle, `record` bounded to a 256 KiB JSON object). Both are purely forward and retry-safe, backfill nothing and rewrite no existing row — 0030's columns are created by 0030, so no pre-existing row can hold a value to migrate, and a non-agent run's row is untouched. Real fresh-database, upgrade and repeated-migration evidence is in `integration/migration_upgrade_path_test.go`: `TestMigration0030AgentRunBusinessLifecycleAppliesFreshAndUpgrades` and `TestMigration0031AgentRunThreadEntriesAppliesFreshAndUpgrades`.
-
-0032 follows 0031 and adds `user_git_identities` (identity-access git identity D1): at most one row per user, keyed by and referencing `users(id)`, a `name` of 1–200 characters with no line break or angle bracket, an `email` of at most 254 bytes shaped `local@domain` with no whitespace or angle bracket, and a `version` that is the row's own optimistic-concurrency counter. The identity has its own table rather than columns on `users` because `/me` and every user read return the `users` row whole, so a git email there would travel to every reader; no row means the default identity applies. Purely forward and retry-safe; no existing table is altered. Fresh-database, upgrade and repeated-migration evidence is `TestMigration0032UserGitIdentitiesAppliesFreshAndUpgrades` in `integration/migration_upgrade_path_test.go`.
-
-## 0033: Personal model connections
-
-0033 adds private connection metadata, defaults, immutable ciphertext credentials, user-scoped
-idempotency records, run bindings and temporary grant digests. Historical runs remain unbound;
-composite foreign keys preserve user ownership. No plaintext key enters migrations or Cloud domain
-methods. See [personal model connections](../../../docs/models/model-access.en.md).
-## 0033: Revision resume
-
-0033 follows 0032 and lets a new run resume its Issue's latest Revision (issue-run resume decision): `revisions` gains `prior_revision_id` (the Revision a run resumed), `bundle_revision_id` (a resumed run that added nothing stores no bundle and names the row holding it, always one hop), and `resume_refused_at` with `resume_refused_reason` (a restore found the base commit gone from the remote; only `prior_revision_base_unavailable`); `issue_runs` gains `resume_revision_id` (the prior Revision fixed at session start). The anonymous `revisions_check` is replaced by the named `revisions_bundle_shape`: existing rows still satisfy the two original shapes, and the new third shape only admits a reused bundle with a prior. Purely forward and retry-safe; the new columns are NULL on existing rows. Fresh-database, upgrade and repeated-migration evidence is `TestMigration0033RevisionResumeAppliesFreshAndUpgrades` in `integration/migration_upgrade_path_test.go`; the constraints' refusal of real rows is in `integration/agent_run_resume_test.go`.
-
-Both `0033` files retain their complete filenames and original SQL. The complete filename and checksum identify a migration; the numeric prefix is not a unique key. Fresh databases apply both additions. An acceptance database with the personal-model migration already applied only adds the missing Revision migration without rewriting its ledger or model bindings.
-
-## 0034: Agent startup windows and residual ownership
-
-Adds startup_ready_at, startup_deadline_at, startup_resume, startup_ending_deadline_at and agent_run_residuals without rewriting historical outcomes. The serialized policy scan freezes legacy active windows once. Residual ownership commits with failed/done; late true terminal facts add evidence without granting cleanup authority. Fresh/upgrade/repeat coverage: TestMigration0034StartupWindowsPreserveExistingRunOnUpgrade.
-
-
-`0035_model_attempt_statistics.sql` adds a content-free model HTTP attempt ledger and tenant/run/time index.
-Composite foreign keys bind run/tenant, binding/run and grant/binding/execution; CHECK constraints bound statuses,
-nullable counters, timing and completion shape. No historical backfill. Apply with `cloudctl migrate`; services still
-only validate schema. `TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackfill` covers fresh, 0034 upgrade and rerun.
-
-## 0036: workflow plugin asset imports
-
-`0036_workflow_asset_imports.sql` records asset imports for `kind='workflow'` plugins: `workflow_asset_imports` holds one row per (space, plugin) with the `requested_revision` each administrator install/reinstall advances, the import progress and its lease; `workflow_asset_documents` holds one row per document path, and only an `outcome='imported'` row permanently occupies (space, namespace, identifier, document path) — failed documents are retried on the next trigger. The imported workflows and published snapshots are ordinary user data; these two tables only record provenance, idempotency and per-document outcomes. Forward-only and additive; no existing table changes.
-
-## 0038: Bounded abandonment of a blocked run Workspace creation
-
-Adds issue_runs.workspace_blocked_at, workspace_deadline_at, workspace_blocked_source (blocked_write / first_observed) with a provisioning-phase partial index, and widens agent_run_residuals' reason constraint to agent_start_failed / workspace_unavailable. The first transaction persisting `blocked` anchors the absolute deadline; legacy blocked creations have no immutable first-blocked evidence, are not backfilled, and receive one default window from the first policy scan as first_observed. Defer, manual retry, re-claiming, restarts and configuration changes never renew; only the creation's real terminal ends the window. Purely forward and retry-safe, without rewriting historical outcomes. Fresh/upgrade/repeat coverage: TestMigration0038WorkspaceBlockedDeadlineAppliesFreshAndUpgrades.
+See [Persistence](../../../docs/core/persistence.en.md) for ownership/transactions, and [Workflows](../../../docs/workflows/workflows.en.md) / [External Git line](../../../docs/repositories/external-git.en.md) for runtime semantics.

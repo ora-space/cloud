@@ -16,8 +16,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  check:
+  tests:
+    name: ${{ matrix.shard == 'packages' && 'packages' || format('integration-{0}', matrix.shard) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [packages, 0, 1, 2, 3]
     runs-on: ubuntu-latest
+    # Bounds setup, builds and tests; each go test invocation retains its default 10m timeout.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17.11
@@ -35,6 +42,7 @@ jobs:
       TEST_DATABASE_URL: 'host=127.0.0.1 port=5432 user=postgres password=postgres dbname=ora_test sslmode=disable'
       REQUIRE_POSTGRES: '1'
       CGO_ENABLED: '1'
+      GOCOVERDIR: ${{ github.workspace }}/coverage-data
       # The Revision tests run against a real S3 (RustFS) instead of skipping: Cloud's presigned PUT,
       # its checksum binding and its HEAD verification are only proven by a store that enforces them.
       # The image is pinned by digest; the sandbox-network test also runs it as its curl uploader.
@@ -85,17 +93,21 @@ jobs:
             "$(cat "$creds/access-key")" "$(cat "$creds/secret-key")" "$TEST_S3_PUBLIC_ENDPOINT" |
             docker run --rm -i --network "$TEST_S3_SANDBOX_NETWORK" --entrypoint /usr/bin/curl "$RUSTFS_IMAGE" \
               --fail --silent --show-error --max-time 60 --output /dev/null --config -
-      - run: go run ./cmd/checkformat
+      - if: matrix.shard == 'packages'
+        run: go run ./cmd/checkformat
       # proto/ is the single source of the internal control contract; internal/controlpb is generated
       # from it with pinned remote plugins. Lint, reject breaking changes to v1 against the base
       # branch, then regenerate and fail on drift, same as `task proto:lint` / `proto:breaking` / `proto:check`.
-      - uses: bufbuild/buf-action@v1
+      - if: matrix.shard == 'packages'
+        uses: bufbuild/buf-action@v1
         with:
           setup_only: true
           version: 1.73.0
-      - run: buf lint
+      - if: matrix.shard == 'packages'
+        run: buf lint
         working-directory: proto
-      - run: |
+      - if: matrix.shard == 'packages'
+        run: |
           base="${{ github.base_ref || 'main' }}"
           if git cat-file -e "origin/$base:proto/buf.yaml" 2>/dev/null; then
             buf breaking --against "../.git#ref=origin/$base,subdir=proto"
@@ -103,11 +115,85 @@ jobs:
             echo "no contract on origin/$base; nothing to compare"
           fi
         working-directory: proto
-      - run: buf generate
+      - if: matrix.shard == 'packages'
+        run: buf generate
         working-directory: proto
-      - run: git diff --exit-code -- internal/controlpb
+      - if: matrix.shard == 'packages'
+        run: git diff --exit-code -- internal/controlpb
       # Same pinned golangci-lint (go.mod `tool` directive) and config as `task lint` locally.
-      - run: go tool golangci-lint config verify
-      - run: go tool golangci-lint run
-      - run: go test -race -count=1 -v -coverpkg=./internal/... -coverprofile=coverage.out ./...
-      - run: go build ./cmd/server ./cmd/gateway ./cmd/cloudctl ./cmd/simulator
+      - if: matrix.shard == 'packages'
+        run: go tool golangci-lint config verify
+      - if: matrix.shard == 'packages'
+        run: go tool golangci-lint run
+      - name: Prepare coverage directory
+        run: mkdir -p "$GOCOVERDIR"
+      - name: Test non-integration packages
+        if: matrix.shard == 'packages'
+        run: |
+          go list ./... > "$RUNNER_TEMP/packages.txt"
+          module=$(go list -m)
+          mapfile -t packages < <(grep -Fxv "$module/integration" "$RUNNER_TEMP/packages.txt")
+          go test -race -count=1 -v -coverpkg=./internal/... "${packages[@]}" -args -test.gocoverdir="$GOCOVERDIR"
+      - name: List and partition integration tests
+        if: matrix.shard != 'packages'
+        id: shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          go test -race -coverpkg=./internal/... -list '.*' ./integration > "$RUNNER_TEMP/integration-list.txt"
+          python3 .github/scripts/integration_shards.py plan "$RUNNER_TEMP/integration-list.txt" "$SHARD" "$GOCOVERDIR/shard.json" >> "$GITHUB_OUTPUT"
+      - name: Test integration shard
+        if: matrix.shard != 'packages'
+        shell: bash
+        env:
+          TEST_PATTERN: ${{ steps.shard.outputs.pattern }}
+        run: |
+          # go test overrides GOCOVERDIR internally; the testing flag retains its binary data for covdata.
+          go test -race -count=1 -v -coverpkg=./internal/... -run "$TEST_PATTERN" ./integration -args -test.gocoverdir="$GOCOVERDIR" | tee "$RUNNER_TEMP/integration.log"
+          python3 .github/scripts/integration_shards.py record "$GOCOVERDIR/shard.json" "$RUNNER_TEMP/integration.log"
+      - if: matrix.shard == 'packages'
+        run: go build ./cmd/server ./cmd/gateway ./cmd/cloudctl ./cmd/simulator
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: coverage-data/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Branch protection depends on this exact status, including failed/cancelled matrix children.
+  check:
+    if: always()
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test job to succeed
+        env:
+          RESULT: ${{ needs.tests.result }}
+        run: test "$RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-inputs
+      - name: Verify complete and disjoint integration execution
+        run: python3 .github/scripts/integration_shards.py verify coverage-inputs
+      - name: Merge all package and shard coverage
+        run: |
+          inputs="coverage-inputs/coverage-packages"
+          for shard in 0 1 2 3; do
+            inputs+=",coverage-inputs/coverage-$shard"
+          done
+          mkdir coverage-merged
+          go tool covdata merge -pcombine -i="$inputs" -o=coverage-merged
+          go tool covdata textfmt -i=coverage-merged -o=coverage.out
+          go tool covdata percent -i=coverage-merged
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 7

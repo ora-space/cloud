@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/wanglongan587/cloud/internal/config"
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/egress"
 	"github.com/wanglongan587/cloud/internal/logger"
 	"github.com/wanglongan587/cloud/internal/modelgateway"
 	"github.com/wanglongan587/cloud/internal/repository"
@@ -30,7 +32,9 @@ func main() {
 // run owns every listener and request context; shutdown cancels model streams before joining servers.
 func run() (runErr error) {
 	path := flag.String("config", "", "Cloud database and verification-key configuration")
+	checkEgress := flag.Bool("check-egress", false, "validate deployment egress without starting services; print schema and digest")
 	health := flag.Bool("healthcheck", false, "verify credential service readiness without reading private keys")
+	egressPath := flag.String("deployment-egress", os.Getenv("ORA_DEPLOYMENT_EGRESS_FILE"), "shared deployment egress JSON file")
 	flag.Parse()
 	if *health {
 		deployment, err := modelgateway.LoadConfig()
@@ -39,11 +43,26 @@ func run() (runErr error) {
 		}
 		return modelgateway.CheckHealth(&deployment)
 	}
-	cfg, err := config.Load(*path)
+	policy, err := egress.Load(*egressPath)
 	if err != nil {
 		return err
 	}
 	deployment, err := modelgateway.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if *checkEgress {
+		client, err := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DevelopmentHosts: deployment.DevelopmentHosts, DNS: deployment.DNS, Policy: policy})
+		if err != nil {
+			return err
+		}
+		defer client.CloseIdleConnections()
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			SchemaVersion int    `json:"schemaVersion"`
+			Digest        string `json:"digest"`
+		}{1, policy.Digest(deployment.DNS)})
+	}
+	cfg, err := config.Load(*path)
 	if err != nil {
 		return err
 	}
@@ -77,7 +96,7 @@ func run() (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, logger.Sync(log)) }()
-	client, err := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DevelopmentHosts: deployment.DevelopmentHosts, DNS: deployment.DNS})
+	client, err := modelgateway.NewUpstreamClient(modelgateway.UpstreamConfig{DevelopmentHosts: deployment.DevelopmentHosts, DNS: deployment.DNS, Policy: policy})
 	if err != nil {
 		return err
 	}
@@ -95,7 +114,7 @@ func run() (runErr error) {
 		return err
 	}
 	servers := []*http.Server{
-		{Addr: deployment.CredentialAddress, Handler: http.HandlerFunc(service.CredentialHandler), TLSConfig: serverTLS},
+		{Addr: deployment.CredentialAddress, Handler: egress.HealthMetadata(http.HandlerFunc(service.CredentialHandler), policy.Digest(deployment.DNS)), TLSConfig: serverTLS},
 		{Addr: deployment.RuntimeAddress, Handler: http.HandlerFunc(service.ModelHandler), TLSConfig: serverTLS.Clone()},
 		{Addr: deployment.GrantAddress, Handler: http.HandlerFunc(service.GrantHandler), TLSConfig: grantTLS},
 	}

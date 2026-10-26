@@ -34,14 +34,8 @@ func runtimeToken(r *http.Request, protocol string) string {
 // ModelHandler forwards only the exact protocol endpoint and frozen model authorized for this
 // runtime. Client-supplied authentication and URLs never reach the upstream model service.
 func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
-	protocol := ""
-	switch r.URL.Path {
-	case "/runtime/openai/v1/chat/completions":
-		protocol = "openai-completions"
-	case "/runtime/anthropic/v1/messages":
-		protocol = "anthropic-messages"
-	}
-	if r.Method != http.MethodPost || protocol == "" || r.URL.RawQuery != "" {
+	protocol, listing := runtimeModelRoute(r)
+	if protocol == "" {
 		reject(w, 404, "not_found")
 		return
 	}
@@ -58,6 +52,19 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if grant.Protocol != protocol {
 		reject(w, 403, "model_protocol_forbidden")
+		return
+	}
+	var protocolHeaders http.Header
+	if protocol == "anthropic-messages" {
+		var valid bool
+		protocolHeaders, valid = anthropicProtocolHeaders(r.Header)
+		if !valid {
+			reject(w, 400, "model_protocol_header_forbidden")
+			return
+		}
+	}
+	if listing {
+		frozenModelList(w, &grant)
 		return
 	}
 	ctx, cancel := context.WithCancelCause(r.Context())
@@ -114,6 +121,9 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 		reject(w, 503, "model_endpoint_unavailable")
 		return
 	}
+	if r.URL.RawQuery == "beta=true" {
+		target += "?beta=true"
+	}
 	plaintext, err := s.options.Cipher.Open(grant.CredentialID, grant.CredentialKeyID, grant.Ciphertext)
 	if err != nil {
 		reject(w, 503, "model_credential_unavailable")
@@ -128,7 +138,9 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 	out.Header.Set("Content-Type", "application/json")
 	out.Header.Set("Accept", "application/json, text/event-stream")
 	if protocol == "anthropic-messages" {
-		out.Header.Set("Anthropic-Version", "2023-06-01")
+		for key, values := range protocolHeaders {
+			out.Header[key] = values
+		}
 	}
 	switch grant.AuthMode {
 	case "bearer":
@@ -150,7 +162,11 @@ func (s *Service) ModelHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := upstreamFailureCode(err)
 		attempt.end("failed", code)
-		s.options.Logger.Warn("model upstream request rejected", zap.String("code", code))
+		fields := []zap.Field{zap.String("code", code)}
+		if detail := upstreamFailureDetail(err); detail != "" {
+			fields = append(fields, zap.String("detail", detail))
+		}
+		s.options.Logger.Warn("model upstream request rejected", fields...)
 		reject(w, 502, code)
 		return
 	}

@@ -11,6 +11,7 @@ import {
 import { NodeParameterSummary } from '@/features/workflows/editor/node-parameter-summary'
 import { IterationNodeFrame } from '@/features/workflows/editor/iteration-node-frame'
 import { NodeIdentity } from '@/features/workflows/editor/node-identity'
+import { WorkflowNodeSourceHandles } from '@/features/workflows/editor/workflow-node-source-handles'
 import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
 import { workflowNodeMetadata } from '@/features/workflows/editor/node-metadata'
 import type { WorkflowCanvasNode } from '@/features/workflows/editor/canvas-types'
@@ -86,13 +87,7 @@ export const WorkflowNodeCard = memo(function WorkflowNodeCard({
         }
       />
       <NodeParameterSummary data={data} />
-      <Handle
-        type="source"
-        position={Position.Right}
-        aria-label={t('workflows.editor.connectFrom', { name: data.title })}
-        className="workflow-port workflow-port-output !size-2.5 !border-0 !bg-transparent"
-        style={{ top: WORKFLOW_NODE_ANCHOR_Y }}
-      />
+      <WorkflowNodeSourceHandles nodeId={id} data={data} />
     </article>
   )
 })

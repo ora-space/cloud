@@ -149,8 +149,10 @@ host for GitHub Enterprise Server), `subject=<numeric id>`, display name from na
 **Local development (`internal/gateway/devlogin`).** `login.development_provider: true` registers the
 `dev` provider: a form served by the Gateway itself where any `source`, `subject` and display name can
 be typed in. Attempts, PKCE and sessions then work exactly as with GitHub. Because it can sign in as
-anyone, it is only accepted together with `public.development` (loopback HTTP), and startup logs a
-warning; production configurations must not set it.
+anyone, configuration validation requires explicit `public.development: true` and a loopback HTTP
+`public.base_url` origin (`localhost`, `127.0.0.1`, or `::1`, with an optional port). HTTPS origins
+are rejected even with development mode enabled. Startup logs a warning; production configurations
+must not set it.
 
 ## Automatic login in the browser
 

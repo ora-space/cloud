@@ -9,7 +9,7 @@
 - **Dual-sink composition**:
   - **Console sink**: Emits colorized, ISO8601 human-readable log lines to `stdout` for local development and container console output.
   - **File sink**: Emits machine-readable JSON log events with log rotation managed by Lumberjack (configurable `max_size`, `max_backups`, `max_age`, and gzip compression).
-- **Standardized event fields**: Includes ISO8601 timestamps, log levels, short caller locations, error stack traces, and request correlation IDs (`requestId`).
+- **Standardized event fields**: The encoder configures ISO8601 timestamps, levels and short caller locations. Callers explicitly attach request correlation IDs (`requestId`) and error stacks; these are not generated automatically.
 - **Platform-safe buffer flushing**: `Sync(log)` cleanly flushes buffered entries on shutdown, explicitly handling and suppressing the Windows console handle `EINVAL` error that occurs when syncing console outputs.
 
 ## Boundaries and invariants

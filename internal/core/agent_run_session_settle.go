@@ -52,6 +52,13 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
+		// A WorkflowRun session ends through this same hook and has its own, smaller settlement
+		// (settleWorkflowSessionEnded): the scheduler commits the node's terminal state from this
+		// evidence on its next pass, so the hook's job is to prove the event is this run's own and
+		// ack it.
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return settleWorkflowSessionEnded(t, runID, executionID, ended)
+		}
 		// No authoritative run to accept the terminal event: an invariant violation, not a replay, so
 		// the event must not be acked.
 		return fmt.Errorf("sessionEnded: issue_run %s not found", runID)
@@ -82,7 +89,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	if !sessionEndReasons[ended.S("reason")] {
 		return fmt.Errorf("sessionEnded: run %s execution %s carries end reason %q, outside the closed set", runID, executionID, ended.S("reason"))
 	}
-	if o.S("phase") == "done" && t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) != nil {
+	if o.S("phase") == "done" && residualForRun(t, runID) != nil {
 		t.exec("UPDATE agent_run_residuals SET session_ended_at=COALESCE(session_ended_at,clock_timestamp()) WHERE run_id=$1", runID)
 		return nil
 	}
@@ -128,6 +135,15 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	t.execRows(`
 		UPDATE thread_entries SET status='discarded'
 		WHERE run_id=$1 AND source='user' AND status='queued'`, runID)
+	// The business verdict of a scheduled run lands in the same transaction as its terminal state and
+	// the delivery release (scheduled-task verdict/artifacts ADR D1/D2): it is a run-level fact, so it
+	// neither waits for the delivery settlement nor derives from the status that settlement writes.
+	if err := recordScheduledRunResult(t, runID, ended); err != nil {
+		return err
+	}
+	if err := recordScheduledArtifacts(t, runID, executionID, ended); err != nil {
+		return err
+	}
 	if ended.S("reason") == "agent_failed" {
 		appendSessionFailure(t, o, ended.S("detail"))
 	}
@@ -148,7 +164,7 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 	if err != nil {
 		return err
 	}
-	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), time.Time{})
+	enqueueExecutionWork(t, runID, "deliver_revision", spec, sessionStartTarget(t, o.S("workspaceId")), "", 0, time.Time{})
 
 	// Last, so lastSeq is the high-water mark this transaction is about to commit. `ended` is a
 	// state-only change with a cleared idleSince, and the discards change per-turn status: both
@@ -160,19 +176,20 @@ func (s *Store) settleSessionEnded(t *transaction, runID, executionID string, en
 }
 
 // sessionDeliverySpec builds the fixed DeliverRevision snapshot the delivery work item carries
-// (proto DeliverRevisionSpec; Revision D2). Everything but the object keys is read from
+// (proto DeliverRevisionSpec; Revision D1). Everything but the server-owned locations is read from
 // authoritative rows in the caller's transaction:
 //
 //	sessionExecutionId:  the ended session execution.
 //	checkoutExecutionId: the clone execution that produced the run Workspace's recorded baseline.
-//	baseCommit:          workspaces.base_commit_id, the commit the bundle is relative to.
-//	priorRevision:       the Revision the session resumed, without bundle (resume decision D5).
+//	baseCommit:          workspaces.base_commit_id, the commit the delivery is measured against.
+//	priorRevision:       the Revision the session resumed (resume decision D5).
 //	kind:                the work item kind, which the control plane's enqueue re-checks.
 //
-// The three server-owned locations — the per-attempt `bundleKey`/`historyKey` and the
-// `revisionRef` — are deliberately absent: the control plane fixes them while it inserts the work
-// item, so a retried delivery is a new attempt with new keys by construction and no caller can name
-// an object another attempt already wrote.
+// The server-owned locations — the per-attempt `historyKey` and `deliveryRef`, the Git Server
+// repository, the Workspace branch and the Node-local `revisionRef` — are deliberately absent: the
+// control plane fixes them while it inserts the work item, so a retried delivery is a new attempt
+// with a new key and ref by construction and no caller can name an object or ref another attempt
+// already wrote.
 //
 // A run Workspace with no recorded baseline, or one whose baseline names no successful clone
 // execution, is an invariant violation: a session cannot have run in a Workspace that was never

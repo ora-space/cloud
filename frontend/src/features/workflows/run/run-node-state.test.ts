@@ -26,6 +26,36 @@ describe('parseRunNodeStates', () => {
     } satisfies RunNodeEntry)
   })
 
+  it('reads the attempt and retry instant of a retrying node', () => {
+    const states = parseRunNodeStates({
+      'a-1': {
+        status: 'retrying',
+        attempt: 2,
+        startedAt: '2026-09-20T10:00:00+08:00',
+        retryAt: '2026-09-20T10:00:30+08:00',
+        error: 'agent_failed',
+      },
+    })
+    expect(states['a-1']).toEqual({
+      status: 'retrying',
+      attempt: 2,
+      startedAt: '2026-09-20T10:00:00+08:00',
+      retryAt: '2026-09-20T10:00:30+08:00',
+      error: 'agent_failed',
+    } satisfies RunNodeEntry)
+  })
+
+  it('drops an attempt that is not a positive integer and a blank retry instant', () => {
+    const states = parseRunNodeStates({
+      'a-1': { status: 'retrying', attempt: 0, retryAt: '' },
+      'a-2': { status: 'running', attempt: 1.5 },
+      'a-3': { status: 'running', attempt: 'two' },
+    })
+    expect(states['a-1']).toEqual({ status: 'retrying' } satisfies RunNodeEntry)
+    expect(states['a-2']).toEqual({ status: 'running' } satisfies RunNodeEntry)
+    expect(states['a-3']).toEqual({ status: 'running' } satisfies RunNodeEntry)
+  })
+
   it('keeps an explicitly falsy output when the row carries one', () => {
     const states = parseRunNodeStates({ 'a-1': { status: 'failed', output: 0 } })
     expect(states['a-1']?.output).toBe(0)
@@ -45,5 +75,17 @@ describe('parseRunNodeStates', () => {
   it('omits optional fields the row never set', () => {
     const states = parseRunNodeStates({ 'a-1': { status: 'idle' } })
     expect(states['a-1']).toEqual({ status: 'idle' } satisfies RunNodeEntry)
+  })
+
+  it('treats a blank timestamp as absent', () => {
+    const states = parseRunNodeStates({
+      'a-1': { status: 'inactive', startedAt: '', finishedAt: '' },
+      'a-2': { status: 'running', startedAt: '2026-09-20T10:00:00+08:00', finishedAt: '' },
+    })
+    expect(states['a-1']).toEqual({ status: 'inactive' } satisfies RunNodeEntry)
+    expect(states['a-2']).toEqual({
+      status: 'running',
+      startedAt: '2026-09-20T10:00:00+08:00',
+    } satisfies RunNodeEntry)
   })
 })

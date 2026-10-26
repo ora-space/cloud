@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { renderWithProviders } from '@/test/render'
+import { renderAtRoute, renderWithProviders } from '@/test/render'
 import { server } from '@/test/msw-server'
 import { installSignedInSession } from '@/test/cloud-handlers'
 import type {
@@ -265,6 +265,74 @@ describe('ActivityPanel', () => {
     expect(await screen.findByText(/已确认/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '审阅' })).not.toBeInTheDocument()
   })
+
+  it('reads WorkflowRun status and links its identity within the current workspace', async () => {
+    servePanel([], [interaction({ runId: 'r1' })])
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i1/runs', () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 'r1',
+              executorId: 'wf-executor',
+              executorType: 'workflow',
+              status: 'queued',
+              workflowInvocationRef: 'workflow-run-1',
+            },
+          ],
+          nextCursor: '',
+        }),
+      ),
+      http.get('/api/v1/tenants/t1/workflows/wf-executor/runs/workflow-run-1', () =>
+        HttpResponse.json({ id: 'workflow-run-1', status: 'succeeded' }),
+      ),
+    )
+    renderAtRoute(
+      '/w/:workspaceSlug/issues/:issueId',
+      <ActivityPanel slug="t1" issueId="i1" members={[]} />,
+      '/w/team-space/issues/i1',
+    )
+
+    expect(await screen.findByText('已确认 · 运行 succeeded')).toBeInTheDocument()
+    expect(screen.queryByText(/运行 queued/)).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '运行详情' })).toHaveAttribute(
+      'href',
+      '/w/team-space/workflows/wf-executor/runs/workflow-run-1',
+    )
+  })
+
+  it.each([null, undefined])(
+    'keeps historical IssueRun status without a detail link when the workflow reference is %s',
+    async (workflowInvocationRef) => {
+      servePanel([], [interaction({ runId: 'legacy-run' })])
+      const workflowRequest = vi.fn<() => void>()
+      server.use(
+        http.get('/api/v1/tenants/t1/issues/i1/runs', () =>
+          HttpResponse.json({
+            items: [
+              {
+                id: 'legacy-run',
+                executorId: 'wf1',
+                executorType: 'workflow',
+                status: 'failed',
+                workflowInvocationRef,
+              },
+            ],
+            nextCursor: '',
+          }),
+        ),
+        http.get('/api/v1/tenants/t1/workflows/wf1/runs/:runId', () => {
+          workflowRequest()
+          return HttpResponse.json({ status: 'succeeded' })
+        }),
+      )
+      renderWithProviders(<ActivityPanel slug="t1" issueId="i1" members={[]} />)
+
+      expect(await screen.findByText('已确认 · 运行 failed')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: '运行详情' })).not.toBeInTheDocument()
+      expect(workflowRequest).not.toHaveBeenCalled()
+    },
+  )
 
   it('renders a workflow progress/message activity with its human-readable detail boxed', async () => {
     servePanel([

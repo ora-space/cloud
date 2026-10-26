@@ -342,6 +342,35 @@ func TestThreadMessagePostRejectsClosedAndUnknownRuns(t *testing.T) {
 	}
 }
 
+// TestThreadMessagePostRejectsScheduledRun proves the write-side half of the scheduled-task D3
+// contract. A scheduled occurrence remains a headless one-shot session even while its Thread is
+// still in an otherwise accepting state, so a client receives the ordinary closed-Thread response
+// and no user turn or command can be recorded.
+func TestThreadMessagePostRejectsScheduledRun(t *testing.T) {
+	f := setup(t)
+	f.bindBusinessHooks()
+	scene := seedThreadScene(t, f)
+	taskID := newTestID()
+	agentID := seedScheduledTaskAgent(t, f.store.Pool, scene.seed)
+	_, e := f.store.Pool.Exec(`
+		INSERT INTO scheduled_tasks(id,tenant_id,issue_id,creator_user_id,agent_id,name,prompt,schedule,timezone,revision,version,enabled)
+		VALUES($1,$2,$3,$4,$5,'headless','Sync','{"kind":"daily","hour":0,"minute":0}'::jsonb,'UTC',1,1,false)`,
+		taskID, scene.tenantID, scene.issueID, scene.seed.userID, agentID)
+	must(t, e)
+	_, e = f.store.Pool.Exec(`
+		INSERT INTO scheduled_task_occurrences(tenant_id,task_id,scheduled_at,outcome,task_revision,observed_at,run_id)
+		VALUES($1,$2,now(),'admitted',1,now(),$3)`, scene.tenantID, taskID, scene.runID)
+	must(t, e)
+
+	f.postThread(scene, "key-scheduled-headless", threadBody("no continuation"), 409, "thread_closed")
+	if n := f.threadEntries(scene.runID); n != 0 {
+		t.Fatalf("a scheduled run must not record a user turn, got %d", n)
+	}
+	if n := f.threadCommands(scene.runID); n != 0 {
+		t.Fatalf("a scheduled run must not release a user command, got %d", n)
+	}
+}
+
 // The two state rows Cloud itself guarantees cannot happen are answered as
 // internal invariant failures, never as 409: a 409 would tell a client "the Thread is closed" about
 // Cloud's own broken state. The transaction aborts, so nothing is written either way.

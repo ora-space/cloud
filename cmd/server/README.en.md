@@ -1,22 +1,27 @@
-# cmd/server: Ora Cloud HTTP Daemon
+# cmd/server: Cloud service composition
 
 [中文](README.md) | [English](README.en.md)
 
-`cmd/server` is the main production entrypoint for the authoritative Ora Cloud service. It binds HTTP endpoints, validates database migration checksums, verifies JWT credentials, and manages the daemon lifecycle under operating system signals.
+The production entrypoint composes configuration, databases, HTTP/gRPC adapters and lifecycle loops around one Store. Core owns business state and policy.
 
-## Responsibilities
+## Startup and serving
 
-- **Configuration & logging**: Loads application settings via `internal/config.Load` (supporting YAML files and `CLOUD_*` environment variable overrides) and initializes the process-wide Zap logger.
-- **PostgreSQL pool initialization**: Connects to the authoritative PostgreSQL database via `internal/repository.InitDB` and verifies connectivity with a mandatory ping.
-- **Migration integrity gate**: Executes `store.CheckSchema(ctx)` at startup. It strictly verifies that all migrations defined in `internal/core/migrations` have been applied in order with matching SHA256 checksums, and that no unexpected migration versions exist. It never applies DDL or runs `AutoMigrate`.
-- **Cryptographic trust setup**: Constructs the `core.Authenticator` using configured trusted verification public keys and the expected audience string.
-- **HTTP server composition**: Initializes the Gin engine via `internal/api/router.New`, applies server timeouts (`ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`), and listens on the configured TCP port.
-- **Graceful shutdown**: Intercepts `os.Interrupt` and `syscall.SIGTERM`. On receipt of a shutdown signal, it allocates a bounded 10-second shutdown context to finish in-flight requests and cleanly closes the PostgreSQL pool and logger buffers.
+- Load YAML / `CLOUD_*` configuration, logging and the PostgreSQL pool. `CheckSchema` rejects missing, unknown or checksum-mismatched migrations without running DDL.
+- Read deployment trust material and construct the Authenticator, object store and external-service clients.
+- `router.New` serves public HTTP; `controlgrpc.NewSecure` serves mutually authenticated Controller gRPC. Retired management JSON paths stay retired.
+- `configureCollaboration` composes real Space Agent and Workflow directories in production; collab fixtures require the explicit development switch.
+- `wireRepository` connects Git ref queries, Credential Store and the Repo Executor worker according to configuration; network I/O stays outside Core transactions.
 
-## Boundaries and invariants
+## Background tasks and shutdown
 
-- **No startup DDL**: The server never mutates the database schema at runtime. Missing or altered migrations immediately cause a fatal startup exit; schema updates must be performed using `cloudctl migrate`.
-- **Stateless daemon**: The server process maintains no in-memory mutable business state across requests. Authoritative state resides entirely within PostgreSQL and is synchronized using database-level advisory locking.
-- **Zero credential leaks**: The server does not handle or log raw external deployment keys, cloud provider secrets, or infrastructure passwords.
+`main.go` owns loops with one cancellation context and WaitGroup: optional catalog sync and workflow asset imports, Agent dispatch/startup, blocked windows, Thread end/cancellation, delivery/release recovery and Workflow scheduling. Core methods still decide state; loops do not make process-local state authoritative.
 
-See [cmd overview](../README.en.md), [HTTP router](../../internal/api/router/README.en.md), [Internal credentials](../../docs/identity/authentication.en.md), and [Authoritative persistence](../../docs/core/persistence.en.md).
+The residual-ledger recovery loop calls `ReconcileAgentRunResidualsOnce` immediately at startup and then at `issue_runs.residual_reconcile_interval` (default `1m`), sharing that cancellation context and WaitGroup. It retains recovery responsibility after the business run ends and consumes existing fact entrypoints without adding a Controller discovery RPC or contract. Missing evidence leaves the ledger open; timeouts, reconnection and forced stops do not establish successful cleanup.
+
+Cleanup differs between shutdown and failure paths:
+
+- Signal-exit branch (SIGINT/SIGTERM): cancel background tasks and send the Controller drain signal; stop gRPC gracefully, forcing it to stop at the shared 10-second shutdown deadline, then call HTTP Shutdown with that same deadline, join background loops, close the database and flush logs.
+- Serving-failure branch: cancel background tasks and join the loops before returning, then close the database and flush logs. This branch does not call HTTP Shutdown or gRPC Stop/GracefulStop and does not guarantee that the other service's in-flight requests drain.
+- Startup failure: after background loops have started, errors from `wireRepository`, `net.Listen`, `Control.TLS` or `NewSecure` return directly without joining the loops. Registered defers run in reverse order, closing the database before cancelling the context; cleanup of already-started tasks is not guaranteed.
+
+See [Deployment](../../docs/operations/deployment.en.md) and [Configuration](../../docs/operations/configuration.en.md) for operations, and [IssueRun](../../docs/agent-runs/issue-runs.en.md), [Workflows](../../docs/workflows/workflows.en.md) and [External Git line](../../docs/repositories/external-git.en.md) for execution semantics. Local tests verify composition boundaries.

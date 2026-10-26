@@ -421,3 +421,37 @@ describe('decorateWorkflowVariableCatalog', () => {
     expect(decorated[0]?.sourceNodeKind).toBeUndefined()
   })
 })
+
+it('exposes loop named outputs outside and carried plus outer ancestors inside', () => {
+  const loop = node('l', 'loop', {
+    loopConfig: {
+      maxIterations: 2,
+      variables: [
+        {
+          name: 'draft',
+          valueType: 'string',
+          initial: { kind: 'constant', value: '' },
+          feedback: ['w', 'output'],
+        },
+      ],
+      until: { logic: 'and', conditions: [] },
+      outputs: [{ name: 'result', variableSelector: ['w', 'output'] }],
+    },
+  })
+  const worker = { ...node('w', 'agent'), parentId: 'l' }
+  const nodes = [
+    node('s', 'start'),
+    loop,
+    worker,
+    node('exit', 'loopExit', { containerId: 'l' }),
+    node('o', 'output'),
+  ]
+  const edges = [edge('s', 'l'), edge('l', 'o')]
+  expect(selectors(deriveWorkflowVariableCatalog(nodes, edges, 'o'))).toContain('l.result')
+  expect(selectors(deriveWorkflowVariableCatalog(nodes, edges, 'o'))).not.toContain('l.output')
+  expect(selectors(deriveWorkflowVariableCatalog(nodes, edges, 'o'))).not.toContain('l.draft')
+  expect(selectors(deriveWorkflowVariableCatalog(nodes, edges, 'w'))).toEqual(
+    expect.arrayContaining(['s.input', 'l.draft']),
+  )
+  expect(selectors(deriveWorkflowVariableCatalog(nodes, edges))).not.toContain('exit.output')
+})

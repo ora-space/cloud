@@ -1,6 +1,15 @@
 import { Variable as VariableIcon } from 'lucide-react'
-import { SelectGroup, SelectItem, SelectLabel, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { workflowChoiceLabel, type WorkflowChoice } from '@/features/workflows/runtime/capabilities'
+import { WORKFLOW_VARIABLE_VALUE_TYPES } from '@/features/workflows/runtime/types'
 import type {
   WorkflowDecoratedVariable,
   WorkflowVariableCatalogEntry,
@@ -8,6 +17,7 @@ import type {
 import { groupWorkflowVariables } from '@/features/workflows/runtime/variable-groups'
 import { workflowNodeMetadata } from '@/features/workflows/editor/node-metadata'
 import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
+import { useTranslation } from 'react-i18next'
 
 /**
  * One variable row inside a select popover: `{x}` mark, name, and type.
@@ -238,6 +248,64 @@ export function parseComparisonValue(text: string): unknown {
     return Number(trimmed)
   }
   return text
+}
+
+/**
+ * A catalog-backed selector menu: the trigger shows the resolved selector and the menu groups every
+ * variable the consumer may reference. Shared by the iteration region panel and the Loop/Aggregator
+ * inspectors so all three pick from the same catalog.
+ */
+export function WorkflowCatalogSelector({
+  htmlId,
+  value,
+  placeholder,
+  choices,
+  catalog,
+  onPick,
+  ariaLabel,
+}: {
+  htmlId: string
+  value: readonly string[]
+  placeholder: string
+  choices: readonly WorkflowDecoratedVariable[]
+  catalog: readonly WorkflowDecoratedVariable[]
+  onPick: (selector: string[]) => void
+  ariaLabel: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <Select
+      value={value.join('.') === '' ? null : value.join('.')}
+      onValueChange={(picked) => {
+        if (picked !== null) {
+          onPick(textToSelector(picked))
+        }
+      }}
+    >
+      <SelectTrigger className="h-8 w-full bg-background" id={htmlId} aria-label={ariaLabel}>
+        <VariableSelectValue catalog={catalog} selector={value} placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false} align="start" className="w-70 min-w-70 max-w-70">
+        <WorkflowVariableSelectContent
+          variables={choices}
+          globalVariablesLabel={t('workflows.variable.global')}
+        />
+      </SelectContent>
+    </Select>
+  )
+}
+
+/** The type menu every workflow variable declaration shares: globals and Loop carried values. */
+export function WorkflowVariableTypeMenu() {
+  return (
+    <SelectContent>
+      {WORKFLOW_VARIABLE_VALUE_TYPES.map((valueType) => (
+        <SelectItem key={valueType} value={valueType}>
+          {valueType}
+        </SelectItem>
+      ))}
+    </SelectContent>
+  )
 }
 
 /** Renders a comparison value back into its editable text form. */

@@ -14,7 +14,9 @@ release 三元组),然后经 `CatalogSink` 接口把结果交给 `internal/core`
   目标三元组白名单、pack 互斥)。
 - `catalog.go`：扫描 `registry/**/orax.toml` 构建目录条目;`marketplace_visible=false` 与损坏
   清单跳过;同 canonical id 按路径序首个胜出;logo 变体(universal/light/dark + 扩展名优先级)
-  与 README(截断存储)解析。
+  与 README(截断存储)解析；校验 Agent 声明静态副本，将关联与原始字节或有界诊断交给目录快照。
+- `agentconfiguration.go`：无 I/O 的 Agent 声明编译器，镜像 desktop 的结构、版本、Settings 与模型访问校验；
+  `testdata/agent-configuration-contract.json` 保存两端共用的契约向量。
 - `sync.go`：`Syncer.Sync` —— seed → go-git clone/pull --ff-only → 扫描 → 事务替换目录;
   单飞准入(并发调用方直接返回 `ErrSyncInFlight`);失败记录 `sync_error` 且保留上一版快照。
 - `loop.go`：`RunSyncLoop` —— 启动即同步一次,此后每 interval 一次,ctx 取消退出,失败只记日志
@@ -31,6 +33,7 @@ release 三元组),然后经 `CatalogSink` 接口把结果交给 `internal/core`
 - 网络与扫描全部发生在数据库事务之外;落库只是 DELETE + INSERT + 时间戳的单事务替换。
 - 一次失败的同步绝不覆盖上一版目录快照(失败路径只写 `plugin_sources.sync_error`)。
 - 目录读取永远不出网:API 只读 PG 快照,与 desktop 的 cache-only 语义一致。
+- Agent 的 `[agent_configuration]` 关联包含 schema version、声明 SHA-256 和条目内副本路径；副本路径的任何一段都不能是符号链接，读取限定在条目目录内，副本须为有界 UTF-8 普通文件，摘要、编译结果与关联版本一致。未声明与声明无效分别记录，无效副本不使条目消失或禁止包安装；本包不读取个人配置、不解析连接、不授权运行时。
 - `ErrNonFastForwardMerge` 即 `pull --ff-only` 契约;desktop 的 `gitlancer` 同语义。
 
 ## 测试
@@ -38,3 +41,4 @@ release 三元组),然后经 `CatalogSink` 接口把结果交给 `internal/core`
 - 单测全部离线:go-git 本地裸仓 fixture 不发真实网络;`fakeSink` 断言事务边界行为;并发单飞
   用阻塞 seed 确定性同步;loop 用注入 sleep 驱动 tick。
 - 真实 PG 约束与 HTTP 链路由 `integration/plugins_test.go` 覆盖。
+- 声明编译与副本校验见 `agentconfiguration_test.go`、`catalog_test.go`；快照持久化和安装关联冻结见 `integration/agent_configuration_catalog_test.go`。

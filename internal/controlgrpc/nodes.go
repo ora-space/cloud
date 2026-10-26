@@ -21,6 +21,9 @@ type nodeService struct {
 func (s *nodeService) RegisterNode(ctx context.Context, req *controlpb.RegisterNodeRequest) (*controlpb.RegisterNodeResponse, error) {
 	identity := req.GetNode()
 	body := core.Object{"epoch": req.GetEpoch(), "sandboxInstanceId": req.GetSandboxInstanceId(), "generation": req.GetGeneration(), "nodeId": identity.GetNodeId(), "nodeIncarnationId": identity.GetNodeIncarnationId(), "protocolVersion": int64(req.GetProtocolVersion()), "modelProxy": req.GetModelProxy()}
+	if capability := req.GetModelAdapter(); capability != nil {
+		body["modelAdapter"] = core.Object{"contractVersion": int64(capability.GetContractVersion()), "target": capability.GetTarget(), "protocols": capability.GetProtocols()}
+	}
 	out, e := control(ctx, s.store, "report_node_register", "", req.GetSubmissionId(), body)
 	if e != nil {
 		return nil, e
@@ -67,10 +70,27 @@ func node(n core.Object) *controlpb.NodeRecord {
 		Id: n.S("id"), SandboxInstanceId: n.S("sandboxInstanceId"), WorkspaceId: n.S("workspaceId"),
 		Connection:  controlpb.NodeConnection(enum(controlpb.NodeConnection_value, "NODE_CONNECTION_", n.S("connectionState"))),
 		Initialized: n.B("initialized"), Version: n.N("version"), IdleAdmissionEpoch: optionalInt(n, "idleAdmissionEpoch"),
-		ModelProxy: n.B("modelProxy"),
+		ModelProxy:   n.B("modelProxy"),
+		ModelAdapter: modelAdapterMessage(n.O("modelAdapter")),
 	}
 	if n.S("nodeIncarnationId") != "" {
 		out.Identity = &controlpb.NodeIdentity{NodeId: n.S("nodeId"), NodeIncarnationId: n.S("nodeIncarnationId")}
 	}
 	return out
+}
+
+// modelAdapterMessage omits unproven legacy state instead of manufacturing host capability.
+func modelAdapterMessage(o core.Object) *controlpb.ModelAdapterCapabilities {
+	if len(o) == 0 {
+		return nil
+	}
+	var protocols []string
+	if values, ok := o["protocols"].([]any); ok {
+		for _, value := range values {
+			if protocol, ok := value.(string); ok {
+				protocols = append(protocols, protocol)
+			}
+		}
+	}
+	return &controlpb.ModelAdapterCapabilities{ContractVersion: boundedSchemaVersion(o.N("contractVersion")), Target: o.S("target"), Protocols: protocols}
 }

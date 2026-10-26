@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -77,5 +78,55 @@ func TestProxyDistinguishesPolicyAndResolutionFailuresWithoutDiagnostics(t *test
 				}
 			}
 		})
+	}
+}
+
+// A checked-dial failure adds its bounded address attribution to the structured log, while the
+// response keeps only the stable code. The wrapped *url.Error text must not be reused: it carries
+// the request URL, which can include a signed asset query.
+func TestProxyLogsOnlyBoundedCheckedDialAttribution(t *testing.T) {
+	dialErr := &url.Error{Op: "Post", URL: "https://models.example.invalid/v1/chat/completions", Err: &dialFailure{attempts: []addressDialFailure{
+		{address: "198.51.100.1:443", reason: "timeout"},
+		{address: "198.51.100.2:443", reason: "connection refused"},
+	}}}
+	cipher := testCipher(t)
+	id := uuid.NewString()
+	secret := randomSecret(t)
+	sealed, err := cipher.Seal(id, []byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakePolicy{active: true, grant: core.ModelGrant{CredentialID: id, CredentialKeyID: "test-v1", Ciphertext: sealed, Protocol: "openai-completions", BaseURL: "https://models.example.invalid/v1", AuthMode: "bearer", Model: core.ModelDefinition{ID: "selected"}}}
+	s := testService(t, store, cipher, &http.Client{Transport: transportFailure{dialErr}})
+	logCore, logs := observer.New(zap.WarnLevel)
+	s.options.Logger = zap.New(logCore)
+	r := httptest.NewRequest(http.MethodPost, "/runtime/openai/v1/chat/completions", strings.NewReader(`{"model":"selected"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+randomSecret(t))
+	w := httptest.NewRecorder()
+	s.ModelHandler(w, r)
+	var fault struct{ Code string }
+	if err := json.Unmarshal(w.Body.Bytes(), &fault); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusBadGateway || fault.Code != "model_upstream_unavailable" {
+		t.Fatalf("status/code = %d/%s", w.Code, fault.Code)
+	}
+	entries := logs.All()
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want one bounded warning", len(entries))
+	}
+	context := entries[0].ContextMap()
+	if context["code"] != "model_upstream_unavailable" {
+		t.Fatalf("logged code = %v", context["code"])
+	}
+	const wantDetail = "checked dial failed: 198.51.100.1:443 timeout; 198.51.100.2:443 connection refused"
+	if context["detail"] != wantDetail {
+		t.Fatalf("logged detail = %v, want %q", context["detail"], wantDetail)
+	}
+	for _, private := range []string{"198.51.100.1", "198.51.100.2", secret, "models.example.invalid"} {
+		if strings.Contains(w.Body.String(), private) {
+			t.Fatal("unsafe diagnostic escaped the public response")
+		}
 	}
 }

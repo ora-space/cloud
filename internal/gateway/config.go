@@ -218,7 +218,8 @@ func (c *Config) Validate() error {
 	if c.Server.ReadTimeout <= 0 || c.Server.WriteTimeout <= 0 || c.Database.ConnMaxLifetime <= 0 {
 		return fmt.Errorf("server timeouts and database.conn_max_lifetime must be positive durations")
 	}
-	if _, e := PublicOrigin(c.Public.BaseURL, c.Public.Development); e != nil {
+	origin, e := PublicOrigin(c.Public.BaseURL, c.Public.Development)
+	if e != nil {
 		return e
 	}
 	if c.Session.TTL <= 0 || c.Session.TTL > MaxSessionLifetime {
@@ -246,8 +247,11 @@ func (c *Config) Validate() error {
 	if c.Tokens.Lifetime <= 0 || c.Tokens.Lifetime > MaxCredentialLifetime {
 		return fmt.Errorf("tokens.lifetime must be positive and at most %s", MaxCredentialLifetime)
 	}
-	if c.Login.DevelopmentProvider && !c.Public.Development {
-		return fmt.Errorf("login.development_provider requires public.development")
+	// The adapter also rejects HTTPS origins; fail at configuration validation rather than
+	// accepting a production-shaped origin until provider registration. PublicOrigin already
+	// guarantees that any HTTP origin is loopback and explicitly marked as development.
+	if c.Login.DevelopmentProvider && (!c.Public.Development || !strings.HasPrefix(origin, "http://")) {
+		return fmt.Errorf("login.development_provider requires a loopback HTTP origin with public.development")
 	}
 	switch c.Login.Provider {
 	case "":

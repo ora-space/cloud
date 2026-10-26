@@ -8,6 +8,7 @@ import { SidebarProvider } from '@/components/ui/sidebar'
 import { makeAgentTarget, makeIssue, makeProject, makeStatus } from '@/test/issue-fixtures'
 import { installSignedInSession } from '@/test/cloud-handlers'
 import { SessionProvider } from '@/features/auth/session'
+import { RequireSession } from '@/features/auth/require-session'
 import { CurrentSpaceProvider } from '@/features/spaces/current-space'
 import { server } from '@/test/msw-server'
 import type { Issue, IssueRun } from './types'
@@ -19,6 +20,9 @@ const statuses = [makeStatus('backlog'), makeStatus('todo'), makeStatus('done')]
 function serveDetail(issue: Issue, allIssues: Issue[] = [issue], runs: IssueRun[] = []) {
   installSignedInSession()
   server.use(
+    http.get('/api/v1/tenants/t1/issues/i1/runs/:rid/statistics', () =>
+      HttpResponse.json({ code: 'not_found' }, { status: 404 }),
+    ),
     http.get('/api/v1/me/spaces', () =>
       HttpResponse.json({
         items: [
@@ -71,26 +75,32 @@ function serveDetail(issue: Issue, allIssues: Issue[] = [issue], runs: IssueRun[
     http.get('/api/v1/tenants/t1/issues/i1/runs', () =>
       HttpResponse.json({ items: runs, nextCursor: '' }),
     ),
+    http.get('/api/v1/tenants/t1/issues/i1/conversation', () =>
+      HttpResponse.json({ items: [], nextCursor: null, prevCursor: null }),
+    ),
   )
 }
 
 function DetailRoute() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
   return (
-    <CurrentSpaceProvider slug={workspaceSlug ?? ''}>
-      <IssueDetailPage slug="t1" />
-    </CurrentSpaceProvider>
+    <RequireSession>
+      <CurrentSpaceProvider slug={workspaceSlug ?? ''}>
+        <IssueDetailPage slug="t1" />
+      </CurrentSpaceProvider>
+    </RequireSession>
   )
 }
 
-function renderIssueDetail(issueId: string) {
+function renderIssueDetail(issueId: string, search = '') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
+      { path: '/login', element: <div>Login screen</div> },
       { path: '/w/:workspaceSlug/issues', element: <div>Issues list screen</div> },
       { path: '/w/:workspaceSlug/issues/:issueId', element: <DetailRoute /> },
     ],
-    { initialEntries: [`/w/real-workspace/issues/${issueId}`] },
+    { initialEntries: [`/w/real-workspace/issues/${issueId}${search}`] },
   )
   const rendered = render(
     <QueryClientProvider client={queryClient}>
@@ -113,6 +123,199 @@ async function selectRepository(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('IssueDetailPage', () => {
+  it('shows a loading state only while the initial task read is pending', async () => {
+    const issue = makeIssue('i1', 'Loaded task')
+    serveDetail(issue)
+    let release: (() => void) | undefined
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    onTestFinished(() => release?.())
+    let requested = false
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i1', async () => {
+        requested = true
+        await pending
+        return HttpResponse.json(issue)
+      }),
+    )
+    renderIssueDetail('i1')
+    await waitFor(() => expect(requested).toBe(true))
+    expect(screen.getByRole('status', { name: '正在加载任务' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    release?.()
+    expect(await screen.findByText('Loaded task')).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: '正在加载任务' })).not.toBeInTheDocument()
+  })
+
+  it.each(['server', 'network'])(
+    'retries a failed initial %s read without issuing concurrent retries',
+    async (failure) => {
+      const issue = makeIssue('i1', 'Recovered task')
+      serveDetail(issue)
+      let release: (() => void) | undefined
+      const pending = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      onTestFinished(() => release?.())
+      let requests = 0
+      server.use(
+        http.get('/api/v1/tenants/t1/issues/i1', async () => {
+          requests += 1
+          if (requests === 1)
+            return failure === 'network'
+              ? HttpResponse.error()
+              : HttpResponse.json({ code: 'internal_error' }, { status: 500 })
+          await pending
+          return HttpResponse.json(issue)
+        }),
+      )
+      const user = userEvent.setup()
+      renderIssueDetail('i1')
+      const retry = await screen.findByRole('button', { name: '重试加载任务' })
+      expect(screen.queryByRole('status', { name: '正在加载任务' })).not.toBeInTheDocument()
+      await user.click(retry)
+      await waitFor(() => expect(requests).toBe(2))
+      expect(screen.getByRole('status', { name: '正在加载任务' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '重试加载任务' })).not.toBeInTheDocument()
+      release?.()
+      expect(await screen.findByText('Recovered task')).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(requests).toBe(2)
+    },
+  )
+
+  it.each([
+    { status: 401, message: 'Login screen' },
+    { status: 403, message: '任务读取失败或已不可访问，请刷新重试。' },
+    { status: 404, message: '任务不存在或已不可访问。' },
+  ])('hides a cached task after a GET $status response', async ({ status, message }) => {
+    serveDetail(makeIssue('i1', 'Previously visible task'))
+    const { queryClient } = renderIssueDetail('i1')
+    await screen.findByText('Previously visible task')
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i1', () =>
+        HttpResponse.json({ code: status === 404 ? 'not_found' : 'forbidden' }, { status }),
+      ),
+    )
+    await queryClient.invalidateQueries({ queryKey: ['issue', 't1', 'i1'] })
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.queryByText('Previously visible task')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('任务对话输入')).not.toBeInTheDocument()
+  })
+
+  it.each([404, 500])(
+    'shows a safe error instead of perpetual loading after GET %s',
+    async (status) => {
+      serveDetail(makeIssue('i1', 'Unavailable task'))
+      server.use(
+        http.get('/api/v1/tenants/t1/issues/i1', () =>
+          HttpResponse.json(
+            {
+              code: status === 404 ? 'not_found' : 'internal_error',
+              message: 'private-internal-detail',
+            },
+            { status },
+          ),
+        ),
+      )
+      const user = userEvent.setup()
+      const { queryClient } = renderIssueDetail('i1')
+      await waitFor(() =>
+        expect(queryClient.getQueryState(['issue', 't1', 'i1'])?.status).toBe('error'),
+      )
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        status === 404 ? '任务不存在或已不可访问' : '任务暂时无法加载，请重试',
+      )
+      expect(screen.queryByText('private-internal-detail')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('任务对话输入')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('link', { name: '返回任务列表' }))
+      expect(await screen.findByText('Issues list screen')).toBeInTheDocument()
+    },
+  )
+
+  it('opens a historical run from execution records, persists its URL and keeps it read-only', async () => {
+    const runs: IssueRun[] = ['old', 'new'].map((id, index) => ({
+      id,
+      tenantId: 't1',
+      issueId: 'i1',
+      executorType: 'agent',
+      executorId: 'a1',
+      input: { task: `Task ${id}` },
+      status: 'completed',
+      createdAt: `2026-10-0${index + 1}T00:00:00Z`,
+      updatedAt: `2026-10-0${index + 1}T00:00:00Z`,
+    }))
+    serveDetail(makeIssue('i1', 'History'), undefined, runs)
+    server.use(
+      http.get('/api/v1/tenants/t1/issues/i1/runs/:rid/thread', ({ params }) =>
+        HttpResponse.json({
+          items: [
+            {
+              seq: 1,
+              source: 'node',
+              kind: 'update',
+              record: {
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: `Reply ${String(params['rid'])}` },
+                },
+              },
+              createdAt: '2026-10-01T00:00:00Z',
+            },
+          ],
+          threadState: 'ended',
+          idleSince: null,
+          nextCursor: 1,
+          prevCursor: 1,
+          initiatorUserId: 'u1',
+          model: null,
+          canAppend: false,
+          canEnd: false,
+        }),
+      ),
+    )
+    const user = userEvent.setup()
+    const { router } = renderIssueDetail('i1')
+    expect(await screen.findByText('Reply new')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /执行记录/ }))
+    const old = within(screen.getByRole('list', { name: '执行记录' }))
+      .getByText('Task old')
+      .closest('li')
+    if (!old) throw new Error('Historical run card missing')
+    await user.click(within(old).getByRole('button', { name: '查看执行详情' }))
+    expect(await screen.findByText('Reply old')).toBeInTheDocument()
+    expect(router.state.location.search).toContain('run=old')
+    expect(screen.queryByLabelText('给 Agent 发送消息')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '返回最新执行' }))
+    expect(await screen.findByText('Reply new')).toBeInTheDocument()
+    expect(router.state.location.search).not.toContain('run=')
+  })
+
+  it('preserves the task draft and explicit recipient across views without sending', async () => {
+    serveDetail(makeIssue('i1', 'Persistent draft'))
+    const user = userEvent.setup()
+    renderIssueDetail('i1')
+    await user.type(await screen.findByLabelText('任务对话输入'), '未发送的任务草稿')
+    await user.click(screen.getByRole('tab', { name: /执行记录/ }))
+    expect(screen.getByLabelText('任务对话输入')).toHaveValue('未发送的任务草稿')
+    await user.click(screen.getByRole('tab', { name: '任务动态' }))
+    expect(screen.getByLabelText('任务对话输入')).toHaveValue('未发送的任务草稿')
+    await user.click(screen.getByRole('tab', { name: '对话' }))
+    expect(screen.getByLabelText('任务对话输入')).toHaveValue('未发送的任务草稿')
+    await user.click(screen.getByRole('button', { name: '任务详情' }))
+    expect(screen.queryByRole('complementary', { name: '任务详情侧栏' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '任务详情' }))
+    expect(screen.getByRole('complementary', { name: '任务详情侧栏' })).toBeInTheDocument()
+  })
+
+  it('does not silently substitute the latest run for an invalid deep link', async () => {
+    serveDetail(makeIssue('i1', 'Missing history'))
+    renderIssueDetail('i1', '?view=conversation&run=missing')
+    expect(await screen.findByRole('alert')).toHaveTextContent('该执行记录不存在或已不可访问')
+    expect(screen.queryByLabelText('给 Agent 发送消息')).not.toBeInTheDocument()
+  })
+
   it.each([200, 503])(
     'keeps recovery reload exclusive and preserves the next save failure after GET %s',
     async (reloadStatus) => {
@@ -157,7 +360,7 @@ describe('IssueDetailPage', () => {
       await user.click(reloadButton)
       await waitFor(() => expect(reloads).toBe(1))
       expect(project).toBeDisabled()
-      const status = screen.getAllByRole('combobox')[0]
+      const status = screen.getByRole('combobox', { name: '状态' })
       if (!status) throw new Error('The versioned status selector is missing')
       expect(status).toBeDisabled()
       expect(reloadButton).toBeDisabled()
@@ -197,11 +400,11 @@ describe('IssueDetailPage', () => {
     renderIssueDetail('i1')
     const project = await selectRepository(user)
     await waitFor(() => expect(project).toBeDisabled())
-    const status = screen.getAllByRole('combobox')[0]
+    const status = screen.getByRole('combobox', { name: '状态' })
     if (!status) throw new Error('The versioned status selector is missing')
     expect(status).toBeDisabled()
     await user.click(status)
-    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '已完成' })).not.toBeInTheDocument()
     await user.click(project)
     expect(writes).toBe(1)
     release?.()
@@ -329,6 +532,7 @@ describe('IssueDetailPage', () => {
     )
     const user = userEvent.setup()
     renderIssueDetail('i1')
+    await user.click(await screen.findByRole('tab', { name: '任务动态' }))
     await user.click(await screen.findByPlaceholderText('添加评论…'))
     await user.paste('A plain comment')
     await user.click(screen.getByRole('button', { name: '评论' }))
@@ -344,7 +548,7 @@ describe('IssueDetailPage', () => {
       body: 'Read the repository',
       targets: [{ type: 'agent', id: 'a1', task: 'Read the repository' }],
     })
-    expect(screen.getByLabelText('给 Agent 发送消息')).toBeEnabled()
+    expect(screen.getByLabelText('任务对话输入')).toBeEnabled()
     expect(screen.queryByLabelText('Installed Agent 的留言')).not.toBeInTheDocument()
   })
   it('renders the title and lets the status be changed', async () => {
@@ -354,8 +558,7 @@ describe('IssueDetailPage', () => {
 
     expect(await screen.findByText('Fix the login')).toBeInTheDocument()
 
-    const [statusTrigger] = screen.getAllByRole('combobox')
-    if (!statusTrigger) throw new Error('issue detail must render a status selector')
+    const statusTrigger = screen.getByRole('combobox', { name: '状态' })
     await user.click(statusTrigger)
     await user.click(await screen.findByRole('option', { name: '已完成' }))
 

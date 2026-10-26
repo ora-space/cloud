@@ -21,11 +21,7 @@ import type {
   WorkflowNodeData,
 } from '@/features/workflows/runtime/types'
 import type { WorkflowCanvasNode } from '@/features/workflows/editor/canvas-types'
-import {
-  VariableSelectValue,
-  WorkflowVariableSelectContent,
-  textToSelector,
-} from '@/features/workflows/editor/workflow-variable-select'
+import { WorkflowCatalogSelector } from '@/features/workflows/editor/workflow-variable-select'
 
 /** Everything the iteration panel reads beyond the selected node itself. */
 export interface WorkflowIterationFieldsProps {
@@ -78,7 +74,7 @@ export function IterationNodeFields({
         label={t('workflows.iteration.field.iterator')}
         htmlFor="workflow-node-iteration-iterator"
       >
-        <CatalogSelector
+        <WorkflowCatalogSelector
           htmlId="workflow-node-iteration-iterator"
           value={config.iteratorSelector}
           placeholder={t('workflows.iteration.iteratorPlaceholder')}
@@ -97,7 +93,7 @@ export function IterationNodeFields({
         label={t('workflows.iteration.field.collect')}
         htmlFor="workflow-node-iteration-collect"
       >
-        <CatalogSelector
+        <WorkflowCatalogSelector
           htmlId="workflow-node-iteration-collect"
           value={config.collectSelector}
           placeholder={t('workflows.iteration.collectPlaceholder')}
@@ -165,57 +161,22 @@ function IterationLimitsFields({
           id="workflow-node-iteration-max"
           type="number"
           min={1}
+          max={100}
           value={config.maxIterations}
           onChange={(event) => {
             const parsed = Number(event.target.value)
-            if (event.target.value !== '' && Number.isFinite(parsed) && parsed >= 1) {
+            if (
+              event.target.value !== '' &&
+              Number.isFinite(parsed) &&
+              parsed >= 1 &&
+              parsed <= 100
+            ) {
               onConfigChange({ maxIterations: Math.floor(parsed) })
             }
           }}
         />
       </InspectorField>
     </>
-  )
-}
-
-/** A catalog-backed picker with the same grouped menu and value every selector uses. */
-function CatalogSelector({
-  htmlId,
-  value,
-  placeholder,
-  choices,
-  catalog,
-  onPick,
-  ariaLabel,
-}: {
-  htmlId: string
-  value: readonly string[]
-  placeholder: string
-  choices: readonly WorkflowDecoratedVariable[]
-  catalog: readonly WorkflowDecoratedVariable[]
-  onPick: (selector: string[]) => void
-  ariaLabel: string
-}) {
-  const { t } = useTranslation()
-  return (
-    <Select
-      value={value.join('.') === '' ? null : value.join('.')}
-      onValueChange={(picked) => {
-        if (picked !== null) {
-          onPick(textToSelector(picked))
-        }
-      }}
-    >
-      <SelectTrigger className="h-8 w-full bg-background" id={htmlId} aria-label={ariaLabel}>
-        <VariableSelectValue catalog={catalog} selector={value} placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} align="start" className="w-70 min-w-70 max-w-70">
-        <WorkflowVariableSelectContent
-          variables={choices}
-          globalVariablesLabel={t('workflows.variable.global')}
-        />
-      </SelectContent>
-    </Select>
   )
 }
 

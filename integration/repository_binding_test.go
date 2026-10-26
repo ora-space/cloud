@@ -24,7 +24,31 @@ func (f *fixture) repositoryOperation(projectID, bindingID, kind, state string) 
 	f.t.Helper()
 	id := uuid.NewString()
 	unfinished := map[string]bool{"awaiting_approval": true, "pending": true, "leased": true, "running": true, "uncertain": true}[state]
-	_, err := f.store.Pool.Exec("INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,finished_at) VALUES($1,$2,$3,$4,$5,$6,'test',CASE WHEN $7 THEN NULL ELSE clock_timestamp() END)", id, kind, f.tid, projectID, bindingID, state, unfinished)
+	// The row is shaped like one the worker produced: a publish carries its approved fields and
+	// credential, and a leased, running or uncertain row its lease and authorization.
+	var credential any
+	if kind == "repository_publish" {
+		var id string
+		if err := f.store.Pool.QueryRow("INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,attribution,secret_state,store_version,repository_scope) VALUES(gen_random_uuid(),$1,$2,'git','team','stored',1,'https://example.invalid/repo') RETURNING id", f.tid, f.uid).Scan(&id); err != nil {
+			return "", err
+		}
+		credential = id
+	}
+	_, err := f.store.Pool.Exec(`INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger,finished_at,
+	 lease_generation,lease_owner,lease_expires_at,authorization_id,started_at,expected_tracking_oid,
+	 source_ref,source_commit,target_branch,expected_old_oid,approver_kind,approval_expires_at,credential_ref_id,credential_version,requested_by,approved_by,approved_at,approved_store_version)
+	 SELECT $1::uuid,$2,$3,$4,$5,$6,'test',CASE WHEN $7 THEN NULL ELSE clock_timestamp() END,
+	 1,CASE WHEN $6 IN ('leased','running') THEN 'test' END,CASE WHEN $6 IN ('leased','running') THEN clock_timestamp()+interval '1 minute' END,
+	 CASE WHEN $6 IN ('running','uncertain') THEN gen_random_uuid() END,CASE WHEN $6 IN ('running','uncertain') THEN clock_timestamp() END,
+	 CASE WHEN $2='repository_sync' AND $6='running' THEN repeat('0',40) END,
+	 p.ref,p.commit,p.branch,p.old,p.kind,p.expires,$8::uuid,p.version,p.actor,p.approver,p.approved,CASE WHEN p.approved IS NULL THEN NULL ELSE p.version END
+	 FROM (SELECT CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'refs/ora/deliveries/'||gen_random_uuid() END AS ref,
+	  CASE WHEN $8::uuid IS NULL THEN NULL ELSE repeat('a',40) END AS commit, CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'fixture-'||$1::text END AS branch,
+	  CASE WHEN $8::uuid IS NULL THEN NULL ELSE repeat('0',40) END AS old, CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'publisher' END AS kind,
+	  CASE WHEN $8::uuid IS NULL THEN NULL ELSE clock_timestamp()+interval '1 day' END AS expires, CASE WHEN $8::uuid IS NULL THEN NULL ELSE 1 END AS version,
+	  CASE WHEN $8::uuid IS NULL THEN NULL ELSE $9::uuid END AS actor, CASE WHEN $8::uuid IS NULL OR $6='awaiting_approval' THEN NULL ELSE $9::uuid END AS approver,
+	  CASE WHEN $8::uuid IS NULL OR $6='awaiting_approval' THEN NULL ELSE clock_timestamp() END AS approved) p`,
+		id, kind, f.tid, projectID, bindingID, state, unfinished, credential, f.uid)
 	return id, err
 }
 
@@ -43,6 +67,7 @@ func (f *fixture) repositoryOperationState(id string) (state, code string) {
 // exists, in the same transaction; the published Project keeps its repository fields.
 func TestCreateProjectRecordsBindingAndInitialSync(t *testing.T) {
 	f := setup(t)
+	f.withoutSnapshot = true
 	created := f.create("binding-create")
 	project := created.O("resource")
 	if project.S("repositoryUrl") != "https://example.invalid/repo.git" || project.S("defaultBranch") != "main" {
@@ -72,6 +97,7 @@ func TestCreateProjectRecordsBindingAndInitialSync(t *testing.T) {
 // one unfinished sync per Binding, and the snapshot ref's name.
 func TestRepositoryOperationStorageConstraints(t *testing.T) {
 	f := setup(t)
+	f.withoutSnapshot = true
 	pid := f.create("binding-constraints").O("resource").S("id")
 	bid := f.bindingOf(pid).S("id")
 
@@ -120,9 +146,10 @@ func TestDeletingProjectCancelsQueuedRepositoryOperationsAndWaitsForRunning(t *t
 	pid := f.create("binding-delete").O("resource").S("id")
 	f.drain()
 	bid := f.bindingOf(pid).S("id")
-	var initial string
-	must(t, f.store.Pool.QueryRow("SELECT id FROM repository_operations WHERE binding_id=$1", bid).Scan(&initial))
-	queued := []string{initial}
+	// The Project's first sync produced its snapshot; a later one is still pending.
+	pending, err := f.repositoryOperation(pid, bid, core.RepositorySync, "pending")
+	must(t, err)
+	queued := []string{pending}
 	for _, state := range []string{"awaiting_approval", "pending", "leased"} {
 		id, err := f.repositoryOperation(pid, bid, core.RepositoryPublish, state)
 		must(t, err)
@@ -152,15 +179,16 @@ func TestDeletingProjectCancelsQueuedRepositoryOperationsAndWaitsForRunning(t *t
 		t.Fatal("entering deleting kept the resync request")
 	}
 
+	// Operation D6: the claim does not hand delete_project to the Controller while Operations are
+	// unfinished; it waits without failing.
 	f.acknowledgeSimulatorBindings()
-	if err := f.controller.Drain(context.Background()); err == nil || !strings.Contains(err.Error(), "repository_operation_unfinished") {
-		t.Fatalf("delete_project started with unfinished repository Operations: %v", err)
-	}
-	if lifecycle := f.call("GET", f.path("/operations/"+deleting.O("operation").S("id")), nil, "", 200).S("step"); lifecycle != "quiesce" {
-		t.Fatalf("delete_project left quiesce at step %s", lifecycle)
+	f.drain()
+	if op := f.call("GET", f.path("/operations/"+deleting.O("operation").S("id")), nil, "", 200); op.S("step") != "quiesce" || op.S("state") != "retry_wait" || op.S("errorCode") != "repository_operation_running" {
+		t.Fatalf("delete_project must wait at quiesce, got %v", op)
 	}
 	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='succeeded',finished_at=clock_timestamp() WHERE id=$1", running)))
 	must(t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='failed',error_code='test',finished_at=clock_timestamp() WHERE id=$1", uncertain)))
+	f.due(deleting.O("operation").S("id"))
 	f.drain()
 	var lifecycle string
 	must(t, f.store.Pool.QueryRow("SELECT lifecycle FROM projects WHERE id=$1", pid).Scan(&lifecycle))
@@ -183,6 +211,10 @@ func TestAbortedProjectDeletionRestoresTheOwedSync(t *testing.T) {
 		{
 			name: "queued sync cancelled",
 			prepare: func(f *fixture, pid, bid, _ string) string {
+				// The fixture's Git Server double already ended the project_created sync with a
+				// snapshot, so the queued sync the deletion cancels is a later one.
+				_, err := f.repositoryOperation(pid, bid, core.RepositorySync, "pending")
+				must(f.t, err)
 				publish, err := f.repositoryOperation(pid, bid, core.RepositoryPublish, "awaiting_approval")
 				must(f.t, err)
 				return publish
@@ -191,8 +223,9 @@ func TestAbortedProjectDeletionRestoresTheOwedSync(t *testing.T) {
 		},
 		{
 			name: "resync requested while a sync runs",
-			prepare: func(f *fixture, _, bid, initial string) string {
-				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_operations SET state='running' WHERE id=$1", initial)))
+			prepare: func(f *fixture, pid, bid, _ string) string {
+				_, err := f.repositoryOperation(pid, bid, core.RepositorySync, "running")
+				must(f.t, err)
 				must(f.t, firstErr(f.store.Pool.Exec("UPDATE repository_bindings SET resync_requested=true WHERE id=$1", bid)))
 				return ""
 			},

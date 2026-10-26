@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -87,14 +88,20 @@ type Store struct {
 
 	// PluginExecution remains for fixtures that still name the old simulation mode. Plugin installs
 	// are Node executions and are no longer gated on it.
-	PluginExecution    PluginExecutionCapability
-	legacyCloneFixture bool
+	PluginExecution PluginExecutionCapability
 	// ObjectStore signs upload grants and verifies stored checksums outside SQL transactions.
 	// Nil means delivery is explicitly skipped through the transaction-scoped business hook.
 	ObjectStore *objectstore.Config
 	// WorkflowAssets downloads the pinned package of a workflow plugin for asset import. Nil
 	// keeps the import loop idle, so a control-plane-only deployment never leaves the cluster.
 	WorkflowAssets WorkflowAssetSource
+	// GitServer is where Workspaces clone from and Revisions are delivered to. Nil means clone
+	// steps block as git_server_unconfigured and deliveries are skipped.
+	GitServer *GitServer
+	// ModelEgress is the immutable deployment admission policy for personal connection writes.
+	ModelEgress ModelEgress
+	// PersonalAgentRuntime is nil until a deployment supports the versioned adapter path.
+	PersonalAgentRuntime *PersonalAgentRuntime
 	// OnThreadEvents receives only first-taken-over events and the caller's SQL transaction.
 	// Hooks must use that transaction; starting another Store transaction would deadlock.
 	OnThreadEvents func(context.Context, *sql.Tx, string, string, []Object) error
@@ -107,6 +114,10 @@ type Store struct {
 	// OnDeliverySettled receives saved/unchanged with revisionId and Revision metadata, failed with
 	// a safe reason, or skipped when storage is unconfigured. It runs after receipt/Revision writes.
 	OnDeliverySettled func(context.Context, *sql.Tx, string, string, Object) error
+	// OnScheduledArtifactsSettled receives a scheduled run's verified artifact delivery: the objects
+	// Cloud confirmed, per-object results and the absolute deadline verdict, computed outside the
+	// transaction. It runs after the receipt is recorded.
+	OnScheduledArtifactsSettled func(context.Context, *sql.Tx, string, string, Object) error
 
 	// Collaboration ports (consuming-side seams; see collaboration.go). NewStore wires the real
 	// workflow-backed Directory and Forms, because Cloud owns the workflow document and needs no
@@ -135,6 +146,13 @@ type Store struct {
 	// the moment it went idle.
 	ThreadIdleTimeout time.Duration
 
+	// ScheduledTaskAcceptanceEnabled is the deployment gate for the first Cloud scheduled-task
+	// rollout. It defaults to false: until the end-to-end acceptance run is explicitly complete,
+	// Cloud rejects definition writes/enables and the worker performs no admission or deadline work.
+	// Keeping this on Store makes the gate explicit in production composition and lets integration
+	// tests exercise the already-approved worker behind an intentional test-only enablement.
+	ScheduledTaskAcceptanceEnabled bool
+
 	// AgentStartTimeout bounds waiting for a first authoritative Node record. Expiry of registered
 	// execution requests termination; confirmation expiry retains an independent residual ledger.
 	// Zero-value stores select the approved defaults when each durable window is first frozen.
@@ -155,17 +173,44 @@ type Store struct {
 	// are deployment configuration values, not columns, and both are judged entirely on the database
 	// clock. Zero (the zero-value Store) means that condition never gives up, so the scan is a no-op
 	// rather than a zero-length window that would abandon every delivery the moment it was declared.
+	//
+	// DeliveryUnreachableAfter is the deployment's one tolerance for a silent Node, not a
+	// delivery-only limit: D8's delete give-up reuses it, and so does the workflow scheduler, which
+	// settles an in-flight session whose Node is gone with it. A second limit would let two passes
+	// disagree about whether the same Node is still there.
 	DeliveryGiveUpAfter      time.Duration
 	DeliveryUnreachableAfter time.Duration
+
+	// WorkflowSessionTurnTimeout bounds a dispatched workflow agent session that has committed no
+	// result and produced no successful `turnEnded` (circus#299 option A): past this window the node
+	// settles failed with `session_turn_deadline_exceeded` and the run finishes, declaring the
+	// Workspace delete. The comparison is on the database clock against
+	// node_executions.created_at, so a scheduler replay, replica change or Controller restart never
+	// resets it, while a retry's new execution row legitimately starts a fresh window. Zero (the
+	// zero-value Store) selects the approved default rather than a zero-length window that would
+	// fail every session the moment it dispatched.
+	WorkflowSessionTurnTimeout time.Duration
 
 	// Events broadcasts committed collaboration-space invalidation notices to live
 	// SSE subscribers. Every project belongs to its tenant's sole collaboration
 	// space; current tenant membership gates visibility and authorization.
 	Events *SpaceHub
 
+	// ThreadPreviews contains optional, bounded live content; PostgreSQL Thread rows remain authoritative.
+	ThreadPreviews *ThreadPreviewHub
+
 	// Signals carries at-most-once work hints to the lease-holding Controller's Watch stream;
 	// clone requests stay durable in PostgreSQL whether or not a hint is delivered.
 	Signals *ControlHub
+
+	// GitSubmissions signs browser submission grants for the Credential Store; nil means the
+	// deployment has no Credential Store and creating or rotating a credential answers 503.
+	GitSubmissions *GitCredentialSubmissions
+	// GitCredentialStore is the Credential Store's management interface (metadata and revoke).
+	GitCredentialStore GitCredentialStore
+	// GitRefs is the Git Server ref query, used to validate publish sources and list Workspace
+	// branches. Repository Operations themselves are driven by the repository worker.
+	GitRefs GitRefReader
 }
 
 // WorkflowRunSimulator produces the execution trace for one workflow run. Cloud has no
@@ -185,23 +230,13 @@ func NewStore(db *gorm.DB) (*Store, error) {
 		return nil, fmt.Errorf("get database pool: %w", err)
 	}
 	return &Store{
-		Pool:      pool,
-		Events:    NewSpaceHub(),
-		Signals:   NewControlHub(),
-		Directory: WorkflowDirectory{Pool: pool},
-		Forms:     WorkflowFormDescriptors{Pool: pool},
+		Pool:           pool,
+		Events:         NewSpaceHub(),
+		ThreadPreviews: NewThreadPreviewHub(),
+		Signals:        NewControlHub(),
+		Directory:      WorkflowDirectory{Pool: pool},
+		Forms:          WorkflowFormDescriptors{Pool: pool},
 	}, nil
-}
-
-// NewDevelopmentStore explicitly enables the retired unscoped clone test contract. Production
-// NewStore remains runtime-scoped; this constructor must never be used by the production server.
-func NewDevelopmentStore(db *gorm.DB) (*Store, error) {
-	s, err := NewStore(db)
-	if err != nil {
-		return nil, err
-	}
-	s.legacyCloneFixture = true
-	return s, nil
 }
 
 type transaction struct {
@@ -218,7 +253,6 @@ type transaction struct {
 	assist         InputAssistProvider
 	simulator      WorkflowRunSimulator
 	// queued names operations this transaction made claimable; they are published only after commit.
-	legacyCloneFixture    bool
 	pluginExecution       PluginExecutionCapability
 	objectStore           *objectstore.Config
 	onThreadEvents        func(context.Context, *sql.Tx, string, string, []Object) error
@@ -226,10 +260,14 @@ type transaction struct {
 	onRunWorkspaceSettled func(context.Context, *sql.Tx, string, string) error
 	onRunWorkspaceDeleted func(context.Context, *sql.Tx, string) error
 	onDeliverySettled     func(context.Context, *sql.Tx, string, string, Object) error
-	queued                []string
-	workSignals           []string
-	commandSignals        []string
-	events                []SpaceEvent
+	// onScheduledArtifactsSettled receives the verified artifact delivery of one scheduled run.
+	onScheduledArtifactsSettled func(context.Context, *sql.Tx, string, string, Object) error
+	queued                      []string
+	workSignals                 []string
+	commandSignals              []string
+	events                      []SpaceEvent
+	residualFactConflict        bool
+	residualFactSource          Object
 }
 
 func (t *transaction) exec(q string, args ...any) {
@@ -278,6 +316,9 @@ func (t *transaction) list(q string, args ...any) []Object {
 		if o["issueRunId"] == nil {
 			delete(o, "issueRunId")
 		}
+		if o["workflowRunId"] == nil {
+			delete(o, "workflowRunId")
+		}
 		out = append(out, o)
 	}
 	if e = rows.Err(); e != nil {
@@ -314,13 +355,75 @@ func jsonText(v any) string {
 func newID() string         { return uuid.NewString() }
 func validID(s string) bool { _, e := uuid.Parse(s); return e == nil }
 
+// Advisory-lock keys. PostgreSQL keeps the one-bigint and the two-integer key spaces apart, so the
+// control-plane key and the workflow keys can never collide even where their numbers agree. The
+// two-integer keys are listed in the order a transaction takes them (see lockWorkflowRunIssue and
+// lockProjectOperations), so the list doubles as the lock-order record:
+//
+//	67420911                    the control-plane transaction lock (int8)
+//	(67420911, key(runID))      one WorkflowRun's serial-executor lock (int4,int4)
+//	(67420913, key(issueID))    one Issue's Timeline-append lock (int4,int4)
+//	(67420912, key(projectID))  one Project's operation-declaration lock (int4,int4)
+const (
+	controlPlaneLockKey      int64 = 67420911
+	workflowRunLockClass     int32 = 67420911
+	workflowProjectLockClass int32 = 67420912
+	workflowIssueLockClass   int32 = 67420913
+)
+
 // transact serializes mutations within the single-cluster phase-one control plane.
 // The lock is transaction scoped, never spans HTTP or external work. It deliberately
 // trades write throughput for a simple, auditable lock order; reads use the same boundary.
-func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (out Object, err error) {
+func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (Object, error) {
+	out, _, err := s.transactLocked(ctx, lockControlPlaneExclusive, nil, fn)
+	return out, err
+}
+
+// transactWorkflowRun is the cross-process serial executor D1 条件② requires for one WorkflowRun.
+// It holds the control-plane lock in shared mode — excluding every ordinary control-plane writer,
+// but not another run — and inside it takes the run's exclusive transaction lock on a best-effort
+// basis. A false `ran` means another replica owns the run right now: nothing was read into a
+// decision, written, signaled or published, and the caller simply retries on its next tick.
+//
+// The lock is the transaction itself, not a lease: PostgreSQL releases it at COMMIT, ROLLBACK or
+// when a crashed replica's connection closes. There is no renewal and no expiry window, and no
+// process-local table is involved, so a replica that never saw the other one still cannot advance
+// the same run concurrently. A hash collision between two run ids only makes them share one lock
+// (extra serialization); it can never give one run two executors.
+//
+// After the run right is held, the transaction also takes the lock of the Issue the run projects
+// onto, because two different runs of one Issue may otherwise append to its Timeline concurrently.
+func (s *Store) transactWorkflowRun(ctx context.Context, runID string, fn func(*transaction) Object) (Object, bool, error) {
+	if !validID(runID) {
+		return nil, false, nil
+	}
+	return s.transactLocked(ctx, lockControlPlaneShared, func(t *transaction) bool {
+		if !t.one("SELECT pg_try_advisory_xact_lock($1,$2) AS locked", workflowRunLockClass, advisoryKey(runID)).B("locked") {
+			return false
+		}
+		lockWorkflowRunIssue(t, runID)
+		return true
+	}, fn)
+}
+
+// lockControlPlaneExclusive is the ordinary writer's boundary: one control-plane mutation at a time.
+func lockControlPlaneExclusive(t *transaction) {
+	t.exec("SELECT pg_advisory_xact_lock($1)", controlPlaneLockKey)
+}
+
+// lockControlPlaneShared is the WorkflowRun boundary: it excludes those ordinary writers, but not a
+// sibling run — two different runs may advance at the same time under their own run locks.
+func lockControlPlaneShared(t *transaction) {
+	t.exec("SELECT pg_advisory_xact_lock_shared($1)", controlPlaneLockKey)
+}
+
+// transactLocked runs fn in one transaction under the control-plane lock taken by lock. claim, when
+// non-nil, runs after that lock; returning false declines the transaction before fn, leaving `ran`
+// false and the transaction rolled back without writes or post-commit signals.
+func (s *Store) transactLocked(ctx context.Context, lock func(*transaction), claim func(*transaction) bool, fn func(*transaction) Object) (out Object, ran bool, err error) {
 	tx, e := s.Pool.BeginTx(ctx, nil)
 	if e != nil {
-		return nil, e
+		return nil, false, e
 	}
 	defer func() { _ = tx.Rollback() }()
 	defer func() {
@@ -335,15 +438,20 @@ func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (out
 			}
 		}
 	}()
-	t := &transaction{tx: tx, ctx: ctx, store: s, pluginExecution: s.PluginExecution, legacyCloneFixture: s.legacyCloneFixture, directory: s.Directory, contextBuilder: s.Context, forms: s.Forms, assist: s.Assist, simulator: s.Simulator, objectStore: s.ObjectStore, onThreadEvents: s.OnThreadEvents, onSessionEnded: s.OnSessionEnded}
+	t := &transaction{tx: tx, ctx: ctx, store: s, pluginExecution: s.PluginExecution, directory: s.Directory, contextBuilder: s.Context, forms: s.Forms, assist: s.Assist, simulator: s.Simulator, objectStore: s.ObjectStore, onThreadEvents: s.OnThreadEvents, onSessionEnded: s.OnSessionEnded}
 	t.onRunWorkspaceSettled, t.onRunWorkspaceDeleted, t.onDeliverySettled = s.OnRunWorkspaceSettled, s.OnRunWorkspaceDeleted, s.OnDeliverySettled
+	t.onScheduledArtifactsSettled = s.OnScheduledArtifactsSettled
 	// Publish this transaction to the B-side hooks, which the seams below invoke with the *sql.Tx
 	// alone. Without it a hook could only wrap the handle in a second transaction view, and every
 	// enqueue, Thread entry and post-commit hint it produced would be collected in a set that is
 	// discarded when the control plane's own transaction commits. See businessTransaction.
 	t.ctx = context.WithValue(t.ctx, businessTransactionKey{}, t)
-	t.exec("SELECT pg_advisory_xact_lock(67420911)")
+	lock(t)
+	if claim != nil && !claim(t) {
+		return nil, false, nil
+	}
 	out = fn(t)
+	ran = true
 	if err = tx.Commit(); err == nil {
 		s.signalOperations(t.queued)
 		s.signalRuns(SignalWorkAvailable, t.workSignals)
@@ -354,7 +462,49 @@ func (s *Store) transact(ctx context.Context, fn func(*transaction) Object) (out
 			}
 		}
 	}
-	return out, err
+	return out, ran, err
+}
+
+// advisoryKey maps an identity to the int4 half of a two-integer advisory lock. FNV-1a is computed
+// here rather than with PostgreSQL's hashtext so the key does not depend on a server function whose
+// exact hash carries no stability contract. The sign is irrelevant to PostgreSQL's key space.
+func advisoryKey(id string) int32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return int32(h.Sum32()) // #nosec G115 -- every 32-bit pattern is a valid key; the sign is meaningless.
+}
+
+// lockWorkflowRunIssue serializes a WorkflowRun transaction against other runs that project onto the
+// same Issue. Timeline positions are allocated as MAX(seq)+1 per Issue (nextTimelineSeq), so two runs
+// of one Issue that wrote concurrently could both read the same maximum — the loser's insert then
+// violates UNIQUE(issue_id, seq) and loses its whole transition. The run lock cannot order them: it
+// is per run by design. Runs without an IssueRun association have no Issue Timeline to write and
+// take no lock.
+//
+// The lookup is the same one the projection uses, and the unique constraint on
+// workflow_invocation_ref makes it at most one row. It is taken after the run lock and before fn, so
+// every path that takes both orders them consistently: control plane -> run -> Issue -> Project.
+func lockWorkflowRunIssue(t *transaction, runID string) {
+	i := t.one(`SELECT issue_id FROM issue_runs
+		WHERE workflow_invocation_ref=$1 AND executor_type='workflow' AND deleted_at IS NULL`, runID)
+	if i == nil {
+		return
+	}
+	t.exec("SELECT pg_advisory_xact_lock($1,$2)", workflowIssueLockClass, advisoryKey(i.S("issueId")))
+}
+
+// lockProjectOperations serializes the Project-level decision a WorkflowRun transaction makes when
+// it provisions or declares the deletion of a run Workspace: "this Project has at most one live
+// operation". That rule spans runs, so the per-run lock cannot express it; ordinary control-plane
+// writers are already excluded by the shared control-plane lock, and this lock orders the run
+// transactions that share a Project. Lock order is control plane -> run -> Issue -> Project
+// everywhere, so it cannot cycle: no transaction takes the Project lock while waiting for a lock it
+// does not already hold.
+func lockProjectOperations(t *transaction, projectID string) {
+	if projectID == "" {
+		return
+	}
+	t.exec("SELECT pg_advisory_xact_lock($1,$2)", workflowProjectLockClass, advisoryKey(projectID))
 }
 
 //go:embed migrations/*.sql
@@ -573,17 +723,6 @@ func (s *Store) RegisterIdentity(ctx context.Context, tid, source, subject, name
 	})
 }
 
-// ConfigureCredential is deliberately a deployment-only management path, never a public secret API.
-func (s *Store) ConfigureCredential(ctx context.Context, tid, owner, ref string) (Object, error) {
-	return s.transact(ctx, func(t *transaction) Object {
-		membership(t, tid, owner, false)
-		require(strings.TrimSpace(ref) != "" && len(ref) <= 1024, 400, "invalid_secret_ref")
-		id := newID()
-		t.exec("INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref) VALUES($1,$2,$3,'git',$4)", id, tid, owner, ref)
-		return Object{"id": id, "tenantId": tid, "ownerUserId": owner, "purpose": "git"}
-	})
-}
-
 func membership(t *transaction, tid, uid string, admin bool) Object {
 	require(validID(tid) && validID(uid), 404, "not_found")
 	m := t.one("SELECT m.* FROM tenant_memberships m JOIN tenants t ON t.id=m.tenant_id JOIN users u ON u.id=m.user_id WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND t.status='active' AND t.deleted_at IS NULL AND u.status='active' AND u.deleted_at IS NULL", tid, uid)
@@ -602,7 +741,7 @@ func project(t *transaction, tid, uid, pid string) Object {
 // workspace loads authorized runtime content. Safe summaries use runtimeOverview instead.
 func workspace(t *transaction, tid, uid, wid string, admin bool) Object {
 	require(validID(wid), 404, "not_found")
-	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND issue_run_id IS NULL", wid, tid)
+	w := t.one("SELECT * FROM workspaces WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND issue_run_id IS NULL AND workflow_run_id IS NULL", wid, tid)
 	require(w != nil, 404, "not_found")
 	require(runtimeUsable(t, w, uid), 403, "runtime_use_forbidden")
 	if admin {

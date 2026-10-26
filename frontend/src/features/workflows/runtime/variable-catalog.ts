@@ -135,7 +135,7 @@ interface WorkflowCatalogScope {
   /** Ancestors of the consumer, plus every node when there is no consumer. */
   visibleProducerIds: ReadonlySet<string>
   /** Owning Iteration of a node, or `null` when it is not a region member. */
-  owningIterationOf: (nodeId: string) => string | null
+  owningContainerOf: (nodeId: string) => string | null
 }
 
 /** Derives the scope one catalog derivation runs against. */
@@ -146,18 +146,27 @@ function buildCatalogScope(
   globalVariables: readonly WorkflowGlobalVariable[],
 ): WorkflowCatalogScope {
   const iterationIds = new Set(
-    nodes.filter((node) => node.data.kind === 'iteration').map((node) => node.id),
+    nodes
+      .filter((node) => node.data.kind === 'iteration' || node.data.kind === 'loop')
+      .map((node) => node.id),
   )
-  const parentByNodeId = new Map(nodes.map((node) => [node.id, node.parentId] as const))
+  const parentByNodeId = new Map(
+    nodes.map((node) => [node.id, node.data.containerId || node.parentId] as const),
+  )
+  const owner = parentByNodeId.get(consumerNodeId ?? '')
+  const visible =
+    consumerNodeId === undefined
+      ? new Set(nodes.map((node) => node.id))
+      : collectVisibleProducerIds(nodes, edges, consumerNodeId)
+  if (owner !== undefined && iterationIds.has(owner)) {
+    for (const id of collectVisibleProducerIds(nodes, edges, owner)) visible.add(id)
+  }
   return {
     nodes,
     globalVariables,
     consumerNodeId,
-    visibleProducerIds:
-      consumerNodeId === undefined
-        ? new Set(nodes.map((node) => node.id))
-        : collectVisibleProducerIds(nodes, edges, consumerNodeId),
-    owningIterationOf: (nodeId) => {
+    visibleProducerIds: visible,
+    owningContainerOf: (nodeId) => {
       const parent = parentByNodeId.get(nodeId)
       return parent !== undefined && iterationIds.has(parent) ? parent : null
     },
@@ -176,11 +185,11 @@ function contributesTo(node: WorkflowCatalogNode, scope: WorkflowCatalogScope): 
   if (!scope.visibleProducerIds.has(node.id) || node.id === scope.consumerNodeId) {
     return false
   }
-  const producerOwner = scope.owningIterationOf(node.id)
+  const producerOwner = scope.owningContainerOf(node.id)
   if (producerOwner === null || scope.consumerNodeId === undefined) {
     return true
   }
-  return producerOwner === scope.owningIterationOf(scope.consumerNodeId)
+  return producerOwner === scope.owningContainerOf(scope.consumerNodeId)
 }
 
 /** The catalog entries one node contributes, if any. */
@@ -194,12 +203,27 @@ function nodeCatalogEntries(
   if (node.data.kind === 'iteration') {
     return iterationCatalogEntries(node, scope)
   }
+  if (node.data.kind === 'loop') {
+    const member =
+      scope.consumerNodeId !== undefined &&
+      scope.owningContainerOf(scope.consumerNodeId) === node.id
+    if (member)
+      return (node.data.loopConfig?.variables ?? []).map((v) =>
+        nodeVariable(node, v.name, v.valueType),
+      )
+    return contributesTo(node, scope)
+      ? (node.data.loopConfig?.outputs ?? []).map((v) => nodeVariable(node, v.name, 'any'))
+      : []
+  }
   if (!contributesTo(node, scope)) {
     return []
   }
   // A Condition only routes control flow. Exposing its internal branch decision would let a
   // downstream prompt depend on scheduler state as if it were business data.
-  const stable = node.data.kind === 'condition' ? [] : [nodeVariable(node, 'output', 'string')]
+  const stable =
+    node.data.kind === 'condition' || node.data.kind === 'loopExit'
+      ? []
+      : [nodeVariable(node, 'output', 'string')]
   return [...stable, ...structuredOutputCatalogEntries(node)]
 }
 
@@ -229,7 +253,9 @@ function iterationCatalogEntries(
   const isMember =
     scope.consumerNodeId !== undefined &&
     scope.nodes.some(
-      (candidate) => candidate.parentId === node.id && candidate.id === scope.consumerNodeId,
+      (candidate) =>
+        (candidate.data.containerId || candidate.parentId) === node.id &&
+        candidate.id === scope.consumerNodeId,
     )
   const config = node.data.iterationConfig
   if (isMember) {

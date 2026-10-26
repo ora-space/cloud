@@ -20,6 +20,7 @@ This document is the overview; individual parts are covered in:
 | Creation (@Agent, the Project gate, the input snapshot) | [Issue collaboration](../collaboration/interactions.en.md#task-mode-agent) |
 | Thread entries, user turns, idleness and ending | [Threads](threads.en.md) |
 | Startup waiting limits and settling unknown outcomes | [Bounded startup](startup-settlement.en.md) |
+| D4/D5 residual ledger, system cleanup responsibility and evidence boundaries | [Residual reclamation](residual-reclamation.en.md) |
 | Object storage, upload grants, Revision registration and resume | [Revisions](revisions.en.md) |
 | Session lists, archives and model request statistics | [Session reads](session-reads.en.md) |
 
@@ -52,13 +53,26 @@ Cloud in the transaction that takes over the previous phase's evidence.
   [Bounded abandonment of a blocked creation](startup-settlement.en.md#bounded-abandonment-of-a-blocked-creation)).
 - **`done` does not mean the run Workspace was deleted**; only a successful delete operation does (see
   [the delete-side limit](#limits)).
+- Once a Run enters `releasing` or `done`, or is soft-deleted, `ClaimWork` no longer returns its
+  unregistered session and delivery work, so stale work cannot block later runs. A new `RecordDispatch`
+  rechecks eligibility under the business transaction lock; a claim taken before settlement cannot
+  bypass it. Work and execution records remain, and existing executions retain their original identity
+  and recovery paths with their existing checks. This does not mean the Node has terminated or the
+  Workspace has been reclaimed. See the [Controller contract](../runtime/controller-integration.en.md#services).
 
 A run Workspace belongs to exactly this run (`workspaces.issue_run_id` and `issue_runs.workspace_id`
-reference each other uniquely). Its creator and operation actor are the user who triggered the run, it
+reference each other uniquely; a WorkflowRun's run Workspace likewise belongs only to it, see
+[Workflows](../workflows/workflows.en.md#runs)). Its creator and operation actor are the user who triggered the run, it
 is cloned from the Project's default branch, it never appears in any public Workspace list or endpoint,
 and it accepts no other run or interactive session.
 
 ## Background loops
+
+After D4/D5 business settlement, independent ledger reconciliation continues and grants one durable system owned-delete responsibility only
+when evidence qualifies. Retries keep the same operation; cleanup does not settle the Run again. Deployment operators can register
+controlled reclamation explicitly with `cloudctl residual` (terminate and retain data, delete data separately, or confirm externally) and
+take over D8 historical residuals; see [residual reclamation](residual-reclamation.en.md). Neither `done` nor a completed reconciliation pass
+proves that resources were reclaimed.
 
 Besides the synchronous transitions taken while evidence is taken over, the Cloud server process runs a
 set of loops every 10 seconds for the progress and settlement that have no external event to follow:
@@ -93,7 +107,7 @@ written together with the phase on entering `releasing`, and accompanied by a ti
 
 Whether the output was saved is stated by `result.deliveryState`: `saved` (a Revision with changes was
 registered), `unchanged` (a Revision without changes was registered), `failed` (delivery was given up),
-`skipped` (the deployment has no object storage, or the run was cancelled before any session). `failed`
+`skipped` (the deployment has no object storage or no Git Server, or the run was cancelled before any session). `failed`
 and `cancelled` runs still try to save their output and can have a Revision too.
 
 On the timeline an Agent run has one `run.enqueued` activity, and on entering `releasing` a
@@ -167,3 +181,9 @@ projections:
 - [An Agent run's conversation is recorded as a Thread](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/0-durable-agent-thread-with-user-turns.md)
 - [Workspace creation and start gain a plugin step; Cloud creates and deletes IssueRun run Workspaces](https://github.com/ora-space/specs/blob/main/decisions/cloud/operation/20260928-plugin-step-and-run-workspace-release.md)
 - [Users can configure a Git commit identity in Cloud](https://github.com/ora-space/specs/blob/main/decisions/cloud/identity-access/20260928-user-git-commit-identity.md)
+
+## Ordering task messages and direct starts
+
+A run that fails or is cancelled during preparation may have no `result.deliveryState`. It still creates a failure pause. Once release is confirmed and the phase is `done`, its initiator or an administrator can explicitly acknowledge the existing discard-undelivered-result action and continue waiting messages. A missing result is not evidence of saved work, never resumes automatically, and does not rewrite the original terminal status.
+
+Manual runs and comment targets for real Space Agents check task pauses, unresolved failed messages and accepted waiting messages in the creation transaction. Pauses/failures return `409 task_paused`; pending input returns `409 task_handoff_pending`, without consuming the pending-Run slot. The task worker admits its specific accepted message in order. Actual claims and retry scans recheck pauses, message order and prior result/release barriers. Already admitted runs drain before the task worker materializes later runs by message sequence; transaction-start timestamps do not determine acceptance order between runs and messages.

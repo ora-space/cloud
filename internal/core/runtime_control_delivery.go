@@ -1,5 +1,7 @@
 package core
 
+import "fmt"
+
 // runtimeControlCommand is a finite, lease-fenced Controller contract. The Controller may
 // acknowledge Node evidence, but cannot assign a holder, epoch or target chosen by a user.
 func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
@@ -15,6 +17,15 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 		for _, id := range unfinished {
 			v, ok := id.(string)
 			require(ok && v != "" && len(v) <= 256, 400, "invalid_runtime_evidence")
+		}
+		if row := residualForWorkspace(t, c.S("workspaceId")); row != nil {
+			sandbox := t.one("SELECT generation FROM sandbox_instances WHERE id=$1", n.S("sandboxInstanceId"))
+			appendResidualFact(t, row.S("runId"), "runtime:"+n.S("id")+":"+fmt.Sprint(c.N("controlEpoch"))+":"+fmt.Sprint(c.N("version")), Object{
+				"kind": "runtime_closed", "state": "observed", "workspaceId": c.S("workspaceId"),
+				"sandboxId": n.S("sandboxInstanceId"), "generation": sandbox.N("generation"),
+				"controlEpoch": c.N("controlEpoch"), "controlVersion": c.N("version"),
+				"inputClosed": closed, "unfinishedExecutionIds": unfinished,
+			})
 		}
 		if closed && (c.S("state") == "held" || c.S("state") == "acquiring") {
 			// Node expiry is conservative. Observed closed input cannot be reopened by a late renew,
@@ -47,10 +58,14 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 			require(e != nil && (e.S("kind") == "agent_session" || e.S("kind") == "deliver_revision") && e.S("operationId") == c.S("maintenanceRunId") && e.S("nodeId") == n.S("nodeId") && e["result"] == nil && e["terminatedByForceStopId"] == nil, 409, "stale_execution")
 			work := t.one("SELECT target FROM execution_work WHERE id=$1", e.S("workId"))
 			require(work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 409, "stale_node")
+			// The maintenance holder is a live run of either kind (D8): the IssueRun join first, the
+			// WorkflowRun row when the Workspace belongs to a workflow invocation.
 			run := t.one("SELECT r.id FROM issue_runs r JOIN issues i ON i.id=r.issue_id WHERE r.id=$1 AND r.deleted_at IS NULL AND i.deleted_at IS NULL", c.S("maintenanceRunId"))
+			if run == nil {
+				run = t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", c.S("maintenanceRunId"))
+			}
 			w := t.one("SELECT * FROM workspaces WHERE id=$1", c.S("workspaceId"))
 			require(run != nil && runtimeUsable(t, w, w.S("creatorUserId")), 403, "runtime_use_forbidden")
-			requireRepositoryAccess(t, w.S("projectId"))
 			binding := runtimeBinding(t, c, n)
 			binding["executionId"], binding["nodeOperationId"] = e.S("executionId"), e.S("nodeOperationId")
 			return binding
@@ -59,7 +74,6 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 		o := t.one("SELECT * FROM operations WHERE id=$1", c.S("maintenanceOperationId"))
 		require(o.S("state") == "running" && o.N("controllerEpoch") == r.Body.N("epoch") && o.S("step") == step, 409, "execution_closed")
 		require(runtimeUsable(t, t.one("SELECT * FROM workspaces WHERE id=$1", c.S("workspaceId")), o.S("actorUserId")), 403, "runtime_use_forbidden")
-		requireRepositoryAccess(t, o.S("projectId"))
 		binding := runtimeBinding(t, c, n)
 		binding["executionId"] = e.S("executionId")
 		binding["nodeOperationId"] = e.S("nodeOperationId")

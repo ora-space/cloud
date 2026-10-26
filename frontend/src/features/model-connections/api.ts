@@ -47,10 +47,11 @@ export function useModelConnections() {
 }
 
 /** Reads the default used only when a new model-backed run is created. */
-export function useModelDefault() {
+export function useModelDefault(enabled = true) {
   return useQuery({
     queryKey: getGetApiV1MeModelDefaultQueryKey(),
     queryFn: ({ signal }) => getApiV1MeModelDefault(undefined, signal),
+    enabled,
   })
 }
 
@@ -97,6 +98,7 @@ export function useSaveModelDefault() {
   return useMutation({
     mutationFn: (input: ModelDefault) => putApiV1MeModelDefault(input),
     onSuccess: (result) => queryClient.setQueryData(getGetApiV1MeModelDefaultQueryKey(), result),
+    onError: () => queryClient.invalidateQueries({ queryKey: getGetApiV1MeModelDefaultQueryKey() }),
   })
 }
 
@@ -136,7 +138,7 @@ export async function clearCredential(connection: ModelConnection): Promise<void
 }
 
 const FAULT_MESSAGES: Record<string, string> = {
-  version_conflict: '配置已在别处修改，请刷新后重试',
+  version_conflict: '配置已在别处修改，草稿已保留，请核对最新配置后重试',
   invalid_model_connection: '请检查连接地址、认证方式和模型信息',
   invalid_model_protocol: '请选择支持的模型协议',
   invalid_model_auth: '该协议不支持所选认证方式',

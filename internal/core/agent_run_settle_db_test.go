@@ -200,6 +200,97 @@ func TestPhase2ASettleWorkspaceFailure(t *testing.T) {
 	}
 }
 
+// pinSettlePlugin writes the run-create snapshot the settle reads: the pinned Agent plugin identity
+// and version live in issue_runs.input, never in the current roster (IssueRun D1/D6).
+func pinSettlePlugin(t *testing.T, store *Store, runID, pluginID, version string) {
+	t.Helper()
+	if _, err := store.Pool.Exec(`UPDATE issue_runs SET input=$2, version=version+1, updated_at=now() WHERE id=$1`,
+		runID, jsonText(Object{"agentPluginId": pluginID, "agentPluginVersion": version})); err != nil {
+		t.Fatalf("pin agent plugin: %v", err)
+	}
+}
+
+// seedSettlePluginInstance writes the workspace_plugin_instances row the create_workspace plugin
+// step leaves behind, with the observed state/version under test.
+func seedSettlePluginInstance(t *testing.T, store *Store, wsID, pluginID, state, version string) {
+	t.Helper()
+	namespace, identifier, ok := pluginIdentity(pluginID)
+	if !ok {
+		t.Fatalf("seed plugin instance: invalid plugin id %q", pluginID)
+	}
+	if _, err := store.Pool.Exec(`INSERT INTO workspace_plugin_instances(workspace_id,tenant_id,owner_user_id,project_id,source_namespace,identifier,observed_state,observed_version)
+		SELECT id,tenant_id,owner_user_id,project_id,$2,$3,$4,NULLIF($5,'') FROM workspaces WHERE id=$1`,
+		wsID, namespace, identifier, state, version); err != nil {
+		t.Fatalf("seed plugin instance: %v", err)
+	}
+}
+
+// TestPhase2ASettlePinnedPluginUnavailable: a run that pins an Agent plugin is only ready when that
+// plugin is installed at the pinned version on its Workspace. The create_workspace plugin step opens
+// admission even when an item install failed, so the Workspace's readiness is not evidence; an absent,
+// failed or wrong-version instance settles releasing/failed/agent_plugin_unavailable in the same
+// transaction as the operation terminal and declares the delete, exactly like any other startup
+// failure. The run never reaches starting.
+func TestPhase2ASettlePinnedPluginUnavailable(t *testing.T) {
+	const pluginID = "official/ora-space.opencode"
+	for _, tc := range []struct {
+		name    string
+		seed    bool
+		state   string
+		version string
+	}{
+		{name: "absent"},
+		{name: "failed", seed: true, state: "failed"},
+		{name: "still installing", seed: true, state: "installing", version: "1.0.0"},
+		{name: "wrong version", seed: true, state: "installed", version: "2.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := dispatcherDB(t)
+			scene := stageSettleScene(t, store, false)
+			pinSettlePlugin(t, store, scene.seed.run, pluginID, "1.0.0")
+			if tc.seed {
+				seedSettlePluginInstance(t, store, scene.ws, pluginID, tc.state, tc.version)
+			}
+
+			if err := settleRun(t, store, scene, "ready"); err != nil {
+				t.Fatalf("ready settle: %v", err)
+			}
+			phase, status, reason, _, _, _ := runFields(t, store, scene.seed.run)
+			if !phase.Valid || phase.String != "releasing" || status != "failed" || reason != "agent_plugin_unavailable" {
+				t.Fatalf("settle = %v/%q/%q; want releasing/failed/agent_plugin_unavailable", phase, status, reason)
+			}
+			if n := countDeleteOperations(t, store, scene.seed.run); n != 1 {
+				t.Fatalf("plugin-unavailable settle must declare delete once, got %d", n)
+			}
+			if n := countRunActivities(t, store, scene.seed.issue, "run.failed"); n != 1 {
+				t.Fatalf("plugin-unavailable settle must append one run.failed activity, got %d", n)
+			}
+		})
+	}
+}
+
+// TestPhase2ASettlePinnedPluginInstalled: the pinned plugin installed at exactly the pinned version
+// keeps the ordinary ready settlement. Together with the cases above this is the D3 line: readiness
+// of the Workspace plus the pinned instance, not readiness alone.
+func TestPhase2ASettlePinnedPluginInstalled(t *testing.T) {
+	const pluginID = "official/ora-space.opencode"
+	store := dispatcherDB(t)
+	scene := stageSettleScene(t, store, false)
+	pinSettlePlugin(t, store, scene.seed.run, pluginID, "1.0.0")
+	seedSettlePluginInstance(t, store, scene.ws, pluginID, "installed", "1.0.0")
+
+	if err := settleRun(t, store, scene, "ready"); err != nil {
+		t.Fatalf("ready settle: %v", err)
+	}
+	phase, status, reason, _, _, _ := runFields(t, store, scene.seed.run)
+	if !phase.Valid || phase.String != "starting" || status != "dispatched" || reason != "" {
+		t.Fatalf("settle = %v/%q/%q; want starting/dispatched with no failure", phase, status, reason)
+	}
+	if n := countDeleteOperations(t, store, scene.seed.run); n != 0 {
+		t.Fatalf("an installed pinned plugin must not declare delete, got %d", n)
+	}
+}
+
 // TestPhase2ASettleHookRollback (T2-4): when the delete seam refuses, the whole caller transaction
 // rolls back — the run stays provisioning/dispatched and no failure activity or delete intent commits.
 //

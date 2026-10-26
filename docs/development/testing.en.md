@@ -26,12 +26,30 @@ in [`integration/`](../../integration/README.en.md).
 ## Database
 
 - Tests connect to PostgreSQL through `TEST_DATABASE_URL`, which `task setup` writes into `.local/dev.env`. The account
-  needs `CREATE SCHEMA`.
-- **One schema per test**: each test creates its own schema, runs the migrations in it and drops it in `t.Cleanup`, so tests
-  share no mutable database state.
+  needs `CREATE SCHEMA`; integration and core template copies also require `CREATEDB` for the test role.
+- **Independent database state**: ordinary integration and core fixtures each migrate a template once per test process and
+  receive independent database copies; the source has no open connections and accepts no business writes. Migration/upgrade
+  cases still execute migrations from empty or older isolated schemas. Core's `dispatcherDB` receives an independent database
+  copy; controlled-reclamation matrices retain their existing per-case resets. Each test owns its cleanup without sharing
+  mutable business state; see [integration fixtures](../../integration/README.en.md#hermetic-testing-invariants).
 - **No silent skipping**: `task test`, `task test:integration`, `task test:race` and `task check` set `REQUIRE_POSTGRES=1` and
   fail outright when no database is configured. Running `go test ./...` directly without a database skips the tests that need
   one explicitly, and a pass in that mode does not count as full verification.
+
+### Cleaning up leftover test databases
+
+A killed test process may leave its template and copies behind. **Run this only when no tests are running**, against the local test PostgreSQL selected by `TEST_DATABASE_URL`: list leftovers first, then drop them. These commands match only the complete names used by `integration/fixture_template_test.go`, `internal/core/fixture_template_test.go` and their callers: one of the listed prefixes followed by a 32-character lowercase hexadecimal UUID. Other names and legacy test schemas are excluded. Use the test role that created the databases (or an administrator with permission to drop them), connected to the base test database, not a copy being dropped. `WITH (FORCE)` disconnects sessions in matching databases.
+
+```sh
+psql -X -v ON_ERROR_STOP=1 "$TEST_DATABASE_URL" <<'SQL'
+SELECT datname FROM pg_database WHERE datname ~ '^(core_template_|core_run_|test_template_|test_|grpc_|test_gateway_|test_controlled_|test_copy_first_|test_copy_second_|test_copy_later_|test_copy_parallel_)[0-9a-f]{32}$' ORDER BY datname;
+SQL
+
+psql -X -v ON_ERROR_STOP=1 "$TEST_DATABASE_URL" <<'SQL'
+SELECT format('DROP DATABASE %I WITH (FORCE);', datname) FROM pg_database WHERE datname ~ '^(core_template_|core_run_|test_template_|test_|grpc_|test_gateway_|test_controlled_|test_copy_first_|test_copy_second_|test_copy_later_|test_copy_parallel_)[0-9a-f]{32}$' ORDER BY datname
+\gexec
+SQL
+```
 
 ## S3
 
@@ -64,6 +82,22 @@ and `task test:race` should enable it as well, so a skipped S3 is never mistaken
 While iterating, run the smallest relevant task first, and the full gate before considering the work done. Never loosen a lint,
 skip a test, raise a timeout or weaken an assertion or security check just to make a gate pass; when an exception is needed,
 document the approved reason next to the narrowest possible suppression.
+
+## Backend CI shards and coverage
+
+Backend runs integration on four independent runners, assigning each top-level UTF-8 test name by CRC32 modulo 4.
+New tests are assigned automatically without changing existing names' assignments. Each runner discovers tests with
+`go test -list '.*' ./integration`, builds a fully anchored `-run '^(A|B|...)$'`, checks for missing or duplicate assignments,
+and verifies the actual top-level starts and results after execution. Examples and fuzz seeds are included; benchmarks remain disabled as in the original command.
+The `packages` job retains every other package, format, proto, lint and command-build check. All groups retain real PostgreSQL,
+RustFS, race detection and the existing `-timeout 20m`.
+Each shard builds Git Server before fixtures create leases, so cold compilation previously warmed by earlier tests cannot consume grant lifetimes.
+The test-output `tee` pipeline uses Bash with `pipefail` to preserve a failing `go test` exit code.
+
+The final `check` status depends on every matrix job and cannot pass after a failure or cancellation. It verifies that the
+four executed sets form exactly the discovered list, then merges every job's binary coverage with `go tool covdata merge -pcombine`
+and generates `coverage.out` with `textfmt` (the `coverage` artifact). Instrumentation remains `-coverpkg=./internal/...`.
+`GOCOVERDIR` together with `-test.gocoverdir` retains test-process data instead of losing it in `go test`'s internal temporary directory.
 
 ## Writing tests
 

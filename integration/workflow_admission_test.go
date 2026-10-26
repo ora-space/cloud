@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wanglongan587/cloud/internal/core"
+	"github.com/wanglongan587/cloud/internal/workflowasset"
 )
 
 // agentRunGraph is a start -> agent document whose agent node asks for `slot` (empty means the
@@ -19,7 +21,7 @@ import (
 // publishes a document built here, so the gate is exercised through the publish path an author uses
 // rather than by writing a snapshot row directly.
 func agentRunGraph(slot string, legacy bool, slots []any) core.Object {
-	config := core.Object{"schemaVersion": 1, "prompt": "评审"}
+	config := core.Object{"schemaVersion": 3, "prompt": "评审"}
 	if slot != "" {
 		config["executorSlot"] = slot
 	}
@@ -31,7 +33,7 @@ func agentRunGraph(slot string, legacy bool, slots []any) core.Object {
 			core.Object{
 				"id": "start", "type": "workflow", "deletable": false,
 				"position": core.Object{"x": 0, "y": 0},
-				"data":     core.Object{"kind": "start", "title": "开始", "description": ""},
+				"data":     core.Object{"kind": "start", "title": "开始", "description": "", "input": ""},
 			},
 			core.Object{
 				"id": "agent-1", "type": "workflow",
@@ -184,11 +186,11 @@ func TestWorkflowPublishRefusesUnusedAgentConfiguration(t *testing.T) {
 		"name": "Configured flow", "graph": agentRunGraph("", false, nil),
 	}, "adm-cfg-create", 200).O("resource")
 
-	// The graph the editor would write for an author who configured retry and skills: both are in the
-	// canonical schema, and neither is in the first phase's executable subset.
+	// The graph the editor would write for an author who configured skills: it is in the canonical
+	// schema but not in Cloud's executable subset. Retry is no longer part of this set — it is
+	// executed (retry decision D1) and its shape has its own gate tests.
 	configured := agentRunGraph("", false, nil)
 	config := configured["nodes"].([]any)[1].(core.Object).O("data").O("agentConfig")
-	config["retry"] = core.Object{"max": 3}
 	config["skills"] = []any{"review"}
 	live := f.call("GET", f.path("/workflows/"+draft.S("id")), nil, "", 200)
 	f.call("PUT", f.path("/workflows/"+draft.S("id")), core.Object{
@@ -198,7 +200,6 @@ func TestWorkflowPublishRefusesUnusedAgentConfiguration(t *testing.T) {
 	refused := f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "adm-cfg-pub", 400)
 	want := []core.Object{
 		{"code": "node_config_unsupported", "nodeId": "agent-1", "field": "skills"},
-		{"code": "node_config_unsupported", "nodeId": "agent-1", "field": "retry"},
 	}
 	if got := problems(t, refused); !reflect.DeepEqual(got, want) {
 		t.Fatalf("publish problems = %v, want %v", got, want)
@@ -216,6 +217,172 @@ func TestWorkflowPublishRefusesUnusedAgentConfiguration(t *testing.T) {
 	f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "adm-cfg-pub-2", 200)
 }
 
+// TestWorkflowPublishRefusesInteractiveCompletionDeclaration covers the deliverable declaration
+// (circus#426): Cloud has no completion gate to apply it to, so publishing refuses the declaration
+// and the envelope version that carries it instead of freezing a graph whose check would never run.
+func TestWorkflowPublishRefusesInteractiveCompletionDeclaration(t *testing.T) {
+	f := setup(t)
+	draft := f.call("POST", f.path("/workflows"), core.Object{
+		"name": "Deliverable flow", "graph": agentRunGraph("", false, nil),
+	}, "adm-deliverable-create", 200).O("resource")
+
+	// A graph declaring expected files is refused by field name.
+	configured := agentRunGraph("", false, nil)
+	config := configured["nodes"].([]any)[1].(core.Object).O("data").O("agentConfig")
+	config["completion"] = core.Object{"files": []any{core.Object{"path": "reports/*.md"}}}
+	live := f.call("GET", f.path("/workflows/"+draft.S("id")), nil, "", 200)
+	f.call("PUT", f.path("/workflows/"+draft.S("id")), core.Object{
+		"graph": configured, "version": live.N("version"),
+	}, "", 200)
+	refused := f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "adm-deliverable-pub", 400)
+	want := []core.Object{{"code": "node_config_unsupported", "nodeId": "agent-1", "field": "completion"}}
+	if got := problems(t, refused); !reflect.DeepEqual(got, want) {
+		t.Fatalf("publish problems = %v, want %v", got, want)
+	}
+	if n := f.scalar("SELECT count(*) FROM workflow_snapshots WHERE workflow_id=$1", draft.S("id")); n != 0 {
+		t.Fatalf("a refused completion declaration left %d snapshots", n)
+	}
+
+	// Version 4 is the envelope that introduces the declaration. Cloud refuses it even without the
+	// field, so a graph authored by a newer editor cannot pass the gate as if nothing were declared.
+	versioned := agentRunGraph("", false, nil)
+	versioned["nodes"].([]any)[1].(core.Object).O("data").O("agentConfig")["schemaVersion"] = 4
+	live = f.call("GET", f.path("/workflows/"+draft.S("id")), nil, "", 200)
+	f.call("PUT", f.path("/workflows/"+draft.S("id")), core.Object{
+		"graph": versioned, "version": live.N("version"),
+	}, "", 200)
+	refused = f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "adm-deliverable-pub-2", 400)
+	want = []core.Object{{"code": "agent_schema_version_unsupported", "nodeId": "agent-1", "field": "agentConfig.schemaVersion"}}
+	if got := problems(t, refused); !reflect.DeepEqual(got, want) {
+		t.Fatalf("publish problems = %v, want %v", got, want)
+	}
+	if n := f.scalar("SELECT count(*) FROM workflow_snapshots WHERE workflow_id=$1", draft.S("id")); n != 0 {
+		t.Fatalf("a refused schema version left %d snapshots", n)
+	}
+
+	// The workflow-asset import entry freezes through the same gate: both declarations are refused
+	// there too, and neither leaves a snapshot behind.
+	completionDoc, err := json.Marshal(core.Object{
+		"name": "Completion Kit", "nodes": configured["nodes"], "edges": configured["edges"],
+	})
+	must(t, err)
+	versionDoc, err := json.Marshal(core.Object{
+		"name": "Version Kit", "nodes": versioned["nodes"], "edges": versioned["edges"],
+	})
+	must(t, err)
+	repo := workflowMarketplace(t, f.root)
+	pkg := workflowPackage(t, map[string]string{
+		"completion.json": string(completionDoc),
+		"version.json":    string(versionDoc),
+	})
+	packages := newWorkflowPackages(t, map[string][]byte{"/packages/deliverable-kit-1.0.0.orax": pkg})
+	publishWorkflowRelease(t, repo, "deliverable-kit", "1.0.0", packages.server.URL+"/packages/deliverable-kit-1.0.0.orax", pkg)
+	f.syncMarketplace(t, repo)
+	f.store.WorkflowAssets = workflowasset.NewFetcher(nil, packages.server.Client().Transport)
+	sid := f.defaultSpaceID()
+	f.installWorkflowPlugin(t, sid, "official/deliverable-kit", "")
+	must(t, f.importWorkflowAssets(t))
+	documents := assetDocuments(f.assetImport(t, sid, "official/deliverable-kit"))
+	for path, wantProblem := range map[string]core.Object{
+		"assets/workflows/completion.json": {"code": "node_config_unsupported", "nodeId": "agent-1", "field": "completion"},
+		"assets/workflows/version.json":    {"code": "agent_schema_version_unsupported", "nodeId": "agent-1", "field": "agentConfig.schemaVersion"},
+	} {
+		imported := documents[path]
+		if imported.S("outcome") != "failed" || imported.S("failureCode") != "document_not_executable_graph" {
+			t.Fatalf("%s = %v, want document_not_executable_graph", path, imported)
+		}
+		raw, _ := imported.O("failureDetail")["problems"].([]any)
+		if len(raw) != 1 {
+			t.Fatalf("%s problems = %v, want the one refused declaration", path, raw)
+		}
+		problem, _ := raw[0].(map[string]any)
+		got := core.Object(problem)
+		if got.S("code") != wantProblem.S("code") || got.S("nodeId") != wantProblem.S("nodeId") || got.S("field") != wantProblem.S("field") {
+			t.Fatalf("%s problem = %v, want %v", path, got, wantProblem)
+		}
+	}
+	if n := f.scalar("SELECT count(*) FROM workflow_snapshots WHERE workflow_id IN (SELECT id FROM workflows WHERE name IN ('Completion Kit','Version Kit'))"); n != 0 {
+		t.Fatalf("refused imported documents left %d snapshots", n)
+	}
+
+	// Version 3 without the declaration publishes: the refusal is about the declaration, not about
+	// having an agent configuration at all.
+	live = f.call("GET", f.path("/workflows/"+draft.S("id")), nil, "", 200)
+	f.call("PUT", f.path("/workflows/"+draft.S("id")), core.Object{
+		"graph": agentRunGraph("", false, nil), "version": live.N("version"),
+	}, "", 200)
+	f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "adm-deliverable-pub-3", 200)
+}
+
+// TestWorkflowAcceptsDesktopDefaultAgentConfig covers circus#204: the desktop editor's default for an
+// agent node with nothing configured is `skills: []`, `mcps: []`, `interactive: false`, which mean
+// "not enabled" and must not be refused as first-phase-unused configuration. The agent node mirrors a
+// real desktop export (schemaVersion 3, the pre-slot `executor`, `roleId`, and the three defaults),
+// and the document is exercised through both gate entry points — direct publish and workflow asset
+// import — so the acceptance is proven at the freeze point an author actually uses.
+func TestWorkflowAcceptsDesktopDefaultAgentConfig(t *testing.T) {
+	f := setup(t)
+	agentConfig := core.Object{
+		"schemaVersion": 3,
+		"executor":      core.Object{"agentCli": "official/ora-space.codeagentcli", "modelId": "gpt-5"},
+		"roleId":        "Implementer",
+		"skills":        []any{},
+		"mcps":          []any{},
+		"prompt":        "生成一行内容。",
+		"interactive":   false,
+	}
+	nodes := []any{
+		core.Object{"id": "start", "type": "workflow", "data": core.Object{"kind": "start", "title": "开始", "description": ""}},
+		core.Object{"id": "agent-1", "type": "workflow", "data": core.Object{"kind": "agent", "title": "内容生成器", "description": "", "agentConfig": agentConfig}},
+	}
+	edges := []any{core.Object{"id": "e1", "kind": "data", "source": "start", "target": "agent-1"}}
+
+	// Direct publish accepts the editor's default: publishing is the freeze point, and the default
+	// enables nothing.
+	draft := f.call("POST", f.path("/workflows"), core.Object{
+		"name": "Default config", "graph": core.Object{"nodes": nodes, "edges": edges},
+	}, "cfg-default-create", 200).O("resource")
+	f.call("POST", f.path("/workflows/"+draft.S("id")+"/publish"), core.Object{}, "cfg-default-pub", 200)
+
+	// The same document imported as a workflow asset is accepted too, with the three defaults kept
+	// exactly as the editor wrote them rather than rewritten or stripped.
+	docJSON, err := json.Marshal(core.Object{"name": "Default Kit", "nodes": nodes, "edges": edges})
+	must(t, err)
+	repo := workflowMarketplace(t, f.root)
+	pkg := workflowPackage(t, map[string]string{"default.json": string(docJSON)})
+	packages := newWorkflowPackages(t, map[string][]byte{"/packages/default-kit-1.0.0.orax": pkg})
+	publishWorkflowRelease(t, repo, "default-kit", "1.0.0", packages.server.URL+"/packages/default-kit-1.0.0.orax", pkg)
+	f.syncMarketplace(t, repo)
+	f.store.WorkflowAssets = workflowasset.NewFetcher(nil, packages.server.Client().Transport)
+	sid := f.defaultSpaceID()
+	f.installWorkflowPlugin(t, sid, "official/default-kit", "")
+	must(t, f.importWorkflowAssets(t))
+	item := f.assetImport(t, sid, "official/default-kit")
+	if item == nil || item.S("state") != "completed" {
+		t.Fatalf("package import = %v", item)
+	}
+	doc := assetDocuments(item)["assets/workflows/default.json"]
+	if doc.S("outcome") != "imported" || doc.S("workflowId") == "" || doc.N("snapshotVersion") != 1 {
+		t.Fatalf("document outcome = %v", doc)
+	}
+	// The stored snapshot keeps the three defaults exactly as the editor wrote them: acceptance is not
+	// normalization, and nothing strips the "not enabled" values on the way in.
+	var stored string
+	must(t, f.store.Pool.QueryRow("SELECT graph::text FROM workflow_snapshots WHERE workflow_id=$1 AND version=1", doc.S("workflowId")).Scan(&stored))
+	var storedGraph core.Object
+	must(t, json.Unmarshal([]byte(stored), &storedGraph))
+	storedAgentConfig := core.Object(storedGraph["nodes"].([]any)[1].(map[string]any)).O("data").O("agentConfig")
+	if skills, ok := storedAgentConfig["skills"].([]any); !ok || len(skills) != 0 {
+		t.Fatalf("stored agentConfig skills = %#v, want []", storedAgentConfig["skills"])
+	}
+	if mcps, ok := storedAgentConfig["mcps"].([]any); !ok || len(mcps) != 0 {
+		t.Fatalf("stored agentConfig mcps = %#v, want []", storedAgentConfig["mcps"])
+	}
+	if interactive, ok := storedAgentConfig["interactive"].(bool); !ok || interactive {
+		t.Fatalf("stored agentConfig interactive = %#v, want false", storedAgentConfig["interactive"])
+	}
+}
+
 // TestWorkflowRunSnapshotIsScopedToItsWorkflow covers the snapshot a run may name: an id belonging to
 // another workflow of the same tenant is the same 404 as an unknown one, so a run can never execute a
 // version of a document it was not started against.
@@ -227,7 +394,7 @@ func TestWorkflowRunSnapshotIsScopedToItsWorkflow(t *testing.T) {
 	publishWorkflow(t, f, second.S("id"), "adm-scope-pub-b")
 
 	// The workflow's own snapshot runs.
-	run := f.call("POST", f.path("/workflows/"+first.S("id")+"/runs"), core.Object{"snapshotId": mine.S("id")}, "adm-scope-1", 200).O("resource")
+	run := f.call("POST", f.path("/workflows/"+first.S("id")+"/runs"), core.Object{"snapshotId": mine.S("id"), "projectId": runProject(t, f, "adm-scope-project")}, "adm-scope-1", 200).O("resource")
 	if run.S("snapshotId") != mine.S("id") {
 		t.Fatalf("the run did not execute the version it named: %v", run)
 	}
@@ -246,6 +413,7 @@ func TestWorkflowRunSnapshotIsScopedToItsWorkflow(t *testing.T) {
 // and the newest published version is what an unqualified run gets.
 func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 	f := setup(t)
+	pid := runProject(t, f, "adm-hist-project")
 	graph := func(names ...string) core.Object {
 		variables := []any{}
 		for _, name := range names {
@@ -268,7 +436,7 @@ func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 
 	// The older version does not demand a variable that did not exist when it was frozen...
 	f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
-		"snapshotId": older.S("id"), "input": core.Object{"topic": "auth"},
+		"snapshotId": older.S("id"), "input": core.Object{"topic": "auth"}, "projectId": pid,
 	}, "adm-hist-1", 200)
 	// ...and still enforces its own required variable.
 	f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
@@ -282,7 +450,7 @@ func TestWorkflowRunValidatesAgainstTheVersionItRuns(t *testing.T) {
 		t.Fatalf("the newest version was not the one applied: %v", missing)
 	}
 	newest := f.call("POST", f.path("/workflows/"+wf.S("id")+"/runs"), core.Object{
-		"snapshotId": newer.S("id"), "input": core.Object{"topic": "auth", "added-later": "x"},
+		"snapshotId": newer.S("id"), "input": core.Object{"topic": "auth", "added-later": "x"}, "projectId": pid,
 	}, "adm-hist-4", 200).O("resource")
 
 	// The version a run executed is recorded on the run row, not left to be re-derived later.
@@ -312,7 +480,7 @@ func manualWorkflowRun(t *testing.T, f *fixture, iid, executorID, key string, in
 // be used to start a run the other two entries would refuse.
 func TestManualWorkflowRunResolvesItsExecutor(t *testing.T) {
 	f := setup(t)
-	iss := f.call("POST", f.path("/issues"), core.Object{"title": "Manual workflow run"}, "adm-manual-issue", 200).O("resource")
+	iss := f.call("POST", f.path("/issues"), core.Object{"title": "Manual workflow run", "projectRef": runProject(t, f, "adm-manual-project")}, "adm-manual-issue", 200).O("resource")
 	iid := iss.S("id")
 
 	// An id that names no workflow of this tenant, published or not.
@@ -388,6 +556,7 @@ func TestManualWorkflowRunCannotNameAForeignWorkflow(t *testing.T) {
 // as itself, and no run is created while it is unresolved.
 func TestWorkflowRunDefaultSlotGate(t *testing.T) {
 	f := setup(t)
+	pid := runProject(t, f, "adm-gate-project")
 	wf := f.call("POST", f.path("/workflows"), core.Object{
 		"name": "Gated flow", "graph": agentRunGraph("", false, nil),
 	}, "adm-gate-wf", 200).O("resource")
@@ -422,7 +591,7 @@ func TestWorkflowRunDefaultSlotGate(t *testing.T) {
 	_, err := f.store.PutModelCredential(context.Background(), &f.user, connection.S("id"), connection.N("version"),
 		"adm-gate-credential", uuid.NewString(), make([]byte, 32), "fixture-key")
 	must(t, err)
-	run := f.call("POST", runPath, core.Object{}, "adm-gate-3", 200).O("resource")
+	run := f.call("POST", runPath, core.Object{"projectId": pid}, "adm-gate-3", 200).O("resource")
 	if run.S("status") != "succeeded" {
 		t.Fatalf("the admitted run did not execute: %v", run)
 	}

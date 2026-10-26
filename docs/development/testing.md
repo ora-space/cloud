@@ -22,10 +22,25 @@ Cloud 的正确性主要来自真实边界上的测试：真实的 PostgreSQL �
 
 ## 数据库
 
-- 测试通过 `TEST_DATABASE_URL` 连接 PostgreSQL；`task setup` 会把它写进 `.local/dev.env`。账号需要 `CREATE SCHEMA` 权限。
-- **每个测试一个 schema**：测试为自己建一个独立的 schema，在里面执行迁移，并在 `t.Cleanup` 里删除，测试之间不共享可变的数据库状态。
+- 测试通过 `TEST_DATABASE_URL` 连接 PostgreSQL；`task setup` 会把它写进 `.local/dev.env`。账号需要 `CREATE SCHEMA`；integration 与 core 的模板副本还需要测试账号具备 `CREATEDB`。
+- **独立数据库状态**：integration 与 core 普通 fixture 各自在每个测试进程内只迁移一次模板，再为各 fixture 创建独立数据库副本；模板关闭连接并禁止业务写入。迁移/升级用例继续从空白或旧版独立 schema 实际运行迁移；core 的 `dispatcherDB` 使用独立数据库副本，受控回收矩阵保留原有逐用例重置。每个测试保留自己的清理，不共享可变业务状态，见 [integration fixture](../../integration/README.md#测试隔离性不变量)。
 - **不能静默跳过**：`task test`、`task test:integration`、`task test:race`、`task check` 都设置 `REQUIRE_POSTGRES=1`，没有配置数据库时直接
   失败。直接运行 `go test ./...` 而没有配置数据库时，需要数据库的测试会显式跳过，此时的通过不能当作完整验证。
+
+### 清理遗留测试数据库
+
+测试进程被强制终止时，模板和副本可能来不及删除。**仅在没有测试运行时**，连接 `TEST_DATABASE_URL` 指向的本地测试 PostgreSQL，先列出遗留库，再删除。以下命令只匹配 `integration/fixture_template_test.go`、`internal/core/fixture_template_test.go` 及其调用方使用的完整名称：列出的前缀加 32 位小写十六进制 UUID；不会匹配其他名称，也不清理旧式测试 schema。使用创建这些库的测试账号（或有删除权限的管理员），并连接基础测试库，不要连接待删除的副本。`WITH (FORCE)` 会断开匹配库的连接。
+
+```sh
+psql -X -v ON_ERROR_STOP=1 "$TEST_DATABASE_URL" <<'SQL'
+SELECT datname FROM pg_database WHERE datname ~ '^(core_template_|core_run_|test_template_|test_|grpc_|test_gateway_|test_controlled_|test_copy_first_|test_copy_second_|test_copy_later_|test_copy_parallel_)[0-9a-f]{32}$' ORDER BY datname;
+SQL
+
+psql -X -v ON_ERROR_STOP=1 "$TEST_DATABASE_URL" <<'SQL'
+SELECT format('DROP DATABASE %I WITH (FORCE);', datname) FROM pg_database WHERE datname ~ '^(core_template_|core_run_|test_template_|test_|grpc_|test_gateway_|test_controlled_|test_copy_first_|test_copy_second_|test_copy_later_|test_copy_parallel_)[0-9a-f]{32}$' ORDER BY datname
+\gexec
+SQL
+```
 
 ## S3
 
@@ -56,6 +71,17 @@ Cloud 的正确性主要来自真实边界上的测试：真实的 PostgreSQL �
 
 迭代时先跑最小的相关任务，完成之前再跑完整门禁。不能为了让门禁通过而放宽 lint、跳过测试、调大超时或削弱断言与安全检查；需要例外时，在尽可能
 窄的抑制旁写明经批准的原因。
+
+## Backend CI 分片与覆盖率
+
+Backend 在四个独立 runner 上运行 integration，按顶层测试名的 UTF-8 CRC32 对 4 取模分组；新增测试自动归组，已有测试名的归属不变。
+每个 runner 用 `go test -list '.*' ./integration` 发现测试，生成锚定完整名称的 `-run '^(A|B|...)$'`，并检查分组无遗漏、无重复；执行后再核对实际运行和结束的顶层名单。Example 和 fuzz seed 同样归组，Benchmark 与原命令一样不执行。
+其他包、格式、proto、lint 和命令构建在 `packages` job 中保持原检查。每组仍使用真实 PostgreSQL、RustFS、race 和原来的 `-timeout 20m`。
+分片会在 fixture 创建租约前预编译 Git Server，避免原先由较早测试隐式预热的冷编译耗尽授权时间。测试输出的 `tee` 管道使用带 `pipefail` 的 Bash，不能掩盖 `go test` 的失败退出码。
+
+最终 `check` 状态依赖全部矩阵 job；任何 job 失败或取消都不能通过。它复核四组实际执行的并集等于完整列表，
+再通过 `go tool covdata merge -pcombine` 合并所有 job 的二进制覆盖率，并用 `textfmt` 生成 `coverage.out`（`coverage` artifact）。
+插桩范围仍为 `-coverpkg=./internal/...`；`GOCOVERDIR` 配合 `-test.gocoverdir` 保留测试进程的数据，避免只收集环境变量而丢失 `go test` 内部临时目录的结果。
 
 ## 编写测试的要点
 

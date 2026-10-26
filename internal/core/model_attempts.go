@@ -22,8 +22,16 @@ func (s *Store) BeginModelAttempt(ctx context.Context, grant *ModelGrant, attemp
 			require(old.S("grantId") == grant.ID && old.B("streamed") == streamed && old.S("outcome") == "started", 409, "model_attempt_conflict")
 			return nil
 		}
-		t.exec(`INSERT INTO model_request_attempts(id,tenant_id,run_id,binding_id,grant_id,execution_id,model_id,protocol,streamed)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, attemptID, scope.TenantID, b.S("runId"), g.S("bindingId"), grant.ID, g.S("executionId"), b.O("model").S("id"), b.S("protocol"), streamed)
+		// The binding names its owner with exactly one of run_id / workflow_run_id (0040), and the
+		// ledger mirrors that discriminator (0044). liveModelBinding maps either owner into runId for
+		// the runtime gates, so the raw workflow_run_id column decides which foreign key this row
+		// satisfies — an IssueRun attempt must never be written under the WorkflowRun reference.
+		runID, workflowRunID := b.S("runId"), ""
+		if b.S("workflowRunId") != "" {
+			runID, workflowRunID = "", b.S("workflowRunId")
+		}
+		t.exec(`INSERT INTO model_request_attempts(id,tenant_id,run_id,workflow_run_id,binding_id,grant_id,execution_id,model_id,protocol,streamed)
+		 VALUES($1,$2,NULLIF($3,'')::uuid,NULLIF($4,'')::uuid,$5,$6,$7,$8,$9,$10)`, attemptID, scope.TenantID, runID, workflowRunID, g.S("bindingId"), grant.ID, g.S("executionId"), b.O("model").S("id"), b.S("protocol"), streamed)
 		return nil
 	})
 	return err

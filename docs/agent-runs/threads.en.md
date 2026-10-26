@@ -133,3 +133,9 @@ transaction emits at most one `thread_changed` per run (see
 - [An Agent run's conversation is recorded as a Thread](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/0-durable-agent-thread-with-user-turns.md)
 - [A personal-model Thread is appended only by its initiator; members read it and administrators may end it](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/20261010-personal-model-initiator-controls-input.md)
 - [Internal Control gRPC adds plugin, Agent session and Revision delivery executions, plus AgentRunService](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260928-agent-run-executions-thread-and-upload-grants.md)
+
+## Cross-run context and tool turn identity
+
+Later runs carry only Node-projected visible prose, selected by recency and frozen. An oversized recent turn retains its user question and a UTF-8-boundary prefix of assistant text, with `assistantTruncated` and incomplete-history markers. The actual rendered prompt measures the budget, including aggregated blocks and JSON escaping. Bounded recovered history is not complete memory.
+
+Public Node entries return their stored `turnId`, associating prose, thoughts and tool updates with the actual turn even when the next user input is already queued. Delivery `status` remains user-only; internal Node execution and receipt identities are not exposed.

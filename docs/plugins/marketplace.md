@@ -26,6 +26,9 @@ Cloud server 自己维护目录（`internal/pluginmarket`），启动时同步�
 - 扫描 `registry/**/orax.toml`，按与 desktop 相同的规则校验每份清单（大小、resolver 版本、kind、标识符语法、文本策略、SHA-256 格式、下载
   地址与 targets 的互斥关系等）。损坏的条目单独跳过；同一个 Plugin ID 出现多次时按路径顺序取第一个；`marketplace_visible=false` 的条目不进
   目录。
+- `kind = agent` 的清单可以声明 `[agent_configuration]` 发布关联：同步在受控 checkout 的条目目录内读取静态声明副本并校验——路径上任何一段都不能是符号链接，
+  最终是普通文件、有界、UTF-8，SHA-256 与关联声明一致，能通过声明编译且 schema 版本一致。有效的关联连同逐字节副本进入目录快照；无效的
+  把有界原因记在条目上，不产生可消费的声明，也不影响包本身可安装（见 [Agent 声明的快照与冻结](#agent-声明的快照与冻结)）。
 - 一次成功的同步在单个事务里整源替换目录，读取方看不到中间状态；失败时保留上一版快照，只在源上记录失败原因，下一轮重试。
 - **读取目录从不出网**：`GET .../spaces/:spaceId/plugins/catalog` 只读这张表，返回全量目录和 `syncedAt`，过滤和搜索在前端完成。
 - 目录替换提交后，向所有 SSE 订阅者广播 `plugins.catalog_updated`。
@@ -46,6 +49,7 @@ Cloud server 自己维护目录（`internal/pluginmarket`），启动时同步�
 - 选择被接受时，Cloud 为当时**已经存在**的每个存活运行时写一行待处理的实例；之后新建的运行时不会被追加到这次维护里，而是在自己创建或启动时
   补装（见下文）。空间里没有存活运行时时，选择立即视为完成。
 - 汇总只给出受影响、已完成、等待启动等计数，不暴露别的运行时的失败输出。
+- 汇总的可选 `kind` 来自空间选定的 release，不从最新目录推断。网页据此给已选 Agent 提供「我的配置」；当前成员可配置自己的值，空间安装/移除仍需管理员权限。
 
 ## 运行时里的执行
 
@@ -54,6 +58,7 @@ Cloud server 自己维护目录（`internal/pluginmarket`），启动时同步�
 - **进入 `plugin` 步骤时冻结集合**：创建和启动运行时取当时空间里所有期望安装的插件；`install_plugin`、`remove_plugin` 维护操作只含那一个插件。
   集合为空时直接跳过这个步骤。冻结之后新选择的插件不进入本次集合。
 - 每一项都是从目录快照拼出的**自包含载荷**：Plugin ID、版本、下载地址、SHA-256 或 targets。Node 不需要查询市场，并在落盘前校验 SHA-256。
+  agent 类插件的安装项还携带冻结的声明关联（见 [Agent 声明的快照与冻结](#agent-声明的快照与冻结)）。
 - Controller 用 `RecordDispatch` 登记一次 `install_plugins` 或 `remove_plugins` 执行，目标必须是该运行时当前代次的 Node，输入必须等于冻结的集合。
 - **逐项结果**：安装成功的版本必须等于计划版本，否则整份结果被拒绝；失败的项以有界的错误码记在实例上，**不阻止**运行时就绪。整次执行失败时按
   clone 步骤的方式延期，用新的执行重试。迟到的结果如果不属于当前这次选择，实例回到待处理，不会覆盖更新的选择。
@@ -74,6 +79,24 @@ Controller 每次领取操作时，Cloud 都会重新扫描待处理的实例，
 **聚合规则**：任一实例失败则空间状态为 `failed`；否则有未结束的实例时为 `installing` 或 `removing`；全部结束（或没有存活运行时）时为
 `installed` 或 `removed`。运行 Workspace 的实例只是那次运行的执行事实，不参与空间的聚合。
 
+## Agent 声明的快照与冻结
+
+`kind = agent` 的插件通过清单里的 `[agent_configuration]` 关联发布 Agent 声明，让声明可以不经运行插件就被读取。声明格式归 specs 的
+[Agent 声明决策](https://github.com/ora-space/specs/blob/main/decisions/desktop/plugin/manifest/20261017-agent-configuration-declarations.md)，
+Cloud 侧的分发语义见
+[Agent 配置元数据决策](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md)。
+Cloud 在这条链上只做三件事：
+
+- **快照自包含**：同步校验通过后，声明关联（schema 版本、声明摘要、副本路径）连同逐字节副本持久化在 `plugin_catalog_entries` 里；目录读取
+  从快照返回它们，全程不下载 `.orax`、不运行插件代码、不发模型请求。
+- **选择即冻结**：管理员选择版本时按既有规则冻结 release，声明关联随整个条目一起冻结；之后的目录更新发布新版本或新声明，都不改写已冻结的
+  选择和它喂给运行时的安装计划。
+- **派发只带身份**：agent 插件安装项的自包含载荷额外携带冻结关联的身份字段（schema 版本与声明摘要），`RecordDispatch` 的输入相等门禁因此
+  拒绝丢失或篡改关联的派发；静态副本不出 Cloud。
+
+“未声明”与“声明无效”是两个事实：前者没有任何关联字段，后者把有界原因记在条目上，也不影响包本身可安装。
+原因使用固定诊断，不回显声明中的值或服务器路径；写入前去除控制字符并保持合法 UTF-8，单个坏声明不会阻断其他条目的同步。
+
 ## Agent 名册
 
 `kind = agent` 的插件在空间聚合变为 `installed` 时，Cloud 在同一事务里为它创建（或恢复）一行 `space_agents`，于是它可以在 Issue 上被 @；插件被移除时
@@ -88,3 +111,4 @@ Agent 运行使用自己的运行 Workspace：创建时的 `plugin` 步骤装上
 - [管理员保存空间插件期望，逐运行时维护等待空闲并使用同一独占边界](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20260927-admin-selection-and-idle-maintenance.md)
 - [插件安装与移除由 Node 执行，新建 Workspace 自动补装 Space 插件](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20260928-node-executes-plugin-installs.md)
 - [Workflow 插件资产由 Cloud 自行取包、逐文档导入为可编辑副本](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261016-workflow-plugin-assets.md)
+- [Cloud 从发布元数据读取 Agent 声明，配置与安装始终绑定同一发行目标](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md)

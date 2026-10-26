@@ -16,7 +16,10 @@ lifecycle), and never modifies the desktop repository.
   sha256, URL/object keys, target-triple allowlist, pack exclusivity).
 - `catalog.go`: scans `registry/**/orax.toml` into catalog entries; `marketplace_visible=false`
   and broken listings are skipped; duplicates on one canonical id resolve first-in-path-order;
-  logo variants (universal/light/dark with extension priority) and READMEs (truncated) resolve.
+  logo variants (universal/light/dark with extension priority) and READMEs (truncated) resolve;
+  validates Agent declaration static copies and hands associations with exact bytes or bounded diagnostics to the catalog snapshot.
+- `agentconfiguration.go`: I/O-free Agent declaration compiler mirroring desktop's structure,
+  version, Settings and model-access checks; `testdata/agent-configuration-contract.json` holds shared contract vectors.
 - `sync.go`: `Syncer.Sync` — seed → go-git clone/pull --ff-only → scan → transactional catalog
   replace; single-flight admission (concurrent callers get `ErrSyncInFlight`); failures record
   `sync_error` and keep the previous snapshot.
@@ -39,6 +42,7 @@ lifecycle), and never modifies the desktop repository.
   `plugin_sources.sync_error`).
 - Catalog reads never leave the database: the API serves the PG snapshot, matching desktop's
   cache-only read semantics.
+- An Agent's `[agent_configuration]` association carries the schema version, declaration SHA-256 and entry-relative copy path. No segment of the copy path may be a symlink and the read stays inside the entry directory; the copy must be a bounded UTF-8 regular file with matching digest, compiled result and associated version. Absence and invalid declarations are distinct; an invalid copy neither hides the listing nor blocks package installation. This package never reads personal configuration, resolves connections or authorizes runtimes.
 - `ErrNonFastForwardMerge` is the `pull --ff-only` contract; desktop's `gitlancer` has the same
   semantics.
 
@@ -48,3 +52,4 @@ lifecycle), and never modifies the desktop repository.
   asserts the transaction boundary; single-flight uses a blocking seed for deterministic sync;
   the loop uses an injected sleep to drive ticks.
 - Real PG constraints and the HTTP chain live in `integration/plugins_test.go`.
+- Compiler and static-copy checks live in `agentconfiguration_test.go` and `catalog_test.go`; snapshot persistence and frozen install associations live in `integration/agent_configuration_catalog_test.go`.

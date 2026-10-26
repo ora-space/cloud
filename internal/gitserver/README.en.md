@@ -2,8 +2,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-Serves Project repositories (`/{tenantId}/{projectId}.git`) over smart HTTP only (root decision
-`cloud/git-server/0` and the proposed follow-up "Git Server as each Project's code hub").
+Serves Project repositories (`/{tenantId}/{projectId}.git`) over smart HTTP only; see the cross-module [Git Server contract](../../docs/repositories/git-server.en.md).
 `internal/core` and PostgreSQL decide every permission; this package holds no authorization state.
 
 | Files | Responsibility |
@@ -36,9 +35,7 @@ ref is written and checks every ref:
 | `refs/ora/deliveries/<deliveryWorkId>` | create-only |
 
 No ref is ever deleted and no ref outside the table is written; one update that no rule admits rejects
-the whole push. Today sandbox executions produce only the delivery rule and a sync Operation only its
-Binding's snapshot prefix; the internal and external lines each add their own rule sources for
-Workspace branches and tracking refs.
+the whole push. Core derives granted rules from the current execution or Operation; see [External Git line](../../docs/repositories/external-git.en.md).
 
 Repository policy and the hook path are applied to every git process through `GIT_CONFIG_*`
 environment variables rather than stored in repositories, so a restart (new hook directory) or an

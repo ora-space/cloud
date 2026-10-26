@@ -8,24 +8,46 @@ Sub-components of the issue board and detail page: cards and rows, the create di
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `issue-card.tsx` / `issue-row.tsx` | Board card and list row |
-| `create-issue-dialog.tsx` / `issue-project-select.tsx` | Creation and detail project selection; loading or failure never clears a stored reference |
-| `issue-properties-panel.tsx` | Detail-page properties column: status, priority, assignee, parent/sub-issues, project, labels, properties, context refs |
-| `activity-panel.tsx` | Activity column: timeline and new comments/targets |
-| `target-picker.tsx` / `pending-targets.tsx` | Loading, empty, search and retry states of the real @ directory, plus pending targets |
-| `workflow-interaction-composer.tsx` / `dynamic-form-renderer.tsx` / `form-field-renderer.tsx` / `assist-suggestions.tsx` / `confirm-review.tsx` | Workflow form rendering, AI suggestions, review and confirm |
-| `context-refs-panel.tsx` | Adding and removing context refs |
-| `agent-request-failure.tsx` | Safe task-refusal messages with project, target and personal-model guidance |
-| `*.test.tsx` | Component tests, including refused tasks retaining their draft and actionable settings links |
+| File                                                                                                                                            | Purpose                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task-layout.tsx`                                                                                                                               | Available-width layout, independent rail and narrow-screen drawer                                                                               |
+| `execution-sidebar.tsx`                                                                                                                         | Active execution, recent history and selected-run statistics                                                                                    |
+| `pull-request-refs.tsx`                                                                                                                         | Safe PR references with explicit add/remove                                                                                                     |
+| `issue-card.tsx` / `issue-row.tsx`                                                                                                              | Board card and list row                                                                                                                         |
+| `create-issue-dialog.tsx` / `issue-project-select.tsx`                                                                                          | Creation and detail project selection; loading or failure never clears a stored reference                                                       |
+| `issue-properties-panel.tsx`                                                                                                                    | Detail-page properties column: status, priority, assignee, parent/sub-issues, project, labels, properties, context refs                         |
+| `activity-panel.tsx`                                                                                                                            | Activity column: timeline and new comments/targets                                                                                              |
+| `issue-workspace.tsx`                                                                                                                           | Main conversation, execution history and activity tabs; URL-persisted historical Run selection and links to the existing full session inspector |
+| `target-picker.tsx` / `pending-targets.tsx`                                                                                                     | Loading, empty, search and retry states of the real @ directory, plus pending targets                                                           |
+| `workflow-interaction-composer.tsx` / `dynamic-form-renderer.tsx` / `form-field-renderer.tsx` / `assist-suggestions.tsx` / `confirm-review.tsx` | Workflow form rendering, AI suggestions, review and confirm                                                                                     |
+| `context-refs-panel.tsx`                                                                                                                        | Adding and removing context refs                                                                                                                |
+| `agent-request-failure.tsx`                                                                                                                     | Safe task-refusal messages with project, target and personal-model guidance                                                                     |
+| `*.test.tsx`                                                                                                                                    | Component tests, including refused tasks retaining their draft and actionable settings links                                                    |
 
 ## Dependencies and invariants
+
+The workspace composes task discussion from `features/issues/conversation` and each session from `features/issues/thread`; text uses `features/conversation-content`. Changing tabs or reading old runs does not create work. A successful new Agent request returns to the current task conversation.
 
 Depends on `features/issues/api`, `features/issues/types`, `features/issues/present`, the real project list in `features/projects/api`, `features/spaces/current-space`, and `components`; used by the `features/issues` pages. Drafts (comments, targets, forms) reach the server only when their own button is pressed; property edits all go through the page's versioned `onCommit`. Project choices come from the current joined space and never fall back to demo data.
 
 Creation drafts remount by tenant/space; activity drafts by tenant/space/issue, including navigation to cached scopes. Project association follows server results; versioned updates disable property edits until settled and keep stored values on refusal. Project guidance targets the `issue-project` selector. Targets come only from the real directory; the server remains authoritative for space compatibility.
 
+Workflow confirmation locks duplicate submissions, editing and removal from interaction creation onward; a rejected confirm reuses that interaction on retry, including after a version switch. Confirmed rows use `features/workflows/api` to read the WorkflowRun referenced by `IssueRun.workflowInvocationRef`; detail links combine `executorId`, that reference and the route's workspace slug.
+
+The initial read takes the live descriptor by `formRef + issueId`, but only to locate the platform version selector and its default version. A `snapshotId` select is recognized as the platform version selector only when every option belongs to this workflow's published snapshots; the form waits for that list and allows retry after a failed read. Once the default version is known, the form itself renders that version's snapshot form even while the user stays on the default, so fields the live draft has not published never appear. An author's same-named text field or select with custom options remains ordinary input and renders from the live descriptor.
+
+The selector comes from the live draft, and without one the component cannot tell the server which version to run. When the live draft declares `snapshotId` itself (or a launch field removes it) the form renders the live draft while Confirm applies the live draft's version rule and runs the newest published version, so the fields shown may belong to another version. When the selector does exist but the version switched to declares the key in its own graph, that version's form has no platform field and the component does not add one back; Confirm still treats the key as the platform's and reads the author's value as a version cursor. Both are the boundary of an author occupying a reserved key, not a supported configuration; the tests pin that a same-named variable stays ordinary input and is never disguised as the selector. Refusing or warning on such a switch is left to a later decision (circus#405).
+
+Changing the platform version selector loads the existing snapshot-form route with a tenant/workflow/snapshot/issue-scoped key, clears the old field draft and initializes the selected version's defaults. The selector retains the echoed snapshotId rather than its newest-version default. Loading or failed reads cannot review stale fields; failed reads can retry. Reading a form is not run admission, but Confirm validates against the selected version's own fields alone and no longer compares them with the live draft: an older version runs on its own form even when its fields differ from the current draft, and the server refuses by that version when a required field is missing or a field it never declared is submitted. A refusal that names a field is shown with that field's label; failures without a field parameter keep the generic message.
+
+Historical runs without a WorkflowRun reference retain their IssueRun status, make no WorkflowRun request and show no detail link. Linked runs always use the WorkflowRun's authoritative status.
+
 ## Testing
 
 Component tests use MSW; properties and Task Mode→Thread are covered by `issue-detail-page.test.tsx`. Loading, empty, refused and retry states are distinct; creation, ordinary-comment and target failures retain drafts, while scope changes clear them.
+
+Workflow tests cover double-click exclusion, rejected confirms reusing an interaction across version switches, both the default and a switched version rendering from that version's snapshot, snapshot fields/defaults/echoes, named-field hints on validation refusals, an author's same-named select making no snapshot-form request, acceptance and refusal by the selected version's own fields, pending and failed reads, and WorkflowRun status and detail links.
+
+`task-layout.tsx` owns the 1024px available-width breakpoint and independent rail. `execution-sidebar.tsx` distinguishes activeRunId from selected history. `pull-request-refs.tsx` manages references without inferring external PR state. `issue-workspace.tsx` keeps one composer mounted across views, preserving drafts and retry identity. Secondary context and configuration links are collapsed.
+
+The default task conversation also uses the workflow form. Comment retries retain one key for the mounted form and resolve the interaction by the returned commentId. An interaction_already_confirmed response refreshes the existing runs instead of opening another interaction. Model configuration, unpublished workflows, authorization and unavailable targets have actionable hints; a failed form read can be cancelled. Tests cover refusals and lost responses. Reloading locates confirmed execution through task run records; unconfirmed field drafts are not persisted.

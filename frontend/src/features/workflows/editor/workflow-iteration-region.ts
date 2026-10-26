@@ -68,6 +68,12 @@ export function buildIterationRegionGraph(
       memberCounts.set(parentId, (memberCounts.get(parentId) ?? 0) + 1)
     }
   }
+  const projectedEdges = edges.map((edge) =>
+    !edge.sourceHandle &&
+    nodes.some((node) => node.id === edge.source && node.data.kind === 'condition')
+      ? { ...edge, sourceHandle: 'else' }
+      : edge,
+  )
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
   const presented = nodes.map((node): WorkflowCanvasNode => {
     const isFrame = iterationIds.has(node.id)
@@ -93,7 +99,7 @@ export function buildIterationRegionGraph(
     nodes: orderForCanvas(presented, nodeById),
     // The projection is generic over the caller's edge type, so the presented
     // edges come back with the same concrete canvas shape they went in with.
-    edges: projectIterationEdges({ nodes: presented, edges: [...edges] }, collapsedIds),
+    edges: projectIterationEdges({ nodes: presented, edges: projectedEdges }, collapsedIds),
   }
 }
 

@@ -36,11 +36,12 @@ type GitGrant struct {
 func (g *GitGrant) Writes() bool { return len(g.Writable) > 0 }
 
 // AuthorizeGitAccess decides from current PostgreSQL state whether the execution a sandbox
-// declares may read or write the Project repository. The certificate only names the runtime
-// target; every permission comes from this check, so ending the execution, replacing the
-// sandbox, canceling the run or disabling the trigger's account takes effect on the next request.
-// It runs in a read-only snapshot without the control-plane advisory lock: Git traffic must not
-// serialize with control-plane writes, and the decision mutates nothing.
+// declares may read the Project repository and which refs it may write (contract D5). The
+// certificate only names the runtime target; every permission comes from this check, so ending the
+// execution, advancing its operation, replacing the sandbox, canceling the run or disabling the
+// trigger's account takes effect on the next request. It runs in a read-only snapshot without the
+// control-plane advisory lock: Git traffic must not serialize with control-plane writes, and the
+// decision mutates nothing.
 func (s *Store) AuthorizeGitAccess(ctx context.Context, scope GitRuntimeScope, executionID, projectID string) (GitGrant, error) {
 	var access GitGrant
 	err := s.view(ctx, func(t *transaction) {
@@ -56,8 +57,14 @@ func (s *Store) AuthorizeGitAccess(ctx context.Context, scope GitRuntimeScope, e
 	return access, err
 }
 
+// gitAccess maps the declared execution to its grant. Every granted execution reads the whole
+// Project repository; what it may write depends on its kind, and never exceeds the sandbox column of
+// the ref contract: no upstream ref, no other Workspace's branch, no ref outside the namespaces.
 func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID string) GitGrant {
 	require(validID(scope.TenantID) && validID(scope.WorkspaceID) && scope.Generation > 0 && validID(projectID) && executionID != "" && len(executionID) <= 200, 403, "git_access_denied")
+	if t.one("SELECT execution_id FROM clone_executions WHERE execution_id=$1", executionID) != nil {
+		return gitCloneAccess(t, scope, executionID, projectID)
+	}
 	e := t.one(`SELECT e.kind,e.node_id,e.work_id,e.input,e.operation_id AS run_id,w.creator_user_id,w.tenant_id,w.id AS workspace_id,
 	 r.phase,r.thread_state,r.cancel_requested_at
 	 FROM node_executions e
@@ -69,17 +76,27 @@ func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID str
 	 AND e.kind IN ('agent_session','deliver_revision') AND e.result IS NULL AND e.terminated_by_force_stop_id IS NULL
 	 AND r.deleted_at IS NULL AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
 	 AND p.deleted_at IS NULL AND p.lifecycle='active'`, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation, projectID)
+	// Plugin executions never reach the repository: the kind filter above leaves them unmatched.
 	require(e != nil, 403, "git_access_denied")
 	access := GitGrant{TenantID: scope.TenantID, ProjectID: projectID}
 	switch e.S("kind") {
 	case "deliver_revision":
 		require(e.S("phase") == "delivering", 403, "git_access_denied")
-		access.Writable = []GitWritableRef{{Ref: GitDeliveryRefPrefix + e.S("workId"), Rule: GitCreateOnly}}
+		// The delivery creates its own ref, named in its fixed input, and may fast-forward the run
+		// Workspace's branch to the same final commit (contract D6). Both come from the input Cloud
+		// fixed; the branch must belong to the certificate's Workspace whatever the input says.
+		input := e.O("input")
+		require(input.S("deliveryRef") == GitDeliveryRefPrefix+e.S("workId"), 403, "git_access_denied")
+		access.Writable = []GitWritableRef{{Ref: input.S("deliveryRef"), Rule: GitCreateOnly}}
+		if ref, ok := ParseGitRef(input.S("workspaceRef")); ok && ref.Namespace == GitWorkspaceBranch && ref.Owner == scope.WorkspaceID {
+			access.Writable = append(access.Writable, GitWritableRef{Ref: input.S("workspaceRef"), Rule: GitFastForward})
+		}
 	case "agent_session":
-		// Only a session restoring a prior Revision reads the repository; other sessions start
-		// from the upstream clone and have no reason to reach the Git Server.
+		// Every live session reads the repository to collaborate and may create or fast-forward
+		// branches of its own Workspace. The prefix comes from the certificate, never the request.
 		live := e.S("phase") == "starting" || e.S("phase") == "running"
-		require(live && e.S("cancelRequestedAt") == "" && e.S("threadState") != "ending" && e.S("threadState") != "ended" && len(e.O("input").O("priorRevision")) > 0, 403, "git_access_denied")
+		require(live && e.S("cancelRequestedAt") == "" && e.S("threadState") != "ending" && e.S("threadState") != "ended", 403, "git_access_denied")
+		access.Writable = []GitWritableRef{{Prefix: GitWorkspaceRefPrefix(scope.WorkspaceID), Rule: GitFastForward}}
 	default:
 		reject(403, "git_access_denied")
 	}
@@ -94,6 +111,29 @@ func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID str
 	work := t.one("SELECT target FROM execution_work WHERE id=$1", e.S("workId"))
 	require(work != nil && work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 403, "git_access_denied")
 	return access
+}
+
+// gitCloneAccess grants a Workspace clone read-only access for exactly as long as its operation is
+// in the clone step (contract D5). Unlike sessions it needs no ready Workspace or open admission:
+// cloning is what happens before admission opens, and main Workspaces clone while their Project is
+// still provisioning. The operation leaving the step, or the execution getting a result, ends it.
+func gitCloneAccess(t *transaction, scope GitRuntimeScope, executionID, projectID string) GitGrant {
+	e := t.one(`SELECT e.node_id,e.input,o.actor_user_id,w.id,w.tenant_id,w.creator_user_id
+	 FROM clone_executions e
+	 JOIN operations o ON o.id=e.operation_id AND o.workspace_id=e.workspace_id
+	 JOIN workspaces w ON w.id=e.workspace_id
+	 JOIN projects p ON p.id=w.project_id AND p.tenant_id=w.tenant_id
+	 WHERE e.execution_id=$1 AND w.tenant_id=$2 AND w.id=$3 AND w.runtime_generation=$4 AND w.project_id=$5
+	 AND e.result IS NULL AND e.terminated_by_force_stop_id IS NULL
+	 AND o.state='running' AND o.step='clone' AND w.deleted_at IS NULL
+	 AND p.deleted_at IS NULL AND p.lifecycle IN ('provisioning','active')`, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation, projectID)
+	require(e != nil, 403, "git_access_denied")
+	require(gitRepositoryURLNames(e.O("input").S("repositoryUrl"), scope.TenantID, projectID), 403, "git_access_denied")
+	// The operation's actor must still be able to use this runtime, as when the clone was dispatched.
+	require(runtimeUsable(t, e, e.S("actorUserId")), 403, "git_access_denied")
+	requireNoForceStop(t, scope.WorkspaceID)
+	require(currentNode(t, scope.WorkspaceID).S("nodeId") == e.S("nodeId"), 403, "git_access_denied")
+	return GitGrant{TenantID: scope.TenantID, ProjectID: projectID}
 }
 
 // view runs a read-only policy decision in one consistent snapshot. Unlike transact it takes no

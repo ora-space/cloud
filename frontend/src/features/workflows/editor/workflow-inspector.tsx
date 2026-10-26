@@ -18,14 +18,17 @@ import {
   UnconfigurableNotice,
 } from '@/features/workflows/editor/workflow-inspector-fields'
 import { ConditionNodeFields } from '@/features/workflows/editor/workflow-condition-fields'
+import { OutputNodeFields } from '@/features/workflows/editor/workflow-output-fields'
 import {
   HumanNodeFields,
   JunctionNodeFields,
-  LoopNodeFields,
+  LoopExitNodeFields,
   SubflowNodeFields,
   ToolNodeFields,
   type WorkflowKindFieldsProps,
 } from '@/features/workflows/editor/workflow-kind-fields'
+import { AggregatorNodeFields } from '@/features/workflows/editor/workflow-aggregator-fields'
+import { LoopNodeFields } from '@/features/workflows/editor/workflow-loop-fields'
 import { IterationNodeFields } from '@/features/workflows/editor/workflow-iteration-fields'
 import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
 import { workflowNodeMetadata } from '@/features/workflows/editor/node-metadata'
@@ -40,6 +43,8 @@ export interface WorkflowInspectorProps {
   node: WorkflowCanvasNode | null
   /** Replaces the selected node's data with an edited copy. */
   onUpdate: (data: WorkflowNodeData) => void
+  /** Adds a loopExit into the selected loop's body. */
+  onAddLoopExit?: (loopId: string) => void
   /** Collapses the panel. */
   onClose: () => void
   /** Whole-graph nodes, from which the selectable variable catalog is derived. */
@@ -62,6 +67,7 @@ export interface WorkflowInspectorProps {
 export function WorkflowInspector({
   node,
   onUpdate,
+  onAddLoopExit,
   onClose,
   nodes,
   edges,
@@ -74,6 +80,7 @@ export function WorkflowInspector({
     <WorkflowNodeInspector
       node={node}
       onUpdate={onUpdate}
+      {...(onAddLoopExit === undefined ? {} : { onAddLoopExit })}
       onClose={onClose}
       nodes={nodes}
       edges={edges}
@@ -110,6 +117,7 @@ function WorkflowInspectorEmpty() {
 function WorkflowNodeInspector({
   node,
   onUpdate,
+  onAddLoopExit,
   onClose,
   nodes,
   edges,
@@ -140,7 +148,9 @@ function WorkflowNodeInspector({
           onChange={onUpdate}
           catalog={catalog}
           graphNodes={nodes}
+          edges={edges}
           globalVariables={globalVariables}
+          {...(onAddLoopExit === undefined ? {} : { onAddLoopExit })}
         />
       </div>
     </aside>
@@ -154,8 +164,13 @@ function NodeKindFields({
   onChange,
   catalog,
   graphNodes,
+  edges,
   globalVariables,
-}: WorkflowKindFieldsProps) {
+  onAddLoopExit,
+}: WorkflowKindFieldsProps & {
+  edges: readonly WorkflowCanvasEdge[]
+  onAddLoopExit?: (loopId: string) => void
+}) {
   if (data.kind === 'start') {
     return <StartNodeFields data={data} onChange={onChange} />
   }
@@ -164,6 +179,9 @@ function NodeKindFields({
   }
   if (data.kind === 'condition') {
     return <ConditionNodeFields data={data} onChange={onChange} catalog={catalog} />
+  }
+  if (data.kind === 'aggregator') {
+    return <AggregatorNodeFields data={data} onChange={onChange} catalog={catalog} />
   }
   if (data.kind === 'tool') {
     return <ToolNodeFields data={data} onChange={onChange} />
@@ -175,7 +193,17 @@ function NodeKindFields({
     return <HumanNodeFields data={data} onChange={onChange} />
   }
   if (data.kind === 'loop') {
-    return <LoopNodeFields data={data} onChange={onChange} />
+    return (
+      <LoopNodeFields
+        data={data}
+        onChange={onChange}
+        nodeId={nodeId}
+        graphNodes={graphNodes}
+        edges={edges}
+        globalVariables={globalVariables}
+        {...(onAddLoopExit === undefined ? {} : { onAddExit: () => onAddLoopExit(nodeId) })}
+      />
+    )
   }
   if (data.kind === 'iteration') {
     return (
@@ -189,13 +217,14 @@ function NodeKindFields({
       />
     )
   }
+  if (data.kind === 'loopExit') {
+    return <LoopExitNodeFields />
+  }
   if (data.kind === 'subflow') {
     return <SubflowNodeFields />
   }
   if (data.kind === 'output') {
-    // An Output node is fully described by its inbound edges until named result
-    // bindings arrive with the structured-output editor.
-    return null
+    return <OutputNodeFields data={data} onChange={onChange} catalog={catalog} />
   }
   return <UnconfigurableNotice />
 }

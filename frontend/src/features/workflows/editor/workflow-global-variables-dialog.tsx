@@ -11,19 +11,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { normalizeWorkflowGlobalVariables } from '@/features/workflows/runtime/variable-catalog'
-import {
-  WORKFLOW_VARIABLE_VALUE_TYPES,
-  type WorkflowGlobalVariable,
-  type WorkflowVariableValueType,
+import type {
+  WorkflowGlobalVariable,
+  WorkflowVariableValueType,
 } from '@/features/workflows/runtime/types'
+import { WorkflowVariableTypeMenu } from '@/features/workflows/editor/workflow-variable-select'
 import {
   formatWorkflowVariableValue,
   isWorkflowVariableValueType,
@@ -256,13 +250,7 @@ function GlobalVariableRow({
           <SelectTrigger aria-label={t('workflows.globalVariables.typeLabel', { index })}>
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
-            {WORKFLOW_VARIABLE_VALUE_TYPES.map((valueType) => (
-              <SelectItem key={valueType} value={valueType}>
-                {valueType}
-              </SelectItem>
-            ))}
-          </SelectContent>
+          <WorkflowVariableTypeMenu />
         </Select>
         <Input
           value={formatWorkflowVariableValue(row.value, row.valueType)}

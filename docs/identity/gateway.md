@@ -123,8 +123,9 @@ login。
 
 **本地开发（`internal/gateway/devlogin`）。** `login.development_provider: true` 注册 `dev` provider：一张由
 Gateway 自己提供的表单，可以输入任意 `source`、`subject`、显示名登录，之后的 attempt、PKCE、会话流程与
-GitHub 完全相同。因为它能以任何身份登录，它只能与 `public.development`（loopback HTTP）同时开启，启动日志
-会给出警告；生产配置不得设置。
+GitHub 完全相同。因为它能以任何身份登录，配置校验要求显式设置 `public.development: true`，且
+`public.base_url` 必须为 loopback HTTP origin（`localhost`、`127.0.0.1` 或 `::1`，可带端口）；即使开启
+开发模式，HTTPS origin 也会被拒绝。启动日志会给出警告；生产配置不得设置。
 
 ## 浏览器侧的自动登录
 

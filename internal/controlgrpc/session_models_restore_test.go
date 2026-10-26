@@ -11,7 +11,8 @@ import (
 	"github.com/wanglongan587/cloud/internal/core"
 )
 
-// A resumed model-backed session must retain both independent snapshots across the wire.
+// A resumed model-backed session must retain its model binding, its prior Revision's Git location and
+// its Workspace directory across the wire.
 func TestSessionWirePreservesModelBindingAndPriorRevision(t *testing.T) {
 	want := core.Object{
 		"kind": "agent_session", "agentPluginId": "official/ora-space.opencode", "agentPluginVersion": "0.6.4",
@@ -19,8 +20,12 @@ func TestSessionWirePreservesModelBindingAndPriorRevision(t *testing.T) {
 		"gitIdentity": core.Object{"name": "User", "email": "user@example.invalid"},
 		"initialTurn": core.Object{"turnId": "turn-1", "content": []core.Object{{"text": "Continue this task"}}},
 		"priorRevision": core.Object{
-			"revisionId": "revision-1", "finalCommit": strings.Repeat("a", 40),
-			"bundle": core.Object{"key": "revision-1/bundle", "size": int64(42), "sha256": strings.Repeat("b", 64)},
+			"revisionId": "revision-1", "finalCommit": strings.Repeat("a", 40), "baseCommit": strings.Repeat("b", 40),
+			"gitRepositoryUrl": "https://git.invalid/tenant/project.git", "deliveryRef": "refs/ora/deliveries/work-1",
+		},
+		"workspaceDirectory": []core.Object{
+			{"workspaceId": "ws-run", "kind": "run", "issueId": "issue-1", "issueTitle": "Fix it", "issueRunId": "run-1", "runStatus": "completed"},
+			{"workspaceId": "ws-main", "kind": "main"},
 		},
 	}
 	message := sessionMessage(want)

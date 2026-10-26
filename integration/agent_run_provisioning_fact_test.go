@@ -45,6 +45,8 @@ func TestRecordProvisioningFactReceiptsLateFactsOverGRPCWithoutResurrectingRun(t
 	_, e = f.store.Pool.Exec(`UPDATE issue_runs SET workspace_deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1`, run)
 	must(t, e)
 	must(t, f.store.GiveUpBlockedWorkspaceCreationsOnce(context.Background()))
+	var responsibility string
+	must(t, f.store.Pool.QueryRow(`SELECT responsibility::text FROM agent_run_residuals WHERE run_id=$1`, run).Scan(&responsibility))
 	var phase, status, threadState sql.NullString
 	must(t, f.store.Pool.QueryRow(`SELECT phase, status, thread_state FROM issue_runs WHERE id=$1`, run).Scan(&phase, &status, &threadState))
 	if phase.String != "done" || status.String != "failed" || threadState.Valid {
@@ -90,8 +92,11 @@ func TestRecordProvisioningFactReceiptsLateFactsOverGRPCWithoutResurrectingRun(t
 	if open := f.scalar(`SELECT count(*) FROM workspaces WHERE id=$1 AND admission_open`, workspace); open != 0 {
 		t.Fatal("late creation success reopened admission")
 	}
-	if n := f.scalar(`SELECT count(*) FROM jsonb_object_keys((SELECT responsibility->'lateFacts' FROM agent_run_residuals WHERE run_id=$1))`, run); n != 2 {
+	if n := f.scalar(`SELECT jsonb_array_length(reclaim_evidence) FROM agent_run_residuals WHERE run_id=$1`, run); n != 2 {
 		t.Fatalf("ledger receipts wrong: %d", n)
+	}
+	if n := f.scalar(`SELECT count(*) FROM agent_run_residuals WHERE run_id=$1 AND responsibility=$2::jsonb`, run, responsibility); n != 1 {
+		t.Fatal("late facts changed the original residual responsibility")
 	}
 }
 
@@ -122,6 +127,8 @@ func TestRecordProvisioningFactBindsTargetAndProgressesOverGRPC(t *testing.T) {
 	_, e = f.store.Pool.Exec(`UPDATE issue_runs SET workspace_deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1`, run)
 	must(t, e)
 	must(t, f.store.GiveUpBlockedWorkspaceCreationsOnce(context.Background()))
+	var responsibility string
+	must(t, f.store.Pool.QueryRow(`SELECT responsibility::text FROM agent_run_residuals WHERE run_id=$1`, run).Scan(&responsibility))
 
 	// A recorded creation fact...
 	_, e = c.operations.RecordProvisioningFact(c.ctx, &controlpb.RecordProvisioningFactRequest{SubmissionId: "bound-creation", Epoch: c.epoch, OperationId: operation, Kind: controlpb.ProvisioningFactKind_PROVISIONING_FACT_KIND_CREATION, Outcome: controlpb.ProvisioningOutcome_PROVISIONING_OUTCOME_READY})
@@ -147,14 +154,17 @@ func TestRecordProvisioningFactBindsTargetAndProgressesOverGRPC(t *testing.T) {
 	if terminal.GetEffect().GetState() != controlpb.EffectState_EFFECT_STATE_SUCCEEDED {
 		t.Fatalf("terminal after running not receipted: %s", terminal.GetEffect().GetState())
 	}
-	// The ledger holds the terminal on top of the retained observation; nothing reopened.
-	var state string
-	var prior int
-	must(t, f.store.Pool.QueryRow(`SELECT responsibility->'lateFacts'->('effect:'||$2)->>'state',
-		jsonb_array_length(responsibility->'lateFacts'->('effect:'||$2)->'prior')
-		FROM agent_run_residuals WHERE run_id=$1`, run, effectID).Scan(&state, &prior))
-	if state != "succeeded" || prior != 1 {
-		t.Fatalf("ledger receipt wrong: state=%s prior=%d", state, prior)
+	// Provisional and terminal observations remain independent append-only evidence entries.
+	var states string
+	var entries int
+	must(t, f.store.Pool.QueryRow(`SELECT string_agg(e->'fact'->>'state', ',' ORDER BY ordinal), count(*)
+	 FROM agent_run_residuals r, jsonb_array_elements(r.reclaim_evidence) WITH ORDINALITY AS facts(e,ordinal)
+	 WHERE r.run_id=$1 AND e->>'key'='effect:'||$2`, run, effectID).Scan(&states, &entries))
+	if states != "running,succeeded" || entries != 2 {
+		t.Fatalf("ledger observations wrong: states=%s entries=%d", states, entries)
+	}
+	if n := f.scalar(`SELECT count(*) FROM agent_run_residuals WHERE run_id=$1 AND responsibility=$2::jsonb`, run, responsibility); n != 1 {
+		t.Fatal("late observations changed the original residual responsibility")
 	}
 	if n := f.scalar(`SELECT count(*) FROM workspaces WHERE id=$1 AND admission_open`, workspace); n != 0 {
 		t.Fatal("late terminal reopened admission")

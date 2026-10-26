@@ -28,7 +28,7 @@ func TestHealthReportsOptionalObjectStoreWithoutDisclosingConfiguration(t *testi
 		err = json.NewDecoder(response.Body).Decode(&actual)
 		response.Body.Close()
 		must(t, err)
-		if response.StatusCode != http.StatusOK || len(actual) != 2 || actual.S("status") != "ok" || len(actual.O("dependencies")) != 1 || actual.O("dependencies").S("objectStore") != want {
+		if response.StatusCode != http.StatusOK || len(actual) != 2 || actual.S("status") != "ok" || len(actual.O("dependencies")) != 2 || actual.O("dependencies").S("objectStore") != want || actual.O("dependencies").S("gitServer") != "configured" {
 			t.Fatal("health must report only readiness and optional storage configuration")
 		}
 	}

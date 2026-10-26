@@ -219,7 +219,7 @@ func TestThreadCommandsAndUploadGrantsAreNotLostOrStored(t *testing.T) {
 	_, e = f.executions.TakeOverNodeEvent(ctx, &controlpb.TakeOverNodeEventRequest{SubmissionId: "end-session", Epoch: f.controller.Epoch, OperationId: run, ExecutionId: "session-1", Sequence: 1, Result: ended, Event: []byte("end")})
 	must(t, e)
 	f.store.ObjectStore = &objectstore.Config{Endpoint: "http://127.0.0.1:9000", Region: "us-east-1", Bucket: "revisions", PathStyle: true, AccessKeyID: "test-access", SecretAccessKey: "test-secret"}
-	delivery := core.Object{"kind": "deliver_revision", "sessionExecutionId": "session-1", "checkoutExecutionId": "checkout-1", "baseCommit": f.commit, "revisionRef": "refs/ora/revisions/1", "bundleKey": "revisions/t/r/w/revision.bundle", "historyKey": "revisions/t/r/w/session.jsonl"}
+	delivery := core.Object{"kind": "deliver_revision", "sessionExecutionId": "session-1", "checkoutExecutionId": f.checkoutOf(wid), "baseCommit": f.commit, "revisionRef": "refs/ora/revisions/1", "historyKey": "revisions/t/r/w/session.jsonl"}
 	_, e = f.store.EnqueueExecutionWork(t.Context(), run, "deliver_revision", delivery, core.Object{"workspaceId": wid, "sandboxInstanceId": sandbox, "nodeId": node}, time.Time{})
 	must(t, e)
 	claimed, e = f.executions.ClaimWork(ctx, &controlpb.ClaimWorkRequest{Epoch: f.controller.Epoch})
@@ -228,7 +228,7 @@ func TestThreadCommandsAndUploadGrantsAreNotLostOrStored(t *testing.T) {
 	must(t, e)
 	granted, e := runs.GrantRevisionUpload(ctx, &controlpb.GrantRevisionUploadRequest{Epoch: f.controller.Epoch, ExecutionId: "delivery-1"})
 	must(t, e)
-	if len(granted.GetGrants()) != 2 || !strings.Contains(granted.GetGrants()[0].GetUrl(), "X-Amz-Signature=") {
+	if len(granted.GetGrants()) != 1 || !strings.Contains(granted.GetGrants()[0].GetUrl(), "X-Amz-Signature=") {
 		t.Fatalf("grants = %v", granted.GetGrants())
 	}
 	if stored := storedGrantCount(t, f); stored != 0 {

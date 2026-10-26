@@ -2,7 +2,7 @@
 
 [English](README.en.md) | [中文](README.md)
 
-`internal/objectstore` serves the Revision path alone: it issues the **single-key, single-method,
+`internal/objectstore` supports Revision delivery, session archives and workflow asset reads: it issues the **single-key, single-method,
 time-limited** upload grant for one delivery attempt (Cloud Revision D2/D3) and verifies an uploaded
 object's **existence, size and SHA-256** by HEAD before Cloud registers a Revision (D4 step 2).
 Registered session archives can also be read with private GET and verified against the actual byte
@@ -29,6 +29,7 @@ dependency: it supports PUT, HEAD and GET using the standard library.
 - `verify.go`: `Verify` sends `HEAD` with `x-amz-checksum-mode: ENABLED` against the private
   endpoint and compares `Content-Length` with `X-Amz-Checksum-Sha256`. It follows no redirect,
   times out after 30s, and lets no infrastructure detail escape the boundary.
+- `ReadHashed`: reads packages for `internal/workflowasset` when SHA-256 is known but size is not; response/stream bounds and digest verification still apply.
 - `presign_test.go`: the offline unit tests described below.
 
 ## Dependencies and callers
@@ -89,3 +90,5 @@ dependency: it supports PUT, HEAD and GET using the standard library.
   that a still-live grant cannot overwrite, and an upload through the public endpoint from the sandbox
   network. `task test:revision` (`REQUIRE_S3=1`) and cluster's `task agent:acceptance` run them, and
   the Backend CI workflow runs them against a pinned RustFS.
+
+Registered artifacts use `ReadVerified` through the private endpoint; browsers receive no storage URL. Core owns authorization, registration and the 10 MiB bound.

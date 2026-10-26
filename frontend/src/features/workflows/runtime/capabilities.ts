@@ -142,10 +142,16 @@ export const DEMO_CONDITION_OPERATORS: WorkflowChoice[] = [
   { value: 'not_equals', labelKey: 'workflows.operator.not-equals' },
   { value: 'contains', labelKey: 'workflows.operator.contains' },
   { value: 'not_contains', labelKey: 'workflows.operator.not-contains' },
+  { value: 'starts_with', labelKey: 'workflows.operator.starts-with' },
+  { value: 'ends_with', labelKey: 'workflows.operator.ends-with' },
   { value: 'greater_than', labelKey: 'workflows.operator.greater-than' },
+  { value: 'greater_than_or_equal', labelKey: 'workflows.operator.greater-than-or-equal' },
   { value: 'less_than', labelKey: 'workflows.operator.less-than' },
+  { value: 'less_than_or_equal', labelKey: 'workflows.operator.less-than-or-equal' },
   { value: 'empty', labelKey: 'workflows.operator.empty' },
   { value: 'not_empty', labelKey: 'workflows.operator.not-empty' },
+  { value: 'exists', labelKey: 'workflows.operator.exists' },
+  { value: 'not_exists', labelKey: 'workflows.operator.not-exists' },
 ]
 
 /**

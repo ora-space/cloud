@@ -3,6 +3,7 @@ import type {
   ThreadEntry,
 } from '@/api/generated.schemas'
 import type { IssueRun } from '@/features/issues/types'
+import { adaptThread, type SessionEvent, type SessionTool } from '@/features/session-data'
 import { sessionFailureMessage } from './thread-failure'
 
 /** The Thread lifecycle states the Thread GET reports, as the contract enumerates them. */
@@ -37,7 +38,12 @@ export function latestAgentRun(runs: readonly IssueRun[]): IssueRun | undefined 
   return runs
     .filter((run) => run.executorType === 'agent')
     .reduce<IssueRun | undefined>(
-      (latest, run) => (latest === undefined || run.createdAt > latest.createdAt ? run : latest),
+      (latest, run) =>
+        latest === undefined ||
+        run.createdAt > latest.createdAt ||
+        (run.createdAt === latest.createdAt && run.id > latest.id)
+          ? run
+          : latest,
       undefined,
     )
 }
@@ -63,6 +69,8 @@ export type ThreadItem =
   | { variant: 'prompt'; key: number; text: string }
   | { variant: 'user'; key: number; text: string; status: string | undefined }
   | { variant: 'agent'; key: number; text: string; turnId: string | undefined }
+  | { variant: 'thought'; key: number; text: string; turnId: string | undefined; live?: boolean }
+  | { variant: 'tool'; key: number; tool: SessionTool; turnId: string | undefined }
   | { variant: 'note'; key: number; text: string }
   | { variant: 'separator'; key: number }
 
@@ -96,7 +104,7 @@ export function userStatusLabel(status: string | null | undefined): string | und
 }
 
 /** Maps a node `update` record onto a row; agent chunks become bubbles, the rest notes. */
-function updateItem(entry: ThreadEntry): ThreadItem | undefined {
+function updateItem(entry: ThreadEntry, event: SessionEvent | undefined): ThreadItem | undefined {
   const update = entry.record['update']
   const kind = isRecord(update) ? update['sessionUpdate'] : undefined
   // The Node echoes the user's own turn as user_message_chunk; the user entry
@@ -110,11 +118,26 @@ function updateItem(entry: ThreadEntry): ThreadItem | undefined {
       turnId: entry.turnId ?? undefined,
     }
   }
-  return { variant: 'note', key: entry.seq, text: typeof kind === 'string' ? kind : 'update' }
+  if (kind === 'agent_thought_chunk') {
+    return {
+      variant: 'thought',
+      key: entry.seq,
+      text: event?.text ?? '',
+      turnId: entry.turnId ?? undefined,
+    }
+  }
+  if (event?.tool) {
+    return { variant: 'tool', key: entry.seq, tool: event.tool, turnId: entry.turnId ?? undefined }
+  }
+  return {
+    variant: 'note',
+    key: entry.seq,
+    text: '暂不支持展示的会话事件，可在执行详情中查看原始记录',
+  }
 }
 
 /** Maps one entry to its row, or undefined when the entry carries nothing worth showing. */
-function itemOf(entry: ThreadEntry): ThreadItem | undefined {
+function itemOf(entry: ThreadEntry, event: SessionEvent | undefined): ThreadItem | undefined {
   if (entry.source === 'system') {
     if (entry.kind === 'session_failed') {
       return { variant: 'note', key: entry.seq, text: sessionFailureMessage(entry.record['code']) }
@@ -129,14 +152,66 @@ function itemOf(entry: ThreadEntry): ThreadItem | undefined {
       status: userStatusLabel(entry.status),
     }
   }
-  if (entry.kind === 'update') return updateItem(entry)
+  if (entry.kind === 'update') return updateItem(entry, event)
   if (entry.kind === 'meta') return { variant: 'note', key: entry.seq, text: '会话已开始' }
   if (entry.kind === 'turnEnded') {
     return entry.record['stopReason'] === 'cancelled'
       ? { variant: 'note', key: entry.seq, text: '本轮已取消' }
       : { variant: 'separator', key: entry.seq }
   }
-  return { variant: 'note', key: entry.seq, text: entry.kind }
+  return {
+    variant: 'note',
+    key: entry.seq,
+    text: entry.kind === 'gap' ? '此处有缺失的会话记录' : '其他会话事件',
+  }
+}
+
+function mergeTool(previous: SessionTool, next: SessionTool): SessionTool {
+  return {
+    ...previous,
+    kind: next.kind ?? previous.kind,
+    title: next.title ?? previous.title,
+    status: next.status ?? previous.status,
+    isError: next.isError ?? previous.isError,
+    output: next.output ?? previous.output,
+    rawInput: next.rawInputPresent ? next.rawInput : previous.rawInput,
+    rawOutput: next.rawOutputPresent ? next.rawOutput : previous.rawOutput,
+    rawInputPresent: next.rawInputPresent || previous.rawInputPresent,
+    rawOutputPresent: next.rawOutputPresent || previous.rawOutputPresent,
+    startedAt: next.startedAt ?? previous.startedAt,
+    startedAtMs: next.startedAtMs ?? previous.startedAtMs,
+    durationMs: next.durationMs ?? previous.durationMs,
+    endedAtMs: next.endedAtMs ?? previous.endedAtMs,
+  }
+}
+
+function displayItem(
+  entry: ThreadEntry & { livePreview?: boolean },
+  event: SessionEvent | undefined,
+): ThreadItem | undefined {
+  const item = itemOf(entry, event)
+  if (!item) return undefined
+  if (item.variant === 'thought' && entry.livePreview) item.live = true
+  if (
+    entry.source === 'node' &&
+    entry.historySequence !== null &&
+    entry.historySequence !== undefined
+  )
+    item.key = -entry.historySequence - 1
+  return item
+}
+
+function mergeText(last: ThreadItem | undefined, item: ThreadItem): boolean {
+  if (
+    (item.variant === 'agent' || item.variant === 'thought') &&
+    last?.variant === item.variant &&
+    last.turnId === item.turnId
+  ) {
+    last.text += item.text
+    if (last.variant === 'thought' && item.variant === 'thought' && item.live) last.live = true
+    return true
+  }
+  return false
 }
 
 /**
@@ -144,17 +219,36 @@ function itemOf(entry: ThreadEntry): ThreadItem | undefined {
  * same turn are merged into one bubble, because the agent streams a reply as
  * many small chunks and one bubble per chunk would be unreadable.
  */
-export function threadItems(entries: readonly ThreadEntry[]): ThreadItem[] {
+export function threadItems(
+  entries: readonly (ThreadEntry & { livePreview?: boolean })[],
+): ThreadItem[] {
   const items: ThreadItem[] = []
+  const snapshot = adaptThread({
+    runId: 'current',
+    entries: entries.map((entry) => ({ ...entry, record: { type: entry.kind, ...entry.record } })),
+  })
+  const events = new Map(snapshot.events.map((event) => [event.seq, event]))
+  const tools = new Map<string, Extract<ThreadItem, { variant: 'tool' }>>()
   for (const entry of entries) {
-    const item = itemOf(entry)
+    const item = displayItem(entry, events.get(entry.seq))
     if (item === undefined) continue
-    const last = items.at(-1)
-    if (item.variant === 'agent' && last?.variant === 'agent' && last.turnId === item.turnId) {
-      last.text += item.text
-    } else {
-      items.push(item)
+    if (item.variant === 'tool' && item.tool.id) {
+      // Older public pages omit the Node turn ID; the session adapter owns explicit user
+      // boundary markers. Never collapse all such records into one undefined Thread-wide turn.
+      const turn = item.turnId ?? events.get(entry.seq)?.turn?.id
+      if (turn === undefined) {
+        items.push(item)
+        continue
+      }
+      const identity = JSON.stringify([turn, item.tool.id])
+      const previous = tools.get(identity)
+      if (previous) {
+        previous.tool = mergeTool(previous.tool, item.tool)
+        continue
+      }
+      tools.set(identity, item)
     }
+    if (!mergeText(items.at(-1), item)) items.push(item)
   }
   return items
 }

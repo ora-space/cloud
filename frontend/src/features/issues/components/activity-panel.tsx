@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { AgentRequestFailure } from './agent-request-failure'
 import { ActorAvatar, type AvatarActor } from '@/components/common/actor-avatar'
@@ -16,7 +17,10 @@ import {
 import { PendingTargets } from '@/features/issues/components/pending-targets'
 import { TargetPicker } from '@/features/issues/components/target-picker'
 import { memberNameById } from '@/features/issues/present'
+import { useWorkflowRun } from '@/features/workflows/api'
+import { workspacePaths } from '@/lib/paths'
 import { cn } from '@/lib/utils'
+import { ConversationMarkdown } from '@/features/conversation-content/markdown'
 import type {
   CollaborationTargetSummary,
   CommentTargetInput,
@@ -70,7 +74,7 @@ function CommentItem({
         <span className="text-sm font-medium">{author.name}</span>
         <span className="text-xs text-muted-foreground">#{entry.seq}</span>
       </div>
-      <p className="whitespace-pre-wrap text-sm text-muted-foreground">{entry.body}</p>
+      <ConversationMarkdown text={entry.body ?? ''} />
     </div>
   )
 }
@@ -87,9 +91,11 @@ function activityDetail(entry: TimelineEntry): string | null {
 function ActivityItem({
   entry,
   names,
+  onOpenRun,
 }: {
   entry: TimelineEntry
   names: ReadonlyMap<string, string>
+  onOpenRun?: ((runId: string) => void) | undefined
 }) {
   const author = entryActor(entry, names)
   const detailsExecutor = entry.details?.['executorType']
@@ -110,25 +116,57 @@ function ActivityItem({
           {detail}
         </div>
       ) : null}
+      {executorType === 'agent' && typeof entry.details?.['runId'] === 'string' && onOpenRun && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            const runId = entry.details?.['runId']
+            if (typeof runId === 'string') onOpenRun(runId)
+          }}
+        >
+          查看执行详情
+        </Button>
+      )}
     </div>
   )
 }
 
 /** A confirmed workflow interaction: it is history now, and never offers a second configuration. */
-function ConfirmedWorkflowRow({ name, run }: { name: string; run: IssueRun | undefined }) {
+function ConfirmedWorkflowRow({
+  slug,
+  name,
+  run,
+}: {
+  slug: string
+  name: string
+  run: IssueRun | undefined
+}) {
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  const runId = run?.workflowInvocationRef ?? undefined
+  const workflow = useWorkflowRun(slug, run?.executorId, runId)
+  const status = runId ? workflow.data?.status : run?.status
+  const path = workspacePaths(workspaceSlug ?? slug)
   return (
     <div className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
       <Badge variant="secondary">Workflow</Badge>
       <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
       <span className="shrink-0 text-xs text-muted-foreground">
-        已确认{run ? ` · 运行 ${run.status}` : ''}
+        已确认{status ? ` · 运行 ${status}` : ''}
       </span>
+      {workflow.isError ? <span className="text-xs text-destructive">运行状态加载失败</span> : null}
+      {run && runId ? (
+        <Link className="shrink-0 text-xs underline" to={path.workflowRun(run.executorId, runId)}>
+          运行详情
+        </Link>
+      ) : null}
     </div>
   )
 }
 
 /** Confirmed workflow interactions, shown as status rows next to the history. */
 function ConfirmedWorkflows(props: {
+  slug: string
   interactions: IssueInteraction[]
   runs: IssueRun[]
   catalog: CollaborationTargetSummary[]
@@ -140,6 +178,7 @@ function ConfirmedWorkflows(props: {
       {confirmed.map((item) => (
         <ConfirmedWorkflowRow
           key={item.id}
+          slug={props.slug}
           name={byId.get(item.targetId)?.displayName ?? 'Workflow'}
           run={props.runs.find((candidate) => candidate.id === item.runId)}
         />
@@ -157,6 +196,8 @@ type ActivityPanelProps = {
   slug: string
   issueId: string
   members: TenantMember[]
+  onOpenRun?: (runId: string) => void
+  onTaskStarted?: () => void
 }
 
 /** Keeps every activity draft within one tenant, space and issue, even for cached navigation. */
@@ -166,7 +207,7 @@ export function ActivityPanel(props: ActivityPanelProps) {
   return <IssueActivity key={`${props.slug}:${space?.id ?? ''}:${props.issueId}`} {...props} />
 }
 
-function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
+function IssueActivity({ slug, issueId, members, onOpenRun, onTaskStarted }: ActivityPanelProps) {
   const { data: timeline, isPending } = useTimeline(slug, issueId)
   const { data: interactions } = useInteractions(slug, issueId)
   const { data: runs } = useRuns(slug, issueId)
@@ -190,6 +231,7 @@ function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
         : { type: target.type, id: target.id }
     await createComment.mutateAsync({ body: message, targets: [entry] })
     setTargets((current) => current.filter((item) => item.id !== target.id))
+    if (target.type === 'agent') onTaskStarted?.()
   }
 
   return (
@@ -203,7 +245,7 @@ function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
         entry.kind === 'comment' ? (
           <CommentItem key={entry.id} entry={entry} names={names} />
         ) : (
-          <ActivityItem key={entry.id} entry={entry} names={names} />
+          <ActivityItem key={entry.id} entry={entry} names={names} onOpenRun={onOpenRun} />
         ),
       )}
 
@@ -224,7 +266,12 @@ function IssueActivity({ slug, issueId, members }: ActivityPanelProps) {
         )}
       </form>
 
-      <ConfirmedWorkflows interactions={interactions ?? []} runs={runs ?? []} catalog={catalog} />
+      <ConfirmedWorkflows
+        slug={slug}
+        interactions={interactions ?? []}
+        runs={runs ?? []}
+        catalog={catalog}
+      />
 
       <div className="space-y-1.5">
         <TargetPicker slug={slug} targets={targets} onChange={setTargets} />

@@ -43,3 +43,14 @@ func upstreamFailureCode(err error) string {
 	}
 	return string(endpointUnavailable)
 }
+
+// upstreamFailureDetail returns the checked dialer's bounded address-and-reason summary. Other
+// errors keep logs at the stable category: their wrapped text may hold URLs, headers or provider
+// diagnostics.
+func upstreamFailureDetail(err error) string {
+	var detail interface{ DialFailureDetail() string }
+	if errors.As(err, &detail) {
+		return detail.DialFailureDetail()
+	}
+	return ""
+}

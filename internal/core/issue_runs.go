@@ -1,14 +1,16 @@
 package core
 
-// agentRunSkeletonFields are the B-skeleton-only columns added to issue_runs and
-// workspaces by migration 0018. The schema and the D6 business hooks land ahead of
-// the feature that owns them (dispatcher, OpenAPI contract, Thread API); until then
-// they are deliberately not part of the public resource shape, so they are removed
-// before an issue_runs or workspaces resource reaches the API. The AgentRunDispatcher
-// that reads and writes them is a later change and reads through the same transaction
-// helpers, not through these shaping functions.
+// agentRunSkeletonFields are the agent-lifecycle columns of issue_runs and workspaces
+// that stay out of the public resource shape, so they are removed before an issue_runs
+// resource reaches the API. They are the
+// internal control identities and deadlines — the Workspace's own id, the Thread state
+// (published by the Thread resource itself, Thread D5), the startup and Workspace
+// deadline windows — which the loops read and write through the transaction helpers
+// rather than through these shaping functions. `cancelRequestedAt` is deliberately not
+// among them: it is the user's own D6 request, made through `POST .../runs/{rid}/cancel`,
+// and the run page has to be able to show that a cancellation is pending.
 var agentRunSkeletonFields = []string{
-	"phase", "workspaceId", "cancelRequestedAt", "threadState", "idleSince", "issueRunId",
+	"phase", "workspaceId", "threadState", "idleSince", "issueRunId",
 	"startupReadyAt", "startupDeadlineAt", "startupResume", "startupEndingDeadlineAt",
 	"workspaceBlockedAt", "workspaceDeadlineAt", "workspaceBlockedSource",
 }
@@ -45,17 +47,21 @@ func runList(t *transaction, r *PublicRequest) Object {
 // a private storage location. `revision` is null for a run that registered none (not an agent run,
 // delivery still pending, skipped or failed); the run's `result.deliveryState` says which.
 //
-// `changed` says whether this run stored a bundle of its own: a resumed run that added nothing reuses
-// its prior Revision's bundle and is unchanged (resume decision D5). `priorRevisionId` names the
-// Revision the run resumed; the run's own `resumeRevisionId` shows it from session start on.
+// `changed` is Cloud's own verification verdict: true when the run delivered new commits, false when
+// it ended on its base commit or on its resumed prior's final commit (Revision D8). For a Revision
+// registered before Git delivery that is exactly "it stored a bundle of its own". `bundleSize` is
+// null for a Revision delivered over Git and keeps its size on an older one. `priorRevisionId` names
+// the Revision the run resumed; the run's own `resumeRevisionId` shows it from session start on.
 func withRevision(t *transaction, o Object) Object {
 	o["revision"] = nil
 	if o.S("executorType") != "agent" {
 		return o
 	}
-	rev := t.one(`SELECT id, base_commit, final_commit, bundle_key IS NOT NULL AS stored_bundle, bundle_size,
-		history_size, prior_revision_id, created_at
-		FROM revisions WHERE run_id=$1 AND tenant_id=$2`, o.S("id"), o.S("tenantId"))
+	rev := t.one(`SELECT r.id, r.base_commit, r.final_commit,
+		COALESCE(v.outcome = 'delivered', r.bundle_key IS NOT NULL) AS stored_bundle, r.bundle_size,
+		r.history_size, r.prior_revision_id, r.created_at
+		FROM revisions r LEFT JOIN revision_verifications v ON v.execution_id = r.execution_id
+		WHERE r.run_id=$1 AND r.tenant_id=$2`, o.S("id"), o.S("tenantId"))
 	if rev == nil {
 		return o
 	}
@@ -95,8 +101,9 @@ func createRun(t *transaction, r *PublicRequest, uid string) Object {
 	if executorType == "workflow" {
 		w := workflow(t, r.TenantID, executorID)
 		s := admitWorkflowRun(t, r.TenantID, w.S("id"), "", uid)
-		requireWorkflowRunInput(s.O("graph"), input)
-		freezeWorkflowSnapshot(input, s.S("id"))
+		// The manual entry has no form: its input object is the execution input itself, so a
+		// submitted `input` key is the run's kickoff, exactly as it is on the direct-run entry.
+		return enqueueWorkflowInvocation(t, r.TenantID, i.S("id"), w, s, input, input, input["input"], "", nil, uid)
 	}
 	if executorType == "agent" {
 		// Authoritative Space Agent (IssueRun D1): reuses the same evidence resolver as the comment

@@ -90,8 +90,15 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
-		// No authoritative run to accept the events: an invariant violation, not a replay, so the
-		// batch must not be acked (unknown run).
+		// D8: a session may execute under a WorkflowRun. Phase-1 (D7) defers workflow thread
+		// history — thread_entries is keyed on issue_runs — so the receipts fence (A-side
+		// node_event_receipts, already recorded in the same transaction) is the durable record
+		// and nothing is appended here. Accepting the batch is what lets the terminal result
+		// commit; an id that is neither a live issue run nor a live workflow run is still an
+		// invariant violation, not a replay, so the batch must not be acked (unknown run).
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return nil
+		}
 		return fmt.Errorf("settleThreadEvents: issue_run %s not found", runID)
 	}
 	if o.S("executorType") != "agent" {
@@ -174,15 +181,15 @@ func (s *Store) settleThreadEvents(t *transaction, runID, executionID string, ev
 		// the A-side batch classification ever let a duplicate through. Identical content is a
 		// no-op; different content under the same identity is an invariant error, never a rewrite.
 		if prior := t.one("SELECT * FROM thread_entries WHERE node_execution_id=$1 AND node_sequence=$2", executionID, ev.N("sequence")); prior != nil {
-			if prior.S("kind") != kind || jsonText(prior.O("record")) != jsonText(ev.O("record")) {
+			if prior.S("kind") != kind || jsonText(prior.O("record")) != jsonText(ev.O("record")) || prior.S("visibleText") != ev.S("visibleText") || prior.B("visibleTextTruncated") != ev.B("visibleTextTruncated") || (prior["historySequence"] == nil) != (ev["historySequence"] == nil) || prior.N("historySequence") != ev.N("historySequence") {
 				return fmt.Errorf("settleThreadEvents: run %s already has a different entry for execution %s node sequence %d", runID, executionID, ev.N("sequence"))
 			}
 			continue
 		}
 		t.exec(`
-			INSERT INTO thread_entries(run_id, seq, source, kind, record, turn_id, node_execution_id, node_sequence)
-			VALUES($1,$2,'node',$3,$4,$5,$6,$7)`,
-			runID, next, kind, jsonText(ev.O("record")), nullable(ev.S("turnId")), executionID, ev.N("sequence"))
+			INSERT INTO thread_entries(run_id, seq, source, kind, record, turn_id, node_execution_id, node_sequence, visible_text, visible_text_truncated, history_sequence)
+			VALUES($1,$2,'node',$3,$4,$5,$6,$7,$8,$9,$10)`,
+			runID, next, kind, jsonText(ev.O("record")), nullable(ev.S("turnId")), executionID, ev.N("sequence"), nullable(ev.S("visibleText")), ev.B("visibleTextTruncated"), ev["historySequence"])
 		next++
 		taken++
 	}

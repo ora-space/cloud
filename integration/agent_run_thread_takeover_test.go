@@ -36,7 +36,7 @@ import (
 )
 
 // seedRunWorkspaceCommit is the 40-hex commit the seeded run Workspace's clone produced, i.e. the
-// baseline every Revision bundle is relative to. It is the shape commitID validates, so a scene that
+// baseline every Revision is delivered against. It is the shape commitID validates, so a scene that
 // seeds it can never be the reason a delivery input is rejected.
 const seedRunWorkspaceCommit = "0123456789abcdef0123456789abcdef01234567"
 
@@ -99,7 +99,8 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 	// The frozen run-create snapshot: renderAgentInitialTurn and the AgentSession spec both read it.
 	// `gitIdentity` is part of it because the AgentSession wire contract carries one and
 	// runGitIdentity refuses to invent it: a run whose input names none resolves its trigger actor
-	// instead, and a directly seeded run has no `run.enqueued` activity to resolve one from.
+	// instead. This fixture also preserves the atomic run.enqueued creation evidence used by
+	// late-delivery ordering, rather than asking a test to reconstruct it after dispatch.
 	input := core.Object{
 		"task":               "Fix the auth flow",
 		"interactionValues":  core.Object{"scope": "web"},
@@ -127,6 +128,8 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 	exec("agent", `INSERT INTO space_agents(id,space_id,tenant_id,plugin_id,display_name,status) VALUES($1,$2,$3,'official/hello-world','Hello','active')`, agent, space, tenant)
 	exec("issue", `INSERT INTO issues(id,tenant_id,creator_user_id,project_ref,title,number) VALUES($1,$2,$3,$4,'takeover issue',1)`, issue, tenant, user, project)
 	exec("run", `INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,status,phase,input) VALUES($1,$2,$3,'agent',$4,'dispatched','starting',$5)`, runID, tenant, issue, agent, mustJSON(t, input))
+	exec("run-creation", `INSERT INTO issue_activities(id,tenant_id,issue_id,seq,actor_type,actor_id,action,details)
+		VALUES(gen_random_uuid(),$1,$2,1,'user',$3,'run.enqueued',jsonb_build_object('runId',$4::text))`, tenant, issue, user, runID)
 	// The run Workspace: isolated, bound to this exact run, live — the predicate the session
 	// start and the takeover both re-read. A live isolated workspace needs exactly one task identity,
 	// and the workspace/task inserts must share the transaction for that deferred trigger. Admission
@@ -139,7 +142,7 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 	// insertWorkspace always records the resolved trigger actor with 'verified_request' evidence. A
 	// row with the column left NULL is a state createRunWorkspace cannot produce, and the delete would
 	// then enqueue an operation with an empty actor.
-	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,admission_open,runtime_generation,requested_ref,issue_run_id) VALUES($1,$2,$3,$4,'verified_request',$5,'isolated','running','ready',true,1,'HEAD',$6)`, workspaceID, tenant, user, user, project, runID)
+	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,admission_open,runtime_generation,requested_ref,issue_run_id) VALUES($1,$2,$3,$4,'verified_request',$5,'isolated','running','ready',true,1,'main',$6)`, workspaceID, tenant, user, user, project, runID)
 	exec("task", `INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'takeover task')`, uuid.NewString(), workspaceID)
 	exec("run-workspace-bind", `UPDATE issue_runs SET workspace_id=$2, version=version+1, updated_at=now() WHERE id=$1`, runID, workspaceID)
 	// The run Workspace's baseline. A Workspace observed `ready` reached that state through its
@@ -151,7 +154,7 @@ func seedStartingAgentRun(t *testing.T, store *core.Store) (runID, workspaceID, 
 		baselineOperationID, tenant, user, project, workspaceID, "run-workspace-"+workspaceID[:8])
 	exec("run-workspace-clone", `INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES($1,$2,$3,$4,$5,$6,$7,1)`,
 		baselineExecutionID, baselineOperationID, workspaceID, nodeID, baselineExecutionID,
-		mustJSON(t, core.Object{"kind": "clone", "repositoryUrl": "https://example.invalid/takeover.git", "branch": "main"}),
+		mustJSON(t, seedCloneInput(tenant, project, workspaceID, seedRunWorkspaceCommit)),
 		mustJSON(t, core.Object{"node": core.Object{"nodeId": nodeID, "nodeIncarnationId": "inc-" + nodeID[:8]}, "outcome": "clone_ready", "path": "/work", "commit": seedRunWorkspaceCommit}))
 	exec("run-workspace-baseline", `UPDATE workspaces SET base_commit_id=$2, version=version+1 WHERE id=$1`, workspaceID, seedRunWorkspaceCommit)
 	// The run's runtime binding, in exactly the state the create_workspace operation's last step
@@ -223,9 +226,10 @@ func TestAgentRunThreadTakeoverOverGRPC(t *testing.T) {
 	h := newControlHarness(t)
 	scene := seedAgentSessionScene(t, h.store)
 	client := controlpb.NewAgentRunServiceClient(h.conn)
+	visible := "working on the fix"
 
 	batch := []*controlpb.ThreadEvent{
-		{Sequence: 1, Record: threadLine("update", "working on the fix")},
+		{Sequence: 1, Record: threadLine("update", "working on the fix"), VisibleText: &visible},
 		{Sequence: 2, TurnId: &scene.initialTurnID, Record: userTurnLine("Fix the auth flow")},
 	}
 	resp, e := client.TakeOverThreadEvents(asController("ctrl-a"), &controlpb.TakeOverThreadEventsRequest{
@@ -264,6 +268,11 @@ func TestAgentRunThreadTakeoverOverGRPC(t *testing.T) {
 	must(t, h.store.Pool.QueryRow(`SELECT seq,kind,node_execution_id FROM thread_entries WHERE run_id=$1 AND node_sequence=1`, scene.runID).Scan(&nodeSeq, &nodeKind, &nodeCollection))
 	if nodeSeq != 2 || nodeKind != "update" || nodeCollection != scene.executionID {
 		t.Fatalf("the real record must land as seq=2/kind=update for %s, got seq=%d kind=%s execution=%s", scene.executionID, nodeSeq, nodeKind, nodeCollection)
+	}
+	var projected string
+	must(t, h.store.Pool.QueryRow("SELECT visible_text FROM thread_entries WHERE run_id=$1 AND node_sequence=1", scene.runID).Scan(&projected))
+	if projected != visible {
+		t.Fatalf("gRPC takeover lost Node's assistant projection: %q", projected)
 	}
 	// The run itself: the takeover is the only running authority.
 	var phase, status, threadState string

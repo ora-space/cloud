@@ -10,8 +10,9 @@ import (
 
 // Scenes for the D5 bounded abandonment of a blocked run Workspace creation. Everything before the
 // `blocked` write uses shipped code paths: the AgentRunDispatcher claim (createRunWorkspace plus the
-// provisioning transition), the control plane's own claim action and its defer action, which is the
-// only writer of `blocked` and therefore the transaction the deadline freezes in.
+// provisioning transition), the control plane's own claim action and its defer action. The defer, and
+// Cloud's own claim parking a clone step it cannot hand out, are the writers of `blocked` and
+// therefore the transactions the deadline freezes in.
 
 // provisioningSeed is one queued run whose claim created the run Workspace and moved the run to
 // provisioning, plus the ids the abandonment asserts on.
@@ -141,6 +142,36 @@ func TestBlockedCreationFreezesDeadlineInDeferTransaction(t *testing.T) {
 	creationPass(t, store)
 	if _, after, _ := creationDeadline(t, store, blocked.run); after.String != deadlineAt.String {
 		t.Fatalf("scan renewed the frozen deadline: %s -> %s", deadlineAt.String, after.String)
+	}
+}
+
+// Cloud parking a run Workspace creation's clone step as blocked when it claims it (no Git Server
+// configured, so no snapshot input can be frozen) is a persistent blocked write too: the deadline
+// freezes in the claim's transaction as blocked_write, not later as first_observed.
+func TestBlockedCloneParkFreezesDeadlineInClaimTransaction(t *testing.T) {
+	store := commandStore(t)
+	parked := seedProvisioningCreation(t, store)
+	seedControllerLease(t, store)
+	if _, err := store.Pool.Exec(`UPDATE operations SET step='clone',state='queued' WHERE id=$1`, parked.operation); err != nil {
+		t.Fatal(err)
+	}
+	out, err := store.Control(context.Background(), &ControlRequest{Action: "claim", Body: Object{"epoch": 1}, Service: controllerClaims()})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if got := out.O("operation").S("id"); got == parked.operation {
+		t.Fatal("a clone step without a Git Server was handed to the Controller")
+	}
+	var state, code string
+	if err := store.Pool.QueryRow(`SELECT state,error_code FROM operations WHERE id=$1`, parked.operation).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "blocked" || code != gitServerUnconfigured {
+		t.Fatalf("claim left the clone step %s/%s, want blocked/%s", state, code, gitServerUnconfigured)
+	}
+	blockedAt, deadlineAt, source := creationDeadline(t, store, parked.run)
+	if !blockedAt.Valid || !deadlineAt.Valid || source.String != "blocked_write" {
+		t.Fatalf("parking as blocked did not freeze the deadline: %v/%v/%v", blockedAt, deadlineAt, source)
 	}
 }
 

@@ -40,6 +40,7 @@ export const AUTHORABLE_NODE_KINDS: readonly WorkflowNodeKind[] = [
   'start',
   'agent',
   'condition',
+  'aggregator',
   'loop',
   'iteration',
   'output',
@@ -97,9 +98,13 @@ function seedNodeData(
       return { input: '' }
     case 'output':
     case 'loop':
+    case 'loopExit':
       // The Loop's own `loopConfig` is supplied by the atomic group factory, which creates
-      // its starter children at the same time.
+      // its starter children at the same time. The early-exit marker carries no data at all.
       return {}
+    case 'aggregator':
+      // An empty list is a legal draft but not publishable: the author picks candidates next.
+      return { aggregatorConfig: { variables: [] } }
     case 'condition':
       return {
         condition: translate('workflows.node.condition.label'),
@@ -186,6 +191,7 @@ export function createWorkflowLoopGroup(seed: WorkflowNodeSeed): WorkflowLoopGro
     translate: seed.translate,
   })
   childStart.id = childStartId
+  childStart.parentId = loop.id
   childStart.data = {
     ...childStart.data,
     title: seed.translate('workflows.loop.roundStart'),
@@ -208,6 +214,7 @@ export function createWorkflowLoopGroup(seed: WorkflowNodeSeed): WorkflowLoopGro
     translate: seed.translate,
   })
   childAgent.id = childAgentId
+  childAgent.parentId = loop.id
   childAgent.data = {
     ...childAgent.data,
     title: seed.translate('workflows.loop.loopAgent'),

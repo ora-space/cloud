@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"github.com/wanglongan587/cloud/internal/egress"
 )
 
 // Config contains only deployment references; original model keys are received at runtime.
@@ -14,20 +16,7 @@ type Config struct {
 	CredentialAddress, RuntimeAddress, GrantAddress, PublicOrigin       string
 	CertificateFile, PrivateKeyFile, CAFile, MasterKeyFile, MasterKeyID string
 	DevelopmentHosts                                                    []string
-	DNS                                                                 DNSConfig
-}
-
-// defaultDNSHTTPSURL and defaultDNSBootstrapIPs are the deployment's checked outbound resolver.
-// Cloud processes that make user-selected outbound requests use the same default identity.
-const (
-	defaultDNSHTTPSURL     = "https://cloudflare-dns.com/dns-query"
-	defaultDNSBootstrapIPs = "1.1.1.1,1.0.0.1"
-)
-
-// DefaultDNSConfig returns the approved resolver configuration as a fresh value, so a caller
-// cannot mutate a process-wide default.
-func DefaultDNSConfig() DNSConfig {
-	return DNSConfig{HTTPSURL: defaultDNSHTTPSURL, BootstrapIPs: strings.Split(defaultDNSBootstrapIPs, ",")}
+	DNS                                                                 egress.DNSConfig
 }
 
 // LoadConfig reads the model-gateway process's environment with explicit safe defaults.
@@ -40,7 +29,7 @@ func LoadConfig() (Config, error) {
 		return v
 	}
 	c := Config{CredentialAddress: value("CREDENTIAL_ADDR", ":8083"), RuntimeAddress: value("RUNTIME_ADDR", ":8443"), GrantAddress: value("GRANT_ADDR", ":8444"), PublicOrigin: value("PUBLIC_ORIGIN", "https://ora-model-gateway:8443"), CertificateFile: value("CERTIFICATE_FILE", "/etc/ora-model-management/server-p256.pem"), PrivateKeyFile: value("PRIVATE_KEY_FILE", "/etc/ora-model-management/server-p256.key"), CAFile: value("CA_FILE", "/etc/ora-model-management/ca.pem"), MasterKeyFile: value("MASTER_KEY_FILE", "/etc/ora-model-secrets/master-key"), MasterKeyID: value("MASTER_KEY_ID", "v1")}
-	c.DNS = DNSConfig{HTTPSURL: value("DNS_HTTPS_URL", defaultDNSHTTPSURL), BootstrapIPs: strings.Split(value("DNS_BOOTSTRAP_IPS", defaultDNSBootstrapIPs), ",")}
+	c.DNS = egress.DeploymentDNSConfig()
 	for _, address := range []string{c.CredentialAddress, c.RuntimeAddress, c.GrantAddress} {
 		if _, _, err := net.SplitHostPort(address); err != nil {
 			return Config{}, errors.New("invalid model gateway listen address")

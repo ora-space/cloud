@@ -85,6 +85,7 @@ export interface CreateProjectInput {
   title: string
   repositoryUrl: string
   defaultBranch: string
+  credentialRefId?: string
 }
 
 /** Creates a project in the current cloud space; creation is asynchronous (202). */
@@ -106,6 +107,7 @@ export function useCreateProject() {
           name: input.title,
           repositoryUrl: input.repositoryUrl,
           defaultBranch: input.defaultBranch,
+          ...(input.credentialRefId ? { credentialRefId: input.credentialRefId } : {}),
         },
         { headers: mutationHeaders(keyFor(input)) },
       )

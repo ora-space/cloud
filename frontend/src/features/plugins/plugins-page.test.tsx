@@ -183,6 +183,29 @@ describe('PluginsPage', () => {
 })
 
 describe('plugin selection authority', () => {
+  it('opens personal configuration lazily for a member using the selected release kind', async () => {
+    let reads = 0
+    installFixtures({ plugins: [spacePlugin('official/hello-world', { kind: 'agent' })] })
+    installCloudSpaceHandlers('member')
+    server.use(
+      http.get('/api/v1/me/agent-configurations/:spaceId/official/hello-world', () => {
+        reads += 1
+        return HttpResponse.json(
+          { code: 'agent_configuration_unavailable', params: {} },
+          { status: 409 },
+        )
+      }),
+    )
+    renderWithProviders(<PluginsPage slug="cloud-dev" />, { slug: 'cloud-dev' })
+    const button = await screen.findByRole('button', { name: '我的配置' })
+    expect(reads).toBe(0)
+    expect(button).toBeEnabled()
+    await userEvent.setup().click(button)
+    expect(await screen.findByRole('alert')).toHaveTextContent('配置')
+    expect(reads).toBe(1)
+    expect(screen.getByRole('dialog')).toHaveTextContent('连接与选项仅对当前账号可见')
+  })
+
   it('allows members to browse while refusing selection controls', async () => {
     installFixtures({ plugins: [spacePlugin('official/hello-world')] })
     installCloudSpaceHandlers('member')

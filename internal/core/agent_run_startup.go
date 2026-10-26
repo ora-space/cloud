@@ -26,6 +26,10 @@ func (s *Store) reconcileAgentStartup(t *transaction, runID string) bool {
 			s.releaseUndispatchedAgentStartup(t, run, "failed", "model_proxy_unavailable", "capability_rejected")
 			return true
 		}
+		if evidence.adapterUnavailable {
+			s.releaseUndispatchedAgentStartup(t, run, "failed", "agent_adapter_unavailable", "capability_rejected")
+			return true
+		}
 		if evidence.expired {
 			s.releaseUndispatchedAgentStartup(t, run, "failed", "agent_start_failed", "startup_timeout")
 			return true

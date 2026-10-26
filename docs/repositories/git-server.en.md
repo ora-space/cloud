@@ -28,9 +28,12 @@ side, then the Git Server's listeners, identities and authorization rules.
   to `active`, the same transaction gives back the cancelled sync; cancelled publishes are not
   restored and must be started again by the user.
 
-The Repo Executor that performs repository Operations is not in this repository. Cloud records the
-Operations and authorizes Git access by Operation state; today a Workspace's `clone` step still clones
-directly from the external repository URL.
+The Repo Executor that performs repository Operations is this repository's `cmd/repo-executor`; it
+receives Git access by Operation state, a sync writes only this Binding's snapshot prefix and
+tracking ref, and a publish only reads its source. The whole line's sync, publish, credential and
+settlement rules are in [The external Git line](external-git.en.md). A Workspace's `clone` step clones only the
+Binding's current snapshot (see [Workspace lifecycle](../runtime/workspaces.en.md#the-clone-step-clones-the-binding-snapshot)):
+Nodes never reach the external repository, and repository credentials take part in no Node work.
 
 ## Listeners
 
@@ -59,16 +62,29 @@ grant: the whole Project repository may be read, plus the refs or prefixes that 
 with the rule fixed by its namespace. The repository is the isolation boundary, so reads hide no ref
 inside it.
 
-**Grants for sandbox executions.** The execution must belong to this runtime, be unfinished and not
+**Grants for Agent session and delivery executions.** The execution must belong to this runtime, be unfinished and not
 force-stopped; the runtime must be at its current generation and ready, and the Project `active`; the
 user who triggered the run must still be able to use the runtime; the current Node must be the
 execution's target Node; and runtime control must be the run's `maintenance` with a binding confirmed
 to this sandbox. On top of that:
 
-| Execution | Run phase | Grant |
+| Execution | Run phase | Writable refs |
 |---|---|---|
-| `deliver_revision` | `delivering` | May only create `refs/ora/deliveries/<delivery work item ID>` |
-| `agent_session` | `starting` or `running`, no cancellation requested, Thread not ending | Read-only, and only for a session restoring a prior Revision; other sessions start from a clone of the external repository and have no reason to reach the Git Server |
+| `agent_session` | `starting` or `running`, no cancellation requested, Thread not ending | Branches under `refs/heads/workspaces/<the certificate's workspaceId>/` (fast-forward rule); the prefix comes from the certificate, never from the request |
+| `deliver_revision` | `delivering` | Create the delivery ref its input fixed, `refs/ora/deliveries/<delivery work item ID>`; also create or fast-forward the input's `workspaceRef`, provided it belongs to the certificate's Workspace |
+
+Plugin executions are always refused and never reach the repository. A WorkflowRun's Agent session is refused too in
+the first phase: grants only cover executions on an IssueRun's run Workspace, so an `agent_session` on a WorkflowRun's
+Workspace gets the same `403`.
+
+**Grants for clone executions.** The clone execution of a Workspace operation's `clone` step is read-only and
+valid only while the operation is `running` in the `clone` step: the execution has no result and is not
+force-stopped; the Workspace is at the certificate's generation and not deleted; the Project is `provisioning` or
+`active` (a main Workspace clones while its Project is being created); the repository URL in the execution's input
+names this tenant and Project; the operation's actor can still use the runtime; no force-stop is in effect; and the
+current Node is the execution's target Node. It does not require a ready Workspace or open admission, because cloning
+happens before admission opens. The grant ends as soon as the operation leaves the `clone` step or the execution has a
+result.
 
 **Grants for the Repo Executor.** The named Operation must be in this tenant and Project, belong to the
 Project's Binding and be `running`, and the Project must not be deleted (`provisioning`, `active` and
@@ -77,7 +93,7 @@ deletion starts must still be able to settle):
 
 | Operation | Grant |
 |---|---|
-| `repository_sync` | Create snapshot refs under this Binding's snapshot prefix |
+| `repository_sync` | Create snapshot refs under this Binding's snapshot prefix and move this Binding's tracking ref from the grant's expected old value to the new commit |
 | `repository_publish` | Read-only; a publish only reads its source from the Project repository |
 
 **Outcomes.** Every denial is the same `403`, a missing repository included, so a sandbox cannot probe
@@ -85,7 +101,7 @@ whether a repository, execution or Node exists. A database failure returns `503`
 request through. Authorization runs in a read-only consistent snapshot without core's global lock, so
 Git traffic does not serialize with control-plane writes.
 
-Ending the execution, replacing the sandbox, cancelling the run, disabling the triggering user's
+Ending the execution, a clone operation leaving its `clone` step, replacing the sandbox, cancelling the run, disabling the triggering user's
 account, or cancelling or ending the Operation all take effect on the **next request**, including a
 push already inside pre-receive. A long fetch is not re-authorized mid-transfer.
 
@@ -101,8 +117,8 @@ push already inside pre-receive. A long fetch is not re-authorized mid-transfer.
 - `pre-receive` resolves the same grant **again** before any ref is written and checks every ref
   against its rule. No ref can be deleted and no ref outside the table can be written; if any single
   update is not accepted, the whole push is refused.
-- Today sandbox executions only produce the delivery rule and sync Operations only the snapshot prefix;
-  the sources of grants for workspace branches and tracking refs are not wired in yet.
+- Sandbox executions produce the Workspace branch and delivery rules; an external-line sync produces the
+  snapshot prefix and this Binding's tracking ref.
 - Repository policy and the hook path are applied through `GIT_CONFIG_*` environment variables on every
   git process rather than written into the repository, so neither a restart nor an old repository can
   weaken them. Both repository listeners refuse ref deletion; the repository listener also refuses
@@ -120,10 +136,20 @@ The ref query listener is open only to Cloud's fixed identity and is read-only:
 - `GET ...?prefix=<prefix>`: the refs and commits inside one namespace instance (one delivery, all of one
   Binding's refs or its snapshot or tracking refs, one Workspace).
 
-Using delivery refs as the basis for registering Revisions is still under decision (see the proposed ADR
-below). Revisions are still verified and registered from
-[bundles in object storage](../agent-runs/revisions.en.md), and the Cloud server does not call the ref
-query yet.
+The Cloud server calls the ref query with the address from its `git_server.*` settings and its own client
+certificate (`internal/gitrefquery`, using `?ref=` only): outside any database transaction it checks that a
+Revision's delivery ref names the final commit the Node declared, then registers the Revision (see
+[Revisions](../agent-runs/revisions.en.md#the-delivery-flow)). Only `404 ref_not_found` counts as the ref being
+absent; any other response, a transport failure or a timeout makes verification unavailable for now and it is retried,
+never concluded. The query never follows redirects. Without a configured Git Server, clone steps stay `blocked`
+(`git_server_unconfigured`), deliveries settle as `skipped`, and Cloud makes no ref query through this client.
+
+This delivery path implements an `approved` Revision decision (see below).
+
+The external Git line calls the ref query through a second client (`internal/gitrefs`) configured by
+`repository.git_refs_*`, in three places: after a sync reports `applied` to verify the snapshot and tracking
+refs, before creating a publish to confirm the source ref, and when listing a Workspace's collaboration
+branches as publish sources (see [The external Git line](external-git.en.md)).
 
 ## Operations
 
@@ -142,4 +168,6 @@ query yet.
 
 - [Git Server is the Project's code hub: a separate HTTPS service where certificates only authenticate and authorization is decided per request from Cloud's current state](https://github.com/ora-space/specs/blob/main/decisions/cloud/git-server/0-project-code-hub-git-server-over-https.md) (approved)
 - [Git Server becomes every Project's code hub: ref namespaces, rule-set grants and the contract for two kinds of writer](https://github.com/ora-space/specs/blob/main/decisions/cloud/git-server/20261016-project-repository-as-code-hub-and-ref-contract.md) (approved)
-- [A Revision's code changes are delivered only through the Git Server](https://github.com/ora-space/specs/blob/main/decisions/cloud/revision/20261012-git-server-delivery-and-verified-delivery-refs.md) (proposed)
+- [A Workspace's clone step consumes the Binding's current snapshot](https://github.com/ora-space/specs/blob/main/decisions/cloud/operation/20261016-clone-step-consumes-binding-snapshot.md) (approved)
+- [The clone input becomes a Git Server snapshot input; the Git Server derives write rules from the execution kind](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261016-snapshot-clone-input-and-execution-ref-grants.md) (approved)
+- [A Revision's code changes are delivered only through the Git Server, and Cloud registers the delivery ref after a ref query](https://github.com/ora-space/specs/blob/main/decisions/cloud/revision/20261017-git-native-delivery-refs-and-resume.md) (approved; supersedes the 20261012 delivery decision)

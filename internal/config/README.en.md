@@ -1,31 +1,23 @@
-# internal/config: Configuration Loader & Validation
+# internal/config: configuration loading and validation
 
 [中文](README.md) | [English](README.en.md)
 
-`internal/config` manages configuration parsing, schema validation, and environment variable overrides for Ora Cloud.
+`Load` uses a local Viper instance to load and validate service configuration, returning `Config`. There is no global mutable configuration.
 
-## Responsibilities
+An empty `plugins.personal_agent_target` disables declared personal-Agent admission. An explicit supported Linux target opts in only after Controller/Node and plugin adapters are deployed; execution still checks the current incarnation's target, contract and protocol.
 
-- **Structured configuration**: Defines strongly-typed Go structs mapping the entire system configuration:
-  - `ServerConfig`: Port, Gin mode, read/write timeouts.
-  - `LoggerConfig`: Log level, file paths, rotation thresholds (max size, age, backups, gzip compression).
-  - `DatabaseConfig`: Driver (must be `postgres`), DSN, and connection pool limits (`max_open_conns`, `max_idle_conns`, `conn_max_lifetime`).
-  - `AuthConfig`: Expected token audience and list of `TrustedKey` verification parameters.
-- **Hierarchical loading via Viper**:
-  - Searches for `config.yaml` in `./configs`, `../configs`, and `.`.
-  - Supports explicit file path overriding via `-config <path>`.
-  - Maps environment variables with the `CLOUD_` prefix, replacing dots with underscores (e.g., `CLOUD_DATABASE_DSN` overrides `database.dsn`).
-- **Startup sanity validation**: Rejects invalid configurations with explicit errors, requiring positive durations for `read_timeout`, `write_timeout`, and `conn_max_lifetime`.
+| File | Responsibility |
+|---|---|
+| `config.go` | Main types, defaults, explicit environment bindings and common validation |
+| `env.go` | Maps configuration keys to `CLOUD_*` variables |
+| `control_tls.go` | Constructs TLS 1.3 mutual-authentication material for the control listener |
+| `object_store.go` | Validates storage configuration, reads key files and constructs in-memory `objectstore.Config` |
+| `repository.go` | Deployment references and switches for Git refs, executor and credential services |
 
-## Boundaries and invariants
+Without an explicit path it searches `./configs`, `../configs` and `.` for `config.yaml`; commands pass explicit `-config` paths. Variables such as `CLOUD_DATABASE_DSN` override leaf keys. Source code and the [Configuration reference](../../docs/operations/configuration.en.md) own complete defaults and ranges.
 
-Startup windows use database time. Confirmation expiry settles business state while retaining independent residual responsibility; a business terminal does not prove physical release. See [Bounded startup](../../docs/agent-runs/startup-settlement.en.md) for defaults and recovery boundaries.
+Configuration stores deployment references; raw private keys and secrets load from separate files and never enter configuration bodies, logs or databases. This package validates startup configuration; Core owns durable window freezing, database clocks and recovery decisions. Enabled object storage does not establish online health.
 
-The optional `object_store` section configures S3 delivery. When enabled, the server loads separately mounted access/secret key files into memory and validates private/public endpoints, region, bucket, addressing mode and a TTL between one second and seven days. All keys support `CLOUD_OBJECT_STORE_*` overrides. Short-lived PUT grants can bind SHA-256; Cloud verifies existence, size and stored checksum through private HEAD before registering Revision. Disabled by default, delivery settles skipped/object_store_unconfigured through the caller's transaction without dispatch; standalone grant requests return unavailable. Health reports configured/unconfigured, not S3 availability.
+`issue_runs.residual_reconcile_interval` sets the cadence of Cloud's residual-ledger recovery pass and defaults to `1m`; `CLOUD_ISSUE_RUNS_RESIDUAL_RECONCILE_INTERVAL` overrides it. Explicit zero, negative and malformed durations reject startup, and there is no disable switch. The interval only schedules scans; it is not a timeout proving successful resource cleanup. Cloud consumes real facts through existing entrypoints without adding a Controller discovery contract; missing evidence leaves the ledger open.
 
-- **No secret storage**: Configuration files store only public verification keys and infrastructure references. Plaintext deployment secrets and private keys must never appear in configuration files.
-- **Immutable runtime**: Configurations are loaded once at command startup and passed as ready-to-use values. There is no global mutable configuration singleton.
-
-See [config.yaml](../../configs/config.yaml), [cmd/server](../../cmd/server/README.en.md), and [Internal credentials](../../docs/identity/authentication.en.md).
-
-Agent startup, restore and end confirmation default to 2m/6m/5m (agent_start_timeout, agent_restore_timeout, agent_end_confirm_timeout); the bounded abandonment window for a run Workspace creation that first blocked defaults to 30m (agent_workspace_blocked_timeout). Only omission selects defaults; explicit nonpositive or invalid durations fail. Changes affect new durable windows only, never renew active ones.
+Tests cover defaults, environment overrides, invalid durations, TLS, storage and repository configuration. See [server](../../cmd/server/README.en.md), [Bounded startup](../../docs/agent-runs/startup-settlement.en.md) and [Deployment egress](../../docs/operations/deployment-egress.en.md).

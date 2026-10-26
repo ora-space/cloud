@@ -29,6 +29,12 @@ type Route struct {
 // cap cannot contain once the JSON envelope around the text is counted.
 const ThreadMessagePath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/messages"
 
+// TaskConversationPath reads the task's durable Agent-directed messages.
+const TaskConversationPath = "/api/v1/tenants/:tid/issues/:iid/conversation"
+
+// TaskConversationMessagesPath accepts a text turn for an explicitly chosen Agent.
+const TaskConversationMessagesPath = "/api/v1/tenants/:tid/issues/:iid/conversation/messages"
+
 // ThreadPath is the Thread GET route (Thread D5). It is named because it is the one public read that
 // may ask for more than the shared list window: D5 caps `limit` at `core.ThreadPageLimit`, while
 // every other pageable route keeps the 100 the core's `window` helper enforces. The two bounds stay
@@ -47,11 +53,34 @@ const AgentSessionsPath = "/api/v1/tenants/:tid/agent-sessions"
 // SessionHistoryPath reads only the verified archive registered for this run.
 const SessionHistoryPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/history"
 
+const (
+	scheduledArtifactsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/artifacts"
+	scheduledArtifactPath  = scheduledArtifactsPath + "/:aidx"
+)
+
 // SessionStatisticsPath aggregates all recorded model HTTP attempts for an authorized run.
 const SessionStatisticsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/statistics"
 
 // SessionModelCallsPath pages content-free model HTTP attempt observations.
 const SessionModelCallsPath = "/api/v1/tenants/:tid/issues/:iid/runs/:rid/model-calls"
+
+// WorkflowStatisticsPath aggregates all recorded model HTTP attempts for an authorized
+// WorkflowRun. It mirrors SessionStatisticsPath; the ledger owner discriminator keeps the two
+// scopes disjoint.
+const WorkflowStatisticsPath = "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid/statistics"
+
+// WorkflowModelCallsPath pages content-free model HTTP attempt observations for a WorkflowRun.
+const WorkflowModelCallsPath = "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid/model-calls"
+
+// PublishPath, WorkspaceBranchesPath and CredentialConfirmPath are the public routes whose
+// answer depends on another service: the Git Server's ref query (publish source, Workspace
+// branches) or the Credential Store's metadata (confirm). They are served by dedicated Store
+// methods that read Cloud state, call out with no transaction open, and then write.
+const (
+	PublishPath           = "/api/v1/tenants/:tid/projects/:pid/repository/publishes"
+	WorkspaceBranchesPath = "/api/v1/tenants/:tid/projects/:pid/repository/workspaces/:wid/branches"
+	CredentialConfirmPath = "/api/v1/tenants/:tid/git-credentials/:gcid/confirm"
+)
 
 // defaultBodyLimit is the request cap every other route keeps.
 const defaultBodyLimit = 64 << 10
@@ -76,7 +105,14 @@ func Routes() []Route {
 		{"PUT", "/api/v1/me/model-connections/:mcid/credential", "", []string{"apiKey", "version"}},
 		{"DELETE", "/api/v1/me/model-connections/:mcid/credential", "", []string{"version"}},
 		{"GET", "/api/v1/me/model-default", "", nil},
+		{"GET", AgentConfigurationPath, "", nil},
+		{"PUT", AgentConfigurationPath, "", []string{"revision", "selectionVersion", "declarationFingerprint", "settings", "connectionId", "modelId"}},
+		{"POST", AgentConfigurationPath + "/repair", "", []string{"revision", "selectionVersion", "declarationFingerprint", "settings", "connectionId", "modelId"}},
+		{"DELETE", AgentConfigurationPath, "", []string{"revision"}},
 		{"PUT", "/api/v1/me/model-default", "", []string{"connectionId", "modelId", "version"}},
+		{"GET", "/api/v1/me/executor-slot-mappings", "", nil},
+		{"PUT", "/api/v1/me/executor-slot-mappings/:slot", "", []string{"agentCli", "connectionId", "modelId", "version"}},
+		{"DELETE", "/api/v1/me/executor-slot-mappings/:slot", "", []string{"version"}},
 		{"GET", "/api/v1/me/tenants", "", nil},
 		{"GET", "/api/v1/me/spaces", "", nil},
 		{"GET", "/api/v1/me/join-requests", "", nil},
@@ -116,8 +152,15 @@ func Routes() []Route {
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/form", "", nil},
 		{"PUT", "/api/v1/tenants/:tid/workflows/:wfid/snapshots/:snapshotId/restore", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", nil},
-		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input"}},
+		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs", "", []string{"name", "snapshotId", "input", "projectId"}},
 		{"GET", "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid", "", nil},
+		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid/cancel", "", nil},
+		// Resume is registered with its final request shape and refuses every valid request with a
+		// named 501 (retry-and-resume decision D7). Registering it lets clients tell "unavailable"
+		// from "wrong path" while the implementation lands in a later phase.
+		{"POST", "/api/v1/tenants/:tid/workflows/:wfid/runs/:rid/resume", "", []string{"mode"}},
+		{"GET", WorkflowStatisticsPath, "", nil},
+		{"GET", WorkflowModelCallsPath, "", nil},
 		{"GET", "/api/v1/tenants/:tid/issue-views", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issue-views", "", []string{"name", "filter"}},
 		{"PUT", "/api/v1/tenants/:tid/issue-views/:vid", "", []string{"name", "filter", "version"}},
@@ -138,8 +181,28 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants/:tid/issues/:iid/runs", "", []string{"executorType", "executorId", "input"}},
 		{"GET", "/api/v1/tenants/:tid/issues/:iid/runs/:rid", "", nil},
 		{"GET", "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread", "", nil},
+		{"GET", "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/preview", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/messages", "", []string{"content"}},
 		{"POST", "/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/end", "", nil},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/runs/:rid/cancel", "", nil},
+		{"POST", "/api/v1/tenants/:tid/scheduled-tasks", "", []string{"issueId", "name", "prompt", "agentId", "model", "schedule", "timezone", "approval", "enabled"}},
+		{"GET", "/api/v1/tenants/:tid/scheduled-tasks", "", nil},
+		{"GET", "/api/v1/tenants/:tid/scheduled-tasks/:stid", "", nil},
+		{"PATCH", "/api/v1/tenants/:tid/scheduled-tasks/:stid", "", []string{"version", "name", "prompt", "agentId", "model", "schedule", "timezone"}},
+		{"DELETE", "/api/v1/tenants/:tid/scheduled-tasks/:stid", "", nil},
+		{"GET", "/api/v1/tenants/:tid/scheduled-tasks/:stid/history", "", nil},
+		{"GET", scheduledArtifactsPath, "", nil},
+		{"GET", scheduledArtifactPath, "", nil},
+		{"POST", "/api/v1/tenants/:tid/scheduled-tasks/:stid/enable", "", []string{"approval"}},
+		{"POST", "/api/v1/tenants/:tid/scheduled-tasks/:stid/disable", "", nil},
+		{"POST", "/api/v1/tenants/:tid/scheduled-tasks/:stid/revoke-consent", "", nil},
+		{"GET", TaskConversationPath, "", nil},
+		{"POST", TaskConversationMessagesPath, "", []string{"agentId", "body"}},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/conversation/messages/:mid/cancel", "", nil},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/conversation/messages/:mid/retry", "", nil},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/conversation/resume", "", []string{"runId"}},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/conversation/stop", "", []string{"runId"}},
+		{"POST", "/api/v1/tenants/:tid/issues/:iid/conversation/discard", "", []string{"runId", "acknowledgeLostWork"}},
 		{"GET", "/api/v1/tenants/:tid/issues/:iid/context-refs", "", nil},
 		{"POST", "/api/v1/tenants/:tid/issues/:iid/context-refs", "", []string{"refType", "refId"}},
 		{"DELETE", "/api/v1/tenants/:tid/issues/:iid/context-refs/:crid", "", nil},
@@ -164,6 +227,24 @@ func Routes() []Route {
 		{"PATCH", "/api/v1/tenants/:tid/projects/:pid", "", []string{"name", "version"}},
 		{"DELETE", "/api/v1/tenants/:tid/projects/:pid", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/projects/:pid/workspaces", "", nil},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/syncs", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/credential", "", []string{"credentialRefId", "version"}},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository/operations", "", nil},
+		{"GET", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/approve", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/reject", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/cancel", "", nil},
+		{"POST", "/api/v1/tenants/:tid/projects/:pid/repository/operations/:roid/check", "", nil},
+		{"POST", PublishPath, "", []string{"sourceRef", "sourceCommit", "revisionId", "targetBranch", "expectedOldOid", "credentialRefId"}},
+		{"GET", WorkspaceBranchesPath, "", nil},
+		{"GET", "/api/v1/tenants/:tid/git-credentials", "", nil},
+		{"POST", "/api/v1/tenants/:tid/git-credentials", "", []string{"name", "attribution", "repositoryScope", "requestedCapabilities"}},
+		{"GET", "/api/v1/tenants/:tid/git-credentials/:gcid", "", nil},
+		{"DELETE", "/api/v1/tenants/:tid/git-credentials/:gcid", "", []string{"version"}},
+		{"POST", "/api/v1/tenants/:tid/git-credentials/:gcid/rotate", "", []string{"version"}},
+		{"POST", CredentialConfirmPath, "", []string{"submissionId"}},
+		{"POST", "/api/v1/tenants/:tid/git-credentials/:gcid/verifications", "", nil},
 		{"POST", "/api/v1/tenants/:tid/projects/:pid/workspaces", "", []string{"title", "baseRef"}},
 		{"GET", "/api/v1/tenants/:tid/workspaces/:wid", "", nil},
 		{"GET", "/api/v1/tenants/:tid/workspaces/:wid/control", "", nil},
@@ -173,9 +254,6 @@ func Routes() []Route {
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/start", "", []string{"version", "sessionId"}},
 		{"POST", "/api/v1/tenants/:tid/workspaces/:wid/stop", "", []string{"version", "sessionId"}},
 		{"DELETE", "/api/v1/tenants/:tid/workspaces/:wid", "", []string{"version", "sessionId"}},
-		{"GET", "/api/v1/tenants/:tid/clones", "", nil},
-		{"POST", "/api/v1/tenants/:tid/clones", "", []string{"requestId", "repository", "branch"}},
-		{"GET", "/api/v1/tenants/:tid/clones/:cloneId", "", nil},
 		{"GET", "/api/v1/tenants/:tid/operations/:oid", "", nil},
 		{"POST", "/api/v1/tenants/:tid/operations/:oid/retry", "", []string{"version"}},
 		{"GET", "/api/v1/tenants/:tid/resource-status", "", nil},
@@ -243,11 +321,13 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 			failure(c, &core.Fault{Code: "database_unavailable", Status: 503, Params: core.Object{}})
 			return
 		}
-		storage := "unconfigured"
-		if store.ObjectStore != nil {
-			storage = "configured"
+		configured := func(ok bool) string {
+			if ok {
+				return "configured"
+			}
+			return "unconfigured"
 		}
-		c.JSON(200, gin.H{"status": "ok", "dependencies": gin.H{"objectStore": storage}})
+		c.JSON(200, gin.H{"status": "ok", "dependencies": gin.H{"objectStore": configured(store.ObjectStore != nil), "gitServer": configured(store.GitServer != nil)}})
 	})
 	for _, route := range Routes() {
 		r.Handle(route.Method, route.Path, func(c *gin.Context) {
@@ -310,7 +390,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 			body := core.Object{}
 			if c.Request.Method != "GET" {
 				limit := int64(defaultBodyLimit)
-				if route.Path == ThreadMessagePath {
+				if route.Path == ThreadMessagePath || route.Path == TaskConversationMessagesPath {
 					limit = threadMessageBodyLimit
 				}
 				c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
@@ -390,7 +470,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 					// which Thread D5 caps higher. The bound is chosen per route rather than raised
 					// globally so no existing list's contract widens as a side effect.
 					maxLimit := 100
-					if route.Path == ThreadPath {
+					if route.Path == ThreadPath || route.Path == TaskConversationPath {
 						maxLimit = core.ThreadPageLimit
 					}
 					if e != nil || limit < 1 || limit > maxLimit {
@@ -398,18 +478,36 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 						return
 					}
 				}
-				out, status, e = store.Public(c.Request.Context(), &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), CloneID: c.Param("cloneId"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person})
+				req := &core.PublicRequest{Method: c.Request.Method, Path: c.Request.URL.Path, TenantID: c.Param("tid"), ProjectID: c.Param("pid"), WorkspaceID: c.Param("wid"), SpaceID: c.Param("spaceId"), OperationID: c.Param("oid"), UserID: c.Param("uid"), IssueID: c.Param("iid"), CommentID: c.Param("cid"), ConversationMessageID: c.Param("mid"), LabelID: c.Param("lid"), StatusID: c.Param("sid"), ViewID: c.Param("vid"), RunID: c.Param("rid"), ContextRefID: c.Param("crid"), InteractionID: c.Param("ixid"), WorkflowID: c.Param("wfid"), SnapshotID: c.Param("snapshotId"), FormRef: c.Param("formRef"), FormIssueID: c.Query("issueId"), ModelConnectionID: c.Param("mcid"), SlotName: c.Param("slot"), GitCredentialID: c.Param("gcid"), RepositoryOperationID: c.Param("roid"), InvitationID: c.Param("iid"), JoinLinkID: c.Param("lid"), JoinRequestID: c.Param("rid"), ScheduledTaskID: c.Param("stid"), ArtifactIndex: c.Param("aidx"), Key: c.GetHeader("Idempotency-Key"), SessionProjectID: c.Query("projectId"), SessionStatus: c.Query("status"), SessionAgent: c.Query("agent"), SessionFrom: c.Query("from"), SessionTo: c.Query("to"), Limit: limit, After: c.Query("after"), Before: c.Query("before"), Query: c.Query("q"), GroupBy: c.Query("by"), Body: body, Identity: user, Person: person}
+				if c.Param("pluginNamespace") != "" {
+					req.AgentPluginID = c.Param("pluginNamespace") + "/" + c.Param("pluginIdentifier")
+				}
+				switch route.Path {
+				case scheduledArtifactPath:
+					serveScheduledArtifact(c, store, req)
+					return
+				case PublishPath:
+					out, status, e = store.CreatePublish(c.Request.Context(), req)
+				case CredentialConfirmPath:
+					out, status, e = store.ConfirmGitCredential(c.Request.Context(), req)
+				case WorkspaceBranchesPath:
+					out, e = store.ListWorkspaceBranches(c.Request.Context(), req)
+				default:
+					out, status, e = store.Public(c.Request.Context(), req)
+				}
 			} else {
 				out, e = store.Control(c.Request.Context(), &core.ControlRequest{Action: route.Action, OperationID: c.Param("oid"), EffectID: c.Param("eid"), TicketID: c.Param("ticket"), Body: body, Service: service, Identity: user})
 				// The retired development Node JSON contract keeps its historical resource shape.
 				// Model capability belongs to the production Controller gRPC registration/record.
 				if strings.HasPrefix(route.Action, "node_") {
 					delete(out, "modelProxy")
+					delete(out, "modelAdapter")
 				}
 				// Claim and snapshot both return the same snapshot document.
 				if nodes, ok := out["nodes"].([]core.Object); ok {
 					for _, node := range nodes {
 						delete(node, "modelProxy")
+						delete(node, "modelAdapter")
 					}
 				}
 			}
@@ -428,6 +526,7 @@ func newRouter(store *core.Store, auth *core.Authenticator, log *zap.Logger, leg
 		})
 	}
 	r.GET("/api/v1/tenants/:tid/spaces/:spaceId/events", func(c *gin.Context) { sseEvents(store, auth, c) })
+	r.GET("/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/preview/events", func(c *gin.Context) { sseThreadPreviews(store, auth, c) })
 	r.NoRoute(func(c *gin.Context) { failure(c, &core.Fault{Code: "not_found", Status: 404, Params: core.Object{}}) })
 	return r
 }
@@ -519,14 +618,14 @@ func bearerToken(header string) (string, bool) {
 
 func validField(name string, value any) bool {
 	switch name {
-	case "version", "epoch", "admissionEpoch", "protocolVersion", "retrySeconds", "position":
+	case "version", "revision", "selectionVersion", "epoch", "admissionEpoch", "protocolVersion", "retrySeconds", "position":
 		n, ok := value.(json.Number)
 		if !ok {
 			return false
 		}
 		_, e := n.Int64()
 		return e == nil
-	case "ids":
+	case "ids", "requestedCapabilities":
 		arr, ok := value.([]any)
 		if !ok {
 			return false
@@ -613,8 +712,58 @@ func validField(name string, value any) bool {
 			}
 		}
 		return true
-	case "filter", "properties", "input", "values", "graph":
+	case "filter", "properties", "input", "values", "graph", "settings":
 		_, ok := value.(map[string]any)
+		return ok
+	case "schedule":
+		// The scheduled-task definition carries its cadence as the ScheduledTaskSchedule object the
+		// OpenAPI contract and the browser both send. Only the shape belongs here: the core parses
+		// the cadence and owns its bounds and defaults, so an out-of-range value must reach it and
+		// fail as the domain fault rather than being guessed at the transport boundary.
+		o, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		for k, v := range o {
+			switch k {
+			case "kind":
+				if _, ok := v.(string); !ok {
+					return false
+				}
+			case "intervalHours", "hour", "minute":
+				if v == nil {
+					continue
+				}
+				if _, ok := v.(json.Number); !ok {
+					return false
+				}
+			case "weekdays":
+				if v == nil {
+					continue
+				}
+				days, ok := v.([]any)
+				if !ok {
+					return false
+				}
+				for _, day := range days {
+					if _, ok := day.(string); !ok {
+						return false
+					}
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	case "approval":
+		// The unattended-consent record is the closed ScheduledTaskApproval object: exactly the
+		// policy name, as the creation form sends it. Whether the name is one this deployment accepts
+		// is the core's decision, not the transport's.
+		o, ok := value.(map[string]any)
+		if !ok || len(o) != 1 {
+			return false
+		}
+		_, ok = o["policy"].(string)
 		return ok
 	case "targetId":
 		_, ok := value.(string)
@@ -641,9 +790,14 @@ func validField(name string, value any) bool {
 			}
 		}
 		return true
-	case "idle", "initialized", "impactConfirmed", "enabled":
+	case "idle", "initialized", "impactConfirmed", "enabled", "acknowledgeLostWork":
 		_, ok := value.(bool)
 		return ok
+	case "mode":
+		// The workflow-run resume request owns this vocabulary: every present value that is not one
+		// of the three mode strings — including null and a non-string — is the route's own 400
+		// invalid_field_value, so the value must reach core instead of becoming invalid_field_type.
+		return true
 	case "result":
 		o, ok := value.(map[string]any)
 		if !ok {
@@ -688,10 +842,10 @@ func validSessionQuery(c *gin.Context, path string) bool {
 		return false
 	}
 	for key, values := range query {
-		if path == SessionHistoryPath || path == SessionStatisticsPath || len(values) != 1 || values[0] == "" {
+		if path == SessionHistoryPath || path == SessionStatisticsPath || path == WorkflowStatisticsPath || len(values) != 1 || values[0] == "" {
 			return false
 		}
-		if path == SessionModelCallsPath && key != "limit" && key != "after" {
+		if (path == SessionModelCallsPath || path == WorkflowModelCallsPath) && key != "limit" && key != "after" {
 			return false
 		}
 		switch key {
@@ -704,5 +858,7 @@ func validSessionQuery(c *gin.Context, path string) bool {
 }
 
 func isSessionReadPath(path string) bool {
-	return path == AgentSessionsPath || path == SessionHistoryPath || path == SessionStatisticsPath || path == SessionModelCallsPath
+	return path == AgentSessionsPath || path == SessionHistoryPath || path == SessionStatisticsPath || path == SessionModelCallsPath ||
+		path == WorkflowStatisticsPath || path == WorkflowModelCallsPath ||
+		path == scheduledArtifactsPath || path == scheduledArtifactPath
 }

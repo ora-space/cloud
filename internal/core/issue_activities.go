@@ -7,9 +7,14 @@ import "strings"
 //
 // Implementation: GREATEST(COALESCE(MAX(comments.seq),0), COALESCE(MAX(activities.seq),0)) + 1,
 // evaluated inside the advisory-locked transaction — the same race-free-under-the-lock pattern as the
-// issue `number` counter. Concurrency note: if the global advisory lock is ever removed, this
-// allocator must first be migrated to a per-issue counter/sequence column (Atomic per-issue
-// UPDATE ... RETURNING), because MAX-read-then-increment is not safe under concurrent write.
+// issue `number` counter.
+//
+// Concurrency note: the read-then-increment is safe only while every transaction that appends holds
+// a lock that orders writers of the same Issue. Ordinary transactions hold the exclusive
+// control-plane lock, and every WorkflowRun transaction holds the shared control-plane lock (the two
+// exclude each other) plus the Issue lock taken by lockWorkflowRunIssue once it holds its run lock.
+// Remove either guarantee and this allocator must first move to a per-issue counter/sequence column
+// (atomic UPDATE ... RETURNING); MAX-read-then-increment is not safe under concurrent writes.
 func nextTimelineSeq(t *transaction, iid string) int64 {
 	o := t.one(`SELECT GREATEST(
 		COALESCE((SELECT max(seq) FROM issue_comments WHERE issue_id=$1), 0),

@@ -7,7 +7,7 @@ package core
 // They are white-box (package core) for exactly one reason: the A→B seam hands the business hooks the
 // unexported *transaction, so a Store cannot be driven through the five On* callbacks from outside the
 // package. There is no in-memory substitute for PostgreSQL anywhere here — every scene is a real
-// isolated schema, and every transition under test runs on the shipped seams:
+// isolated database copy, and every transition under test runs on the shipped seams:
 //
 //	createRunWorkspace   the control plane's own Workspace + create_workspace operation creation.
 //	startAgentSession    the B-owned Session Start core (seq=1, thread_state='pending', work enqueue).
@@ -24,52 +24,30 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// dispatcherDB creates an isolated PostgreSQL schema, migrates it, and returns a Store with Cloud's
+// dispatcherDB copies the package's sealed PostgreSQL template and returns a Store with Cloud's
 // business lifecycle bound onto the control plane's five same-transaction callbacks — exactly the way
 // cmd/server wires them at process start. A Store returned here is therefore the production Store as
 // far as the A/B seam is concerned; only the sleepers and background loops are the caller's business.
 func dispatcherDB(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		if os.Getenv("REQUIRE_POSTGRES") == "1" {
-			t.Fatal("TEST_DATABASE_URL is required; agent run DB tests must not skip under REQUIRE_POSTGRES")
-		}
-		t.Skip("real PostgreSQL: set TEST_DATABASE_URL")
-	}
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
-	}
-	admin := stdlib.OpenDB(*config)
-	if err := admin.Ping(); err != nil {
-		t.Fatalf("ping admin: %v", err)
-	}
-	schema := "core_run_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-	config.RuntimeParams["search_path"] = schema
-	pool := stdlib.OpenDB(*config)
-	t.Cleanup(func() {
-		_ = pool.Close()
-		_, _ = admin.Exec("DROP SCHEMA " + schema + " CASCADE")
-		_ = admin.Close()
+	return dispatcherDBWithCleanup(t, func(cleanup func() error) {
+		t.Cleanup(func() {
+			if err := cleanup(); err != nil {
+				t.Error(err)
+			}
+		})
 	})
-	store := &Store{Pool: pool}
-	if err := store.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+}
+
+func dispatcherDBWithCleanup(t *testing.T, registerCleanup func(func() error)) *Store {
+	t.Helper()
+	store := &Store{Pool: coreFixturePool(t, registerCleanup)}
 	BindBusinessHooks(store)
 	return store
 }

@@ -1,5 +1,10 @@
+import { publishErrorTranslations } from '@/features/workflows/publish-error-translations'
 import { historyTranslations } from '@/features/workflows/history-translations'
 import { launchFieldTranslations } from '@/features/workflows/launch-field-translations'
+import { aggregatorTranslations } from '@/features/workflows/aggregator-translations'
+import { loopTranslations } from '@/features/workflows/loop-translations'
+import { nodeTranslations } from '@/features/workflows/node-translations'
+import { operatorTranslations } from '@/features/workflows/operator-translations'
 import type { TranslationBundle } from '@/i18n/resource-bundle'
 
 /**
@@ -21,33 +26,12 @@ import type { TranslationBundle } from '@/i18n/resource-bundle'
 export const workflowTranslations = {
   'zh-CN': {
     ...historyTranslations['zh-CN'],
+    ...publishErrorTranslations['zh-CN'],
     ...launchFieldTranslations['zh-CN'],
-    // Node catalog: palette labels and descriptions for every executable kind.
-    'workflows.node.start.label': '开始',
-    'workflows.node.start.description': '定义工作流输入',
-    'workflows.node.agent.label': 'Agent',
-    'workflows.node.agent.description': '交给模型自主执行',
-    'workflows.node.condition.label': '条件分支',
-    'workflows.node.condition.description': '根据规则选择路径',
-    'workflows.node.tool.label': '工具',
-    'workflows.node.tool.description': '调用终端或插件',
-    'workflows.node.junction.label': '汇合',
-    'workflows.node.junction.description': '等待多个执行分支完成',
-    'workflows.node.human.label': '人工确认',
-    'workflows.node.human.description': '等待人工决策后继续',
-    'workflows.node.loop.label': '循环',
-    'workflows.node.loop.description': '重复执行直到满足条件',
-    'workflows.node.iteration.label': '迭代',
-    'workflows.node.iteration.description': '对数组逐项执行区域内节点',
-    'workflows.node.subflow.label': '子流程',
-    'workflows.node.subflow.description': '封装复杂业务步骤',
-    'workflows.node.output.label': '输出',
-    'workflows.node.output.description': '返回最终结果',
-
-    // Loop container: the starter group a factory builds atomically.
-    'workflows.loop.roundStart': '轮次开始',
-    'workflows.loop.loopAgent': '循环 Agent',
-    'workflows.loop.promptTemplate': '改进当前值并输出新值：{{#NODE_ID.value#}}',
+    ...aggregatorTranslations['zh-CN'],
+    ...loopTranslations['zh-CN'],
+    ...nodeTranslations['zh-CN'],
+    ...operatorTranslations['zh-CN'],
 
     // Palette.
     'workflows.palette.title': '节点',
@@ -115,10 +99,9 @@ export const workflowTranslations = {
     'workflows.inspector.field.role': '角色',
     'workflows.inspector.field.agentModel': 'Agent 模型',
     'workflows.inspector.field.interactive': '交互模式',
-    'workflows.inspector.field.interactiveHint': '开启后该节点会在执行中等待人工输入。',
+    'workflows.inspector.field.interactiveHint':
+      '首期 Cloud 不执行交互式 Agent 节点；开启后发布会拒绝该配置。',
     'workflows.inspector.field.structuredOutput': '结构化输出',
-    'workflows.inspector.field.structuredOutputHint':
-      '要求 Agent 按声明的 JSON 结构返回，额外输出结构化结果。',
     'workflows.inspector.field.prompt': '自定义 Prompt',
     'workflows.inspector.field.promptHint':
       '运行开始时发送给 Agent 的提示词，可插入前面节点的输出。',
@@ -145,14 +128,6 @@ export const workflowTranslations = {
     'workflows.role.documentation-agent': '文档',
 
     // Condition operators, referenced by the capability catalog.
-    'workflows.operator.equals': '等于',
-    'workflows.operator.not-equals': '不等于',
-    'workflows.operator.contains': '包含',
-    'workflows.operator.not-contains': '不包含',
-    'workflows.operator.greater-than': '大于',
-    'workflows.operator.less-than': '小于',
-    'workflows.operator.empty': '为空',
-    'workflows.operator.not-empty': '不为空',
 
     // Tool operations, referenced by the capability catalog.
     'workflows.operation.run-command': '执行命令',
@@ -203,11 +178,6 @@ export const workflowTranslations = {
     'workflows.junction.field.waitCount': '完成数量',
     'workflows.junction.field.failureStrategy': '失败策略',
     'workflows.human.field.approvalPrompt': '审批说明',
-    'workflows.loop.field.maxIterations': '最大轮次',
-    'workflows.loop.field.initialValue': '初始值',
-    'workflows.loop.defaultBehavior':
-      '每轮将 Agent 输出反馈为下一轮的 value；输出非空时结束，并导出为 result。',
-    'workflows.loop.legacyUnsupported': '此旧循环节点缺少可执行配置，请删除后重新添加。',
     'workflows.iteration.hint':
       '对迭代源数组的每个元素执行一轮区域内的节点；每轮绑定 {iter}.item 与 {iter}.index，完成后暴露 output / entries / failed_count 三个变量。',
     'workflows.iteration.field.iterator': '迭代源',
@@ -382,7 +352,7 @@ export const workflowTranslations = {
     // Run viewer: run-level lifecycle and the read-only Overview surfaces.
     'workflows.run.status.pending': '等待中',
     'workflows.run.status.running': '运行中',
-    'workflows.run.status.awaiting_input': '等待输入',
+    'workflows.run.status.retrying': '重试中',
     'workflows.run.status.succeeded': '成功',
     'workflows.run.status.failed': '失败',
     'workflows.run.status.cancelled': '已取消',
@@ -392,6 +362,17 @@ export const workflowTranslations = {
     'workflows.run.runHint': '对已发布快照执行一次这个工作流',
     'workflows.run.noSnapshotHint': '请先发布一个版本，才能运行这个工作流',
     'workflows.run.noPublishedSnapshot': '这个工作流还没有已发布的版本，无法运行。',
+    'workflows.run.startTitle': '运行这个工作流',
+    'workflows.run.startDescription': '选择要运行的版本，填写该版本的输入后启动一次运行。',
+    'workflows.run.project': '项目',
+    'workflows.run.chooseProject': '选择一个项目',
+    'workflows.run.projectRequired': '先选一个项目：运行的工作区建在这个项目里。',
+    'workflows.run.noProjects': '这个空间还没有项目，先创建一个项目再运行。',
+    'workflows.run.projectsUnavailable': '项目列表加载失败，请刷新后重试。',
+    'workflows.run.version': '版本',
+    'workflows.run.start': '开始运行',
+    'workflows.run.noInput': '这个版本没有需要填写的输入。',
+    'workflows.run.missingRequired': '还需要填写：{{fields}}',
     'workflows.run.history': '运行历史',
     'workflows.run.historyHint': '查看这个工作流的运行历史',
     'workflows.run.historyEmpty': '还没有运行记录。',
@@ -414,7 +395,9 @@ export const workflowTranslations = {
     'workflows.run.inspector.config': '配置',
     'workflows.run.inspector.unconfigured': '该节点没有可展示的配置。',
     'workflows.run.inspector.execution': '执行信息',
+    'workflows.run.inspector.attempt': '第几次尝试',
     'workflows.run.inspector.startedAt': '开始',
+    'workflows.run.inspector.retryAt': '下次重试',
     'workflows.run.inspector.finishedAt': '结束',
     'workflows.run.inspector.output': '输出',
     'workflows.run.inspector.noOutput': '该节点没有可展示的输出。',
@@ -425,37 +408,20 @@ export const workflowTranslations = {
     'workflows.errors.nameBlank': '工作流名称不能为空。',
     'workflows.errors.notFound': '未找到该工作流。',
     'workflows.errors.stale': '该工作流已被他人修改，请刷新后重试。',
+    'workflows.errors.requiredField': '还有必填项没有填写，请补齐后再运行。',
+    'workflows.errors.invalidField': '有一项输入不符合所选版本的要求，请按字段提示修改后重试。',
+    'workflows.errors.executorUnconfigured':
+      '所选版本引用的执行器槽位还没有配置。请先在模型设置里为每个槽位选择执行器，再回来运行。',
     'workflows.errors.unknown': '操作失败，请稍后重试。',
   },
   'en-US': {
     ...historyTranslations['en-US'],
+    ...publishErrorTranslations['en-US'],
     ...launchFieldTranslations['en-US'],
-    'workflows.node.start.label': 'Start',
-    'workflows.node.start.description': 'Define workflow inputs',
-    'workflows.node.agent.label': 'Agent',
-    'workflows.node.agent.description': 'Delegate autonomous work to a model',
-    'workflows.node.condition.label': 'Condition',
-    'workflows.node.condition.description': 'Route execution based on rules',
-    'workflows.node.tool.label': 'Tool',
-    'workflows.node.tool.description': 'Call a terminal or plugin',
-    'workflows.node.junction.label': 'Merge',
-    'workflows.node.junction.description': 'Wait for multiple branches to complete',
-    'workflows.node.human.label': 'Human confirmation',
-    'workflows.node.human.description': 'Pause for a human decision',
-    'workflows.node.loop.label': 'Loop',
-    'workflows.node.loop.description': 'Repeat until the exit condition is met',
-    'workflows.node.iteration.label': 'Iteration',
-    'workflows.node.iteration.description': 'Run the region once per array element',
-    'workflows.node.subflow.label': 'Subflow',
-    'workflows.node.subflow.description': 'Encapsulate a complex business step',
-    'workflows.node.output.label': 'Output',
-    'workflows.node.output.description': 'Return the final result',
-
-    // Loop container: the starter group a factory builds atomically.
-    'workflows.loop.roundStart': 'Round start',
-    'workflows.loop.loopAgent': 'Loop Agent',
-    'workflows.loop.promptTemplate':
-      'Improve the current value and output the new value: {{#NODE_ID.value#}}',
+    ...aggregatorTranslations['en-US'],
+    ...loopTranslations['en-US'],
+    ...nodeTranslations['en-US'],
+    ...operatorTranslations['en-US'],
 
     'workflows.palette.title': 'Nodes',
     'workflows.palette.dragHint': 'Drag onto the canvas or click to add at the center',
@@ -525,10 +491,8 @@ export const workflowTranslations = {
     'workflows.inspector.field.agentModel': 'Agent model',
     'workflows.inspector.field.interactive': 'Interactive',
     'workflows.inspector.field.interactiveHint':
-      'When on, this node waits for human input while the run is executing.',
+      'Cloud does not execute interactive agent nodes in phase one; publishing rejects this setting.',
     'workflows.inspector.field.structuredOutput': 'Structured output',
-    'workflows.inspector.field.structuredOutputHint':
-      'Require the agent to follow a declared JSON structure and emit a structured result.',
     'workflows.inspector.field.prompt': 'Custom prompt',
     'workflows.inspector.field.promptHint':
       'The prompt sent to the agent when the run starts; can reference outputs of upstream nodes.',
@@ -551,15 +515,6 @@ export const workflowTranslations = {
     'workflows.role.tester': 'Tester',
     'workflows.role.debugger': 'Debugger',
     'workflows.role.documentation-agent': 'Documentation agent',
-
-    'workflows.operator.equals': 'equals',
-    'workflows.operator.not-equals': 'does not equal',
-    'workflows.operator.contains': 'contains',
-    'workflows.operator.not-contains': 'does not contain',
-    'workflows.operator.greater-than': 'is greater than',
-    'workflows.operator.less-than': 'is less than',
-    'workflows.operator.empty': 'is empty',
-    'workflows.operator.not-empty': 'is not empty',
 
     'workflows.operation.run-command': 'Run command',
     'workflows.operation.read-file': 'Read file',
@@ -606,12 +561,6 @@ export const workflowTranslations = {
     'workflows.junction.field.waitCount': 'Completion count',
     'workflows.junction.field.failureStrategy': 'Failure strategy',
     'workflows.human.field.approvalPrompt': 'Approval prompt',
-    'workflows.loop.field.maxIterations': 'Maximum rounds',
-    'workflows.loop.field.initialValue': 'Initial value',
-    'workflows.loop.defaultBehavior':
-      'Each Agent output feeds the next round as value; a non-empty output stops the Loop and is exported as result.',
-    'workflows.loop.legacyUnsupported':
-      'This legacy Loop lacks executable configuration. Delete it and add a new Loop.',
     'workflows.iteration.hint':
       'Runs the region once per element of the iterator array; each round binds {iter}.item and {iter}.index, and completion exposes output / entries / failed_count.',
     'workflows.iteration.field.iterator': 'Iterator source',
@@ -799,7 +748,7 @@ export const workflowTranslations = {
     // Run viewer: run-level lifecycle and the read-only Overview surfaces.
     'workflows.run.status.pending': 'Pending',
     'workflows.run.status.running': 'Running',
-    'workflows.run.status.awaiting_input': 'Awaiting input',
+    'workflows.run.status.retrying': 'Retrying',
     'workflows.run.status.succeeded': 'Succeeded',
     'workflows.run.status.failed': 'Failed',
     'workflows.run.status.cancelled': 'Cancelled',
@@ -809,6 +758,20 @@ export const workflowTranslations = {
     'workflows.run.runHint': 'Execute this workflow once against a published snapshot',
     'workflows.run.noSnapshotHint': 'Publish a version before running this workflow',
     'workflows.run.noPublishedSnapshot': 'This workflow has no published version to run against.',
+    'workflows.run.startTitle': 'Run this workflow',
+    'workflows.run.startDescription':
+      'Choose the version to run, answer what it asks for, and start one run.',
+    'workflows.run.project': 'Project',
+    'workflows.run.chooseProject': 'Choose a Project',
+    'workflows.run.projectRequired':
+      'Choose a Project first: the run’s Workspace is provisioned in it.',
+    'workflows.run.noProjects': 'This space has no Project yet. Create one, then start the run.',
+    'workflows.run.projectsUnavailable':
+      'The Project list could not be loaded. Refresh and try again.',
+    'workflows.run.version': 'Version',
+    'workflows.run.start': 'Start run',
+    'workflows.run.noInput': 'This version asks for no input.',
+    'workflows.run.missingRequired': 'Still needed: {{fields}}',
     'workflows.run.history': 'Run history',
     'workflows.run.historyHint': 'Browse this workflow’s run history',
     'workflows.run.historyEmpty': 'No runs yet.',
@@ -831,7 +794,9 @@ export const workflowTranslations = {
     'workflows.run.inspector.config': 'Configuration',
     'workflows.run.inspector.unconfigured': 'This node has no recorded configuration.',
     'workflows.run.inspector.execution': 'Execution',
+    'workflows.run.inspector.attempt': 'Attempt',
     'workflows.run.inspector.startedAt': 'Started',
+    'workflows.run.inspector.retryAt': 'Next retry',
     'workflows.run.inspector.finishedAt': 'Finished',
     'workflows.run.inspector.output': 'Output',
     'workflows.run.inspector.noOutput': 'This node has no recorded output.',
@@ -841,6 +806,11 @@ export const workflowTranslations = {
     'workflows.errors.nameBlank': 'Workflow name cannot be blank.',
     'workflows.errors.notFound': 'Workflow not found.',
     'workflows.errors.stale': 'This workflow changed elsewhere; reload and try again.',
+    'workflows.errors.requiredField': 'A required field is still empty. Fill it in and run again.',
+    'workflows.errors.invalidField':
+      'One value does not fit the selected version. Fix the field it names and try again.',
+    'workflows.errors.executorUnconfigured':
+      'The selected version references an executor slot you have not configured. Choose an executor for each slot in model settings, then run again.',
     'workflows.errors.unknown': 'Something went wrong. Try again in a moment.',
   },
 } satisfies TranslationBundle

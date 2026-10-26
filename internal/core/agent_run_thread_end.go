@@ -8,7 +8,10 @@ import (
 // Thread ending (Thread D4, IssueRun D4/D6).
 //
 // All three of D4's ending triggers live here: the idle window expiring, a cancellation request, and
-// the user ending the conversation from the UI (`POST .../thread/end`).
+// the user ending the conversation from the UI (`POST .../thread/end`). So does the writer of the
+// cancellation request itself (`POST .../runs/{rid}/cancel`, cancelAgentRunByUser): the request and
+// the reaction to it are one story, and keeping them in one file is what keeps D6's "cancellation is
+// a request" visible from both ends — the API records and returns, the pass moves the Thread.
 //
 // Everything in this file stops at `thread_state = 'ending'`. Nothing here writes `ended`, marks a
 // queued turn `discarded`, settles a Revision, moves the run to `delivering`/`releasing`/`done`, or
@@ -85,7 +88,10 @@ func (s *Store) endIdleAgentThread(ctx context.Context, runID string) error {
 			  AND thread_state = 'idle'
 			  AND idle_since IS NOT NULL
 			  AND cancel_requested_at IS NULL
-			  AND idle_since < now() - make_interval(secs => $2)`, runID, s.ThreadIdleTimeout.Seconds())
+			  AND (
+				EXISTS(SELECT 1 FROM scheduled_task_occurrences o WHERE o.run_id=issue_runs.id)
+				OR ($3 AND idle_since < now() - make_interval(secs => $2))
+			  )`, runID, s.ThreadIdleTimeout.Seconds(), s.ThreadIdleTimeout > 0)
 		if o == nil {
 			return Object{}
 		}
@@ -110,9 +116,12 @@ func (s *Store) scanEndableIdleThreads(ctx context.Context, limit int) ([]string
 		  AND thread_state = 'idle'
 		  AND idle_since IS NOT NULL
 		  AND cancel_requested_at IS NULL
-		  AND idle_since < now() - make_interval(secs => $2)
+		  AND (
+			EXISTS(SELECT 1 FROM scheduled_task_occurrences o WHERE o.run_id=issue_runs.id)
+			OR ($3 AND idle_since < now() - make_interval(secs => $2))
+		  )
 		ORDER BY idle_since, id
-		LIMIT $1`, limit, s.ThreadIdleTimeout.Seconds())
+		LIMIT $1`, limit, s.ThreadIdleTimeout.Seconds(), s.ThreadIdleTimeout > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -133,16 +142,12 @@ func (s *Store) scanEndableIdleThreads(ctx context.Context, limit int) ([]string
 // by the caller. Per-run failures are deliberately not surfaced — endIdleAgentThread already rolls
 // back and leaves the run idle for a later tick, and the loop must not flood logs because one run is
 // transiently stuck. Only a scan-level failure cancels the pass.
-//
-// A window that was never configured is a no-op, not a zero-length window: `idle_since < now()`
-// would declare every idle Thread expired the instant it went idle, shutting down live sessions.
-// Failing closed means ending nothing.
+// A window that was never configured still leaves ordinary Threads alone. Scheduled occurrences
+// are the sole approved exception: after their first successful turn they enter `idle` and must
+// release EndSession{idle_timeout} immediately, independent of the deployment idle window.
 func (s *Store) EndIdleAgentThreadsOnce(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-	if s.ThreadIdleTimeout <= 0 {
-		return nil
 	}
 	ids, err := s.scanEndableIdleThreads(ctx, agentThreadEndBatchSize)
 	if err != nil {
@@ -152,6 +157,31 @@ func (s *Store) EndIdleAgentThreadsOnce(ctx context.Context) error {
 		_ = s.endIdleAgentThread(ctx, id)
 	}
 	return nil
+}
+
+// mayControlRun answers whether the caller may act on this run's live session — ending its Thread
+// (Thread D4) or requesting its cancellation (IssueRun D6), the two run-level control actions the
+// personal-model decision governs with one rule: on a run carrying a model Binding only that
+// Binding's initiator and the tenant's current administrators may act, while an unbound run keeps
+// Thread D3/D5's rule — any active tenant member, which Public already established before
+// dispatching here. The rule is read from current PostgreSQL state, never from a caller-supplied
+// field, and the caller's identity is resolved through the alias table so a renamed account keeps
+// the right it earned.
+//
+// It answers rather than rejects so each caller names its own fault code: the two actions are
+// distinct to a client ("you may not end this conversation" is not "you may not cancel this run"),
+// and a shared helper that rejected would have to pick one of them.
+func mayControlRun(t *transaction, run Object, r *PublicRequest) bool {
+	binding := t.one("SELECT user_id FROM run_model_bindings WHERE run_id=$1", run.S("id"))
+	if binding == nil {
+		return true
+	}
+	uid := identityWithAlias(t, r.Identity).S("id")
+	if uid == binding.S("userId") {
+		return true
+	}
+	member := t.one("SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='active'", run.S("tenantId"), uid)
+	return member != nil && member.S("role") == "admin"
 }
 
 // endThreadByUser is the public user-initiated end (Thread D4) behind
@@ -176,11 +206,7 @@ func endThreadByUser(t *transaction, s *Store, r *PublicRequest) Object {
 	require(validID(r.RunID), 404, "not_found")
 	run := t.one(`SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL`, r.RunID, r.TenantID, i.S("id"))
 	require(run != nil && run.S("executorType") == "agent", 404, "not_found")
-	if binding := t.one("SELECT user_id FROM run_model_bindings WHERE run_id=$1", run.S("id")); binding != nil {
-		uid := identityWithAlias(t, r.Identity).S("id")
-		member := t.one("SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='active'", r.TenantID, uid)
-		require(uid == binding.S("userId") || member != nil && member.S("role") == "admin", 403, "model_run_end_forbidden")
-	}
+	require(mayControlRun(t, run, r), 403, "model_run_end_forbidden")
 	// A run whose session was never declared has no Thread to end: StartSession materializes `pending`,
 	// so an empty state is a genuine absence, answered like every other
 	// out-of-scope run rather than as a conflict.
@@ -195,6 +221,75 @@ func endThreadByUser(t *transaction, s *Store, r *PublicRequest) Object {
 	}
 	s.endAgentThread(t, run, "user_ended")
 	return Object{"threadState": "ending"}
+}
+
+// cancelAgentRunByUser is the public cancellation request (IssueRun D6) behind
+// `POST .../runs/{rid}/cancel`: the writer of the `issue_runs.cancel_requested_at` column that every
+// consumer of a cancellation already reads. It runs on the caller's transaction, so the request and
+// the caller's idempotency record share one commit.
+//
+// It records the request and writes nothing else. D6 makes cancellation a *request* — the run keeps
+// its phase, status, Thread and Workspace, and the session shuts down on its own evidence — so the
+// reaction is deliberately not inlined here: ending the Thread (or releasing a run whose session was
+// never declared) belongs to reactToAgentRunCancel, which re-reads the recorded column under the same
+// advisory lock on its next tick and is where a failed reaction is retried. Reacting here as well
+// would put one transition in two places, and the second one would be reached by a caller whose
+// request was already accepted.
+//
+// The window is the run's agent-execution window: a `queued` run (no phase yet) is cancellable,
+// because the request outlives the dispatch it precedes — the dispatcher does not filter on it, and
+// the run it provisions settles cancelled through settleRunWorkspace — and `provisioning`,
+// `starting` and `running` are the three live phases. Everything past them answers 409
+// run_not_cancellable: the session is over, and what remains is delivery and release, which D5's
+// give-up limits own rather than the user.
+//
+// Authorization is mayControlRun's, the same rule as ending the Thread, and it is checked before the
+// window so a caller who may not act on this run never learns whether it was still cancellable. An
+// unbound run keeps the member rule; a bound one answers 403 model_run_cancel_forbidden.
+//
+// Repeating the request is a no-op that returns the instant the first one recorded, so the CAS writes
+// only while `cancel_requested_at IS NULL`. That is also what makes the endpoint idempotent beyond
+// its Idempotency-Key: a second click, a retry under a fresh key, and a cancel that arrives after the
+// reaction already ran all leave the recorded instant — the one the run's outcome was decided from —
+// untouched.
+func cancelAgentRunByUser(t *transaction, r *PublicRequest) Object {
+	i := issue(t, r.TenantID, r.IssueID)
+	require(validID(r.RunID), 404, "not_found")
+	run := t.one(`SELECT * FROM issue_runs WHERE id=$1 AND tenant_id=$2 AND issue_id=$3 AND deleted_at IS NULL`, r.RunID, r.TenantID, i.S("id"))
+	require(run != nil && run.S("executorType") == "agent", 404, "not_found")
+	require(mayControlRun(t, run, r), 403, "model_run_cancel_forbidden")
+	if run.S("cancelRequestedAt") == "" {
+		require(cancellableAgentRun(run), 409, "run_not_cancellable")
+		// The CAS repeats the predicate the re-read approved, under the caller's advisory lock: zero
+		// affected rows contradicts that read, so it is invariant corruption rather than a race to
+		// tolerate, exactly as in endAgentThread.
+		if moved := t.execRows(`
+			UPDATE issue_runs
+			SET cancel_requested_at=now(), version=version+1, updated_at=now()
+			WHERE id=$1 AND cancel_requested_at IS NULL`, run.S("id")); moved != 1 {
+			panic(databaseFailure{fmt.Errorf("cancel agent run: run %s was not marked cancelled (rows affected %d)", run.S("id"), moved)})
+		}
+		// Re-read rather than trust the application clock: the recorded instant is the database's, and
+		// the response must be the one a later repeat reads back.
+		run = t.one(`SELECT cancel_requested_at FROM issue_runs WHERE id=$1`, run.S("id"))
+	}
+	return Object{"cancelRequestedAt": run["cancelRequestedAt"]}
+}
+
+// cancellableAgentRun reports whether a cancellation request still has meaning for this run: D6's
+// agent-execution window, which is `queued` (no phase yet) plus the three live phases. The remaining
+// phases are named rather than folded into a default so that a phase outside the schema's closed set
+// is reported as Cloud's broken invariant instead of being answered as a conflict — the same
+// treatment endThreadByUser gives an unknown thread_state.
+func cancellableAgentRun(run Object) bool {
+	switch run.S("phase") {
+	case "", "provisioning", "starting", "running":
+		return true
+	case "delivering", "releasing", "done":
+		return false
+	default:
+		panic(databaseFailure{fmt.Errorf("cancel agent run: run %s has phase=%q, outside the closed set", run.S("id"), run.S("phase"))})
+	}
 }
 
 // reactToAgentRunCancel is the B-owned reaction to a cancellation request (IssueRun D6).
@@ -309,8 +404,9 @@ func (s *Store) scanCancelledAgentRuns(ctx context.Context, limit int) ([]string
 // transaction rolled back, the run is unchanged, and the next tick retries it. Only a scan-level
 // failure cancels the pass.
 //
-// The request is written by whoever owns the cancellation API — no such writer exists in Cloud
-// yet, so today this pass reacts to requests that arrived out of band.
+// The request is written by cancelAgentRunByUser (`POST .../runs/{rid}/cancel`); this pass is the
+// reaction to it, and the two meet only on the column, so a request recorded while this pass is
+// mid-tick is picked up by the next one.
 func (s *Store) ReactToCancelledAgentRunsOnce(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

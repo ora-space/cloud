@@ -24,7 +24,10 @@ type Config struct {
 	Control       ControlConfig       `mapstructure:"control"`
 	Plugins       PluginConfig        `mapstructure:"plugins"`
 	IssueRuns     IssueRunsConfig     `mapstructure:"issue_runs"`
+	Workflow      WorkflowConfig      `mapstructure:"workflow"`
 	ObjectStore   ObjectStoreConfig   `mapstructure:"object_store"`
+	GitServer     GitServerConfig     `mapstructure:"git_server"`
+	Repository    RepositoryConfig    `mapstructure:"repository"`
 }
 
 // IssueRunsConfig holds the Thread lifecycle policy that belongs to Cloud's own dispatch loop
@@ -47,12 +50,20 @@ type IssueRunsConfig struct {
 	// rejects startup rather than silently selecting a zero-length window that would abandon every
 	// blocked creation the moment it blocked.
 	AgentWorkspaceBlockedTimeout time.Duration `mapstructure:"agent_workspace_blocked_timeout"`
+	// ResidualReconcileInterval is the cadence for Cloud's residual-ledger recovery pass. Omission
+	// selects one minute; an explicit non-positive or malformed duration rejects startup. This
+	// schedules reconciliation and is never a deadline proving external cleanup succeeded.
+	ResidualReconcileInterval time.Duration `mapstructure:"residual_reconcile_interval"`
 	// ThreadIdleTimeout is Thread D4's idle window: how long a Thread may sit `idle` before Cloud
 	// asks the session to end. It is a duration configured per deployment, never a per-run column,
 	// and the comparison that judges it runs on database time — no Cloud, Controller or Node process
 	// clock decides that a Thread is idle. Zero or negative selects the approved default (15 minutes)
 	// rather than a zero-length window that would end every Thread the moment it went idle.
 	ThreadIdleTimeout time.Duration `mapstructure:"thread_idle_timeout"`
+	// ScheduledTaskAcceptanceEnabled remains false until the scheduled-task end-to-end acceptance
+	// is complete. It is deliberately opt-in: setting the deployment flag is the release action
+	// that permits Cloud to save, enable and execute these unattended tasks.
+	ScheduledTaskAcceptanceEnabled bool `mapstructure:"scheduled_task_acceptance_enabled"`
 
 	// DeliveryGiveUpAfter is IssueRun D5's continuous-delivery-failure window: how long a Revision
 	// delivery may keep failing before Cloud abandons it and releases the run's Workspace. It is the
@@ -60,16 +71,35 @@ type IssueRunsConfig struct {
 	// succeed. Zero or negative selects the approved default (2 hours).
 	DeliveryGiveUpAfter time.Duration `mapstructure:"delivery_give_up_after"`
 
-	// DeliveryUnreachableAfter is IssueRun D5's unreachability window: how long the run Workspace's
-	// Node may be unreachable before Cloud treats it as gone and closes the run out in the IssueRun D8
-	// give-up path, without waiting out the full failure window. Zero or negative selects the
-	// approved default (30 minutes).
+	// DeliveryUnreachableAfter is the deployment's one unreachability window: how long a run
+	// Workspace's Node may be unreachable before Cloud treats it as gone. IssueRun D5 uses it to close
+	// a run out in the D8 give-up path without waiting out the full failure window, and the workflow
+	// scheduler uses the same window to settle an in-flight session whose Node is gone — one limit, so
+	// two passes cannot disagree about whether the same Node is still there. Zero or negative selects
+	// the approved default (30 minutes).
 	DeliveryUnreachableAfter time.Duration `mapstructure:"delivery_unreachable_after"`
+}
+
+// WorkflowConfig holds the Cloud-side workflow scheduler's deployment policy. Leaf keys are bound to
+// CLOUD_WORKFLOW_* environment overrides like every other section.
+type WorkflowConfig struct {
+	// SessionTurnTimeout bounds a dispatched agent session that has committed no result and produced
+	// no successful `turnEnded` (circus#299 option A): once the execution's own registered instant is
+	// older than this window, the scheduler fails the node with Cloud's own
+	// `session_turn_deadline_exceeded` instead of holding the run `running` forever. It is
+	// deliberately separate from issue_runs.agent_end_confirm_timeout, which measures the different
+	// wait that starts when Cloud releases EndSession; one key must not carry two meanings. Zero or
+	// negative selects the approved default (2 hours), so an omitted key never produces a
+	// zero-length window that would fail every session the moment it dispatched.
+	SessionTurnTimeout time.Duration `mapstructure:"session_turn_timeout"`
 }
 
 // PluginConfig is the cloud-side plugin marketplace configuration. Leaf keys
 // are bound to CLOUD_PLUGINS_* environment overrides like every other section.
 type PluginConfig struct {
+	// PersonalAgentTarget opts into deployed v1 adapters for one exact Linux execution target.
+	// Empty keeps declared-agent admission disabled during host rollout.
+	PersonalAgentTarget string `mapstructure:"personal_agent_target"`
 	// MarketplaceURL is the git repository the marketplace catalog is synced from.
 	MarketplaceURL string `mapstructure:"marketplace_url"`
 	// MarketplaceBranch is the branch checked out and fast-forwarded on every sync.
@@ -168,6 +198,8 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("issue_runs.agent_restore_timeout", DefaultAgentRestoreTimeout)
 	v.SetDefault("issue_runs.agent_end_confirm_timeout", DefaultAgentEndConfirmTimeout)
 	v.SetDefault("issue_runs.agent_workspace_blocked_timeout", DefaultAgentWorkspaceBlockedTimeout)
+	v.SetDefault("issue_runs.residual_reconcile_interval", DefaultResidualReconcileInterval)
+	v.SetDefault("workflow.session_turn_timeout", DefaultWorkflowSessionTurnTimeout)
 	v.SetDefault("plugins.asset_import_interval", DefaultAssetImportInterval)
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -191,6 +223,9 @@ func Load(configPath string) (*Config, error) {
 	if cfg.IssueRuns.AgentStartTimeout <= 0 || cfg.IssueRuns.AgentRestoreTimeout <= 0 || cfg.IssueRuns.AgentEndConfirmTimeout <= 0 || cfg.IssueRuns.AgentWorkspaceBlockedTimeout <= 0 {
 		return nil, fmt.Errorf("issue_runs startup, restore, end confirmation and workspace blocked timeouts must be positive durations")
 	}
+	if cfg.IssueRuns.ResidualReconcileInterval <= 0 {
+		return nil, fmt.Errorf("issue_runs.residual_reconcile_interval must be a positive duration")
+	}
 	// IssueRun D5's two approved defaults, applied for the same reason: an operator who omits the keys
 	// gets the limits the decision fixes, not a zero-length window that would abandon every delivery
 	// immediately.
@@ -199,6 +234,12 @@ func Load(configPath string) (*Config, error) {
 	}
 	if cfg.IssueRuns.DeliveryUnreachableAfter <= 0 {
 		cfg.IssueRuns.DeliveryUnreachableAfter = DefaultDeliveryUnreachableAfter
+	}
+	// circus#299's approved default, applied for the same reason as the windows above: an operator
+	// who omits the key gets the window the owner fixed, not a zero-length one that would fail every
+	// dispatched session at its first pass.
+	if cfg.Workflow.SessionTurnTimeout <= 0 {
+		cfg.Workflow.SessionTurnTimeout = DefaultWorkflowSessionTurnTimeout
 	}
 
 	return &cfg, nil
@@ -221,6 +262,15 @@ const DefaultAgentEndConfirmTimeout = 5 * time.Minute
 // issue_runs.agent_workspace_blocked_timeout is absent or not positive.
 const DefaultAgentWorkspaceBlockedTimeout = 30 * time.Minute
 
+// DefaultResidualReconcileInterval is the residual-ledger recovery cadence when omitted.
+const DefaultResidualReconcileInterval = time.Minute
+
+// DefaultWorkflowSessionTurnTimeout is circus#299 option A's first-version window, applied when
+// workflow.session_turn_timeout is absent or not positive. It is the same order of magnitude as
+// IssueRun D5's delivery give-up limit: far longer than a normal single turn, short enough that a
+// stuck run does not hold its Workspace overnight.
+const DefaultWorkflowSessionTurnTimeout = 2 * time.Hour
+
 // DefaultDeliveryGiveUpAfter and DefaultDeliveryUnreachableAfter are IssueRun D5's first-version
 // give-up limits, applied when the corresponding key is absent or not positive.
 const (
@@ -237,6 +287,9 @@ const DefaultAssetImportInterval = 30 * time.Second
 // marketplace address and branch must be present and well-formed so a typo
 // fails at startup instead of surfacing as a silently empty catalog.
 func validatePlugins(p PluginConfig) error {
+	if p.PersonalAgentTarget != "" && p.PersonalAgentTarget != "x86_64-unknown-linux-gnu" && p.PersonalAgentTarget != "aarch64-unknown-linux-gnu" {
+		return fmt.Errorf("plugins.personal_agent_target must name a supported Linux target")
+	}
 	if p.AssetImportEnabled && p.AssetImportInterval <= 0 {
 		return fmt.Errorf("plugins.asset_import_interval must be a positive duration when plugins.asset_import_enabled is true")
 	}

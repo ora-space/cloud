@@ -38,6 +38,7 @@ package live in that directory's `README.md`; the authoritative source for busin
 **Repositories**
 
 - [Git Server and Project repositories](repositories/git-server.en.md): repository Bindings and Operations, listeners, authorization, ref rules
+- [The external Git line](repositories/external-git.en.md): Repo Executor, Credential Store, sync and explicit publish, the credential lifecycle, authorization and failure convergence
 
 **Collaboration**
 
@@ -49,6 +50,7 @@ package live in that directory's `README.md`; the authoritative source for busin
 - [Agent IssueRuns: an Agent run from start to finish](agent-runs/issue-runs.en.md)
 - [Threads: the conversation of an Agent run](agent-runs/threads.en.md)
 - [Bounded startup: waiting limits and settling unknown outcomes](agent-runs/startup-settlement.en.md)
+- [Agent Run residual reclamation: Cloud authority and evidence](agent-runs/residual-reclamation.en.md)
 - [Revisions: delivery, verified registration and resume](agent-runs/revisions.en.md)
 - [Session reads: session lists, archives and model request statistics](agent-runs/session-reads.en.md)
 
@@ -66,6 +68,7 @@ package live in that directory's `README.md`; the authoritative source for busin
 
 - [Configuration reference](operations/configuration.en.md)
 - [Deployment and operations](operations/deployment.en.md)
+- [Shared deployment egress](operations/deployment-egress.en.md)
 
 **Development**
 

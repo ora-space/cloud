@@ -92,7 +92,7 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 	if err != nil {
 		return err
 	}
-	enqueueExecutionWork(t, runID, "agent_session", spec, sessionStartTarget(t, wid), time.Time{})
+	enqueueExecutionWork(t, runID, "agent_session", spec, sessionStartTarget(t, wid), "", 0, time.Time{})
 	return nil
 }
 
@@ -107,7 +107,9 @@ func (s *Store) startAgentSession(t *transaction, runID string) error {
 //	                       actor's default (identity-access D1; agent_run_identity.go names the
 //	                       divergence from D2's creation-time freeze).
 //	initialTurn:           the deterministic first prompt this transaction just wrote as seq=1.
-//	priorRevision:         the Revision the run resumes, when selectPriorRevision chose one.
+//	priorRevision:         the Revision the run resumes, when selectPriorRevision chose one and it
+//	                       lives in the repository the checkout was cloned from.
+//	workspaceDirectory:    the Project's Workspaces as of now, for `ora-git list`.
 //
 // A run Workspace with no recorded baseline, or one whose baseline names no successful clone
 // execution, is an invariant violation: a session cannot run in a Workspace that was never cloned, so
@@ -126,11 +128,17 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 		return nil, fmt.Errorf("session start: run %s workspace %s has no usable base commit (%q)", runID, wid, base)
 	}
 	checkout := t.one(`
-		SELECT execution_id FROM clone_executions
+		SELECT execution_id, input FROM clone_executions
 		WHERE workspace_id=$1 AND result->>'outcome'='clone_ready' AND result->>'commit'=$2
 		ORDER BY created_at DESC, execution_id DESC LIMIT 1`, wid, base)
 	if checkout == nil {
 		return nil, fmt.Errorf("session start: run %s workspace %s has no successful clone execution for base commit %s", runID, wid, base)
+	}
+	// The prior Revision is fetched from the repository the checkout was cloned from, or not at
+	// all (contract D8). Selection already required this; the frozen prior is checked again here,
+	// where the two inputs are finally put side by side.
+	if prior != nil && prior.S("gitRepositoryUrl") != checkout.O("input").S("repositoryUrl") {
+		prior = nil
 	}
 	identity, err := runGitIdentity(t, o)
 	if err != nil {
@@ -150,10 +158,64 @@ func (s *Store) sessionStartSpec(t *transaction, o, snap Object, turnID, content
 	if bindingID := snap.S("modelBindingId"); bindingID != "" {
 		spec["modelBindingId"] = bindingID
 	}
+	if frozen := t.one("SELECT *,settings::text AS settings_json FROM run_agent_configurations WHERE run_id=$1", runID); frozen != nil {
+		binding := t.one("SELECT protocol,model FROM run_model_bindings WHERE id=$1 AND run_id=$2", snap.S("modelBindingId"), runID)
+		if binding == nil {
+			return nil, fmt.Errorf("session start: frozen agent has no model binding")
+		}
+		spec["agentConfiguration"] = Object{
+			"pluginId": frozen.S("pluginId"), "pluginVersion": frozen.S("pluginVersion"),
+			"target": frozen.S("target"), "packageSha256": frozen.S("packageSha256"),
+			"schemaVersion": frozen.N("declarationSchemaVersion"), "declarationFingerprint": frozen.S("declarationFingerprint"),
+			"adapterVersion": frozen.N("adapterContractVersion"), "configurationRevision": frozen.N("configurationRevision"),
+			"settingsJson": frozen.S("settingsJson"),
+			"protocol":     binding.S("protocol"), "model": binding.O("model"),
+		}
+	}
 	if prior != nil {
 		spec["priorRevision"] = prior
 	}
+	spec["workspaceDirectory"] = workspaceDirectory(t, wid)
+	// Only a scheduled occurrence may report a business verdict or run artifacts, and the executor
+	// must know which admission it runs under before it starts. A manual run leaves the field out:
+	// that is the shape every session released before this field existed already has.
+	if scheduledTaskRun(t, runID) {
+		spec["trigger"] = "scheduled"
+	}
 	return spec, nil
+}
+
+// workspaceDirectoryLimit bounds the Workspace directory a session input carries (contract D7).
+const workspaceDirectoryLimit = 100
+
+// workspaceDirectory lists the Workspaces of the session's Project, newest first, so `ora-git list`
+// can name their branches by Issue and run (contract D7). Run Workspaces stay listed after deletion
+// because their branches remain on the Git Server. A WorkflowRun's Workspace is never listed: its
+// sessions get no Git Server access in the first phase and the directory has no fields for it
+// (contract D5, D7). It is a snapshot taken when the session work is
+// released, never refreshed and never used for authorization: which branches a session can read and
+// write is decided by the Git Server alone.
+func workspaceDirectory(t *transaction, wid string) []Object {
+	rows := t.list(`
+		SELECT w.id AS workspace_id,
+		       CASE WHEN w.issue_run_id IS NOT NULL THEN 'run' ELSE w.kind END AS kind,
+		       r.issue_id, i.title AS issue_title, r.id AS issue_run_id, r.status AS run_status
+		FROM workspaces w
+		JOIN workspaces self ON self.id=$1 AND self.project_id=w.project_id AND self.tenant_id=w.tenant_id
+		LEFT JOIN issue_runs r ON r.id=w.issue_run_id AND r.tenant_id=w.tenant_id
+		LEFT JOIN issues i ON i.id=r.issue_id AND i.tenant_id=r.tenant_id
+		WHERE (w.deleted_at IS NULL OR w.issue_run_id IS NOT NULL) AND w.workflow_run_id IS NULL
+		ORDER BY w.created_at DESC, w.id DESC
+		LIMIT $2`, wid, workspaceDirectoryLimit)
+	out := make([]Object, 0, len(rows))
+	for _, row := range rows {
+		listing := Object{"workspaceId": row.S("workspaceId"), "kind": row.S("kind")}
+		if row.S("issueRunId") != "" {
+			listing["issueId"], listing["issueTitle"], listing["issueRunId"], listing["runStatus"] = row.S("issueId"), row.S("issueTitle"), row.S("issueRunId"), row.S("runStatus")
+		}
+		out = append(out, listing)
+	}
+	return out
 }
 
 // renderAgentInitialTurn produces the deterministic first-prompt content from the frozen run-create
@@ -174,6 +236,18 @@ func renderAgentInitialTurn(input, resume Object) string {
 		"inputs":      input["interactionValues"],
 		"target":      input["target"],
 		"contextRefs": input["contextRefs"],
+	}
+	// Carry the same frozen task context that the builder admitted. Reading the live Issue here
+	// would change the meaning of a queued run; dropping these fields loses the user's constraints.
+	for _, key := range []string{"issue", "recentComments"} {
+		if value, exists := input[key]; exists {
+			sections[key] = value
+		}
+	}
+	for _, key := range []string{"conversationHistory", "conversationHistoryIncomplete"} {
+		if value, exists := input[key]; exists {
+			sections[key] = value
+		}
 	}
 	if resume != nil {
 		sections["resume"] = resume
@@ -228,7 +302,7 @@ func (s *Store) scanStartingAgentRuns(ctx context.Context, limit int) ([]string,
 		         JOIN workspaces w ON w.id=n.workspace_id AND w.runtime_generation=si.generation
 		         WHERE n.workspace_id=ir.workspace_id AND n.initialized AND n.connection_state='connected'
 		           AND n.ended_at IS NULL AND si.terminated_at IS NULL
-		           AND n.last_seen_at>clock_timestamp()-interval '30 seconds' AND NOT n.model_proxy)))))))
+		           AND n.last_seen_at>clock_timestamp()-interval '30 seconds' AND (NOT n.model_proxy OR `+declaredAdapterMismatchSQL+`))))))))
 		ORDER BY ir.created_at, ir.id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err

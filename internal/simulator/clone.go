@@ -40,7 +40,12 @@ func (c *Controller) clone(ctx context.Context, snap core.Object, workspaces, no
 	if e != nil {
 		return e
 	}
-	input := core.Object{"workspaceId": wid, "repositoryUrl": snap.O("project").S("repositoryUrl"), "branch": workspace.S("requestedRef")}
+	// The clone input is the one Cloud froze into the step; the Controller never builds it.
+	frozen := snap.O("cloneInput")
+	if frozen.S("kind") != "clone" {
+		return fmt.Errorf("clone step without a frozen clone input")
+	}
+	input := core.Object{"workspaceId": wid, "repositoryUrl": frozen.S("repositoryUrl"), "snapshotRef": frozen.S("snapshotRef"), "baseCommit": frozen.S("baseCommit"), "workspaceRef": frozen.S("workspaceRef")}
 	ctx = metadata.AppendToOutgoingContext(ctx, controlgrpc.HolderMetadata, c.Client.Subject)
 	execution := ""
 	for _, clone := range clones {
@@ -54,7 +59,7 @@ func (c *Controller) clone(ctx context.Context, snap core.Object, workspaces, no
 	}
 	if execution == "" {
 		execution = uuid.NewString()
-		spec := &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{Repository: input.S("repositoryUrl"), Branch: input.S("branch")}}}
+		spec := &controlpb.ExecutionInput{Spec: &controlpb.ExecutionInput_Clone{Clone: &controlpb.CloneSpec{RepositoryUrl: frozen.S("repositoryUrl"), SnapshotRef: frozen.S("snapshotRef"), BaseCommit: frozen.S("baseCommit"), WorkspaceRef: frozen.S("workspaceRef")}}}
 		if _, e = c.Executions.RecordDispatch(ctx, &controlpb.RecordDispatchRequest{SubmissionId: "dispatch-" + execution, Epoch: c.Epoch, OperationId: c.Operation.S("id"), ExecutionId: execution, NodeId: node.S("nodeId"), Input: spec}); e != nil {
 			return fmt.Errorf("record clone dispatch: %w", e)
 		}

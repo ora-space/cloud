@@ -18,16 +18,17 @@ tasks:
     cmds: [go tool golangci-lint run -c .golangci.yml]
   lint:fix:
     cmds: [go tool golangci-lint run -c .golangci.yml --fix]
+  # Keep 20m for unsharded local runs (Linux 417s; Windows aborted at 607s under 10m); race is slower, while CI is sharded.
   test:
     desc: All tests; real PostgreSQL is mandatory
     env:
       REQUIRE_POSTGRES: '1'
-    cmds: [go test -count=1 -v -coverpkg=./internal/... -coverprofile=coverage.out ./...]
+    cmds: [go test -count=1 -timeout 20m -v -coverpkg=./internal/... -coverprofile=coverage.out ./...]
   test:integration:
     desc: Real HTTP + PostgreSQL + disk + Git acceptance tests
     env:
       REQUIRE_POSTGRES: '1'
-    cmds: [go test -count=1 -v ./integration]
+    cmds: [go test -count=1 -timeout 20m -v ./integration]
   test:revision:
     desc: Revision verification and recovery; real PostgreSQL and S3 are mandatory
     env:
@@ -41,7 +42,7 @@ tasks:
     env:
       REQUIRE_POSTGRES: '1'
       CGO_ENABLED: '1'
-    cmds: [go test -race -count=1 -v ./...]
+    cmds: [go test -race -count=1 -timeout 20m -v ./...]
   check:
     cmds:
       - task: format:check
@@ -51,7 +52,7 @@ tasks:
       - task: test
   build:
     cmds:
-      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/git-server-preset ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
+      - go build -o bin/ ./cmd/server ./cmd/gateway ./cmd/model-gateway ./cmd/git-server ./cmd/git-server-preset ./cmd/repo-executor ./cmd/git-credential-ora ./cmd/credential-store ./cmd/cloudctl ./cmd/simulator ./cmd/devsetup
   run:
     desc: Go API server on :8080
     cmds: [go run ./cmd/server]

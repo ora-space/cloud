@@ -77,7 +77,7 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 	case r.After != "":
 		// `after=N` is the forward cursor: everything strictly after N, oldest first.
 		rows = t.list(`
-			SELECT seq, source, kind, record, turn_id, status, created_at
+			SELECT seq, source, kind, record, turn_id, status, created_at, history_sequence
 			FROM thread_entries WHERE run_id=$1 AND seq>$2 ORDER BY seq LIMIT $3`,
 			run.S("id"), threadCursor(r.After), limit)
 	case r.Before != "":
@@ -86,7 +86,7 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 		// to take that page; the outer one restores the response's ascending order.
 		rows = t.list(`
 			SELECT * FROM (
-				SELECT seq, source, kind, record, turn_id, status, created_at
+				SELECT seq, source, kind, record, turn_id, status, created_at, history_sequence
 				FROM thread_entries WHERE run_id=$1 AND seq<$2 ORDER BY seq DESC LIMIT $3
 			) w ORDER BY seq`,
 			run.S("id"), threadCursor(r.Before), limit)
@@ -96,7 +96,7 @@ func threadRead(t *transaction, r *PublicRequest) Object {
 		// Thread has grown.
 		rows = t.list(`
 			SELECT * FROM (
-				SELECT seq, source, kind, record, turn_id, status, created_at
+				SELECT seq, source, kind, record, turn_id, status, created_at, history_sequence
 				FROM thread_entries WHERE run_id=$1 ORDER BY seq DESC LIMIT $2
 			) w ORDER BY seq`,
 			run.S("id"), limit)
@@ -148,9 +148,9 @@ func threadCursor(v string) int64 {
 // (Thread D1/D3). It is what keeps the entry's Node-owned columns (`node_execution_id`,
 // `node_sequence`) and its internal `run_id` off the wire: that identity is Cloud-internal.
 //
-// `turnId` and `status` describe the user-turn lifecycle and exist only for a user turn — 0022's
-// `(source = 'user') = (status IS NOT NULL)` CHECK makes that exactly `source = 'user'` — so a node
-// or system entry carries neither field rather than carrying a null.
+// `status` is the user delivery lifecycle only. Node rows expose their stored turn identity too:
+// queued future user entries may precede an earlier turn's final tool update in the public log,
+// so the client cannot safely infer current Node identity from the most recently displayed user.
 func threadEntryView(row Object) Object {
 	out := Object{
 		"seq":       row["seq"],
@@ -160,8 +160,13 @@ func threadEntryView(row Object) Object {
 		"createdAt": row["createdAt"],
 	}
 	if row.S("source") == "user" {
-		out["turnId"] = row["turnId"]
 		out["status"] = row["status"]
+	}
+	if row["turnId"] != nil {
+		out["turnId"] = row["turnId"]
+	}
+	if row["historySequence"] != nil {
+		out["historySequence"] = row["historySequence"]
 	}
 	return out
 }

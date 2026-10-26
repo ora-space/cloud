@@ -64,6 +64,33 @@ function fault(code: string, status: number) {
 }
 
 describe('ModelConnectionsPage', () => {
+  it('retains the default edit version across a conflict until the user reconciles explicitly', async () => {
+    serve([connection()])
+    let version = 1
+    const writes: unknown[] = []
+    server.use(
+      http.get(DEFAULT, () =>
+        HttpResponse.json({ connectionId: 'mc1', modelId: 'vendor/model', version }),
+      ),
+      http.put(DEFAULT, async ({ request }) => {
+        writes.push(await request.json())
+        version = 2
+        return fault('version_conflict', 409)
+      }),
+    )
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '保存默认模型' }))
+    await user.click(await screen.findByRole('button', { name: '已核对，保留草稿继续编辑' }))
+    expect(screen.getByRole('combobox', { name: '默认模型' })).toHaveTextContent('Model One')
+    await user.click(screen.getByRole('button', { name: '保存默认模型' }))
+    await waitFor(() => expect(writes).toHaveLength(2))
+    expect(writes).toEqual([
+      { connectionId: 'mc1', modelId: 'vendor/model', version: 1 },
+      { connectionId: 'mc1', modelId: 'vendor/model', version: 2 },
+    ])
+  })
+
   it.each([
     {
       protocol: 'openai-completions',

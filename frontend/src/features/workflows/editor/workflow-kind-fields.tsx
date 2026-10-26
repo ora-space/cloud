@@ -19,15 +19,13 @@ import type {
   WorkflowNodeData,
   WorkflowToolParameter,
 } from '@/features/workflows/runtime/types'
-import type { TranslationKey } from '@/i18n/i18n-instance'
 import { InspectorField } from '@/features/workflows/editor/workflow-inspector-fields'
-import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
 import type { WorkflowCanvasNode } from '@/features/workflows/editor/canvas-types'
 import type { WorkflowDecoratedVariable } from '@/features/workflows/runtime/variable-catalog'
-import {
-  LocalizedSelectValue,
-  comparisonValueToText,
-} from '@/features/workflows/editor/workflow-variable-select'
+import type { TranslationKey } from '@/i18n/i18n-instance'
+import { LocalizedChoiceSelect } from '@/features/workflows/editor/workflow-choice-select'
+import { LocalizedSelectValue } from '@/features/workflows/editor/workflow-variable-select'
+import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
 
 /**
  * Everything the kind-specific panels may read beyond the selected node itself.
@@ -214,33 +212,17 @@ export function JunctionNodeFields({
   const { t } = useTranslation()
   return (
     <>
-      <InspectorField
+      <LocalizedChoiceSelect
+        id="workflow-node-wait-strategy"
         label={t('workflows.junction.field.waitStrategy')}
-        htmlFor="workflow-node-wait-strategy"
-      >
-        <Select
-          value={data.waitStrategy ?? 'all'}
-          onValueChange={(strategy) => {
-            if (strategy === 'all' || strategy === 'any' || strategy === 'count') {
-              onChange({ ...data, waitStrategy: strategy })
-            }
-          }}
-        >
-          <SelectTrigger id="workflow-node-wait-strategy" className="w-full">
-            <LocalizedSelectValue
-              options={WORKFLOW_JUNCTION_WAIT_CHOICES}
-              value={data.waitStrategy ?? 'all'}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {WORKFLOW_JUNCTION_WAIT_CHOICES.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {t(option.labelKey)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </InspectorField>
+        value={data.waitStrategy ?? 'all'}
+        options={WORKFLOW_JUNCTION_WAIT_CHOICES}
+        onChange={(strategy) => {
+          if (strategy === 'all' || strategy === 'any' || strategy === 'count') {
+            onChange({ ...data, waitStrategy: strategy })
+          }
+        }}
+      />
       {data.waitStrategy === 'count' && (
         <InspectorField
           label={t('workflows.junction.field.waitCount')}
@@ -266,33 +248,17 @@ export function JunctionNodeFields({
           />
         </InspectorField>
       )}
-      <InspectorField
+      <LocalizedChoiceSelect
+        id="workflow-node-failure-strategy"
         label={t('workflows.junction.field.failureStrategy')}
-        htmlFor="workflow-node-failure-strategy"
-      >
-        <Select
-          value={data.failureStrategy ?? 'fail'}
-          onValueChange={(strategy) => {
-            if (strategy === 'fail' || strategy === 'continue') {
-              onChange({ ...data, failureStrategy: strategy })
-            }
-          }}
-        >
-          <SelectTrigger id="workflow-node-failure-strategy" className="w-full">
-            <LocalizedSelectValue
-              options={WORKFLOW_JUNCTION_FAILURE_CHOICES}
-              value={data.failureStrategy ?? 'fail'}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {WORKFLOW_JUNCTION_FAILURE_CHOICES.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {t(option.labelKey)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </InspectorField>
+        value={data.failureStrategy ?? 'fail'}
+        options={WORKFLOW_JUNCTION_FAILURE_CHOICES}
+        onChange={(strategy) => {
+          if (strategy === 'fail' || strategy === 'continue') {
+            onChange({ ...data, failureStrategy: strategy })
+          }
+        }}
+      />
     </>
   )
 }
@@ -337,90 +303,13 @@ export function HumanNodeFields({
   )
 }
 
-/** Edits a Loop container: iteration ceiling, carried initial value, and a behavior note. */
-export function LoopNodeFields({
-  data,
-  onChange,
-}: Pick<WorkflowKindFieldsProps, 'data' | 'onChange'>) {
+/** Explains the loopExit marker: it ends the round and carries no configuration of its own. */
+export function LoopExitNodeFields() {
   const { t } = useTranslation()
-  const loopConfig = data.loopConfig
-  const carriedVariable = loopConfig?.variables[0]
-  // A constant may have been imported as a number, boolean, or object, so the
-  // shared JSON value renderer turns it back into editable text safely.
-  const initialValue =
-    carriedVariable?.initial.kind === 'constant'
-      ? comparisonValueToText(carriedVariable.initial.value)
-      : ''
-  const updateMaxIterations = (value: number): void => {
-    if (loopConfig === undefined) {
-      return
-    }
-    onChange({
-      ...data,
-      loopConfig: {
-        ...loopConfig,
-        maxIterations: Math.min(100, Math.max(1, Math.trunc(value))),
-      },
-    })
-  }
-  const updateInitialValue = (value: string): void => {
-    if (loopConfig === undefined || carriedVariable === undefined) {
-      return
-    }
-    onChange({
-      ...data,
-      loopConfig: {
-        ...loopConfig,
-        variables: [
-          {
-            ...carriedVariable,
-            initial: { kind: 'constant', value },
-          },
-          ...loopConfig.variables.slice(1),
-        ],
-      },
-    })
-  }
   return (
-    <>
-      <InspectorField
-        label={t('workflows.loop.field.maxIterations')}
-        htmlFor="workflow-node-max-iterations"
-      >
-        <Input
-          id="workflow-node-max-iterations"
-          type="number"
-          min={1}
-          max={100}
-          value={loopConfig?.maxIterations ?? 3}
-          disabled={loopConfig === undefined}
-          onChange={(event) => {
-            const parsed = Number(event.target.value)
-            if (Number.isFinite(parsed)) {
-              updateMaxIterations(parsed)
-            }
-          }}
-        />
-      </InspectorField>
-      <InspectorField
-        label={t('workflows.loop.field.initialValue')}
-        htmlFor="workflow-node-loop-initial-value"
-      >
-        <Input
-          id="workflow-node-loop-initial-value"
-          value={initialValue}
-          disabled={loopConfig === undefined || carriedVariable === undefined}
-          onChange={(event) => updateInitialValue(event.target.value)}
-        />
-      </InspectorField>
-      <p className="rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        {t(
-          loopConfig === undefined
-            ? 'workflows.loop.legacyUnsupported'
-            : 'workflows.loop.defaultBehavior',
-        )}
-      </p>
-    </>
+    <p className="rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+      {t('workflows.node.loopExit.description')}
+    </p>
   )
 }
 

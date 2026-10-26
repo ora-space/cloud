@@ -46,11 +46,19 @@ func agentRunEvidence(t *transaction, tid, agentID string) (Object, bool) {
 // failure rejects the whole comment target by panicking (409), rolling back the enclosing comment
 // transaction so no comment, activity, or run survives.
 func agentRunGate(t *transaction, i, agent Object) {
+	require(agentRunGateOK(t, i, agent), 409, "issue_project_required")
+}
+
+// agentRunGateOK reports the same IssueRun D2 project gate without panicking, so a scheduled-task
+// admission maps the failure to its D5 failure reason and records the occurrence instead of rolling
+// the whole evaluation transaction back.
+func agentRunGateOK(t *transaction, i, agent Object) bool {
 	ref, _ := i["projectRef"].(string)
-	require(ref != "", 409, "issue_project_required")
+	if ref == "" {
+		return false
+	}
 	p := t.one("SELECT id, space_id FROM projects WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL", ref, i.S("tenantId"))
-	require(p != nil, 409, "issue_project_required")
-	require(p.S("spaceId") == agent.S("spaceId"), 409, "issue_project_required")
+	return p != nil && p.S("spaceId") == agent.S("spaceId")
 }
 
 // snapshotAgentRunInput merges the D1 plugin identity/version snapshot into a run input so a later

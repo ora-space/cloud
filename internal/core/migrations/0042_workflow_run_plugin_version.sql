@@ -1,0 +1,27 @@
+-- Freeze the plugin version a WorkflowRun executes with (specs decisions/cloud/workflow
+-- 0-cloud-side-scheduler-owns-workflow-execution.md D3: the execution identity — snapshot, input,
+-- initiator, Project, run Workspace binding, per-slot model bindings, plugin version — is frozen in
+-- the run's creation transaction).
+--
+-- Why it has to be frozen. A run executes over minutes; a space's plugin version moves whenever
+-- somebody upgrades. Reading the version at session start made an already-created run's execution
+-- content depend on a decision taken after it was created, which is the one thing the frozen identity
+-- exists to prevent: a run started against 1.0.0 and dispatched after an upgrade to 2.0.0 would have
+-- executed 2.0.0 while its own record said nothing about either. The frozen value is what the session
+-- spec carries, so the plugin identity is as reproducible as the snapshot, the model bindings and the
+-- Project already are.
+--
+-- Nullable, and deliberately not backfilled. Rows written before this migration were never frozen, and
+-- there is no recoverable answer for them: the space's current version is not what such a run was
+-- created against, so writing it would record a fact that never held. A run with no frozen version
+-- fails at its first agent node with `agent_plugin_version_unfrozen` rather than guessing — see
+-- workflowSessionSpec. Whether such rows should instead be backfilled, refused or executed under some
+-- other rule is an open owner decision; this migration records no answer to it.
+--
+-- A run with no Project also leaves this NULL: the plugin lives in the Project's space, so a run that
+-- named no Project has no space to read one from. Such a run already fails at its first agent node
+-- (workflow_run_project_required) before the plugin version is ever needed.
+--
+-- Additive; edits no applied migration.
+
+ALTER TABLE workflow_runs ADD COLUMN plugin_version text;

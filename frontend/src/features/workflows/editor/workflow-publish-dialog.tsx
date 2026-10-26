@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { usePublishWorkflow } from '@/features/workflows/api'
-import { workflowErrorKey } from '@/features/workflows/error-messages'
+import { WorkflowPublishError } from '@/features/workflows/editor/workflow-publish-error'
 
 /**
  * Confirms publishing the workflow's live graph as the next immutable version.
@@ -73,11 +73,7 @@ export function WorkflowPublishDialog({
             }
           }}
         />
-        {publish.error && (
-          <p className="text-xs text-destructive">
-            {t(workflowErrorKey(publish.error.response?.data?.code))}
-          </p>
-        )}
+        {publish.error && <WorkflowPublishError fault={publish.error.response?.data} />}
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t('workflows.list.cancel')}

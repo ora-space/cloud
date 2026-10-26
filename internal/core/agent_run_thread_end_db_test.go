@@ -43,9 +43,38 @@ func stageIdleThread(t *testing.T, store *Store, runID string, age time.Duration
 	}
 }
 
-// requestCancel records the cancellation request the ending reaction consumes. No Cloud API writes
-// this column yet, so a test states the request directly; the reaction under test is the
-// shipped one either way.
+// markScheduledThread records the admission-ledger origin for an already-live fixture run. The
+// stored occurrence is the only origin fact the production D3 guards consult, so this keeps the
+// test on the same path a real scheduled admission would create without reconstructing its worker.
+func markScheduledThread(t *testing.T, store *Store, runID string) {
+	t.Helper()
+	var tenantID, issueID, agentID, creatorID string
+	if err := store.Pool.QueryRow(`
+		SELECT r.tenant_id, r.issue_id, r.executor_id, tm.user_id
+		FROM issue_runs r
+		JOIN tenant_memberships tm ON tm.tenant_id=r.tenant_id AND tm.status='active'
+		WHERE r.id=$1
+		ORDER BY tm.user_id LIMIT 1`, runID).Scan(&tenantID, &issueID, &agentID, &creatorID); err != nil {
+		t.Fatalf("read scheduled Thread fixture identity: %v", err)
+	}
+	taskID := newID()
+	if _, err := store.Pool.Exec(`
+		INSERT INTO scheduled_tasks(id,tenant_id,issue_id,creator_user_id,agent_id,name,prompt,schedule,timezone,revision,version,enabled)
+		VALUES($1,$2,$3,$4,$5,$6,'headless','{"kind":"daily","hour":0,"minute":0}'::jsonb,'UTC',1,1,false)`,
+		taskID, tenantID, issueID, creatorID, agentID, "headless-"+taskID); err != nil {
+		t.Fatalf("seed scheduled task: %v", err)
+	}
+	if _, err := store.Pool.Exec(`
+		INSERT INTO scheduled_task_occurrences(tenant_id,task_id,scheduled_at,outcome,task_revision,observed_at,run_id)
+		VALUES($1,$2,now(),'admitted',1,now(),$3)`, tenantID, taskID, runID); err != nil {
+		t.Fatalf("seed scheduled occurrence: %v", err)
+	}
+}
+
+// requestCancel records the cancellation request the ending reaction consumes. The public endpoint
+// (`POST .../runs/{rid}/cancel`) writes this column, but the cases here are about what the reaction
+// does with a request, so they state it directly; the writer→reaction seam is
+// agent_run_cancel_db_test.go's subject, where the request is written through the endpoint instead.
 func requestCancel(t *testing.T, store *Store, runID string) {
 	t.Helper()
 	if _, err := store.Pool.Exec(`UPDATE issue_runs SET cancel_requested_at=now(), version=version+1, updated_at=now() WHERE id=$1`, runID); err != nil {
@@ -233,6 +262,25 @@ func TestIdleScanLeavesUnconfiguredAndUnfinishedWindowsAlone(t *testing.T) {
 	}
 	if got := endSessionRequests(t, other, second.run); len(got) != 0 {
 		t.Fatalf("a Thread activated by a POST must emit no EndSession, got %v", got)
+	}
+}
+
+// TestScheduledIdleThreadEndsImmediately proves the scheduled-task D3 exception: a headless
+// occurrence has no user append window, so its first successful turn's idle transition is ended on
+// the next scan even though the ordinary deployment timeout has not elapsed.
+func TestScheduledIdleThreadEndsImmediately(t *testing.T) {
+	store := commandStore(t)
+	store.ThreadIdleTimeout = 15 * time.Minute
+	scene := runningThreadScene(t, store)
+	markScheduledThread(t, store, scene.run)
+	stageIdleThread(t, store, scene.run, 0)
+
+	idlePass(t, store)
+	if state := runThreadState(t, store, scene.run); !state.Valid || state.String != "ending" {
+		t.Fatalf("a scheduled idle Thread must end immediately, got %v", state)
+	}
+	if reasons := endSessionRequests(t, store, scene.run); len(reasons) != 1 || reasons[0] != "idle_timeout" {
+		t.Fatalf("scheduled headless end must emit one EndSession{idle_timeout}, got %v", reasons)
 	}
 }
 

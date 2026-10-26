@@ -3,7 +3,7 @@
 [中文](README.md) | [English](README.en.md)
 
 This process runs separately from Cloud's business server and composes `internal/gitserver`, Core
-and PostgreSQL (proposed ADR `cloud/git-server/0`). It reads only the Cloud database configuration
+and PostgreSQL; see [Git Server](../../docs/repositories/git-server.en.md) for the cross-module contract. It reads only the Cloud database configuration
 and its own deployment TLS file references; it stores no authorization state. Startup validates
 migrations; shutdown drains the three listeners before closing the pre-receive hook channel. Git also
 runs this binary as the pre-receive hook (`-pre-receive`).

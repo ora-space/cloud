@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,6 +75,94 @@ func TestPluginFieldValidation(t *testing.T) {
 	}
 	if validField("result", map[string]any{"unknownEvidence": true}) {
 		t.Fatal("unknown evidence keys must be rejected")
+	}
+}
+
+// TestScheduledTaskFieldValidation pins the boundary types of the scheduled-task definition: the
+// cadence and the unattended-consent record are the objects the OpenAPI contract and the browser
+// send, while a string (the shape the transport used to fall through to) never reaches the core.
+func TestScheduledTaskFieldValidation(t *testing.T) {
+	number := func(v int64) json.Number { return json.Number(strconv.FormatInt(v, 10)) }
+	valid := []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"daily cadence", "schedule", map[string]any{"kind": "daily", "hour": number(3), "minute": number(5)}},
+		{"every-hours cadence", "schedule", map[string]any{"kind": "every_hours", "intervalHours": number(2)}},
+		{"weekly cadence", "schedule", map[string]any{"kind": "weekly", "hour": number(9), "minute": number(0), "weekdays": []any{"monday", "friday"}}},
+		{"nullable cadence fields", "schedule", map[string]any{"kind": "daily", "hour": number(3), "minute": number(5), "intervalHours": nil, "weekdays": nil}},
+		{"documented approval", "approval", map[string]any{"policy": "full_auto_in_cloud_workspace"}},
+	}
+	for _, test := range valid {
+		if !validField(test.field, test.value) {
+			t.Fatalf("%s must be accepted", test.name)
+		}
+	}
+	invalid := []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"schedule as a string", "schedule", `{"kind":"daily","hour":3,"minute":5}`},
+		{"unknown schedule key", "schedule", map[string]any{"kind": "daily", "hour": number(3), "minute": number(5), "cron": "* * * * *"}},
+		{"hour as a string", "schedule", map[string]any{"kind": "daily", "hour": "3", "minute": number(5)}},
+		{"weekdays as a string", "schedule", map[string]any{"kind": "weekly", "hour": number(9), "minute": number(0), "weekdays": "monday"}},
+		{"weekday as a number", "schedule", map[string]any{"kind": "weekly", "hour": number(9), "minute": number(0), "weekdays": []any{number(1)}}},
+		{"approval as a string", "approval", "full_auto_in_cloud_workspace"},
+		{"unknown approval key", "approval", map[string]any{"policy": "full_auto_in_cloud_workspace", "scope": "all"}},
+		{"policy as a number", "approval", map[string]any{"policy": number(1)}},
+	}
+	for _, test := range invalid {
+		if validField(test.field, test.value) {
+			t.Fatalf("%s must be rejected", test.name)
+		}
+	}
+}
+
+// TestScheduledTaskDocumentedBodyPassesFieldValidation decodes the body the creation form and the
+// OpenAPI contract describe and runs every field through the same gate the route applies. It is
+// the regression guard for the boundary that once answered 400 invalid_field_type for both object
+// fields while every domain test called Store.Public directly.
+func TestScheduledTaskDocumentedBodyPassesFieldValidation(t *testing.T) {
+	const body = `{"issueId":"c0b8b8e4-6a2f-4f6f-9d6d-0d0b5f0c9a11",
+		"agentId":"3f0d0a6e-8f0e-4a53-9a4e-9f1b0d3f5c22","name":"Nightly acceptance",
+		"prompt":"write the acceptance report","model":"vendor/model-v1","timezone":"Asia/Shanghai",
+		"schedule":{"kind":"daily","hour":3,"minute":5},
+		"approval":{"policy":"full_auto_in_cloud_workspace"},"enabled":true}`
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	var decoded map[string]any
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("decode documented body: %v", err)
+	}
+	fields := map[string]bool{
+		"issueId": true, "name": true, "prompt": true, "agentId": true,
+		"model": true, "schedule": true, "timezone": true, "approval": true, "enabled": true,
+	}
+	if len(decoded) != len(fields) {
+		t.Fatalf("documented body fields = %v", decoded)
+	}
+	for field, value := range decoded {
+		if !fields[field] {
+			t.Fatalf("documented body carries unexpected field %q", field)
+		}
+		if !validField(field, value) {
+			t.Fatalf("documented field %q was rejected by the transport gate", field)
+		}
+	}
+	patch := `{"version":1,"name":"Renamed","prompt":"new prompt","agentId":"3f0d0a6e-8f0e-4a53-9a4e-9f1b0d3f5c22",
+		"model":"vendor/model-v2","schedule":{"kind":"every_hours","intervalHours":2},"timezone":"Asia/Shanghai"}`
+	decoder = json.NewDecoder(strings.NewReader(patch))
+	decoder.UseNumber()
+	var decodedPatch map[string]any
+	if err := decoder.Decode(&decodedPatch); err != nil {
+		t.Fatalf("decode documented patch: %v", err)
+	}
+	for field, value := range decodedPatch {
+		if !validField(field, value) {
+			t.Fatalf("documented patch field %q was rejected by the transport gate", field)
+		}
 	}
 }
 

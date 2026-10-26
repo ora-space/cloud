@@ -24,17 +24,27 @@ import (
 // issue_runs state in this transaction, never taken from the caller. The Phase 2 state
 // machine is not re-designed here; only the committed matrix above is implemented.
 //
-// The plugin-specific failure (agent_plugin_unavailable) is deliberately NOT produced
-// here: the hook carries only a boolean ready and the create_workspace plugin step is
-// not wired, so there is no authoritative evidence to distinguish it. A
-// ready=false settlement always maps to the generic workspace_unavailable. Deferred
-// to Phase 2B.
+// The pinned-plugin failure is decided here, in the transaction that owns the Workspace's readiness
+// fact: a run that pins an Agent plugin is only ready when that plugin is installed at the pinned
+// version on its Workspace. The create_workspace plugin step still opens the Workspace when an item
+// install fails (plugin_execution.go), so readiness by itself never proves the plugin. An absent,
+// failed or wrong-version instance settles agent_plugin_unavailable (IssueRun D3/D4,
+// plugin-marketplace D3); a ready=false settlement always maps to the generic workspace_unavailable.
 func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 	if !validID(runID) {
 		return fmt.Errorf("runWorkspaceSettled: invalid run id %q", runID)
 	}
 	o := t.one("SELECT * FROM issue_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if o == nil {
+		// D8: a run Workspace may belong to a WorkflowRun. A create_workspace terminal firing
+		// under a WorkflowRun reaches this hook with the WorkflowRun's id; the evidence-driven
+		// scheduler reads terminal operation facts directly, so settlement writes nothing — but
+		// it must ACCEPT the fact, or the terminal transaction aborts and a workflow run's
+		// Workspace can never settle. An id that is neither a live issue run nor a live
+		// workflow run is still an invariant violation, not a replay.
+		if t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil {
+			return nil
+		}
 		// A create_workspace terminal firing for a run that does not exist is an invariant
 		// violation, not a replay: returning an error aborts the whole transaction.
 		return fmt.Errorf("runWorkspaceSettled: issue_run %s not found", runID)
@@ -66,13 +76,17 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 	case ready:
 		// The run's creation succeeded at the infra level, but the run is
 		// only ready when its *required pinned agent plugin* (IssueRun D1/D6 snapshot key) is
-		// installed at the pinned version on the run workspace. A failed or absent-at-version
-		// pinned-plugin instance settles agent_plugin_unavailable (plugin-marketplace D3),
-		// even though the operation terminal itself succeeded. Runs whose snapshot pins no agent
-		// plugin (legacy engine / other executors) and runs with no instance row yet are treated
-		// as ready, exactly as the pre-plugin-engine settle (legacy compatibility).
-		if inst, req := s.agentPluginInstance(t, o); req && inst != nil &&
-			(inst.S("observedState") != "installed" || inst.S("observedVersion") != o.O("input").S("agentPluginVersion")) {
+		// installed at the pinned version on the run workspace. A missing, failed or
+		// absent-at-version pinned-plugin instance settles agent_plugin_unavailable
+		// (plugin-marketplace D3), even though the operation terminal itself succeeded. Runs whose
+		// snapshot pins no agent plugin (legacy engine / other executors) keep the pre-plugin-engine
+		// behavior.
+		//
+		// The plugin step's own retries and timeouts cover a slow or flaky download; the run must not
+		// start on the promise that the install will finish later, because the Node would then fail the
+		// first agent turn after the run already looked started.
+		if inst, required := s.agentPluginInstance(t, o); required &&
+			(inst == nil || inst.S("observedState") != "installed" || inst.S("observedVersion") != o.O("input").S("agentPluginVersion")) {
 			return s.settleFailed(t, o, "agent_plugin_unavailable")
 		}
 		// Ready settles provisioning → starting, status stays dispatched.
@@ -92,9 +106,9 @@ func (s *Store) settleRunWorkspace(t *transaction, runID, status string) error {
 // from the current roster — IssueRun D1/D6), to its workspace_plugin_instances row for the run
 // workspace, in the caller's transaction. required=false means the run snapshot pins no agent
 // plugin (legacy engine or a non-space-agent executor), so the caller must treat the run as
-// ready rather than downgrade. The returned instance is nil when the workspace has no row for
-// the pinned plugin yet (which the pre-plugin-engine settle treats as ready; the plugin step creates the
-// row on the plugin step).
+// ready rather than downgrade. When required, a nil instance is authoritative evidence that the
+// pinned plugin is not installed on this Workspace; the caller fails the run rather than waiting
+// for an install that may never happen.
 func (s *Store) agentPluginInstance(t *transaction, run Object) (inst Object, required bool) {
 	pid := run.O("input").S("agentPluginId")
 	version := run.O("input").S("agentPluginVersion")

@@ -279,7 +279,7 @@ describe('useSpaceEvents', () => {
     unmount()
   })
 
-  it('refetches the run thread and the issue runs a thread event names, and nothing else', async () => {
+  it('refetches the Thread, runs and task conversation named by a Thread event', async () => {
     server.use(
       http.get(eventsUrl, () =>
         eventStream([
@@ -294,18 +294,92 @@ describe('useSpaceEvents', () => {
     const threadKey = [`/api/v1/tenants/${tenantId}/issues/I/runs/R/thread`]
     const runsKey = ['issue-runs', tenantId, 'I']
     const otherRunsKey = ['issue-runs', tenantId, 'J']
+    const conversationKey = ['task-conversation', tenantId, 'I']
+    const otherConversationKey = ['task-conversation', tenantId, 'J']
     const spacesKey = ['/api/v1/me/spaces']
     const { unmount, invalidated } = renderEvents(queryClient, [
       threadKey,
       runsKey,
       otherRunsKey,
+      conversationKey,
+      otherConversationKey,
       spacesKey,
     ])
 
     await waitFor(() => expect(invalidated(otherRunsKey)).toBe(true))
     expect(invalidated(threadKey)).toBe(true)
     expect(invalidated(runsKey)).toBe(true)
+    expect(invalidated(conversationKey)).toBe(true)
+    expect(invalidated(otherConversationKey)).toBe(true)
     expect(invalidated(spacesKey)).toBe(false)
+    unmount()
+  })
+
+  it('refreshes only the addressed task when its durable conversation changes', async () => {
+    server.use(
+      http.get(eventsUrl, () =>
+        eventStream([
+          'data: {"type":"issue.conversation_changed","spaceId":"S","issueId":"I"}\n\n',
+          'data: {"type":"issue.conversation_changed","spaceId":"S","issueId":8}\n\n',
+        ]),
+      ),
+    )
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const conversationKey = ['task-conversation', tenantId, 'I']
+    const runsKey = ['issue-runs', tenantId, 'I']
+    const otherKey = ['task-conversation', tenantId, 'J']
+    const { unmount, invalidated } = renderEvents(queryClient, [conversationKey, runsKey, otherKey])
+    await waitFor(() => expect(invalidated(conversationKey)).toBe(true))
+    expect(invalidated(runsKey)).toBe(true)
+    expect(invalidated(otherKey)).toBe(false)
+    unmount()
+  })
+
+  it('refetches scheduled histories and the named run index without invalidating other tenants or downloads', async () => {
+    server.use(
+      http.get(eventsUrl, () =>
+        eventStream([
+          'data: {"type":"scheduled_task.artifacts_updated","spaceId":"S","issueId":"I","runId":"R"}\n\n',
+        ]),
+      ),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const history = [`/api/v1/tenants/${tenantId}/scheduled-tasks/T/history`]
+    const index = [`/api/v1/tenants/${tenantId}/issues/I/runs/R/artifacts`]
+    const otherRun = [`/api/v1/tenants/${tenantId}/issues/I/runs/OTHER/artifacts`]
+    const foreign = ['/api/v1/tenants/other/scheduled-tasks/T/history']
+    const grant = [`/api/v1/tenants/${tenantId}/issues/I/runs/R/artifacts/0`]
+    const { unmount, invalidated } = renderEvents(client, [
+      history,
+      index,
+      otherRun,
+      foreign,
+      grant,
+    ])
+    await waitFor(() => expect(invalidated(index)).toBe(true))
+    expect(invalidated(history)).toBe(true)
+    expect(invalidated(otherRun)).toBe(false)
+    expect(invalidated(foreign)).toBe(false)
+    expect(invalidated(grant)).toBe(false)
+    unmount()
+  })
+
+  it('refetches the scheduled-task list and only the history addressed by a task update event', async () => {
+    server.use(
+      http.get(eventsUrl, () =>
+        eventStream([
+          'data: {"type":"space.scheduled_tasks_updated","spaceId":"S","scheduledTaskId":"T"}\n\n',
+        ]),
+      ),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const list = [`/api/v1/tenants/${tenantId}/scheduled-tasks`]
+    const history = [`/api/v1/tenants/${tenantId}/scheduled-tasks/T/history`]
+    const otherHistory = [`/api/v1/tenants/${tenantId}/scheduled-tasks/OTHER/history`]
+    const { unmount, invalidated } = renderEvents(client, [list, history, otherHistory])
+    await waitFor(() => expect(invalidated(list)).toBe(true))
+    expect(invalidated(history)).toBe(true)
+    expect(invalidated(otherHistory)).toBe(false)
     unmount()
   })
 

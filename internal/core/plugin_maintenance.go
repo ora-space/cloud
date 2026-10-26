@@ -50,6 +50,9 @@ func schedulePluginMaintenance(t *transaction) {
 // pluginSelection is a shared safe summary; runtime-specific errors and identifiers stay private.
 func pluginSelection(t *transaction, sid, namespace, identifier string) Object {
 	row := t.spacePluginRow(sid, namespace, identifier)
+	if kind := row.O("selectedRelease").S("kind"); kind != "" {
+		row["kind"] = kind
+	}
 	delete(row, "selectedRelease")
 	row["installError"] = nil // Shared summaries never expose another runtime's failure output.
 	counts := t.one("SELECT count(*) AS affected_count,count(*) FILTER(WHERE wi.observed_state IN ('installed','removed')) AS completed_count,count(*) FILTER(WHERE wi.pending_reason='waiting_start') AS waiting_start_count,count(*) FILTER(WHERE wi.pending_reason IN ('waiting_control','waiting_execution','waiting_lifecycle')) AS waiting_control_count,count(*) FILTER(WHERE wi.pending_reason='executor_capability_unavailable') AS unavailable_count,count(*) FILTER(WHERE wi.observed_state='failed') AS failed_count FROM workspace_plugin_instances wi JOIN workspaces w ON w.id=wi.workspace_id JOIN projects p ON p.id=w.project_id WHERE p.space_id=$1 AND wi.source_namespace=$2 AND wi.identifier=$3 AND w.deleted_at IS NULL", sid, namespace, identifier)

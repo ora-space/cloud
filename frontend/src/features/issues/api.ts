@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AXIOS_INSTANCE } from '@/lib/api-client'
+import {
+  getApiV1TenantsTidWorkflowsWfidSnapshots,
+  getApiV1TenantsTidWorkflowsWfidSnapshotsSnapshotIdForm,
+} from '@/api/workflows/workflows'
+import { AXIOS_INSTANCE, faultCode } from '@/lib/api-client'
 import type {
   AssistSuggestion,
   CollaborationTargetSummary,
@@ -312,6 +316,51 @@ export function useFormDescriptor(tid: string, formRef: string | undefined, issu
   })
 }
 
+/** Lists every published snapshot id so version-selector checks do not depend on UUID page order. */
+export function useWorkflowPublishedSnapshotIds(tid: string, workflowId: string | undefined) {
+  return useQuery({
+    queryKey: ['workflow-published-snapshot-ids', tid, workflowId ?? ''],
+    queryFn: ({ signal }) => {
+      const ids: string[] = []
+      async function collectPage(cursor = ''): Promise<string[]> {
+        const page = await getApiV1TenantsTidWorkflowsWfidSnapshots(
+          tid,
+          workflowId ?? '',
+          { limit: 100, ...(cursor ? { cursor } : {}) },
+          undefined,
+          signal,
+        )
+        ids.push(...page.items.map((item) => item.id))
+        return page.nextCursor ? collectPage(page.nextCursor) : ids
+      }
+      return collectPage()
+    },
+    enabled: !!tid && !!workflowId,
+  })
+}
+
+/** Reads a chosen frozen version's form, isolated by tenant, workflow, snapshot and issue context. */
+export function useWorkflowSnapshotForm(
+  tid: string,
+  workflowId: string,
+  snapshotId: string | undefined,
+  issueId: string,
+) {
+  return useQuery({
+    queryKey: ['workflow-snapshot-form', tid, workflowId, snapshotId ?? '', issueId],
+    queryFn: ({ signal }) =>
+      getApiV1TenantsTidWorkflowsWfidSnapshotsSnapshotIdForm(
+        tid,
+        workflowId,
+        snapshotId ?? '',
+        { issueId },
+        undefined,
+        signal,
+      ),
+    enabled: !!tid && !!workflowId && !!snapshotId && !!issueId,
+  })
+}
+
 /**
  * Asks for AI suggestions for a Workflow form that has **not** been confirmed yet. The form is a draft
  * until the user confirms it, so this route is deliberately stateless: no interaction needs to exist,
@@ -343,10 +392,16 @@ export function useConfirmWorkflow(tid: string, issueId: string) {
       contextRefs?: ContextRefRef[]
     }) => {
       const { interactionId, ...body } = input
-      return created<IssueRun>(
-        `/api/v1/tenants/${tid}/issues/${issueId}/interactions/${interactionId}/confirm`,
-        body,
-      )
+      try {
+        return await created<IssueRun>(
+          `/api/v1/tenants/${tid}/issues/${issueId}/interactions/${interactionId}/confirm`,
+          body,
+        )
+      } catch (error) {
+        // A lost successful response must resolve to the existing execution, not a fresh interaction.
+        if (faultCode(error) !== 'interaction_already_confirmed') throw error
+        return undefined
+      }
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['issue-interactions', tid, issueId] })
@@ -365,21 +420,32 @@ export async function openWorkflowInteraction(
   tid: string,
   issueId: string,
   targetId: string,
-  body: string,
+  submission: { body: string; key: string },
 ): Promise<IssueInteraction> {
-  await AXIOS_INSTANCE.post(
+  const { data: comment } = await AXIOS_INSTANCE.post<{ resource: IssueComment }>(
     `/api/v1/tenants/${tid}/issues/${issueId}/comments`,
-    { body, targets: [{ type: 'workflow', id: targetId }] },
-    { headers: { 'Idempotency-Key': idempotencyKey() } },
+    { body: submission.body, targets: [{ type: 'workflow', id: targetId }] },
+    { headers: { 'Idempotency-Key': submission.key } },
   )
-  const { data } = await AXIOS_INSTANCE.get<Page<IssueInteraction>>(
-    `/api/v1/tenants/${tid}/issues/${issueId}/interactions`,
-  )
-  const mine = data.items.findLast(
-    (item) => item.mode === 'form' && item.runId === null && item.targetId === targetId,
-  )
-  if (!mine) throw new Error('workflow interaction was not created')
-  return mine
+  let after: string | undefined
+  do {
+    // oxlint-disable-next-line no-await-in-loop -- each page supplies the next cursor.
+    const { data } = await AXIOS_INSTANCE.get<Page<IssueInteraction>>(
+      `/api/v1/tenants/${tid}/issues/${issueId}/interactions`,
+      { params: { limit: 100, after } },
+    )
+    const mine = data.items.find(
+      (item) =>
+        item.mode === 'form' &&
+        item.targetType === 'workflow' &&
+        item.targetId === targetId &&
+        item.commentId === comment.resource.id,
+    )
+    if (mine) return mine
+    if (!data.nextCursor || data.nextCursor === after) break
+    after = data.nextCursor
+  } while (after)
+  throw new Error('workflow interaction was not created')
 }
 
 export function useContextRefs(tid: string, issueId: string) {

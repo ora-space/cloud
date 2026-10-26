@@ -15,6 +15,7 @@ type ControlRequest struct {
 	Service                                              *Claims
 	Identity                                             *Claims
 	verification                                         *revisionVerification
+	artifacts                                            *artifactVerification
 }
 
 // Control is the finite internal command API. Controllers have no table-write or SQL interface.
@@ -32,7 +33,23 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		copyRequest.verification = prepared
 		r = &copyRequest
 	}
-	out, err := s.transact(ctx, func(t *transaction) Object {
+	// A scheduled run's artifacts are checked the same way: the object store is asked between two
+	// short transactions, and the answer travels bound to the frozen execution input.
+	if r.Action == "clone_takeover" && r.Body.O("result").S("outcome") == "scheduled_artifacts_delivered" {
+		prepared, err := s.prepareArtifactVerification(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		copyRequest := *r
+		copyRequest.artifacts = prepared
+		r = &copyRequest
+	}
+	out, err := s.transact(ctx, func(t *transaction) (response Object) {
+		defer func() {
+			if t.residualFactConflict && response != nil {
+				response["residualFactConflict"] = true
+			}
+		}()
 		if r.Action == "access" || r.Action == "admit" {
 			require(r.Service.Role == "controller", 403, "service_forbidden")
 			if r.Action == "admit" || r.Body.S("action") == "execute" {
@@ -54,6 +71,10 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 			return cloneCommand(t, r)
 		}
 		leaseValid(t, r)
+		t.residualFactSource = Object{
+			"kind": "controller", "holderId": r.Service.Subject,
+			"epoch": r.Body.N("epoch"), "submissionId": r.SubmissionID,
+		}
 		refreshRuntimeControls(t)
 		if r.Action == "effect_permit" {
 			return effectPermit(t, r)
@@ -87,11 +108,28 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		// return the recorded response, not fail the version check it already passed.
 		return submitted(t, r, func() Object { return operationCommand(t, r) })
 	})
+	if err == nil && out.B("residualFactConflict") {
+		return nil, &Fault{Status: 409, Code: "residual_fact_conflict", Params: Object{}}
+	}
 	return out, err
 }
 
 // operationCommand runs one Effect-level action on the operation the caller claimed.
 func operationCommand(t *transaction, r *ControlRequest) Object {
+	if r.Action == "effect_result" && validID(r.OperationID) {
+		if completed := t.one("SELECT * FROM operations WHERE id=$1 AND state IN ('succeeded','failed')", r.OperationID); completed != nil && controlledOperationRoot(t, completed) != nil {
+			return effectResult(t, r, completed)
+		}
+		// A completed residual operation has no execution authority left, but its original
+		// effect receipts still arrive through this existing intake. Do not require a running
+		// operation or its old version merely to preserve an identical fact or audit a conflict.
+		completed := t.one(`SELECT o.* FROM operations o JOIN agent_run_residuals ar ON ar.reclaim_operation_id=o.id
+ WHERE o.id=$1 AND o.kind='delete_workspace' AND o.state='succeeded'
+ AND ar.reclaim_state='cleared' AND ar.reclaim_mode='owned_delete'`, r.OperationID)
+		if completed != nil {
+			return effectResult(t, r, completed)
+		}
+	}
 	o := operation(t, r)
 	switch r.Action {
 	case "snapshot":
@@ -109,6 +147,17 @@ func operationCommand(t *transaction, r *ControlRequest) Object {
 		require(deferCodes[code], 400, "invalid_error_code")
 		delay := r.Body.N("retrySeconds")
 		require(delay >= 1 && delay <= 3600, 400, "invalid_retry_delay")
+		// Result takeover may have committed just before this stale unknown observation. Continue
+		// from the original known result instead of parking a creation nobody can publicly retry.
+		if code == "clone_result_unknown" && resumeKnownWorkspaceClone(t, o) {
+			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		}
+		if row := residualOperation(t, o); row != nil && (row.S("reclaimMode") == "owned_delete" || row.S("reclaimMode") == "controlled") && row["reclaimConflictedAt"] == nil {
+			// A3 has no public/operator retry path for this hidden Workspace. Preserve the
+			// same retryable operation even when the existing Controller requests blocked
+			// for an unconfirmed termination; plan/permit still require fresh real evidence.
+			state = "retry_wait"
+		}
 		if o.S("step") == "clone" && code == "clone_failed" {
 			deferWorkspaceClone(t, o)
 			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
@@ -159,19 +208,43 @@ func leaseValid(t *transaction, r *ControlRequest) {
 	require(l != nil, 409, "stale_controller")
 }
 
+// claim hands the oldest claimable operation to the Controller. An operation that must not be handed
+// out yet is parked in this same transaction and the claim moves on to the next one, so a waiter at
+// the head of the queue never makes a claim come back empty while other work is claimable
+// (operation D2). Each parked operation leaves the claimable set, so the loop ends.
 func claim(t *transaction, r *ControlRequest) Object {
 	schedulePluginMaintenance(t)
-	o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
-	if o == nil {
-		return Object{"operation": nil}
-	}
-	t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
-	o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
-	if o.S("step") == "plugin" {
-		enterPluginStep(t, o)
+	for {
+		o := t.one("SELECT * FROM operations WHERE state='queued' OR (state='retry_wait' AND retry_at<=clock_timestamp()) OR state='running' ORDER BY created_at,id LIMIT 1")
+		if o == nil {
+			return Object{"operation": nil}
+		}
+		if !readyToHandOut(t, o) {
+			continue
+		}
+		t.exec("UPDATE operations SET state='running',controller_epoch=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), r.Body.N("epoch"))
 		o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		if o.S("step") == "plugin" {
+			enterPluginStep(t, o)
+			o = t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		}
+		return snapshot(t, o)
 	}
-	return snapshot(t, o)
+}
+
+// readyToHandOut decides, before a Controller sees an operation, the conditions only Cloud can
+// judge. A clone step needs its frozen snapshot input (operation D1, D2). delete_project does not
+// start quiescing while a sync or publish of the Project may still write to its repository
+// (operation D6); like a snapshot wait this consumes no attempt and fails nothing.
+func readyToHandOut(t *transaction, o Object) bool {
+	switch {
+	case o.S("step") == "clone":
+		return freezeCloneInput(t, o)
+	case o.S("kind") == "delete_project" && o.S("step") == "quiesce" && repositoryOperationsUnfinished(t, o.S("projectId")):
+		parkOperation(t, o, "retry_wait", repositoryOperationRunning, repositoryWaitSeconds)
+		return false
+	}
+	return true
 }
 
 func operation(t *transaction, r *ControlRequest) Object {
@@ -184,11 +257,13 @@ func operation(t *transaction, r *ControlRequest) Object {
 }
 
 // snapshot is everything a Controller needs to drive one operation. Workspaces carry their own
-// requested ref and baseline commit; the retired Project storage and worktree rows are not part of
-// it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
+// branch name and baseline commit, and a clone step carries its frozen input; the retired Project
+// storage and worktree rows are not part of it. clones lists this operation's Workspace clone executions so a recovering Controller finds the
 // original execution instead of registering a second one.
 func snapshot(t *transaction, o Object) Object {
-	p := t.one("SELECT p.*,c.secret_ref FROM "+projectView+" p LEFT JOIN credential_refs c ON c.id=p.credential_ref_id WHERE p.id=$1", o.S("projectId"))
+	// The Project's external repository and credential reference stay in Cloud: a Workspace clones
+	// only the snapshot input frozen into its clone step.
+	p := t.one("SELECT p.* FROM projects p WHERE p.id=$1", o.S("projectId"))
 	out := Object{
 		"operation":  o,
 		"project":    p,
@@ -196,12 +271,17 @@ func snapshot(t *transaction, o Object) Object {
 		"sandboxes":  t.list("SELECT s.* FROM sandbox_instances s JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY s.id", o.S("projectId")),
 		"nodes":      t.list("SELECT n.* FROM node_instances n JOIN sandbox_instances s ON s.id=n.sandbox_instance_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.project_id=$1 ORDER BY n.id", o.S("projectId")),
 		// Retired plugin effects stay in the table as history and are not part of the live snapshot.
-		"effects":          t.list("SELECT * FROM external_effects WHERE operation_id=$1 AND kind NOT IN ('plugin_ensure','plugin_delete') ORDER BY created_at,id", o.S("id")),
-		"clones":           t.list("SELECT * FROM clone_executions WHERE operation_id=$1 ORDER BY created_at,execution_id", o.S("id")),
-		"pluginExecutions": t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind IN ('install_plugins','remove_plugins') ORDER BY created_at,execution_id", o.S("id")),
+		"effects": t.list("SELECT * FROM external_effects WHERE operation_id=$1 AND kind NOT IN ('plugin_ensure','plugin_delete') ORDER BY created_at,id", o.S("id")),
+		"clones":  t.list("SELECT * FROM clone_executions WHERE operation_id=$1 ORDER BY created_at,execution_id", o.S("id")),
+		// nodeExecutionColumns, not `*`: the table carries Cloud-internal columns the Controller's
+		// closed ExecutionRecord contract has no field for. See its doc comment.
+		"pluginExecutions": t.list("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE operation_id=$1 AND kind IN ('install_plugins','remove_plugins') ORDER BY created_at,execution_id", o.S("id")),
 	}
 	if input := pluginInputOf(o); len(input) > 0 {
 		out["pluginInput"] = input
+	}
+	if input := cloneInputOf(o); input != nil && o.S("step") == "clone" {
+		out["cloneInput"] = input
 	}
 	return out
 }
@@ -235,6 +315,9 @@ func planEffect(t *transaction, r *ControlRequest, o Object) Object {
 	reconciled(t, o)
 	kind, wid := r.Body.S("kind"), r.Body.S("workspaceId")
 	require(validID(wid), 400, "invalid_effect_scope")
+	requireNoResidualConflict(t, wid)
+	requireNoControlledReclamation(t, wid, o.S("id"))
+	checkResidualEffect(t, o, kind, wid, nil)
 	found := false
 	for _, w := range operationWorkspaces(t, o) {
 		if w.S("id") == wid {
@@ -283,21 +366,18 @@ func effectResult(t *transaction, r *ControlRequest, o Object) Object {
 	e := t.one("SELECT * FROM external_effects WHERE id=$1 AND operation_id=$2", r.EffectID, o.S("id"))
 	require(e != nil, 404, "not_found")
 	require(e.S("kind") != "plugin_ensure" && e.S("kind") != "plugin_delete", 409, "invalid_step")
+	residual := residualEffectRow(t, e)
 	state := r.Body.S("state")
 	require(state == "running" || state == "succeeded" || state == "failed" || state == "absent", 400, "invalid_effect_state")
 	result := r.Body.O("result")
 	external := r.Body.S("externalId")
 	if state == "absent" {
-		require(e.S("state") == "planned", 409, "external_state_conflict")
 		state = "planned"
 	} else {
 		require(external != "" && len(external) <= 200, 400, "external_id_required")
-		if e.S("externalId") != "" {
+		if e.S("externalId") != "" && residual == nil {
 			require(external == e.S("externalId"), 409, "external_binding_conflict")
 		}
-	}
-	if e.S("state") == "succeeded" {
-		require(state == "succeeded" && jsonText(result) == jsonText(e.O("result")), 409, "external_state_conflict")
 	}
 	if state == "succeeded" {
 		switch e.S("kind") {
@@ -316,6 +396,26 @@ func effectResult(t *transaction, r *ControlRequest, o Object) Object {
 		case "plugin_delete":
 			require(result.B("removed"), 400, "invalid_cleanup_evidence")
 		}
+	}
+	if residual != nil {
+		fact := Object{
+			"kind": "effect", "effectKind": e.S("kind"), "state": state,
+			"externalId": external, "result": result,
+		}
+		if !acceptResidualEffectFact(t, residual, e, fact) {
+			return Object{"effect": e, "operation": t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))}
+		}
+		if residual.S("reclaimState") == "cleared" && residual.S("reclaimOperationId") == o.S("id") && (o.S("state") == "succeeded" || o.S("state") == "failed") {
+			// Receipt only: neither canonical effects, operation versions nor resource rows may
+			// advance again after atomic completion. Contradictions already committed their block.
+			return Object{"effect": e, "operation": o}
+		}
+	}
+	if r.Body.S("state") == "absent" {
+		require(e.S("state") == "planned", 409, "external_state_conflict")
+	}
+	if e.S("state") == "succeeded" {
+		require(state == "succeeded" && jsonText(result) == jsonText(e.O("result")), 409, "external_state_conflict")
 	}
 	if state == "failed" && (e.S("kind") == "plugin_ensure" || e.S("kind") == "plugin_delete") {
 		// A failed install/remove surfaces on the space row immediately so the
@@ -351,6 +451,7 @@ func completedEffect(t *transaction, o Object, kind, wid string) Object {
 
 func advance(t *transaction, r *ControlRequest, o Object) Object {
 	reconciled(t, o)
+	checkResidualOperation(t, o)
 	next := ""
 	wid := o.S("workspaceId")
 	switch o.S("step") {
@@ -381,7 +482,7 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			require(!repositoryOperationsUnfinished(t, o.S("projectId")), 409, "repository_operation_unfinished")
 		}
 		for _, w := range operationWorkspaces(t, o) {
-			checkActivities(t, w)
+			checkResidualCleanupActivities(t, w, o)
 			live := t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", w.S("id"))
 			if live != nil {
 				require(t.one("SELECT id FROM node_instances WHERE sandbox_instance_id=$1 AND ended_at IS NULL AND idle_admission_epoch=$2 AND connection_state='connected' AND last_seen_at>clock_timestamp()-interval '30 seconds'", live.S("id"), w.N("admissionEpoch")) != nil, 409, "idle_unconfirmed")
@@ -393,6 +494,9 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			live := t.one("SELECT id FROM sandbox_instances WHERE workspace_id=$1 AND terminated_at IS NULL", w.S("id"))
 			if live != nil {
 				completedEffect(t, o, "sandbox_terminate", w.S("id"))
+				if row := residualOperation(t, o); row != nil {
+					require(residualSandboxTerminated(t, row, live.S("id")), 409, "termination_unconfirmed")
+				}
 				t.exec("UPDATE node_instances SET ended_at=now(),connection_state='ended',version=version+1 WHERE sandbox_instance_id=$1 AND ended_at IS NULL", live.S("id"))
 				t.exec("UPDATE sandbox_instances SET observed_state='terminated',terminated_at=now() WHERE id=$1", live.S("id"))
 			}
@@ -409,6 +513,9 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 			next = "cleanup"
 		}
 	case "cleanup":
+		if !completeResidualReclamation(t, o) {
+			return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
+		}
 		// Each Workspace's data was deleted by its own effect, planned only after its sandbox ended.
 		for _, w := range operationWorkspaces(t, o) {
 			completedEffect(t, o, "workspace_data_delete", w.S("id"))
@@ -437,16 +544,35 @@ func advance(t *transaction, r *ControlRequest, o Object) Object {
 	if next == "done" {
 		t.exec("UPDATE operations SET step='done',state='succeeded',error_code=NULL,retry_at=NULL,result=jsonb_build_object('resourceId',COALESCE(workspace_id,project_id)),version=version+1,updated_at=now() WHERE id=$1", o.S("id"))
 		finishRuntimeMaintenance(t, o.S("id"))
-		if w := t.one("SELECT issue_run_id FROM workspaces WHERE id=$1", nullable(wid)); w.S("issueRunId") != "" {
-			switch o.S("kind") {
-			case "create_workspace":
-				runWorkspaceSettled(t, w.S("issueRunId"), "ready")
-			case "delete_workspace":
-				runWorkspaceDeleted(t, w.S("issueRunId"))
+		if w := t.one("SELECT issue_run_id, workflow_run_id FROM workspaces WHERE id=$1", nullable(wid)); w != nil {
+			// A Workspace belongs to at most one run of either kind (0039's XOR), so at most one binding
+			// fires. `create_workspace` settlement is IssueRun business: a workflow run reads its
+			// Workspace's readiness from the row itself. `delete_workspace` is the one terminal every run
+			// Workspace shares, and both kinds record their own release fact from it.
+			runID := w.S("issueRunId")
+			if runID == "" {
+				runID = w.S("workflowRunId")
+			}
+			if runID != "" {
+				switch o.S("kind") {
+				case "create_workspace":
+					if w.S("issueRunId") != "" {
+						runWorkspaceSettled(t, runID, "ready")
+					}
+				case "delete_workspace":
+					if controlledOperationRoot(t, o) == nil {
+						runWorkspaceDeleted(t, runID)
+					}
+				}
 			}
 		}
 	} else {
 		t.exec("UPDATE operations SET step=$2,version=version+1,updated_at=now() WHERE id=$1", o.S("id"), next)
+		if next == "clone" {
+			// The step is frozen in the transaction that enters it; without a snapshot the operation
+			// leaves the Controller here, parked or failed, and returns through a later claim.
+			freezeCloneInput(t, t.one("SELECT * FROM operations WHERE id=$1", o.S("id")))
+		}
 	}
 	return t.one("SELECT * FROM operations WHERE id=$1", o.S("id"))
 }

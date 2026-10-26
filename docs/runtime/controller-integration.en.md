@@ -113,7 +113,7 @@ The gRPC status code is the primary classification; `ErrorDetail{ErrorCode}` ref
 | `WorkspaceOperationService` | Workspace lifecycle operations: `ClaimOperation`, `PlanEffect`, `RecordEffectResult`, `AdvanceOperation`, `DeferOperation`, `RecordProvisioningFact`, `ListLiveSandboxes` |
 | `NodeReportService` | The Controller reports the Nodes it holds sessions with: `RegisterNode`, `ReportNodeStatus`, `EndNode`, `ReportNodeIdle` |
 | `ExecutionService` | The execution registry: `ClaimWork`, `RecordDispatch`, `TakeOverNodeEvent`, `RecordQueriedResult`, `GetDispatch`, `ListPendingDispatches` |
-| `AgentRunService` | Agent runs: `TakeOverThreadEvents`, `ClaimThreadCommands`, `RecordThreadCommandDelivered`, `GrantRevisionUpload`, `GrantRevisionDownload` |
+| `AgentRunService` | Agent runs: `TakeOverThreadEvents`, `ClaimThreadCommands`, `RecordThreadCommandDelivered`, `GrantRevisionUpload` |
 | `RuntimeControlService` | Runtime control: `ListBindings`, `AcknowledgeBinding`, `GetExecutionPermit`, `GetEffectPermit`, `ListForceStops`, `ConfirmForceStop` |
 | `ControlSignalService` | The `Watch` signal stream |
 
@@ -122,9 +122,16 @@ The gRPC status code is the primary classification; `ErrorDetail{ErrorCode}` ref
 - `ClaimOperation` claims the oldest runnable operation (`queued`, a due `retry_wait`, or one already
   `running`), sets it `running` with the current epoch and **increments its version**, which fences
   any worker still holding an old snapshot; it is a write, not a pure read. The returned snapshot holds
-  everything the operation needs: the Project (with its credential reference), every related Workspace,
-  sandbox, Node and effect, and the clone and plugin executions this operation already has, so a
-  recovering Controller finds the original execution instead of registering a second one.
+  everything the operation needs: the Project's identity and lifecycle (no external repository URL,
+  default branch or credential reference), every related Workspace, sandbox, Node and effect, and the
+  clone and plugin executions this operation already has, so a recovering Controller finds the original
+  execution instead of registering a second one. An operation in the `clone` step also carries the
+  `clone_input` Cloud froze from the Binding's current snapshot (the Git Server repository URL, snapshot
+  ref, `base_commit` and `workspace_ref`); the Controller forwards it verbatim to `RecordDispatch` and the
+  Node and never dispatches a clone step without it. Operations Cloud cannot hand out yet (a `clone` step
+  without a snapshot, a `delete_project` while a repository Operation is unfinished) are parked in the
+  same transaction, and the claim returns the next runnable operation instead (see
+  [Workspace lifecycle](workspaces.en.md#the-clone-step-clones-the-binding-snapshot)).
 - `RecordProvisioningFact` records late real facts against the original operation, effect and execution identities after a run
   Workspace creation was abandoned, and reopens nothing (see
   [Bounded abandonment of a blocked creation](../agent-runs/startup-settlement.en.md#bounded-abandonment-of-a-blocked-creation)).
@@ -148,21 +155,36 @@ generation and live sandbox.
 | `install_plugins`, `remove_plugins` | The `plugin` step of a Workspace operation | `node_executions` |
 | `agent_session`, `deliver_revision` | Execution work items declared by an Agent run (`execution_work`) | `node_executions` |
 
-- `ClaimWork` is a **pure read**: it returns the oldest claimable work item, and ownership is decided
+- `ClaimWork` is a **pure read**: it returns the oldest claimable Agent session or delivery work item (a clone is
+  never a work item; it is claimed with its operation), and ownership is decided
   only in `RecordDispatch`'s transaction, so a Controller that crashes between claiming and registering
   leaves nothing to recover.
+- For Agent session and Revision delivery work owned by an IssueRun (a work item carrying `run_id`),
+  `ClaimWork` skips unregistered items whose Run is `releasing`, `done` or soft-deleted; Runs with
+  residuals are also excluded. WorkflowRun session work carries `workflow_run_id` instead and stays
+  claimable: the IssueRun lifecycle does not govern it. A new `RecordDispatch` rechecks Run eligibility
+  and residuals under the same transaction lock as business settlement, so an earlier claim snapshot
+  cannot register a new session or delivery afterwards. Work rows and execution records remain;
+  existing executions use the original idempotency, query and result-takeover paths, subject to their
+  existing residual and other checks. Leaving the claim queue does not prove Node termination or
+  physical Workspace deletion (see [Agent run settlement](../agent-runs/issue-runs.en.md#phases)).
 - `RecordDispatch` registers an execution before it is dispatched. Cloud, not the Controller, decides
   the input and the target Node: registration checks that the input equals the one frozen by the
   operation or work item, that the target is the current Node, and that no execution of the same kind is
   still undecided. Replaying the same execution with the same input returns the original registration;
   a contradicting input is a conflict.
+- Inside an `install_plugins` input, an agent plugin's install item may carry a frozen declaration
+  association (`agent_configuration`, fields per proto): an identity field written from the catalog
+  snapshot when the install plan was frozen. It takes part in the same input-equality check, so a
+  dispatch that loses or tampers with the association is refused; the static copy never leaves Cloud.
+  See [The plugin marketplace](../plugins/marketplace.en.md#agent-declaration-snapshots-and-freezing).
 - `TakeOverNodeEvent` takes over Node events by execution identity and **consecutive sequence number**
   and stores a receipt; a repeated event must match the original receipt byte for byte. Terminal events
   of sessions and deliveries use the same sequence and cannot overtake events not yet taken over.
 
 **`AgentRunService`** carries the session side of an Agent run: batched Thread event takeover,
-claiming and acknowledging delivery of Thread commands, and issuing object storage upload and download
-grants for deliveries. Semantics are in [Threads](../agent-runs/threads.en.md) and
+claiming and acknowledging delivery of Thread commands, and issuing the object storage upload grant for a
+delivery's session JSONL; code is delivered through the Git Server, and there is no download grant. Semantics are in [Threads](../agent-runs/threads.en.md) and
 [Revisions](../agent-runs/revisions.en.md).
 
 **`RuntimeControlService`** delivers runtime control bindings, issues execution and effect permits and
@@ -171,7 +193,10 @@ carries out force-stops; see [Runtime control](runtime-control.en.md).
 ## Changing the contract
 
 - `buf.yaml` uses `STANDARD` lint and `FILE`-level breaking checks: `v1` accepts only non-breaking
-  changes, and a breaking change is expressed as a parallel `v2` package.
+  changes, and a breaking change is expressed as a parallel `v2` package. The exception: the switch to
+  Git-native Workspace code (cloning from Git Server snapshots, Revisions delivered over Git, no bundles)
+  deleted fields, messages and RPCs in `v1`, so `buf.yaml` carries a one-time `ignore_only` exemption
+  that is removed in the next change to that file.
 - After editing a `.proto`, run `task proto:lint` and `task proto:breaking`, then `task proto:generate`,
   and commit the generated output with the change. `task check` and CI run lint, breaking and drift
   checks on the generated code.
@@ -189,3 +214,5 @@ carries out force-stops; see [Runtime control](runtime-control.en.md).
 - [Runtime control is authorized by Cloud, delivered by the Controller, and fenced at the Node's real entry points](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260927-fenced-runtime-control-delivery.md)
 - [Internal Control gRPC adds plugin, Agent session and Revision delivery executions](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260928-agent-run-executions-thread-and-upload-grants.md)
 - [Session and delivery inputs gain a prior Revision, plus `GrantRevisionDownload`](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261010-revision-restore-contract.md)
+- [The clone input becomes a Git Server snapshot input forwarded verbatim by the Controller; delivery and session inputs drop bundles and `GrantRevisionDownload` is removed](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261016-snapshot-clone-input-and-execution-ref-grants.md) (approved; the current contract implements it)
+- [Agent declarations travel with the `install_plugins` input (the install-input part of the Agent configuration metadata decision)](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md)

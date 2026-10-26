@@ -47,8 +47,10 @@ func seedReleaseScene(t *testing.T, store *Store, phase, status string) releaseS
 	}
 	// The run Workspace a release deletes: isolated, bound to this exact run by the unique
 	// workspaces.issue_run_id the operation identity is defined on.
-	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,runtime_generation,requested_ref,issue_run_id)
-		VALUES($1,$2,$3,$4,'isolated','deleted','deleting',1,'HEAD',$5)`, runws, seed.tenant, owner, seed.project, seed.run)
+	// Match insertWorkspace's verified_request identity at insertion: migration 0018 requires
+	// evidence whenever creator_user_id is non-NULL, and the creator tuple is immutable afterward.
+	exec("run-workspace", `INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,runtime_generation,requested_ref,issue_run_id)
+		VALUES($1,$2,$3,$3,'verified_request',$4,'isolated','deleted','deleting',1,'HEAD',$5)`, runws, seed.tenant, owner, seed.project, seed.run)
 	exec("task", `INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'release task')`, newID(), runws)
 	exec("stage", `UPDATE issue_runs SET phase=$2, status=$3, workspace_id=$4, version=version+1, updated_at=now() WHERE id=$1`,
 		seed.run, phase, status, runws)

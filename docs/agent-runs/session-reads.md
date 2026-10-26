@@ -57,10 +57,13 @@
 登记，之后写入完成观察。客户端重试是一次新的尝试；SSE 分块和 Thread 记录都不是请求次数。台账不含请求正文、密钥、请求头、供应商的原始
 错误或用户的文件路径。服务崩溃留下的 `started` 观察保持未知，不推断成功、失败或用量为零。
 
-两个读取接口都只读，校验当前成员、Issue 和 Agent 运行，与归档是否可用无关：
+两个读取接口在 IssueRun 和 WorkflowRun 下各有一组路径，都只读，与归档是否可用无关：IssueRun 路径校验当前成员、Issue 与
+Agent 运行；WorkflowRun 路径校验当前成员，且运行属于路径里的 workflow、未被删除。租户成员只要能读该运行就能读统计，不限运行
+发起者；归档的 workflow 连同它的运行历史一起不可读。
 
 - `GET .../runs/:rid/statistics` 聚合这次运行的全部已登记尝试，不接受查询参数。
-- `GET .../runs/:rid/model-calls` 按 `(startedAt, id)` 升序分页列出尝试，只接受 `limit`（默认 50、最大 100）和同一运行内的 UUID `after`。
+- `GET .../runs/:rid/model-calls` 按 `(startedAt, id)` 升序分页列出尝试，只接受 `limit`（默认 50、最大 100）和同一运行内的 UUID
+  `after`；游标绑定该运行，不能跨运行使用。
 
 统计的来源固定为 `model_gateway`、范围为 `recorded_http_attempts`：它不是历史会话的完整请求数，也不是账单。
 
@@ -77,3 +80,20 @@ Agent 运行时在最后的 `turnEnded` 里也可能带着 ACP 的 `token_usage`
 
 - [会话分析从 Cloud 授权记录与已登记归档建立只读视图](https://github.com/ora-space/specs/blob/main/decisions/cloud/thread/20261016-session-analysis-read-model.md)（approved）
 - [模型用量按网关 HTTP 尝试独立登记，保留部分观测与未知值](https://github.com/ora-space/specs/blob/main/decisions/cloud/model-access/20261016-recorded-http-attempt-statistics.md)（approved）
+
+## 定时运行结论与产物
+
+定时任务历史读取运行级 verdict（缺失即「未报告」）和已登记/被拒产物计数；执行完成不等于业务通过。
+`GET .../issues/:iid/runs/:rid/artifacts` 返回当前登记元数据，不含对象键或下载 URL。
+`GET .../issues/:iid/runs/:rid/artifacts/:aidx` 在短事务内核验当前成员、Issue、Run 与登记，事务外通过私有端点
+读取对象并校验登记的大小/SHA-256（上限 10 MiB），返回前再次检查权限与登记。调用者只能给运行与序号，不能指定对象键。
+对象缺失、登记被清理或校验失败返回 `404 artifact_unavailable`；未配置对象存储返回 `503 object_store_unavailable`。
+
+成功响应为原始字节，强制 `Content-Disposition: attachment`（安全编码展示名称的 basename）、
+`Content-Type: application/octet-stream`、`X-Content-Type-Options: nosniff` 与 `Cache-Control: private, no-store`。
+浏览器只访问 Cloud 同源路径，不获得对象存储地址或凭据；HTML 也以附件下载。前端按需展开元数据，通过普通同源下载链接
+每次重新鉴权，不展示链接有效期、不在应用内渲染文件。
+
+`scheduled_task.artifacts_updated` 只触发历史/对应运行索引刷新，不携带产物事实。历史裁剪保留运行事实，产物按独立保留边界清理。
+见 [verdict/产物 ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/scheduled-task/20261022-run-verdict-and-artifacts.md)。
+非成员与资源不存在统一返回 `404 not_found`。仅成功/部分交付后索引被清空的产物标为已过期，无产物与上传失败不标过期。

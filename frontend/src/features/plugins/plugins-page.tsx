@@ -7,6 +7,7 @@ import type {
   WorkflowAssetImport,
 } from '@/api/generated.schemas'
 import { useCurrentSpace } from '@/features/spaces/current-space'
+import { AgentConfigurationDialog } from '@/features/agent-configurations/dialog'
 import { PageHeader } from '@/components/layout/page-header'
 import {
   AlertDialog,
@@ -176,6 +177,7 @@ function SelectedPluginRow({
         {plugin.waitingControlCount ?? 0} · 等待启动 {plugin.waitingStartCount ?? 0} · 暂不可执行{' '}
         {plugin.unavailableCount ?? 0} · 失败 {plugin.failedCount ?? 0}
       </p>
+      {plugin.kind === 'agent' && <AgentConfigurationDialog pluginId={plugin.id} />}
       <AlertDialog>
         <AlertDialogTrigger
           render={

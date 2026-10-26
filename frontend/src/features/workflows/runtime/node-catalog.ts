@@ -1,7 +1,7 @@
 import type { WorkflowNodeKind } from '@/features/workflows/runtime/types'
 
 /** Editor scopes in which a node kind can be authored. */
-export type WorkflowNodeScope = 'workflow' | 'iteration'
+export type WorkflowNodeScope = 'workflow' | 'iteration' | 'loop'
 
 /** Inspector sections a node kind exposes. */
 export type WorkflowConfigField =
@@ -9,6 +9,7 @@ export type WorkflowConfigField =
   | 'initialPrompt'
   | 'tool'
   | 'condition'
+  | 'aggregator'
   | 'approvalPrompt'
   | 'waitStrategy'
   | 'failureStrategy'
@@ -16,6 +17,7 @@ export type WorkflowConfigField =
   | 'exitCondition'
   | 'maxIterations'
   | 'loopInitialValue'
+  | 'loopBehavior'
   | 'iteration'
 
 /**
@@ -40,9 +42,12 @@ export const WORKFLOW_NODE_PALETTE: readonly WorkflowNodeKind[] = [
   'start',
   'agent',
   'condition',
+  'aggregator',
   'loop',
   'iteration',
   'output',
+  // Offered only by a loop body's insert menu: the marker is meaningless outside a container.
+  'loopExit',
 ]
 
 /** Builds one definition, deriving the translation keys from the kind. */
@@ -70,10 +75,12 @@ const NODE_TYPE_DEFINITIONS: Record<WorkflowNodeKind, WorkflowNodeTypeDefinition
   start: defineNodeType('start', ['initialPrompt'], ['workflow']),
   agent: defineNodeType('agent', ['agent'], ['workflow', 'iteration']),
   condition: defineNodeType('condition', ['condition'], ['workflow', 'iteration']),
+  aggregator: defineNodeType('aggregator', ['aggregator'], ['workflow', 'iteration']),
   tool: defineNodeType('tool', ['tool'], ['workflow']),
   junction: defineNodeType('junction', ['waitStrategy', 'failureStrategy'], ['workflow']),
   human: defineNodeType('human', ['approvalPrompt'], ['workflow']),
-  loop: defineNodeType('loop', ['maxIterations', 'loopInitialValue'], ['workflow']),
+  loop: defineNodeType('loop', ['maxIterations', 'loopBehavior', 'loopInitialValue'], ['workflow']),
+  loopExit: defineNodeType('loopExit', [], ['loop']),
   iteration: defineNodeType('iteration', ['iteration'], ['workflow']),
   subflow: defineNodeType('subflow', [], ['workflow']),
   output: defineNodeType('output', [], ['workflow']),

@@ -135,3 +135,49 @@ func TestParseManifestAcceptsObjectKeyLocator(t *testing.T) {
 		t.Fatalf("object key locator = %q", m.URL)
 	}
 }
+
+// One valid association section, exactly as a release pipeline would emit it.
+func validAssociation(declarationDigest string) string {
+	return "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + declarationDigest + "\"\ncopy = \"agent-configuration.json\"\n"
+}
+
+func TestParseManifestAgentConfigurationAssociation(t *testing.T) {
+	m := mustParse(t, validBase()+validAssociation(strings.Repeat("cd", 32)))
+	if m.AgentConfiguration == nil {
+		t.Fatal("association must parse")
+	}
+	if m.AgentConfiguration.SchemaVersion != 2 ||
+		m.AgentConfiguration.DeclarationSha256 != strings.Repeat("cd", 32) ||
+		m.AgentConfiguration.CopyPath != "agent-configuration.json" {
+		t.Fatalf("association fields: %+v", m.AgentConfiguration)
+	}
+	// A targeted agent release carries the same binding; every target package must contain the
+	// associated declaration bytes, which install verification proves per package digest.
+	targeted := "resolver = 1\nidentifier = \"native-agent\"\nkind = \"agent\"\nversion = \"1.0.0\"\ndescription = \"A native agent.\"\n[[targets]]\ntarget = \"x86_64-unknown-linux-gnu\"\nurl = \"https://example.invalid/native-linux.orax\"\nsha256 = \"" + strings.Repeat("ef", 32) + "\"\n"
+	if m := mustParse(t, targeted+validAssociation(strings.Repeat("cd", 32))); m.AgentConfiguration == nil {
+		t.Fatal("targeted association must parse")
+	}
+}
+
+func TestParseManifestRejectsInvalidAgentConfiguration(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		field  string
+	}{
+		{"non-agent kind", strings.Replace(validBase(), "kind = \"agent\"", "kind = \"mcp\"", 1) + validAssociation(strings.Repeat("cd", 32)), "agent_configuration"},
+		{"no release source", "resolver = 1\nidentifier = \"bare\"\nkind = \"agent\"\nversion = \"1.0.0\"\ndescription = \"No release.\"\n" + validAssociation(strings.Repeat("cd", 32)), "agent_configuration"},
+		{"zero schema version", validBase() + "\n[agent_configuration]\nschema_version = 0\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"agent-configuration.json\"\n", "agent_configuration.schema_version"},
+		{"short digest", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"abcd\"\ncopy = \"agent-configuration.json\"\n", "agent_configuration.declaration_sha256"},
+		{"parent escape", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"../agent-configuration.json\"\n", "agent_configuration.copy"},
+		{"absolute path", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"/etc/passwd\"\n", "agent_configuration.copy"},
+		{"windows drive", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"C:agent-configuration.json\"\n", "agent_configuration.copy"},
+		{"empty segment", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"nested//agent.json\"\n", "agent_configuration.copy"},
+		{"unknown key", validBase() + "\n[agent_configuration]\nschema_version = 2\ndeclaration_sha256 = \"" + strings.Repeat("cd", 32) + "\"\ncopy = \"agent-configuration.json\"\nadapter = \"acp\"\n", "agent_configuration"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mustReject(t, testCase.source, testCase.field)
+		})
+	}
+}

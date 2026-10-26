@@ -46,6 +46,7 @@ atomically** and settles the run in these cases:
 |---|---|
 | The user ended the session first, or the run was cancelled | `cancelled` |
 | The current Node is initialized, connected, with a heartbeat within 30 seconds, and **definitively** lacks the model proxy capability while the run uses a personal model | `failed`, `failureReason = model_proxy_unavailable` |
+| Such a Node **definitively** lacks the adapter capability the run's frozen Agent declaration needs (target, contract version or protocol differs) | `failed`, `failureReason = agent_adapter_unavailable` |
 | The startup window expired | `failed`, `failureReason = agent_start_failed` |
 
 Withdrawal and dispatch registration share the same transaction lock, so a registration arriving after the
@@ -73,6 +74,14 @@ From there, two things can happen:
   run as `failed` and `done`, the Thread as `ended` and the delivery state as `failed`, and inserts a row
   into the **residual ledger** `agent_run_residuals`. Cloud **never fabricates** a Node result, receipt or
   Revision.
+
+When the end-confirmation window expires without a real terminal result, the same residual row
+records `stop_evidence.stop_unconfirmed`: kind, source `cloud`, observation time and original execution
+identity. Repeated scans neither duplicate nor renew it. It changes neither `reason`, `responsibility`
+nor resource protection, and grants no termination, deletion or clearance authority. Node exposes its
+own stop-confirmation bound and original Scope/Run timestamps through the existing execution query;
+both sides correspond to the same execution/Workspace. Cloud's 2/6/5 windows retain their original
+anchors and durations.
 
 ## The residual ledger
 

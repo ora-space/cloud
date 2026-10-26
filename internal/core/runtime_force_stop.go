@@ -46,8 +46,12 @@ func forceStopCommand(t *transaction, r *ControlRequest) Object {
 			}
 			plans = append(plans, Object{"forceStop": f, "effects": targets})
 		}
+		plans = append(plans, controlledPendingPlans(t, r)...)
 		return Object{"plans": plans}
 	case "force_confirm":
+		if root := t.one("SELECT * FROM agent_run_reclamation_intents WHERE id=$1 AND command_kind='terminate'", r.Body.S("forceStopId")); root != nil {
+			return controlledForceConfirm(t, r, root)
+		}
 		f := t.one("SELECT * FROM runtime_force_stops WHERE id=$1", r.Body.S("forceStopId"))
 		require(f != nil, 404, "not_found")
 		version(f, r.Body.N("version"))
@@ -94,6 +98,9 @@ func effectPermit(t *transaction, r *ControlRequest) Object {
 	var wid, sid, tid string
 	var generation, controlEpoch int64
 	if fid := r.Body.S("forceStopId"); fid != "" {
+		if root := t.one("SELECT * FROM agent_run_reclamation_intents WHERE id=$1 AND command_kind='terminate'", fid); root != nil {
+			return controlledEffectPermit(t, r, root)
+		}
 		f := t.one("SELECT f.*,w.project_id FROM runtime_force_stops f JOIN workspaces w ON w.id=f.workspace_id WHERE f.id=$1 AND f.state<>'succeeded'", fid)
 		require(f != nil, 409, "force_stop_completed")
 		target := t.one("SELECT * FROM runtime_force_stop_targets WHERE id=$1 AND force_stop_id=$2", r.EffectID, fid)
@@ -102,6 +109,10 @@ func effectPermit(t *transaction, r *ControlRequest) Object {
 	} else {
 		e := t.one("SELECT e.*,o.state AS operation_state,o.controller_epoch,w.tenant_id,w.runtime_generation FROM external_effects e JOIN operations o ON o.id=e.operation_id JOIN workspaces w ON w.id=e.workspace_id WHERE e.id=$1", r.EffectID)
 		require(e != nil && e.S("operationState") == "running" && e.N("controllerEpoch") == r.Body.N("epoch"), 409, "stale_effect")
+		op := t.one("SELECT * FROM operations WHERE id=$1", e.S("operationId"))
+		requireNoControlledReclamation(t, e.S("workspaceId"), op.S("id"))
+		requireNoResidualConflict(t, e.S("workspaceId"))
+		checkResidualEffect(t, op, e.S("kind"), e.S("workspaceId"), e)
 		wid, tid, generation = e.S("workspaceId"), e.S("tenantId"), e.N("runtimeGeneration")
 		requireNoForceStop(t, wid)
 		c := runtimeControl(t, wid)

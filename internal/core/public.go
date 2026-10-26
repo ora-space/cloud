@@ -5,13 +5,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/wanglongan587/cloud/internal/cloneauth"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
 // PublicRequest is populated only after service and final-user credentials are verified.
 type PublicRequest struct {
-	Method, Path, TenantID, ProjectID, WorkspaceID, SpaceID, OperationID, CloneID, UserID, IssueID, CommentID, LabelID, StatusID, ViewID, RunID, ContextRefID, InteractionID, WorkflowID, SnapshotID, FormRef, InvitationID, JoinLinkID, JoinRequestID, Key, After, Before, Query, GroupBy string
+	Method, Path, TenantID, ProjectID, WorkspaceID, SpaceID, OperationID, UserID, IssueID, CommentID, ConversationMessageID, LabelID, StatusID, ViewID, RunID, ContextRefID, InteractionID, WorkflowID, SnapshotID, FormRef, InvitationID, JoinLinkID, JoinRequestID, ScheduledTaskID, ArtifactIndex, Key, After, Before, Query, GroupBy string
 	// FormIssueID is the optional `issueId` query parameter of the form-descriptor route. It is
 	// deliberately its own field rather than a fallback into IssueID: IssueID drives dispatch in both
 	// readPublic and Public, so a query parameter folded into it would let `GET /issues?issueId=…`
@@ -19,18 +21,29 @@ type PublicRequest struct {
 	FormIssueID string
 	// ModelConnectionID addresses an owner-scoped personal connection outside tenant routing.
 	ModelConnectionID string
+	// AgentPluginID is the canonical plugin in the caller's personal configuration.
+	AgentPluginID string
 	// Session filters are independent of resource IDs used by public route dispatch.
 	SessionProjectID, SessionStatus, SessionAgent, SessionFrom, SessionTo string
-	Limit                                                                 int
-	Body                                                                  Object
-	Identity                                                              *Claims
-	Person                                                                *DirectoryPerson
+	// GitCredentialID addresses a tenant's Git credential reference.
+	GitCredentialID string
+	// RepositoryOperationID addresses one sync or publish of a Project's repository.
+	RepositoryOperationID string
+	// SlotName addresses one executor-slot mapping under /api/v1/me/executor-slot-mappings/:slot.
+	SlotName string
+	Limit    int
+	Body     Object
+	Identity *Claims
+	Person   *DirectoryPerson
 }
 
 // Public executes one authorized public request in a short database transaction.
 // Committed collaboration-space mutations are broadcast to live space subscribers
 // after the transaction succeeds, never before.
 func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, error) {
+	if err := s.admitModelWrite(ctx, r); err != nil {
+		return nil, 0, err
+	}
 	if r.Method == "GET" && r.Path == "/api/v1/tenants/"+r.TenantID+"/agent-sessions" {
 		return s.sessionList(ctx, r)
 	}
@@ -38,22 +51,39 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		return s.SessionHistory(ctx, r)
 	}
 	runPath := "/api/v1/tenants/" + r.TenantID + "/issues/" + r.IssueID + "/runs/" + r.RunID
+	if r.Method == "GET" && r.ArtifactIndex == "" && r.Path == runPath+"/artifacts" {
+		return s.SessionRunArtifacts(ctx, r)
+	}
 	if r.Method == "GET" && (r.Path == runPath+"/statistics" || r.Path == runPath+"/model-calls") {
 		return s.sessionModelRead(ctx, r)
+	}
+	workflowRunPath := "/api/v1/tenants/" + r.TenantID + "/workflows/" + r.WorkflowID + "/runs/" + r.RunID
+	if r.Method == "GET" && r.WorkflowID != "" && (r.Path == workflowRunPath+"/statistics" || r.Path == workflowRunPath+"/model-calls") {
+		return s.workflowModelRead(ctx, r)
 	}
 	status := 200
 	var dispatches []dispatchTarget
 	var events []SpaceEvent
-	var accepted []string
+	queueConversation := false
 	result, e := s.transact(ctx, func(t *transaction) Object {
 		u := identityWithAlias(t, r.Identity)
 		uid := u.S("id")
 		if r.Path == "/api/v1/me" {
 			return u
 		}
+		if strings.HasPrefix(r.Path, "/api/v1/me/agent-configurations/") {
+			var out Object
+			out, status = personalAgentConfigurationsPublic(t, r, uid)
+			return out
+		}
 		if strings.HasPrefix(r.Path, "/api/v1/me/model-connections") || r.Path == "/api/v1/me/model-default" {
 			var out Object
 			out, status = personalModelsPublic(t, r, uid)
+			return out
+		}
+		if strings.HasPrefix(r.Path, "/api/v1/me/executor-slot-mappings") {
+			var out Object
+			out, status = personalSlotMappingsPublic(t, r, uid)
 			return out
 		}
 		if r.Path == "/api/v1/me/git-identity" {
@@ -90,14 +120,16 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			out, status = createTenant(t, r, uid)
 			return out
 		}
-		isAdmin := r.SpaceID == "" && (strings.HasSuffix(r.Path, "/resource-status") || strings.HasSuffix(r.Path, "/force-stop") || (r.UserID != "" && r.Method == "PUT") || strings.Contains(r.Path, "/invitations") || strings.Contains(r.Path, "/join-links") || strings.Contains(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/members/huawei"))
+		// Force-stop resolves the ordinary Workspace before checking administrator status. Hidden
+		// run Workspaces must remain 404 for every tenant role, including ordinary members.
+		isAdmin := r.SpaceID == "" && (strings.HasSuffix(r.Path, "/resource-status") || (r.UserID != "" && r.Method == "PUT") || strings.Contains(r.Path, "/invitations") || strings.Contains(r.Path, "/join-links") || strings.Contains(r.Path, "/join-requests") || strings.HasSuffix(r.Path, "/members/huawei"))
 		membership(t, r.TenantID, uid, isAdmin)
 		refreshRuntimeControls(t)
 		if r.Method == "GET" {
 			if strings.HasSuffix(r.Path, "/force-stop") {
 				return forceStopPublic(t, r, uid)
 			}
-			return readPublic(t, r, uid)
+			return readPublic(t, r, uid, s.ScheduledTaskAcceptanceEnabled)
 		}
 		authorizeRuntimeReplay(t, r, uid)
 		hash := requestHash(r.Method, r.Path, r.Body)
@@ -113,6 +145,10 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		}
 		var out Object
 		switch {
+		case strings.Contains(r.Path, "/git-credentials"):
+			out, status = gitCredentialsPublic(t, r, uid)
+		case r.ProjectID != "" && strings.Contains(r.Path, "/repository"):
+			out, status = repositoryPublic(t, r, uid)
 		case strings.Contains(r.Path, "/invitations") || strings.Contains(r.Path, "/join-links") || strings.Contains(r.Path, "/join-requests"):
 			out, status = adminJoinWrite(t, r, uid)
 			if r.JoinRequestID != "" && strings.HasSuffix(r.Path, "/approve") {
@@ -143,15 +179,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			out = createProject(t, r, uid, hash)
 			status = 202
 			events = append(events, SpaceEvent{Type: "project.created", SpaceID: out.O("resource").S("spaceId"), ProjectID: out.O("resource").S("id")})
-		case strings.HasSuffix(r.Path, "/clones"):
-			// Clone requests are accepted work items outside the operation model; they share the
-			// public idempotency scope but never create an operation or effect.
-			var queued string
-			out, queued = clonesPublic(t, r, uid)
-			status = 202
-			if queued != "" {
-				accepted = append(accepted, queued)
-			}
 		case r.OperationID != "":
 			out = retryOperation(t, r, uid)
 			status = 202
@@ -182,6 +209,7 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				require(r.Method == "DELETE", 405, "method_not_allowed")
 				requireSpaceRole(m, "admin")
 				version(p, r.Body.N("version"))
+				require(t.one("SELECT run_id FROM agent_run_residuals WHERE project_id=$1 AND reclaim_conflicted_at IS NOT NULL", p.S("id")) == nil, 409, "residual_fact_conflict")
 				idleProject(t, p.S("id"))
 				require(p.S("lifecycle") == "active", 409, "resource_unavailable")
 				ws := t.list("SELECT * FROM workspaces WHERE project_id=$1 AND deleted_at IS NULL ORDER BY id", p.S("id"))
@@ -207,13 +235,53 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 					events = append(events, SpaceEvent{Type: "project.archived", SpaceID: p.S("spaceId"), ProjectID: p.S("id")})
 				}
 			}
+		case strings.Contains(r.Path, "/scheduled-tasks"):
+			// Cloud Scheduled Task 的管理端点（D1：管理仅创建者，读取跟随绑定 issue 可见性，
+			// 不存在与无权限统一 404）。分支放在 issue 臂之前，因为路径不含 :iid。
+			resolved := scheduledTaskPublic(t, s, r, uid)
+			if r.Method == "DELETE" {
+				out = resolved
+			} else {
+				out = Object{"resource": resolved}
+			}
+			// D7：任务定义或历史随写变更，发 Space 失效事件让任务列表与历史刷新。事件带任务标识，
+			// 客户端据此决定刷新整个列表还是单个任务详情/历史。
+			events = append(events, SpaceEvent{Type: "space.scheduled_tasks_updated", SpaceID: soleSpace(t, r.TenantID).S("id"), ScheduledTaskID: r.ScheduledTaskID})
+			if r.Method == "POST" && !strings.HasSuffix(r.Path, "/history") {
+				status = 200
+			}
 		case r.IssueID != "" || strings.HasSuffix(r.Path, "/issues"):
 			switch {
+			case strings.HasSuffix(r.Path, "/conversation/messages"):
+				require(r.Method == "POST", 404, "not_found")
+				out = Object{"resource": taskConversationSend(t, s, r, uid)}
+				status = 201
+				queueConversation = out.O("resource").S("state") == "waiting"
+			case r.ConversationMessageID != "" && strings.HasSuffix(r.Path, "/cancel"):
+				require(r.Method == "POST", 404, "not_found")
+				out = Object{"resource": taskConversationCancel(t, r, uid)}
+				queueConversation = true
+			case r.ConversationMessageID != "" && strings.HasSuffix(r.Path, "/retry"):
+				require(r.Method == "POST", 404, "not_found")
+				out = Object{"resource": taskConversationRetry(t, r, uid)}
+				queueConversation = true
+			case strings.HasSuffix(r.Path, "/conversation/resume"):
+				require(r.Method == "POST", 404, "not_found")
+				out = taskConversationResume(t, r, uid)
+				queueConversation = true
+			case strings.HasSuffix(r.Path, "/conversation/discard"):
+				require(r.Method == "POST", 404, "not_found")
+				out = taskConversationDiscard(t, r, uid)
+				queueConversation = true
+			case strings.HasSuffix(r.Path, "/conversation/stop"):
+				require(r.Method == "POST", 404, "not_found")
+				out = taskConversationStop(t, s, r, uid)
+				status = 202
 			case strings.HasSuffix(r.Path, "/thread/messages"):
 				// Thread D3: appending a user turn. Matched before the /runs arm because the path
 				// contains "/runs/" too, and the thread sub-resource is a different write.
 				require(r.Method == "POST", 404, "not_found")
-				out = Object{"resource": appendThreadMessage(t, s, r, uid)}
+				out = Object{"resource": appendThreadMessage(t, s, r, uid, taskAppendAtQueueTail)}
 				status = 201
 			case strings.HasSuffix(r.Path, "/thread/end"):
 				// Thread D4: the user ending the conversation. Also matched before the /runs
@@ -222,6 +290,15 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				// than a wrapped resource: the endpoint creates no new resource to point at.
 				require(r.Method == "POST", 404, "not_found")
 				out = endThreadByUser(t, s, r)
+				status = 202
+			case strings.HasSuffix(r.Path, "/cancel"):
+				// IssueRun D6: the user's cancellation request. Matched before the /runs arm because
+				// the path contains "/runs/" too, and recording a request is not creating a run. Also
+				// answered 202, for the same reason as the Thread end: the request is accepted for
+				// asynchronous shutdown and the run has not changed state yet. The response is the
+				// recorded instant rather than a wrapped resource — this endpoint creates none.
+				require(r.Method == "POST", 404, "not_found")
+				out = cancelAgentRunByUser(t, r)
 				status = 202
 			case strings.Contains(r.Path, "/runs"):
 				switch r.Method {
@@ -244,7 +321,7 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 				out = assistWorkflow(t, r)
 			case strings.Contains(r.Path, "/interactions"):
 				require(r.Method == "POST" && strings.HasSuffix(r.Path, "/confirm"), 404, "not_found")
-				out = confirmInteraction(t, r, uid, &dispatches)
+				out = confirmInteraction(t, r, uid)
 			case strings.Contains(r.Path, "/comments"):
 				switch r.Method {
 				case "POST":
@@ -322,6 +399,22 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			}
 		case strings.Contains(r.Path, "/workflows"):
 			switch {
+			case strings.HasSuffix(r.Path, "/cancel"):
+				// D4/D6: the user's cancellation request for a WorkflowRun. Matched before the /runs
+				// arm because the path contains "/runs/" too, and recording a request is not creating
+				// a run. Answered 202 like the IssueRun request: the request is accepted for
+				// asynchronous settlement by the scheduler, and the response is the recorded instant
+				// rather than a wrapped resource — this endpoint creates none.
+				require(r.Method == "POST", 404, "not_found")
+				out = cancelWorkflowRunByUser(t, r, uid)
+				status = 202
+			case strings.HasSuffix(r.Path, "/resume"):
+				// D7: resume is registered against its final request shape and refuses every valid
+				// request with a named 501. Matched before /runs for the same reason as /cancel. The
+				// handler rejects through a Fault, so this transaction rolls back and the idempotency
+				// record below is never written.
+				require(r.Method == "POST", 404, "not_found")
+				resumeWorkflowRun(t, r, uid)
 			case strings.HasSuffix(r.Path, "/runs"):
 				out = Object{"resource": createWorkflowRun(t, r, uid)}
 			case strings.HasSuffix(r.Path, "/publish"):
@@ -349,6 +442,9 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 		return out
 	})
 	if e == nil {
+		if queueConversation {
+			_ = s.DispatchTaskConversationsOnce(ctx)
+		}
 		for _, d := range dispatches {
 			// Task Mode runs are dispatched after the comment transaction commits (the advisory
 			// lock must not span external/observer writes). Best-effort: a failure leaves the run
@@ -359,9 +455,6 @@ func (s *Store) Public(ctx context.Context, r *PublicRequest) (Object, int, erro
 			for _, ev := range events {
 				s.Events.Publish(ev)
 			}
-		}
-		for _, id := range accepted {
-			s.signalWork(id)
 		}
 	}
 	return result, status, e
@@ -409,7 +502,18 @@ func window(t *transaction, q string, args []any, r *PublicRequest) Object {
 	return Object{"items": items, "nextCursor": next}
 }
 
-func readPublic(t *transaction, r *PublicRequest, uid string) Object {
+func readPublic(t *transaction, r *PublicRequest, uid string, scheduledTaskAcceptanceEnabled bool) Object {
+	if strings.Contains(r.Path, "/scheduled-tasks") {
+		return scheduledTaskPublicRead(t, r, uid, scheduledTaskAcceptanceEnabled)
+	}
+	if strings.Contains(r.Path, "/git-credentials") {
+		out, _ := gitCredentialsPublic(t, r, uid)
+		return out
+	}
+	if r.ProjectID != "" && strings.Contains(r.Path, "/repository") {
+		out, _ := repositoryPublic(t, r, uid)
+		return out
+	}
 	if r.SpaceID != "" {
 		switch {
 		case strings.HasSuffix(r.Path, "/projects"):
@@ -438,18 +542,19 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 	switch {
 	case strings.HasSuffix(r.Path, "/invitations") || strings.HasSuffix(r.Path, "/join-links") || strings.HasSuffix(r.Path, "/join-requests"):
 		return adminJoinRead(t, r)
-	case r.CloneID != "" || strings.HasSuffix(r.Path, "/clones"):
-		out, _ := clonesPublic(t, r, uid)
-		return out
 	case strings.HasSuffix(r.Path, "/spaces"):
 		return listSpaces(t, r, uid)
 	case strings.HasSuffix(r.Path, "/members"):
 		return page(t, "SELECT m.user_id AS id,m.tenant_id,m.user_id,m.role,m.status,m.version,u.display_name FROM tenant_memberships m JOIN users u ON u.id=m.user_id WHERE m.tenant_id=$1", []any{r.TenantID}, "m.user_id", r)
+	case strings.HasSuffix(r.Path, "/thread/preview"):
+		return threadPreviewRead(t, t.store, r)
 	case strings.HasSuffix(r.Path, "/thread"):
 		// Thread D5: reading a run's Thread. Matched before the /runs arm below because the path
 		// contains "/runs/" too and this is a different resource — the Thread, not the run. The POST
 		// side is dispatched in Public before readPublic; this arm is the GET.
 		return threadRead(t, r)
+	case strings.HasSuffix(r.Path, "/conversation"):
+		return taskConversationRead(t, r)
 	case r.WorkflowID != "" && (r.RunID != "" || strings.HasSuffix(r.Path, "/runs")):
 		// Workflow runs resolve here, before the generic issue-`/runs` case below: that case
 		// matches any path containing "/runs", so .../workflows/:wfid/runs would otherwise be
@@ -492,7 +597,7 @@ func readPublic(t *transaction, r *PublicRequest, uid string) Object {
 	case strings.HasSuffix(r.Path, "/issues"):
 		return issueList(t, r)
 	case strings.HasSuffix(r.Path, "/resource-status"):
-		return page(t, "SELECT w.id,w.project_id,w.owner_user_id,w.kind,w.desired_state,w.observed_state,w.runtime_generation,w.version FROM workspaces w WHERE w.tenant_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL", []any{r.TenantID}, "w.id", r)
+		return page(t, "SELECT w.id,w.project_id,w.owner_user_id,w.kind,w.desired_state,w.observed_state,w.runtime_generation,w.version FROM workspaces w WHERE w.tenant_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL", []any{r.TenantID}, "w.id", r)
 	case strings.Contains(r.Path, "/workflows"):
 		// A snapshot-scoped form read is checked before the bare snapshot read, because both carry a
 		// snapshot id and only the path distinguishes projecting a version from describing it.
@@ -565,22 +670,29 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 	}
 	name := validText(r.Body.S("name"), 200)
 	repo := validText(r.Body.S("repositoryUrl"), 2048)
+	// Phase one reaches external repositories over HTTPS only, and only through the Repo
+	// Executor; the URL carries no user information, query or fragment (sync ADR D1).
 	parsed, e := url.Parse(repo)
-	require(e == nil && (parsed.Scheme == "https" || parsed.Scheme == "ssh") && parsed.Host != "" && parsed.RawQuery == "" && parsed.Fragment == "", 400, "invalid_repository_url")
-	if parsed.User != nil {
-		_, password := parsed.User.Password()
-		require(!password && parsed.Scheme == "ssh", 400, "embedded_credentials_forbidden")
-	}
-	// The Node clones only a literal branch name and Cloud reads no remote repository, so the
-	// caller names the branch; HEAD would leave the Workspace's clone step blocked for good.
+	require(e == nil && parsed.User == nil, 400, "embedded_credentials_forbidden")
+	_, e = cloneauth.NormalizeRepository(repo)
+	require(e == nil, 400, "invalid_repository_url")
+	// Cloud reads no remote repository, so the caller names the branch the Binding follows; it
+	// is the Project's default branch and the only one phase one synchronizes. Workspaces take it
+	// as the short name of their Git Server branch refs/heads/workspaces/<id>/<branch>, so it must
+	// be a name Git accepts in a ref.
 	branch := r.Body.S("defaultBranch")
 	require(strings.TrimSpace(branch) != "", 400, "default_branch_required")
-	branch = validRef(branch)
-	require(branch != "HEAD", 400, "default_branch_required")
+	require(validBranchName(branch) && branch != "HEAD", 400, "default_branch_required")
 	var cred any
 	if id := r.Body.S("credentialRefId"); id != "" {
 		require(validID(id), 400, "invalid_credential_ref")
-		require(t.one("SELECT id FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND owner_user_id=$3 AND purpose='git' AND deleted_at IS NULL", id, r.TenantID, uid) != nil, 404, "credential_ref_not_found")
+		c := t.one("SELECT * FROM credential_refs WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND name IS NOT NULL", id, r.TenantID)
+		require(c != nil, 404, "credential_ref_not_found")
+		// Binding a credential lets the Project's syncs read with it: a personal one only its
+		// owner may bind, a team one only an administrator (identity-access D5).
+		requireCredentialManager(t, c, uid)
+		code := credentialProblem(t, r.TenantID, id, repo, "")
+		require(code == "", 409, code)
 		cred = id
 	}
 	pid, wid := newID(), newID()
@@ -592,8 +704,8 @@ func createProject(t *transaction, r *PublicRequest, uid, hash string) Object {
 }
 
 func insertWorkspace(t *transaction, tid, owner, creator, pid, wid, kind, ref, title string) {
-	// The Workspace's Node clones ref into the Workspace's own data; there is no shared Project
-	// repository or linked worktree any more.
+	// ref is the short name of the Workspace's branch on the Git Server; its Node checks the
+	// snapshot out on a local branch of that name in the Workspace's own data.
 	t.exec("INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_user_id,creator_evidence,project_id,kind,desired_state,observed_state,requested_ref) VALUES($1,$2,$3,$4,'verified_request',$5,$6,'running','provisioning',$7)", wid, tid, owner, creator, pid, kind, ref)
 	if kind == "isolated" {
 		t.exec("INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,$3)", newID(), wid, title)
@@ -604,13 +716,14 @@ func createWorkspace(t *transaction, r *PublicRequest, p Object, uid, hash strin
 	require(p.S("lifecycle") == "active", 409, "resource_unavailable")
 	idleProject(t, p.S("id"))
 	title := validText(r.Body.S("title"), 200)
-	ref := validRef(r.Body.S("baseRef"))
-	if ref == "HEAD" {
-		// HEAD means the Project's default branch, which is concrete for every Project created
-		// since defaultBranch became required; an older Project that still stores HEAD cannot say.
-		ref = p.S("defaultBranch")
-		require(ref != "HEAD", 400, "default_branch_required")
+	// A Workspace starts from its Binding's current snapshot, which holds only the Binding's branch
+	// (operation D3). An absent, empty or HEAD baseRef means that branch; naming any other branch
+	// would give a Workspace called "feature" the content of "main", so it is refused.
+	ref := p.S("defaultBranch")
+	if requested := strings.TrimSpace(r.Body.S("baseRef")); requested != "" && requested != "HEAD" {
+		require(validRef(requested) == ref, 400, "base_ref_not_synced")
 	}
+	require(ref != "" && ref != "HEAD", 400, "default_branch_required")
 	wid := newID()
 	// The project's durable owner is part of the workspace FK. A different
 	// tenant member may initiate this action, recorded separately as actor.
@@ -634,6 +747,8 @@ func newOperation(t *transaction, r *PublicRequest, uid, pid, wid, kind, step, h
 }
 
 func checkActivities(t *transaction, w Object) {
+	requireNoControlledReclamation(t, w.S("id"), "")
+	requireNoResidualConflict(t, w.S("id"))
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE workspace_id=$1 AND cleared_at IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	require(t.one("SELECT id FROM execution_tickets WHERE workspace_id=$1 AND state='active' AND terminated_by_force_stop_id IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	require(t.one("SELECT execution_id FROM clone_executions WHERE workspace_id=$1 AND result IS NULL AND terminated_by_force_stop_id IS NULL", w.S("id")) == nil, 409, "resource_in_use")
@@ -717,6 +832,15 @@ func ownedOperation(t *transaction, r *PublicRequest, uid string) Object {
 		membership(t, r.TenantID, uid, true)
 		return adminOperation(o)
 	}
+	// The frozen clone input names the Git Server's repository and refs; like a Revision's delivery
+	// ref it is Cloud's and the Controller's, never part of the public API.
+	if req := o.O("request"); req["clone"] != nil {
+		delete(req, "clone")
+	}
+	// A clone step that ended with repository_sync_failed keeps the sync Operation's ID for Cloud and
+	// operators, never for the public view; a run shows the sync's safe error code through its
+	// preparation instead (operation D2).
+	delete(o.O("result"), "syncOperationId")
 	return o
 }
 

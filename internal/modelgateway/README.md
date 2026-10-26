@@ -7,11 +7,12 @@
 
 | 文件 | 职责 |
 |---|---|
+| anthropic.go | Claude 固定版本的 query/协议头白名单与单模型授权目录 |
 | `crypto.go`、`key_verification.go` | AES-256-GCM 密文、不可变记录绑定、重试指纹及旧加密身份检查 |
 | `credentials.go` | Gateway 独占的写入/清除边界，双重签名身份和当前个人归属 |
 | `grants.go` | 专用 mTLS 模型身份的授权、同令牌续期与撤销 |
 | `forward.go`、`events.go`、`envelopes.go`、`response_io.go` | 限定模型与路径、校验协议封装、HTTP/SSE 错误过滤及撤销时打断阻塞写入 |
-| `transport.go`、`dns.go` | `NewUpstreamClient(UpstreamConfig)` 固定部署所有的 `DNSConfig`；通过认证 HTTPS DNS 与公网数值 IP 建立连接，禁用环境代理和重定向 |
+| `transport.go`、`connection.go`、`internal/egress` | `NewUpstreamClient` 按部署出网策略拨号：公网模式用认证 HTTPS DNS，企业模式用策略里的 TCP DNS 或静态地址；禁用环境代理和重定向 |
 | `diagnostics.go` | 只按类型生成有限错误类别，不读取上游错误文本；`Options.Logger` 仅记录类别 |
 | `attempt.go`、`usage.go` | 每次上游 HTTP attempt 的持久化登记、单调时钟计时、协议 usage 快照与有界幂等收尾 |
 | `config.go`、`health.go` | 部署引用、监听用途和正常验证证书的就绪检查 |
@@ -20,6 +21,17 @@
 模型数据监听需要临时令牌。三个入口不可互换。所有响应和错误禁止出现真实 Key。
 成功的 SSE 逐事件刷新，HTTP 200 内的错误事件也归一为安全错误；撤销同时打断上游和阻塞的下游写入。
 每个授权观察任务归属于一个请求，取消后必须等待它退出。
+
+Anthropic 兼容面固定到 Claude Code 2.1.303：推理只接受 POST messages 的空 query 或
+精确 beta=true；协议版本固定 2023-06-01，beta token 仅允许 anthropic.go 中 claudeBetaHeaders 列出的值，
+重复或未知值拒绝。其他客户端头不转发；CLI 的 browser-access 标记只验证并丢弃。
+GET models（空 query 或 limit=1000）在重新核验当前授权后返回绑定的唯一模型，不请求上游、
+不解密 Key、不登记推理 attempt。count_tokens 等可选接口保持未实现并明确拒绝。
+上述目录是冻结模型集合的视图，不伪装供应商发现能力。
+
+TestPinnedClaudeMessagesCompatibility 可用 CLAUDE_COMPAT_BINARY 指向经上游锁文件校验的
+2.1.303 CLI 做受控验证：独立 HOME/配置目录、合成凭据和本地供应商，实际请求经生产
+ModelHandler；未设置该路径时显式跳过，不以普通协议夹具替代真实 CLI 证据。
 
 模型转发在 `Upstream.Do` 前调用 Core `BeginModelAttempt`，失败时返回安全的
 `model_metrics_unavailable`，不会请求上游。一次登记表示一次网关发送意图；它不能证明远端已经
@@ -56,9 +68,14 @@ Anthropic 合并 `message_start` 与累计 `message_delta`。
 [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和
 [thinking usage](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost)。
 
-生产 DNS 不回退系统解析器。HTTPS 解析器由公网数值 IP 引导并正常验证 TLS；模型域名的 A/AAAA
+生产解析不回退系统解析器。公网模式由公网数值 IP 引导 HTTPS DNS 并正常验证 TLS；企业模式使用策略文件中的 DNS-over-TCP 或静态地址。模型域名的 A/AAAA
 答案全部通过地址策略后才允许数值拨号，TLS 仍验证原模型域名。仅部署配置中精确指定的开发
-fixture 主机使用系统 DNS；该例外不能由用户连接配置开启。`2001:2::/48` 和 `198.18.0.0/15` 均拒绝。
+fixture 主机使用系统 DNS，且不能与企业模式同时开启。`2001:2::/48` 和 `198.18.0.0/15` 均拒绝。详见
+[部署方共享出网配置](../../docs/operations/deployment-egress.md)。
+
+拨号总预算仍是 `Connect`（默认 10 秒），按 DNS 返回顺序逐个尝试受检地址；每次拨号分到「剩余总预算 ÷ 剩余地址数」，并有约 2 秒下限，一个不响应的边缘地址不会耗尽后面地址的时间。全部地址失败时，错误和结构化日志的 `detail` 按地址列出有限原因（timeout、connection refused、network unreachable 或未尝试），只含数字地址与原因，不含 URL、query、认证头或凭据。
+
+`NewUpstreamClientWithTimeouts` 接受 `UpstreamTimeouts`，可在构造时注入 `Connect` 与 `ResponseHeader` 时限；非正字段分别保留 TCP/TLS 各 10 秒、响应头 30 秒的生产默认值。原构造函数保持默认值；工作流资产边界测试只缩短等待，不替换安全 transport。
 
 原始 Key 仅在本服务内存中存在，密文写入前随机产生 nonce；Node 的临时令牌只保存摘要。
 备份必须同时包含数据库和加密主密钥卷。启动时不匹配已有密文就失败，不重置历史记录。

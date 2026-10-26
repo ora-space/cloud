@@ -3,6 +3,7 @@ package simulator
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/metadata"
@@ -93,6 +94,13 @@ func pluginSpec(kind string, plugins []core.Object) (*controlpb.ExecutionInput, 
 		}
 		for _, target := range targets {
 			item.Targets = append(item.Targets, &controlpb.PluginTargetDownload{Target: target.S("target"), Download: &controlpb.PluginDownload{Url: target.S("url"), Sha256: target.S("sha256")}})
+		}
+		if agent, declared := core.PluginAgentConfiguration(plugin); declared {
+			version := agent.N("schemaVersion")
+			if version < 0 || version > math.MaxUint32 {
+				version = 0
+			}
+			item.AgentConfiguration = &controlpb.PluginAgentConfiguration{SchemaVersion: uint32(version), DeclarationSha256: agent.S("declarationSha256")} // #nosec G115 -- bounded above.
 		}
 		items = append(items, item)
 	}

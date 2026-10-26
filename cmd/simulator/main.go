@@ -51,7 +51,7 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	store, e := core.NewDevelopmentStore(db)
+	store, e := core.NewStore(db)
 	if e != nil {
 		return e
 	}
@@ -95,7 +95,14 @@ func run() error {
 	gin.SetMode(gin.ReleaseMode)
 	cloud := httptest.NewServer(router.NewDevelopment(store, auth, zap.NewNop()))
 	defer cloud.Close()
-	substrate, e := simulator.NewSubstrate(filepath.Join(absolute, "substrate"), map[string]string{"https://example.invalid/repo.git": repo})
+	// The Git Server double holds the Project repositories; Workspaces clone its snapshots and
+	// deliveries push to it. The external repository URL below is never contacted.
+	gitServer, e := simulator.NewGitServer(filepath.Join(absolute, "git"))
+	if e != nil {
+		return e
+	}
+	store.GitServer = gitServer.Config()
+	substrate, e := simulator.NewSubstrate(filepath.Join(absolute, "substrate"), gitServer)
 	if e != nil {
 		return e
 	}
@@ -125,7 +132,7 @@ func run() error {
 		return e
 	}
 	defer func() { _ = conn.Close() }()
-	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(conn)}
+	controller := &simulator.Controller{Client: client, SubstrateURL: external.URL, Executions: controlpb.NewExecutionServiceClient(conn), Git: gitServer}
 	controller.AgentRuns = controlpb.NewAgentRunServiceClient(conn)
 	controller.AgentNode, e = simulator.NewAgentNode(filepath.Join(*root, "agent-node"))
 	if e != nil {
@@ -139,6 +146,10 @@ func run() error {
 	created, status, e := client.Call(ctx, "POST", "/api/v1/tenants/"+tenant.S("tenantId")+"/projects", "gateway", gateway, user, "demo-create", core.Object{"name": "Demo project", "repositoryUrl": "https://example.invalid/repo.git", "defaultBranch": "main"})
 	if e != nil || status != 202 {
 		return fmt.Errorf("create: %d %v %v", status, e, created)
+	}
+	// Stand in for the external line's first sync so the main Workspace has a snapshot to clone.
+	if _, e := gitServer.SeedSnapshot(ctx, store.Pool, created.O("resource").S("id"), repo); e != nil {
+		return e
 	}
 	if e := controller.Drain(ctx); e != nil {
 		return e

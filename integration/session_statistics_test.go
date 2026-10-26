@@ -69,9 +69,14 @@ func TestMigration0035ModelAttemptsFreshAndUpgradeWithoutBackfill(t *testing.T) 
 		var rows, constraints, indexes int
 		must(t, pool.QueryRow(`SELECT count(*) FROM model_request_attempts`).Scan(&rows))
 		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint WHERE conrelid='model_request_attempts'::regclass AND contype='f'`).Scan(&constraints))
-		must(t, pool.QueryRow(`SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='model_attempt_run_order'`).Scan(&indexes))
-		if rows != 0 || constraints != 3 || indexes != 1 {
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname IN ('model_attempt_run_order','model_attempt_workflow_run_order')`).Scan(&indexes))
+		// 0035's three foreign keys are replaced by one IssueRun/WorkflowRun pair each for the run
+		// and the binding; both owners are nullable and discriminated by exactly one check.
+		if rows != 0 || constraints != 5 || indexes != 2 {
 			t.Fatalf("rows=%d scoped constraints=%d indexes=%d", rows, constraints, indexes)
+		}
+		if !columnNullable(t, pool, "model_request_attempts", "run_id") || !columnNullable(t, pool, "model_request_attempts", "workflow_run_id") {
+			t.Fatal("attempt owners must both be nullable and discriminated by model_attempt_owner_exclusive")
 		}
 	}
 	for _, upgrade := range []bool{false, true} {

@@ -40,6 +40,8 @@ export interface WorkflowEditorHandlers {
   onEdgesChange: (changes: EdgeChange<WorkflowCanvasEdge>[]) => void
   onConnect: (connection: Connection) => void
   onAddNode: (kind: WorkflowNodeKind, position: XYPosition) => void
+  /** Adds a loopExit into the selected loop's body. */
+  onAddLoopExit: (loopId: string) => void
   onOrganize: () => void
   onNodeDataUpdate: (data: WorkflowNodeData) => void
   /** Adds one region member through an iteration insertion seam. */
@@ -436,6 +438,7 @@ function useWorkflowActionRecorder(
   const {
     captureContent,
     addNode,
+    addLoopExit,
     addIterationMember,
     toggleIterationCollapsed,
     applyCorrection,
@@ -444,29 +447,37 @@ function useWorkflowActionRecorder(
   } = draft
   const { record } = history
 
-  const onAddNode = useCallback(
-    (kind: WorkflowNodeKind, position: XYPosition) => {
+  const recordNodeAddition = useCallback(
+    (kind: WorkflowNodeKind, mutate: () => void) => {
       const before = captureContent()
       markDirty()
-      addNode(kind, position)
+      mutate()
       record(before, captureContent(), 'node.add', {
-        meta: {
-          nodeKind: kind,
-          subject: t(`workflows.node.${kind}.label`),
-        },
+        meta: { nodeKind: kind, subject: t(`workflows.node.${kind}.label`) },
       })
     },
-    [addNode, captureContent, markDirty, record, t],
+    [captureContent, markDirty, record, t],
+  )
+
+  const onAddNode = useCallback(
+    (kind: WorkflowNodeKind, position: XYPosition) => {
+      recordNodeAddition(kind, () => addNode(kind, position))
+    },
+    [addNode, recordNodeAddition],
+  )
+
+  const onAddLoopExit = useCallback(
+    (loopId: string) => {
+      recordNodeAddition('loopExit', () => addLoopExit(loopId))
+    },
+    [addLoopExit, recordNodeAddition],
   )
 
   const onIterationInsert = useCallback(
     (insertion: WorkflowIterationInsertion, kind: WorkflowNodeKind) => {
-      const before = captureContent()
-      markDirty()
-      addIterationMember(insertion, kind)
-      record(before, captureContent(), 'node.add', { meta: { nodeKind: kind } })
+      recordNodeAddition(kind, () => addIterationMember(insertion, kind))
     },
-    [addIterationMember, captureContent, markDirty, record],
+    [addIterationMember, recordNodeAddition],
   )
 
   const onToggleIterationCollapsed = useCallback(
@@ -521,6 +532,7 @@ function useWorkflowActionRecorder(
 
   return {
     onAddNode,
+    onAddLoopExit,
     onIterationInsert,
     onToggleIterationCollapsed,
     onIterationCorrection,

@@ -5,6 +5,10 @@ package core
 func withAgentRunDetails(t *transaction, run Object) Object {
 	run["preparation"] = nil
 	if run.S("executorType") == "agent" {
+		// Private options and release locators never enter the shared run document.
+		if configuration := t.one(`SELECT plugin_id,plugin_version,configuration_revision FROM run_agent_configurations WHERE run_id=$1`, run.S("id")); configuration != nil {
+			run["agentConfiguration"] = configuration
+		}
 		if p := agentRunPreparation(t, run); p != nil {
 			p["syncErrorCode"] = preparationSyncErrorCode(t, run, p)
 			run["preparation"] = p
@@ -12,6 +16,10 @@ func withAgentRunDetails(t *transaction, run Object) Object {
 	}
 	return withRevision(t, stripAgentRunSkeleton(run))
 }
+
+// preparationWaitCodes are the clone-step codes a run's preparation shows as they are: safe, bounded
+// reasons the step is not making progress that name no Binding, snapshot or deployment detail.
+var preparationWaitCodes = map[string]bool{snapshotNotReady: true, gitServerUnconfigured: true}
 
 // repositorySyncFailed is the preparation error code of a clone step that ended because its
 // Binding's latest sync failed; syncErrorCode then names why.
@@ -25,8 +33,22 @@ func preparationSyncErrorCode(t *transaction, run, progress Object) any {
 	if progress.S("errorCode") != repositorySyncFailed || run.S("workspaceId") == "" {
 		return nil
 	}
-	o := t.one(`SELECT o.error_code FROM repository_operations o JOIN workspaces w ON w.project_id=o.project_id
-	 WHERE w.id=$1 AND o.type='repository_sync' AND o.state='failed' ORDER BY o.finished_at DESC,o.id DESC LIMIT 1`, run.S("workspaceId"))
+	// The clone step recorded the very sync it failed on, and only its ID (operation D2): the code is
+	// that sync's own error_code, read in the Workspace's Project so a recorded ID never reaches
+	// another tenant's sync. A recorded sync without a code (superseded or cancelled) has none to
+	// show. The latest failed sync of the Binding answers only for operations that recorded no ID.
+	var o Object
+	op := t.one("SELECT result FROM operations WHERE workspace_id=$1 AND kind='create_workspace' AND error_code=$2 ORDER BY created_at DESC,id DESC LIMIT 1", run.S("workspaceId"), repositorySyncFailed)
+	if id := op.O("result").S("syncOperationId"); id != "" {
+		if !validID(id) {
+			return nil
+		}
+		o = t.one(`SELECT o.error_code FROM repository_operations o JOIN workspaces w ON w.project_id=o.project_id AND w.tenant_id=o.tenant_id
+		 WHERE w.id=$1 AND o.id=$2 AND o.type='repository_sync'`, run.S("workspaceId"), id)
+	} else {
+		o = t.one(`SELECT o.error_code FROM repository_operations o JOIN workspaces w ON w.project_id=o.project_id AND w.tenant_id=o.tenant_id
+		 WHERE w.id=$1 AND o.type='repository_sync' AND o.state='failed' ORDER BY o.finished_at DESC,o.id DESC LIMIT 1`, run.S("workspaceId"))
+	}
 	if o == nil || o.S("errorCode") == "" {
 		return nil
 	}
@@ -67,7 +89,14 @@ func agentRunPreparation(t *transaction, run Object) Object {
 				progress["errorCode"] = "clone_attempts_exhausted"
 				return progress
 			}
-			if code := op.S("errorCode"); deferCodes[code] {
+			// The Binding's sync ended without a snapshot to clone: the run fails for that reason,
+			// whatever the session layer later records (operation D2).
+			if op.S("state") == "failed" && op.S("errorCode") == repositorySyncFailed {
+				progress["stage"] = "failed"
+				progress["errorCode"] = repositorySyncFailed
+				return progress
+			}
+			if code := op.S("errorCode"); deferCodes[code] || preparationWaitCodes[code] {
 				progress["errorCode"] = code
 			}
 		}

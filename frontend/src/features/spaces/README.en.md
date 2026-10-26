@@ -30,4 +30,6 @@ Depends on the generated client, `features/auth/session`, and TanStack Query. La
 
 MSW replaces the generated client's network boundary; pure tests cover slugs, SSE frames, and reconnect delays.
 
-Creation uses shared `CreateFormSubmit` error and pending feedback. SSE handles tenant membership revocation, plugin selection and catalog updates by refreshing the corresponding queries. `issue_run.thread_appended` / `issue_run.thread_changed` invalidate that run's Thread query (the generated client's `getGetApiV1TenantsTidIssuesIidRunsRidThreadQueryKey`, without params) and `['issue-runs', tid, issueId]`; `lastSeq` is only a hint, and only the Thread GET moves a cursor. A Thread event without `issueId` is ignored, and an event whose `issueId`/`runId` is not a string is dropped at the boundary.
+Creation uses shared `CreateFormSubmit` error and pending feedback. SSE handles member revocation, plugin selection and catalog updates. `issue_run.thread_appended` / `issue_run.thread_changed` invalidate the addressed Thread, task conversation and run list. `issue.conversation_changed` invalidates task messages and runs. Both are lossy hints; only REST moves a cursor. Missing or malformed issue/run identities are rejected at the boundary.
+
+`scheduled_task.artifacts_updated` invalidates only this tenant’s scheduled histories and the addressed run’s artifact index. It never mints downloads or refreshes other tenants or runs. `space.scheduled_tasks_updated` invalidates the tenant task list and, when it carries `scheduledTaskId`, only that task's history.

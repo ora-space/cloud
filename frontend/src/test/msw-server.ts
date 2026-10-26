@@ -16,4 +16,13 @@ const githubOnly = http.get('/auth/providers', () =>
   HttpResponse.json({ providers: ['github'], default: 'github' }),
 )
 
-export const server = setupServer(...handlers, signedOut, githubOnly)
+const previewsUnavailable = http.get(
+  '/api/v1/tenants/:tid/issues/:iid/runs/:rid/thread/preview/events',
+  () =>
+    HttpResponse.json(
+      { code: 'not_found', params: {}, requestId: 'preview-unavailable' },
+      { status: 404 },
+    ),
+)
+
+export const server = setupServer(...handlers, signedOut, githubOnly, previewsUnavailable)

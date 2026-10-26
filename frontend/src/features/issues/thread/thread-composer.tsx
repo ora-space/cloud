@@ -16,7 +16,13 @@ import { isThreadClosed, type ThreadState } from './thread-entries'
  * second ("确认结束") sends the request. Ending cannot be undone, so one
  * stray click must never end a session.
  */
-function EndSessionControl({ threadRef, closed }: { threadRef: ThreadRef; closed: boolean }) {
+export function EndSessionControl({
+  threadRef,
+  closed,
+}: {
+  threadRef: ThreadRef
+  closed: boolean
+}) {
   const end = useEndThread(threadRef)
   const [confirming, setConfirming] = useState(false)
 

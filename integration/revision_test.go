@@ -52,7 +52,7 @@ func (f *fixture) registeredDelivery(t *testing.T, cfg *objectstore.Config) (str
 	var wid string
 	must(t, f.store.Pool.QueryRow("SELECT id::text FROM workspaces WHERE issue_run_id=$1", run).Scan(&wid))
 	sandbox, _, _ := f.liveNode(t, wid)
-	input := core.Object{"kind": "deliver_revision", "sessionExecutionId": session, "checkoutExecutionId": "checkout-1", "baseCommit": f.commit}
+	input := core.Object{"kind": "deliver_revision", "sessionExecutionId": session, "checkoutExecutionId": f.checkoutOf(wid), "baseCommit": f.commit}
 	target := core.Object{"workspaceId": wid, "sandboxInstanceId": sandbox, "nodeId": node}
 	work, err := f.store.EnqueueExecutionWork(t.Context(), run, "deliver_revision", input, target, time.Time{})
 	must(t, err)
@@ -82,6 +82,8 @@ func (f *fixture) registeredDelivery(t *testing.T, cfg *objectstore.Config) (str
 	if !proto.Equal(recovered.GetRecord().GetInput(), claim.GetItem().GetInput()) {
 		t.Fatal("GetDispatch changed the frozen delivery input")
 	}
+	// The Node pushed its final commit, here its unchanged baseline, to the attempt's delivery ref.
+	f.pushedDelivery("revision-delivery", f.commit)
 	history := []byte("{\"kind\":\"assistant\",\"text\":\"echo\"}\n")
 	sum := sha256.Sum256(history)
 	result := &controlpb.ExecutionResult{Node: ended.GetNode(), Outcome: &controlpb.ExecutionResult_RevisionUnchanged{RevisionUnchanged: &controlpb.RevisionUnchanged{FinalCommit: f.commit, BaseCommit: f.commit, RevisionRef: spec.GetRevisionRef(), History: &controlpb.StoredObject{Key: spec.GetHistoryKey(), Size: uint64(len(history)), Sha256: hex.EncodeToString(sum[:])}}}}
@@ -143,7 +145,7 @@ func TestFailedDeliveryRetryUsesNewWorkKeysAndAtomicHook(t *testing.T) {
 	var session string
 	must(t, f.store.Pool.QueryRow("SELECT input->>'sessionExecutionId' FROM node_executions WHERE execution_id=$1", req.ExecutionId).Scan(&session))
 	sandbox, node, _ := f.liveNode(t, wid)
-	work, err := f.store.EnqueueExecutionWork(t.Context(), req.OperationId, "deliver_revision", core.Object{"kind": "deliver_revision", "sessionExecutionId": session, "checkoutExecutionId": "checkout-1", "baseCommit": f.commit}, core.Object{"workspaceId": wid, "sandboxInstanceId": sandbox, "nodeId": node}, time.Time{})
+	work, err := f.store.EnqueueExecutionWork(t.Context(), req.OperationId, "deliver_revision", core.Object{"kind": "deliver_revision", "sessionExecutionId": session, "checkoutExecutionId": f.checkoutOf(wid), "baseCommit": f.commit}, core.Object{"workspaceId": wid, "sandboxInstanceId": sandbox, "nodeId": node}, time.Time{})
 	must(t, err)
 	if work.O("input").S("historyKey") == oldHistory || !strings.Contains(work.O("input").S("historyKey"), "/"+work.S("id")+"/") || f.scalar("SELECT count(*) FROM revisions") != 0 {
 		t.Fatal("retry reused a previous work item's object key or fabricated a Revision")
@@ -198,15 +200,10 @@ func TestRevisionS3VerificationAndAtomicTakeover(t *testing.T) {
 				history.Size++
 			}
 			if mode == "delivered" {
-				// Git artifact generation is exercised separately by the simulator acceptance.
-				bundle := []byte("opaque bundle object verified by S3 checksum")
-				sum := sha256.Sum256(bundle)
-				var key string
-				must(t, f.store.Pool.QueryRow("SELECT input->>'bundleKey' FROM node_executions WHERE execution_id=$1", req.ExecutionId).Scan(&key))
-				if status := putRevisionObject(t, cfg, key, bundle, ""); status != 200 {
-					t.Fatalf("bundle PUT status=%d", status)
-				}
-				req.Result.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{BaseCommit: f.commit, FinalCommit: strings.Repeat("b", 40), RevisionRef: req.Result.GetRevisionUnchanged().GetRevisionRef(), History: history, Bundle: &controlpb.StoredObject{Key: key, Size: uint64(len(bundle)), Sha256: hex.EncodeToString(sum[:])}}}
+				// The Git push itself is exercised against a real Git Server in git_server_test.go.
+				final := strings.Repeat("b", 40)
+				f.pushedDelivery(req.ExecutionId, final)
+				req.Result.Outcome = &controlpb.ExecutionResult_RevisionDelivered{RevisionDelivered: &controlpb.RevisionDelivered{BaseCommit: f.commit, FinalCommit: final, RevisionRef: req.Result.GetRevisionUnchanged().GetRevisionRef(), History: history}}
 			}
 			_, err := f.store.Pool.Exec("CREATE TABLE delivery_hook_evidence(outcome text, revision_id uuid)")
 			must(t, err)

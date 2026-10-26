@@ -1,26 +1,163 @@
 package core
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+)
 
 // Workflow Condition node semantics, ported from desktop's engine/condition.rs so a branch decision
 // means the same thing on both sides (specs#99 D1 条件④: the scheduler boundary mirrors desktop's
 // ports, and desktop is the reference implementation).
 //
-// The variable pool is the run's committed node outputs: a rule's variableSelector [nodeId, ...path]
-// resolves by reading prior node states — selector[0] names the node, selector[1:] walks into its
-// output object. A variable a prior node has not produced (unknown node, absent path, or a node that
-// never ran) is absent, which the operators handle deliberately: exists / not_exists / empty /
-// not_empty classify absence, and every other operator compares nothing — a comparator on an absent
-// variable does not match. None of this is a run failure: an unevaluable condition has an else
-// branch to fall back to, and a failed run should name a real execution failure, not a document the
-// author must fix anyway.
+// The variable pool is the run's committed node outputs: a rule's variableSelector is
+// [nodeId, root, ...nested]. nodeId names a prior node, root is one variable that node's kind
+// declares (start: `input` plus each declared input variable; agent: `output`, plus
+// `structured_output` when the node declares an output contract; output: `output`; condition: none),
+// and nested walks object fields past the root.
+//
+// Today only the start node actually writes roots. Agent and output roots are declared by the
+// contract but stay unassigned until cloud#70/#74 completes the variable passing, so a selector on
+// them reads the same declared-but-unassigned state desktop has before a node produces its output.
+// Cloud's runtime has no declaration set — the states map cannot tell an unassigned variable from one
+// the graph never declared — so the publish gate refuses selectors naming an unknown node or a root
+// its kind does not expose (`condition_selector_undeclared`), which desktop's pool reports as
+// `Undeclared` and fails. What reaches the evaluator is therefore either assigned or genuinely
+// unassigned, and a variable a prior node has not produced is absent.
+//
+// Absence is not a universal no-match: desktop's existence and emptiness operators classify it, and
+// every other operator fails the node and the run rather than silently falling through to else. The
+// same applies to a value whose type the operator cannot compare. That failure is the point of the
+// parity work (circus#210): a condition the author could not have meant must be visible, not routed.
+//
+// The expected value may also be a Dify-style template. `{{#node.var#}}` alone keeps the bound JSON
+// type (so numeric and boolean comparisons stay typed); a template mixed with literal text renders
+// as a string. Both forms resolve every placeholder eagerly, so an unset variable fails the node
+// before a branch is chosen.
 
-// workflowConditionOperator evaluates one comparison rule. absent reports whether the selector
-// resolved to nothing; resolved is the variable when it is present.
-type workflowConditionOperator = func(resolved any, absent bool, expected any) bool
+// workflowConditionError is one runtime condition failure. Code is the stable identifier callers and
+// tests key on; the message names the selector and operator the way desktop's ConditionError does so
+// the run viewer points at the value that needs fixing.
+type workflowConditionError struct {
+	Code   string
+	Detail string
+}
+
+func (e *workflowConditionError) Error() string { return e.Detail }
+
+func workflowConditionFailure(code, format string, args ...any) *workflowConditionError {
+	return &workflowConditionError{Code: code, Detail: fmt.Sprintf(format, args...)}
+}
+
+// workflowSelector is a resolved variableSelector. Root is the variable name inside the node's
+// output, not part of an opaque path, which is what makes Cloud's selector the same shape desktop's
+// variable pool uses.
+type workflowSelector struct {
+	nodeID string
+	root   string
+	nested []string
+}
+
+func (s workflowSelector) qualified() string {
+	parts := make([]string, 0, 2+len(s.nested))
+	parts = append(parts, s.nodeID, s.root)
+	parts = append(parts, s.nested...)
+	return strings.Join(parts, ".")
+}
+
+// parseWorkflowSelector reads a wire variableSelector. The editor sends JSON arrays, so []any is the
+// production shape; []string is accepted too because hand-built documents and tests spell selectors
+// naturally that way. A selector needs both a node and a root: one segment would name a whole node
+// output, which desktop refuses.
+func parseWorkflowSelector(raw any) (workflowSelector, bool) {
+	var parts []string
+	switch value := raw.(type) {
+	case []any:
+		parts = make([]string, len(value))
+		for i, element := range value {
+			text, ok := element.(string)
+			if !ok {
+				return workflowSelector{}, false
+			}
+			parts[i] = text
+		}
+	case []string:
+		parts = value
+	default:
+		return workflowSelector{}, false
+	}
+	return buildWorkflowSelector(parts)
+}
+
+// buildWorkflowSelector validates selector parts from either a wire array or a template placeholder.
+func buildWorkflowSelector(parts []string) (workflowSelector, bool) {
+	if len(parts) < 2 {
+		return workflowSelector{}, false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return workflowSelector{}, false
+		}
+	}
+	return workflowSelector{nodeID: parts[0], root: parts[1], nested: parts[2:]}, true
+}
+
+// resolveWorkflowSelector reads one selector out of committed node states. The boolean reports
+// whether the variable is assigned; absence is an ordinary state the operators classify. A nested
+// path that cannot be walked is an error, matching desktop's variable pool: once the root exists, a
+// missing or non-object field means the selector names something the author did not produce.
+func resolveWorkflowSelector(selector workflowSelector, states map[string]workflowNodeState) (value any, present bool, err error) {
+	state, ok := states[selector.nodeID]
+	if !ok || state.Status != "succeeded" {
+		return nil, false, nil
+	}
+	output, ok := asWorkflowObject(state.Output)
+	if !ok {
+		return nil, false, nil
+	}
+	value, present = output[selector.root]
+	if !present {
+		return nil, false, nil
+	}
+	for _, segment := range selector.nested {
+		object, ok := asWorkflowObject(value)
+		if !ok {
+			return nil, false, workflowConditionFailure("condition_invalid_path",
+				"condition variable %s is not an object, so its path cannot be resolved", selector.qualified())
+		}
+		value, present = object[segment]
+		if !present {
+			return nil, false, workflowConditionFailure("condition_invalid_path",
+				"condition variable %s has no object path segment %s", selector.qualified(), segment)
+		}
+	}
+	return value, true, nil
+}
+
+// workflowConditionOperand is one rule's fully resolved inputs: the variable, the expected value and
+// the names both are reported with. hasExpected is false for a missing `value` and for an explicit
+// JSON null alike, matching desktop's Option<Value>: serde reads null as None, and a comparison
+// operator then reports the missing operand instead of comparing against null.
+type workflowConditionOperand struct {
+	actual      any
+	present     bool
+	expected    any
+	hasExpected bool
+	selector    string
+	operator    string
+}
+
+// workflowConditionOperator evaluates one comparison rule; an error fails the node and the run.
+type workflowConditionOperator func(*workflowConditionOperand) (bool, error)
 
 // workflowConditionOperators is desktop's full wire operator set (condition.rs
 // ComparisonOperator::parse). `is`/`is_not` are the same comparisons as `equals`/`not_equals`.
+//
+// Only the keys are wire spellings. The direction labels the comparator helpers are built with
+// ("starts", "greater_eq", …) name one comparison on the Go side and are not operators a document
+// may write: the gate reads this map, so a document spelling one is refused as an unknown operator
+// rather than quietly evaluated as the comparison it feeds.
 var workflowConditionOperators = map[string]workflowConditionOperator{
 	"equals":                workflowCompareEquals,
 	"is":                    workflowCompareEquals,
@@ -28,240 +165,340 @@ var workflowConditionOperators = map[string]workflowConditionOperator{
 	"is_not":                workflowCompareNotEquals,
 	"contains":              workflowCompareContains,
 	"not_contains":          workflowCompareNotContains,
-	"starts_with":           workflowCompareTextOrder("starts"),
-	"ends_with":             workflowCompareTextOrder("ends"),
+	"starts_with":           workflowCompareTextOrder(true),
+	"ends_with":             workflowCompareTextOrder(false),
 	"empty":                 workflowCompareEmpty,
-	"not_empty":             workflowCompareNegate(workflowCompareEmpty),
+	"not_empty":             workflowCompareNotEmpty,
 	"exists":                workflowCompareExists,
-	"not_exists":            workflowCompareNegate(workflowCompareExists),
+	"not_exists":            workflowCompareNotExists,
 	"greater_than":          workflowCompareNumeric("greater"),
 	"greater_than_or_equal": workflowCompareNumeric("greater_eq"),
 	"less_than":             workflowCompareNumeric("less"),
 	"less_than_or_equal":    workflowCompareNumeric("less_eq"),
 }
 
-func workflowCompareEquals(resolved any, absent bool, expected any) bool {
-	if absent {
-		return false
+// operands requires an assigned variable and an expected value. Existence and emptiness are the
+// only operators that read an absent variable; every other one fails instead of treating absence as
+// false, so an unset variable can never silently choose the else branch.
+func (o *workflowConditionOperand) operands() (actual, expected any, err error) {
+	if !o.present {
+		return nil, nil, workflowConditionFailure("condition_variable_unset",
+			"condition variable %s has not been assigned yet", o.selector)
 	}
-	return workflowJSONEqual(resolved, expected)
+	if !o.hasExpected {
+		return nil, nil, workflowCompareTypeMismatch(o, "a comparison value")
+	}
+	return o.actual, o.expected, nil
 }
 
-func workflowCompareNotEquals(resolved any, absent bool, expected any) bool {
-	if absent {
-		return false
-	}
-	return !workflowJSONEqual(resolved, expected)
+func workflowCompareTypeMismatch(o *workflowConditionOperand, expectedLabel string) error {
+	return workflowConditionFailure("condition_type_mismatch",
+		"operator %s cannot compare variable %s of type %s against %s",
+		o.operator, o.selector, workflowTypeLabel(o.actual), expectedLabel)
 }
 
-func workflowCompareContains(resolved any, absent bool, expected any) bool {
-	if absent {
-		return false
+func workflowCompareEquals(o *workflowConditionOperand) (bool, error) {
+	actual, expected, err := o.operands()
+	if err != nil {
+		return false, err
 	}
-	return strings.Contains(workflowTextOf(resolved), workflowTextOf(expected))
+	return workflowJSONEqual(actual, expected), nil
 }
 
-// workflowCompareNotContains is contains' negation with one deliberate exception: absence. Every
-// comparator in this file treats an absent variable as a no-match (see the file comment), so
-// not_contains has to answer false there too. Negating the inner verdict instead would answer
-// true, which puts not_contains and not_equals on opposite branches of the same absent variable —
-// not_contains would select its case while not_equals fell through to else. The negation belongs to
-// the comparison, not to the classification of absence.
-func workflowCompareNotContains(resolved any, absent bool, expected any) bool {
-	if absent {
-		return false
+func workflowCompareNotEquals(o *workflowConditionOperand) (bool, error) {
+	matched, err := workflowCompareEquals(o)
+	if err != nil {
+		return false, err
 	}
-	return !workflowCompareContains(resolved, absent, expected)
+	return !matched, nil
 }
 
-// workflowCompareTextOrder serves both text-position operators: "starts" is prefix, "ends" is
-// suffix; any other direction is unreachable.
-func workflowCompareTextOrder(direction string) workflowConditionOperator {
-	return func(resolved any, absent bool, expected any) bool {
-		if absent {
-			return false
+func workflowCompareContains(o *workflowConditionOperand) (bool, error) {
+	actual, expected, err := o.operands()
+	if err != nil {
+		return false, err
+	}
+	switch value := actual.(type) {
+	case string:
+		needle, ok := expected.(string)
+		if !ok {
+			return false, workflowCompareTypeMismatch(o, workflowTypeLabel(expected))
 		}
-		resolvedText, expectedText := workflowTextOf(resolved), workflowTextOf(expected)
-		switch direction {
-		case "starts":
-			return strings.HasPrefix(resolvedText, expectedText)
-		default:
-			return strings.HasSuffix(resolvedText, expectedText)
+		return strings.Contains(value, needle), nil
+	case []any:
+		for _, item := range value {
+			if workflowJSONEqual(item, expected) {
+				return true, nil
+			}
 		}
+		return false, nil
+	default:
+		// desktop's contains is defined for strings (substring) and arrays (element equality) only;
+		// an object or scalar has no containment relation to guess at.
+		return false, workflowCompareTypeMismatch(o, workflowTypeLabel(expected))
 	}
 }
 
-func workflowCompareEmpty(resolved any, absent bool, expected any) bool {
-	if absent {
-		return true // absence is the emptiest a variable can be
+func workflowCompareNotContains(o *workflowConditionOperand) (bool, error) {
+	matched, err := workflowCompareContains(o)
+	if err != nil {
+		return false, err
 	}
-	switch value := resolved.(type) {
+	return !matched, nil
+}
+
+// workflowCompareTextOrder serves both text-position operators: starts is prefix, ends is suffix.
+// desktop requires both sides to be strings; a number or object is a type error, not text.
+func workflowCompareTextOrder(starts bool) workflowConditionOperator {
+	return func(o *workflowConditionOperand) (bool, error) {
+		actual, expected, err := o.operands()
+		if err != nil {
+			return false, err
+		}
+		actualText, okActual := actual.(string)
+		expectedText, okExpected := expected.(string)
+		if !okActual || !okExpected {
+			return false, workflowCompareTypeMismatch(o, workflowTypeLabel(expected))
+		}
+		if starts {
+			return strings.HasPrefix(actualText, expectedText), nil
+		}
+		return strings.HasSuffix(actualText, expectedText), nil
+	}
+}
+
+func workflowCompareEmpty(o *workflowConditionOperand) (bool, error) {
+	return workflowValueEmpty(o.actual, o.present), nil
+}
+
+func workflowCompareNotEmpty(o *workflowConditionOperand) (bool, error) {
+	return !workflowValueEmpty(o.actual, o.present), nil
+}
+
+func workflowCompareExists(o *workflowConditionOperand) (bool, error) {
+	return o.present, nil
+}
+
+func workflowCompareNotExists(o *workflowConditionOperand) (bool, error) {
+	return !o.present, nil
+}
+
+// workflowValueEmpty is desktop's is_empty: unassigned, null, and an empty string/array/object are
+// empty; booleans and numbers are not.
+func workflowValueEmpty(value any, present bool) bool {
+	if !present {
+		return true
+	}
+	switch typed := value.(type) {
 	case nil:
 		return true
 	case string:
-		return value == ""
+		return typed == ""
 	case []any:
-		return len(value) == 0
+		return len(typed) == 0
 	default:
 		// The object case goes through asWorkflowObject rather than a `case map[string]any` arm:
 		// Object is a named type, so an Object boxed in `any` — which is exactly what a start node's
 		// output is, since it wraps the run input — never matches that arm and would fall through to
 		// "not empty". Reading a nested object out of a node output hits the same trap one level in.
-		obj, ok := asWorkflowObject(value)
+		object, ok := asWorkflowObject(typed)
 		if !ok {
 			return false
 		}
-		return len(obj) == 0
+		return len(object) == 0
 	}
 }
 
-func workflowCompareExists(resolved any, absent bool, expected any) bool {
-	return !absent
-}
-
-// workflowCompareNegate flips one operator's verdict. The absent-handling stays the inner
-// operator's, so not_exists matches exactly what exists does not.
-func workflowCompareNegate(inner workflowConditionOperator) workflowConditionOperator {
-	return func(resolved any, absent bool, expected any) bool {
-		return !inner(resolved, absent, expected)
+// workflowCompareNumeric serves the four ordering operators. Both sides must be JSON numbers;
+// text against a number is a type error, exactly as desktop's compare_numbers answers None.
+func workflowCompareNumeric(direction string) workflowConditionOperator {
+	return func(o *workflowConditionOperand) (bool, error) {
+		actual, expected, err := o.operands()
+		if err != nil {
+			return false, err
+		}
+		left, okLeft := workflowNumberOf(actual)
+		right, okRight := workflowNumberOf(expected)
+		if !okLeft || !okRight {
+			return false, workflowCompareTypeMismatch(o, workflowTypeLabel(expected))
+		}
+		switch direction {
+		case "greater":
+			return left > right, nil
+		case "greater_eq":
+			return left >= right, nil
+		case "less":
+			return left < right, nil
+		default:
+			return left <= right, nil
+		}
 	}
 }
 
-// workflowTextOf renders a JSON value as the text a text operator compares. A string is itself;
-// anything else is its canonical JSON, so comparing against a number or object stays deterministic.
-func workflowTextOf(value any) string {
-	if text, ok := value.(string); ok {
-		return text
+// workflowNumberOf reads any Go numeric representation JSON decoding can leave in a document.
+func workflowNumberOf(value any) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number, true
+	case float32:
+		return float64(number), true
+	case int:
+		return float64(number), true
+	case int64:
+		return float64(number), true
+	case int32:
+		return float64(number), true
+	case uint:
+		return float64(number), true
+	case uint64:
+		return float64(number), true
+	case uint32:
+		return float64(number), true
+	case json.Number:
+		parsed, err := number.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
 	}
-	return canonicalJSON(value)
+}
+
+// workflowTypeLabel names a JSON value's type for a type-mismatch message. Cloud decodes every number
+// as float64, so it cannot tell 92 from 92.0 and labels any integral value "integer"; desktop's
+// type_label calls only is_i64/is_u64 "integer" and 92.0 "number". The difference is confined to the
+// message text — comparison and equality are unaffected.
+func workflowTypeLabel(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	}
+	if number, ok := workflowNumberOf(value); ok {
+		if number == math.Trunc(number) {
+			return "integer"
+		}
+		return "number"
+	}
+	if _, ok := asWorkflowObject(value); ok {
+		return "object"
+	}
+	return "value"
 }
 
 // workflowJSONEqual compares two JSON values by canonical form (encoding/json sorts map keys), so
-// object comparison is order-independent and deterministic. A value JSON cannot represent cannot be
-// compared — that is a no-match, not a panic.
-func workflowJSONEqual(resolved, expected any) bool {
-	a, b := canonicalJSON(resolved), canonicalJSON(expected)
+// object comparison is order-independent and deterministic. Numeric spellings 2 and 2.0 render the
+// same way, which is desktop's equal() across integer and float representations.
+//
+// Two edge cases differ from desktop's Value equality: inside a container desktop keeps integer and
+// float distinct (`{a:2}` and `{a:2.0}` are not equal), while the canonical form unifies them; and
+// desktop's as_f64 comparison treats -0.0 and 0 as equal, while their canonical forms "-0" and "0"
+// differ. Top-level numeric comparison matches on both sides.
+func workflowJSONEqual(actual, expected any) bool {
+	a, b := canonicalJSON(actual), canonicalJSON(expected)
 	if a == "" || b == "" {
 		return false
 	}
 	return a == b
 }
 
-// workflowCompareNumeric serves the four ordering operators. Only two numbers are orderable; text
-// against a number is a no-match rather than an error.
-func workflowCompareNumeric(direction string) workflowConditionOperator {
-	return func(resolved any, absent bool, expected any) bool {
-		if absent {
-			return false
-		}
-		resolvedNum, okA := resolved.(float64)
-		expectedNum, okB := expected.(float64)
-		if !okA || !okB {
-			return false
-		}
-		switch direction {
-		case "greater":
-			return resolvedNum > expectedNum
-		case "greater_eq":
-			return resolvedNum >= expectedNum
-		case "less":
-			return resolvedNum < expectedNum
-		default:
-			return resolvedNum <= expectedNum
-		}
-	}
-}
-
 // evaluateWorkflowCondition evaluates a Condition node's cases against the committed node states and
-// returns the selected branch id: the first case whose rules match under the case's logic, or `else`
-// when none did.
-func evaluateWorkflowCondition(node workflowNodeView, states map[string]workflowNodeState) string {
-	cases, ok := node.Data["cases"].([]any)
-	if !ok {
-		return workflowBranchElse
+// returns the selected branch id: the first case whose rules match under its case logic, or `else`
+// when none did. A malformed document or an unevaluable rule is an error: the publish gate refuses
+// such documents, and a snapshot that predates the gate must fail loudly rather than route wrongly.
+func evaluateWorkflowCondition(node workflowNodeView, states map[string]workflowNodeState) (string, error) {
+	raw, present := node.Data["cases"]
+	if !present || raw == nil {
+		return workflowBranchElse, nil
 	}
-	for _, raw := range cases {
-		c, ok := asWorkflowObject(raw)
+	cases, ok := raw.([]any)
+	if !ok {
+		return "", workflowConditionFailure("condition_invalid_config", "condition cases must be a list")
+	}
+	for _, item := range cases {
+		c, ok := asWorkflowObject(item)
 		if !ok {
-			continue
+			return "", workflowConditionFailure("condition_invalid_config", "condition case must be an object")
 		}
-		rules, _ := c["conditions"].([]any)
-		if len(rules) == 0 {
+		id := c.S("id")
+		if id == "" {
+			return "", workflowConditionFailure("condition_invalid_config", "condition case is missing an id")
+		}
+		logic := c.S("logic")
+		if logic != "" && logic != "and" && logic != "or" {
+			return "", workflowConditionFailure("condition_invalid_config", "condition case has unknown logic %s", logic)
+		}
+		rawRules, present := c["conditions"]
+		if !present || rawRules == nil {
 			continue // an authored shell with no rule yet falls through
 		}
-		matched := false
-		if c.S("logic") == "or" {
-			for _, raw := range rules {
-				if workflowConditionRule(raw, states) {
-					matched = true
-					break
-				}
+		rules, ok := rawRules.([]any)
+		if !ok {
+			return "", workflowConditionFailure("condition_invalid_config", "condition case conditions must be a list")
+		}
+		if len(rules) == 0 {
+			continue
+		}
+		// Evaluate every rule before combining them, as desktop does: an or-case whose first rule
+		// matches must still report an unset variable in its second rule instead of skipping it.
+		verdicts := make([]bool, len(rules))
+		for i, rawRule := range rules {
+			verdict, err := workflowConditionRule(rawRule, states)
+			if err != nil {
+				return "", err
 			}
-		} else {
-			matched = true
-			for _, raw := range rules {
-				if !workflowConditionRule(raw, states) {
-					matched = false
-					break
-				}
+			verdicts[i] = verdict
+		}
+		matched := logic != "or"
+		for _, verdict := range verdicts {
+			if logic == "or" {
+				matched = matched || verdict
+			} else {
+				matched = matched && verdict
 			}
 		}
 		if matched {
-			return c.S("id")
+			return id, nil
 		}
 	}
-	return workflowBranchElse
+	return workflowBranchElse, nil
 }
 
-// workflowConditionRule resolves a rule's variableSelector and applies its operator. A malformed
-// rule (not an object, malformed selector, unknown operator) is a no-match.
-func workflowConditionRule(raw any, states map[string]workflowNodeState) bool {
+// workflowConditionRule resolves a rule's variableSelector and expected value, then applies its
+// operator. A malformed rule is an error, not a no-match.
+func workflowConditionRule(raw any, states map[string]workflowNodeState) (bool, error) {
 	r, ok := asWorkflowObject(raw)
 	if !ok {
-		return false
+		return false, workflowConditionFailure("condition_invalid_rule", "condition rule must be an object")
 	}
-	selector, ok := r["variableSelector"].([]any)
-	if !ok || len(selector) == 0 {
-		return false
-	}
-	nodeID, ok := selector[0].(string)
-	if !ok || nodeID == "" {
-		return false
-	}
-	state, ok := states[nodeID]
-	if !ok || state.Status != "succeeded" {
-		return false
-	}
-	resolved, absent := walkWorkflowOutputPath(state.Output, selector[1:])
-	operator, ok := workflowConditionOperators[r.S("operator")]
+	selector, ok := parseWorkflowSelector(r["variableSelector"])
 	if !ok {
-		return false
+		return false, workflowConditionFailure("condition_invalid_rule",
+			"condition rule selector is not a node id and root variable")
 	}
-	return operator(resolved, absent, r["value"])
-}
-
-// walkWorkflowOutputPath walks a variableSelector's path into one node's output. The first path
-// element indexes the output object; deeper elements walk further in. Absent is the honest answer
-// for a node whose output is not an object or a path that leaves the object.
-func walkWorkflowOutputPath(output Object, path []any) (any, bool) {
-	if output == nil {
-		return nil, true
+	operatorName := r.S("operator")
+	operator, ok := workflowConditionOperators[operatorName]
+	if !ok {
+		return false, workflowConditionFailure("condition_invalid_rule",
+			"condition rule has unknown operator %s", operatorName)
 	}
-	current := any(output)
-	for _, element := range path {
-		obj, ok := asWorkflowObject(current)
-		if !ok {
-			return nil, true
-		}
-		key, ok := element.(string)
-		if !ok {
-			return nil, true
-		}
-		value, present := obj[key]
-		if !present {
-			return nil, true
-		}
-		current = value
+	actual, present, err := resolveWorkflowSelector(selector, states)
+	if err != nil {
+		return false, err
 	}
-	return current, false
+	expected, hasExpected, err := resolveWorkflowExpected(r, states)
+	if err != nil {
+		return false, err
+	}
+	return operator(&workflowConditionOperand{
+		actual:      actual,
+		present:     present,
+		expected:    expected,
+		hasExpected: hasExpected,
+		selector:    selector.qualified(),
+		operator:    operatorName,
+	})
 }

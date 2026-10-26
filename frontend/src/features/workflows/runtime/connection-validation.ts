@@ -1,7 +1,13 @@
 import type { WorkflowLayoutEdge } from '@/features/workflows/runtime/layout'
 
+/** Port identities distinguish parallel branch edges between the same nodes. */
+interface WorkflowConnectionHandles {
+  sourceHandle?: string | null
+  targetHandle?: string | null
+}
+
 /** The endpoint pair a candidate connection would create. */
-export interface WorkflowConnectionCandidate {
+export interface WorkflowConnectionCandidate extends WorkflowConnectionHandles {
   source: string | null
   target: string | null
 }
@@ -22,19 +28,26 @@ export interface WorkflowConnectionCandidate {
  */
 export function isValidWorkflowConnection(
   candidate: WorkflowConnectionCandidate,
-  edges: readonly WorkflowLayoutEdge[],
+  edges: readonly (WorkflowLayoutEdge & WorkflowConnectionHandles)[],
 ): boolean {
   const { source, target } = candidate
   if (source === null || target === null || source === target) {
     return false
   }
-  return !edges.some((edge) => edge.source === source && edge.target === target)
+  return !edges.some(
+    (edge) =>
+      edge.source === source &&
+      edge.target === target &&
+      (edge.sourceHandle || null) === (candidate.sourceHandle || null) &&
+      (edge.targetHandle || null) === (candidate.targetHandle || null),
+  )
 }
 
 /**
  * Builds the id of the edge between two nodes.
  *
- * Deriving it from the endpoints rather than from a counter keeps the id stable
+ * Including the port pair keeps sibling branches distinct. Deriving the id from these identities
+ * rather than from a counter keeps it stable
  * across a reload, so an edge is never duplicated by re-adding the same
  * connection.
  *
@@ -42,6 +55,16 @@ export function isValidWorkflowConnection(
  * @param target - Target node id.
  * @returns The edge id.
  */
-export function workflowEdgeId(source: string, target: string): string {
-  return `e-${source}-${target}`
+export function workflowEdgeId(
+  source: string,
+  target: string,
+  handles: WorkflowConnectionHandles = {},
+): string {
+  const base = `e-${source}-${target}`
+  const sourceHandle = handles.sourceHandle || null
+  const targetHandle = handles.targetHandle || null
+  if (sourceHandle === null && targetHandle === null) {
+    return base
+  }
+  return `${base}-${encodeURIComponent(JSON.stringify([sourceHandle, targetHandle]))}`
 }

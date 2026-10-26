@@ -1018,8 +1018,8 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 	constraints := func(pool *sql.DB) string {
 		t.Helper()
 		var names string
-		must(t, pool.QueryRow(`SELECT string_agg(conname, ',' ORDER BY conname) FROM pg_constraint
-			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused')`).Scan(&names))
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(conname, ',' ORDER BY conname),'') FROM pg_constraint
+			WHERE conrelid='revisions'::regclass AND contype='c' AND conname IN ('revisions_check','revisions_bundle_shape','revisions_resume_refused','revisions_shape')`).Scan(&names))
 		return names
 	}
 	columns := func(pool *sql.DB) int {
@@ -1043,7 +1043,772 @@ func TestMigration0033RevisionResumeAppliesFreshAndUpgrades(t *testing.T) {
 		t.Fatalf("before 0033: columns %d constraints %q", got, names)
 	}
 	migratedTwice(t, newStoreOnSchema(t, pool))
-	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_bundle_shape,revisions_resume_refused" {
+	// 0054 later replaces the bundle shape 0033 introduced with revisions_shape.
+	if got, names := columns(pool), constraints(pool); got != 5 || names != "revisions_resume_refused,revisions_shape" {
 		t.Fatalf("after 0033: columns %d constraints %q", got, names)
+	}
+}
+
+// 0039 turns the WorkflowRun into an execution aggregate the control plane accepts as a work owner:
+// the frozen run identity, the workspace binding, the exactly-one-owner discriminator on work and
+// the polymorphic runtime reservation. Fresh databases get all of it, an upgrade from 0037 gets it
+// without a backfill, and a rerun changes nothing.
+func TestMigration0039WorkflowRunIdentityAppliesFreshAndUpgrades(t *testing.T) {
+	columns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND
+			((table_name='workflow_runs' AND column_name IN ('created_by','project_id'))
+			 OR (table_name='workspaces' AND column_name='workflow_run_id')
+			 OR (table_name='execution_work' AND column_name='workflow_run_id'))`).Scan(&n))
+		return n
+	}
+	constraints := func(pool *sql.DB) string {
+		t.Helper()
+		var names string
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(conname, ',' ORDER BY conname),'') FROM pg_constraint
+			WHERE conrelid IN ('workspaces'::regclass,'execution_work'::regclass) AND contype='c'
+			  AND conname IN ('workspace_run_binding_exclusive','execution_work_owner_exclusive')`).Scan(&names))
+		return names
+	}
+	indexes := func(pool *sql.DB) string {
+		t.Helper()
+		var names string
+		must(t, pool.QueryRow(`SELECT coalesce(string_agg(indexname, ',' ORDER BY indexname),'') FROM pg_indexes
+			WHERE schemaname=current_schema() AND tablename='execution_work'
+			  AND indexname IN ('one_unregistered_execution_work','one_unregistered_workflow_execution_work')`).Scan(&names))
+		return names
+	}
+	// A polymorphic run reference cannot be a foreign key, so 0039 drops the IssueRun FK instead of
+	// reworking it. The column stays; only the constraint goes. Resolved through the search path
+	// rather than by name alone, which would count another schema's constraint of the same name.
+	reservationFK := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint
+			WHERE conrelid='runtime_controls'::regclass AND conname='runtime_controls_maintenance_run_id_fkey'`).Scan(&n))
+		return n
+	}
+
+	freshPool, _ := testSchema(t, "test_wfi39f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got, names, idx, fk := columns(freshPool), constraints(freshPool), indexes(freshPool), reservationFK(freshPool); got != 4 || names != "execution_work_owner_exclusive,workspace_run_binding_exclusive" || idx != "one_unregistered_execution_work,one_unregistered_workflow_execution_work" || fk != 0 {
+		t.Fatalf("fresh: columns %d constraints %q indexes %q reservation fk %d", got, names, idx, fk)
+	}
+
+	pool, _ := testSchema(t, "test_wfi39_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0039_workflow_run_identity.sql"))
+	if got, names, fk := columns(pool), constraints(pool), reservationFK(pool); got != 0 || names != "" || fk != 1 {
+		t.Fatalf("before 0039: columns %d constraints %q reservation fk %d", got, names, fk)
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if got, names, idx, fk := columns(pool), constraints(pool), indexes(pool), reservationFK(pool); got != 4 || names != "execution_work_owner_exclusive,workspace_run_binding_exclusive" || idx != "one_unregistered_execution_work,one_unregistered_workflow_execution_work" || fk != 0 {
+		t.Fatalf("after 0039: columns %d constraints %q indexes %q reservation fk %d", got, names, idx, fk)
+	}
+}
+
+// 0043 (external Git line) is the one destructive switch the contract allows: the independent
+// Credential Store becomes the only source of truth for a credential, so a pre-switch reference is
+// revoked rather than migrated, and a Binding's continuity column folds into the single credential
+// reference it keeps. A fresh database and a database that stopped at 0042 must reach the same
+// shape, and rerunning the migration must change nothing.
+func TestMigration0043ExternalGitLineAppliesFreshAndUpgrades(t *testing.T) {
+	credentialColumns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='credential_refs' AND column_name IN ('name','secret_state','store_version','requested_capabilities',
+			'capability_evidence','pending_submission_id','pending_store_version','pending_submission_expires_at',
+			'store_revocation_pending','revoked_at')`).Scan(&n))
+		return n
+	}
+	operationColumns := func(pool *sql.DB) int {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_operations' AND column_name IN ('requested_by','source_operation_id','replay_count',
+			'credential_ref_id','credential_version','binding_version','expected_tracking_oid','lease_generation','lease_owner',
+			'lease_expires_at','authorization_id','started_at','task_deadline','result','source_ref','source_commit',
+			'target_branch','expected_old_oid','revision_id','approver_kind','approved_by','approved_at',
+			'approved_store_version','approval_expires_at','check_attempts','next_check_at')`).Scan(&n))
+		return n
+	}
+	bindings := func(pool *sql.DB) (version, continuity bool) {
+		t.Helper()
+		var n int
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_bindings' AND column_name='version'`).Scan(&n))
+		version = n == 1
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='repository_bindings' AND column_name='repository_credential_ref_id'`).Scan(&n))
+		continuity = n == 1
+		return version, continuity
+	}
+
+	freshPool, _ := testSchema(t, "test_egl43f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	if got := credentialColumns(freshPool); got != 10 {
+		t.Fatalf("a fresh database must have the ten Credential Store columns, got %d", got)
+	}
+	if got := operationColumns(freshPool); got != 26 {
+		t.Fatalf("a fresh database must have the 26 lease and publish columns, got %d", got)
+	}
+	if version, continuity := bindings(freshPool); !version || continuity {
+		t.Fatalf("a fresh database: version column %v, continuity column %v", version, continuity)
+	}
+	for _, table := range []string{"credential_verifications", "repository_operation_events"} {
+		if !tableExists(t, freshPool, table) {
+			t.Fatalf("a fresh database must have %s", table)
+		}
+	}
+
+	// The upgrade path: a deployment that stopped at 0042, carrying real rows.
+	pool, _ := testSchema(t, "test_egl43_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0043_external_git_line.sql"))
+	if got := credentialColumns(pool); got != 0 {
+		t.Fatalf("before 0043 the Credential Store columns must be absent, got %d", got)
+	}
+	if version, continuity := bindings(pool); version || !continuity {
+		t.Fatalf("before 0043: version column %v, continuity column %v", version, continuity)
+	}
+	if tableExists(t, pool, "credential_verifications") {
+		t.Fatal("credential_verifications must not exist before 0043")
+	}
+
+	user, tenant, project, space := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	preset, personal, binding := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	// One transaction: the aggregate guards are deferred, so an active tenant is only legal once
+	// its administrator exists, which is exactly how the deployment's rows arrived.
+	tx, e := pool.Begin()
+	must(t, e)
+	defer func() { _ = tx.Rollback() }()
+	_, e = tx.Exec(`INSERT INTO users(id,display_name,status) VALUES($1,'Upgraded','active')`, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO tenants(id,name,status) VALUES($1,'Upgraded','active')`, tenant)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO collab_workspaces(id,tenant_id,name,slug,description,created_by) VALUES($1,$2,'Upgraded','upgraded-tenant','',$3)`, space, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref,repository_scope,capabilities)
+		VALUES($1,$2,$3,'git','deployment-preset:repo','https://git.example.invalid/team/repo.git','["read","publish"]'::jsonb)`, preset, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO credential_refs(id,tenant_id,owner_user_id,purpose,secret_ref)
+		VALUES($1,$2,$3,'git','deployment-preset:other')`, personal, tenant, user)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle)
+		VALUES($1,$2,$3,$4,'Upgraded','active')`, project, tenant, user, space)
+	must(t, e)
+	_, e = tx.Exec(`INSERT INTO repository_bindings(id,tenant_id,project_id,repository_url,branch,repository_credential_ref_id)
+		VALUES($1,$2,$3,'https://git.example.invalid/team/repo.git','main',$4)`, binding, tenant, project, personal)
+	must(t, e)
+	// A live project requires exactly one main workspace (the deferred guard in 0001).
+	_, e = tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,project_id,kind,desired_state,observed_state,requested_ref)
+		VALUES($1,$2,$3,$4,'main','running','ready','main')`, uuid.NewString(), tenant, user, project)
+	must(t, e)
+	must(t, tx.Commit())
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+
+	if got := credentialColumns(pool); got != 10 {
+		t.Fatalf("after 0043 the Credential Store columns must all be present, got %d", got)
+	}
+	if version, continuity := bindings(pool); !version || continuity {
+		t.Fatalf("after 0043: version column %v, continuity column %v", version, continuity)
+	}
+
+	// A pre-switch reference keeps its audit trail and can never be redeemed again.
+	var state, capabilities string
+	var revokedAt sql.NullTime
+	must(t, pool.QueryRow(`SELECT secret_state, capabilities::text, revoked_at FROM credential_refs WHERE id=$1`, preset).Scan(&state, &capabilities, &revokedAt))
+	if state != "revoked" || capabilities != "[]" || !revokedAt.Valid {
+		t.Fatalf("a pre-switch reference = (%q, %q, %v), want it revoked with no capabilities", state, capabilities, revokedAt)
+	}
+
+	// The continuity column's value is the one that survives, and a Binding starts at version 1.
+	var effective sql.NullString
+	var bindingVersion int64
+	must(t, pool.QueryRow(`SELECT credential_ref_id, version FROM repository_bindings WHERE id=$1`, binding).Scan(&effective, &bindingVersion))
+	if !effective.Valid || effective.String != personal {
+		t.Fatalf("the Binding's credential reference = %v, want the continuity column's %s", effective, personal)
+	}
+	if bindingVersion != 1 {
+		t.Fatalf("the Binding version = %d, want 1", bindingVersion)
+	}
+
+	// The reference invariants hold against real rows.
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', revoked_at=NULL WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // a stored reference always has a store version
+	_, e = pool.Exec(`UPDATE credential_refs SET capabilities='["admin"]'::jsonb WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // the vocabulary is read and publish
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', store_version=1, revoked_at=NULL WHERE id=$1`, personal)
+	wantPGError(t, e, "23514") // a stored reference is scoped to a repository
+	_, e = pool.Exec(`UPDATE credential_refs SET secret_state='stored', store_version=1, revoked_at=NULL WHERE id=$1`, preset)
+	must(t, e)
+	_, e = pool.Exec(`UPDATE credential_refs SET pending_submission_id=gen_random_uuid(), pending_store_version=5, pending_submission_expires_at=now() WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // a pending submission is always the next version
+	_, e = pool.Exec(`UPDATE credential_refs SET store_revocation_pending=true WHERE id=$1`, preset)
+	wantPGError(t, e, "23514") // only a revoked reference may await the Store's revocation
+
+	// The Operation audit is append-only, which is what makes it evidence.
+	operation := uuid.NewString()
+	_, e = pool.Exec(`INSERT INTO repository_operations(id,type,tenant_id,project_id,binding_id,state,trigger)
+		VALUES($1,'repository_sync',$2,$3,$4,'pending','manual')`, operation, tenant, project, binding)
+	must(t, e)
+	_, e = pool.Exec(`INSERT INTO repository_operation_events(operation_id,tenant_id,kind) VALUES($1,$2,'queued')`, operation, tenant)
+	must(t, e)
+	_, e = pool.Exec(`UPDATE repository_operation_events SET kind='rewritten' WHERE operation_id=$1`, operation)
+	wantPGError(t, e, "P0001")
+	_, e = pool.Exec(`DELETE FROM repository_operation_events WHERE operation_id=$1`, operation)
+	wantPGError(t, e, "P0001")
+}
+
+// 0044 lets the attempt ledger record a WorkflowRun-owned binding without inventing an IssueRun.
+// It takes 0040's discriminator shape: run_id becomes nullable, workflow_run_id is added, and each
+// owner gets its own tenant-scoped run and binding reference. A fresh database and one that stopped
+// at 0043 reach the same shape, and rerunning the migration changes nothing.
+func TestMigration0044ModelAttemptWorkflowRunAppliesFreshAndUpgrades(t *testing.T) {
+	shape := func(pool *sql.DB) (nullables, ownerFKs, legacyFKs, ownerCheck, indexes, identities int) {
+		t.Helper()
+		must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema()
+			AND table_name='model_request_attempts' AND column_name IN ('run_id','workflow_run_id') AND is_nullable='YES'`).Scan(&nullables))
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint WHERE conrelid='model_request_attempts'::regclass AND contype='f'
+			AND conname IN ('model_attempt_issue_run_scope','model_attempt_workflow_run_scope','model_attempt_issue_binding','model_attempt_workflow_binding')`).Scan(&ownerFKs))
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint WHERE conrelid='model_request_attempts'::regclass AND contype='f'
+			AND conname IN ('model_request_attempts_run_id_tenant_id_fkey','model_request_attempts_binding_id_run_id_fkey')`).Scan(&legacyFKs))
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint WHERE conrelid='model_request_attempts'::regclass AND contype='c'
+			AND conname='model_attempt_owner_exclusive'`).Scan(&ownerCheck))
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='model_request_attempts'
+			AND indexname IN ('model_attempt_run_order','model_attempt_workflow_run_order')`).Scan(&indexes))
+		must(t, pool.QueryRow(`SELECT count(*) FROM pg_constraint WHERE contype='u'
+			AND ((conrelid='workflow_runs'::regclass AND conname='workflow_run_tenant_identity')
+			  OR (conrelid='run_model_bindings'::regclass AND conname='model_binding_workflow_run_identity'))`).Scan(&identities))
+		return nullables, ownerFKs, legacyFKs, ownerCheck, indexes, identities
+	}
+	assertShape := func(t *testing.T, pool *sql.DB, stage string) {
+		t.Helper()
+		if n, fk, legacy, check, idx, id := shape(pool); n != 2 || fk != 4 || legacy != 0 || check != 1 || idx != 2 || id != 2 {
+			t.Fatalf("%s: nullable owners %d owner fks %d legacy fks %d exclusive check %d indexes %d identities %d",
+				stage, n, fk, legacy, check, idx, id)
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_ma44f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	assertShape(t, freshPool, "fresh")
+
+	pool, _ := testSchema(t, "test_ma44_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0044_model_attempt_workflow_run.sql"))
+	if n, fk, legacy, check, idx, id := shape(pool); n != 0 || fk != 0 || legacy != 2 || check != 0 || idx != 1 || id != 0 {
+		t.Fatalf("before 0044: nullable owners %d owner fks %d legacy fks %d exclusive check %d indexes %d identities %d",
+			n, fk, legacy, check, idx, id)
+	}
+	if columnNullable(t, pool, "model_request_attempts", "run_id") {
+		t.Fatal("before 0044 run_id must still be required")
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertShape(t, pool, "upgrade")
+}
+
+// Migration 0053 upgrades a database that still holds tenant-level clones: their requests,
+// executions and receipts are removed, while a Workspace operation's clone execution and its receipt
+// stay, and every remaining clone execution must name its Workspace.
+func TestMigration0053RetiresTenantLevelClonesKeepingWorkspaceClones(t *testing.T) {
+	pool, _ := testSchema(t, "test_gn53_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0053_retire_tenant_level_clones.sql"))
+	s := seedOwnershipChain(t, pool)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		_, e := pool.Exec(q, args...)
+		must(t, e)
+	}
+	request, operation := uuid.NewString(), uuid.NewString()
+	exec(`INSERT INTO clone_requests(id,tenant_id,actor_user_id,request_id,repository_url,branch,state) VALUES($1,$2,$3,'tenant-request','https://example.invalid/repo.git','main','succeeded')`, request, s.tenantID, s.userID)
+	exec(`INSERT INTO clone_executions(execution_id,operation_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES('tenant-clone',$1,'node','tenant-clone','{}','{"outcome":"clone_ready"}',1)`, request)
+	exec(`INSERT INTO clone_event_receipts(execution_id,sequence,event) VALUES('tenant-clone',1,'ready')`)
+	exec(`INSERT INTO operations(id,tenant_id,actor_user_id,project_id,workspace_id,kind,state,step,request,idempotency_key,request_hash) VALUES($1,$2,$3,$4,$5,'create_project','succeeded','done','{}','gn39','gn39')`, operation, s.tenantID, s.userID, s.projectID, s.mainWorkspaceID)
+	exec(`INSERT INTO clone_executions(execution_id,operation_id,workspace_id,node_id,node_operation_id,input,result,dispatched_epoch) VALUES('workspace-clone',$1,$2,'node','workspace-clone','{}','{"outcome":"clone_ready"}',1)`, operation, s.mainWorkspaceID)
+	exec(`INSERT INTO clone_event_receipts(execution_id,sequence,event) VALUES('workspace-clone',1,'ready')`)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	if tableExists(t, pool, "clone_requests") {
+		t.Fatal("0053 must drop clone_requests")
+	}
+	var executions, receipts string
+	must(t, pool.QueryRow(`SELECT string_agg(execution_id, ',' ORDER BY execution_id) FROM clone_executions`).Scan(&executions))
+	must(t, pool.QueryRow(`SELECT string_agg(execution_id, ',' ORDER BY execution_id) FROM clone_event_receipts`).Scan(&receipts))
+	if executions != "workspace-clone" || receipts != "workspace-clone" {
+		t.Fatalf("only the Workspace clone and its receipt may remain, got executions %q receipts %q", executions, receipts)
+	}
+	if columnNullable(t, pool, "clone_executions", "workspace_id") {
+		t.Fatal("every clone execution must name its Workspace after 0053")
+	}
+	var requestColumns int
+	must(t, pool.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='clone_executions' AND column_name='clone_request_id'`).Scan(&requestColumns))
+	if requestColumns != 0 {
+		t.Fatal("0053 must drop clone_executions.clone_request_id")
+	}
+}
+
+// 0051 adds the cancellation-request instant to workflow_runs. The column is nullable and has no
+// default so a run that was never asked to stop stays distinguishable from one requested at any
+// instant; nothing is backfilled because the request is an intent recorded from now on. A fresh
+// database and a database that stopped at 0050 must reach the same shape, and rerunning the
+// migration must change nothing.
+func TestMigration0051WorkflowRunCancelAppliesFreshAndUpgrades(t *testing.T) {
+	column := func(pool *sql.DB) (int, string) {
+		t.Helper()
+		var n int
+		var nullable, dflt sql.NullString
+		must(t, pool.QueryRow(`SELECT count(*), max(is_nullable), max(column_default)
+			FROM information_schema.columns WHERE table_schema=current_schema()
+			  AND table_name='workflow_runs' AND column_name='cancel_requested_at'`).Scan(&n, &nullable, &dflt))
+		return n, nullable.String + "|" + dflt.String
+	}
+	assertShape := func(t *testing.T, pool *sql.DB, stage string) {
+		t.Helper()
+		n, shape := column(pool)
+		if n != 1 || shape != "YES|" {
+			t.Fatalf("%s: cancel_requested_at columns %d nullable/default %q", stage, n, shape)
+		}
+		if !columnNullable(t, pool, "workflow_runs", "cancel_requested_at") {
+			t.Fatalf("%s: cancel_requested_at must be nullable", stage)
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_wfc51f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	assertShape(t, freshPool, "fresh")
+
+	pool, _ := testSchema(t, "test_wfc51_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0051_workflow_run_cancel.sql"))
+	if n, shape := column(pool); n != 0 || shape != "|" {
+		t.Fatalf("before 0051: cancel_requested_at columns %d nullable/default %q", n, shape)
+	}
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertShape(t, pool, "upgrade")
+}
+
+// 0052 settles the legacy manual workflow IssueRuns that were persisted `queued`/`dispatched` but
+// had no executor and no frozen workflow identity (specs ADR
+// 0-cloud-side-scheduler-owns-workflow-execution D3). The upgrade path is the one that matters: a
+// deployment that stopped at 0051 can hold such rows. They become failed with the named reason and
+// a completion instant; every other run — workflow runs in another status, a soft-deleted queued
+// one, and a queued agent run — keeps its stored state. A fresh database has no such row, applies
+// the file cleanly and a second Migrate changes nothing.
+func TestMigration0052LegacyWorkflowIssueRunSettlementAppliesFreshAndUpgrades(t *testing.T) {
+	type runShape struct {
+		status, reason string
+		completedAt    sql.NullTime
+		deletedAt      sql.NullTime
+		version        int64
+	}
+	read := func(t *testing.T, pool *sql.DB, id string) runShape {
+		t.Helper()
+		var s runShape
+		must(t, pool.QueryRow(`SELECT status, failure_reason, completed_at, deleted_at, version
+			FROM issue_runs WHERE id=$1`, id).Scan(&s.status, &s.reason, &s.completedAt, &s.deletedAt, &s.version))
+		return s
+	}
+	seedRuns := func(t *testing.T, pool *sql.DB) map[string]string {
+		t.Helper()
+		uid, tid, iid := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		ids := map[string]string{
+			"queued": uuid.NewString(), "dispatched": uuid.NewString(), "running": uuid.NewString(),
+			"completed": uuid.NewString(), "deleted": uuid.NewString(), "agent": uuid.NewString(),
+		}
+		tx, e := pool.Begin()
+		must(t, e)
+		defer func() { _ = tx.Rollback() }()
+		for _, s := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO users(id,display_name,status) VALUES($1,'Legacy workflow user','active')`, []any{uid}},
+			{`INSERT INTO tenants(id,name,status) VALUES($1,'Legacy workflow tenant','active')`, []any{tid}},
+			{`INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, []any{tid, uid}},
+			{`INSERT INTO issues(id,tenant_id,creator_user_id,title,number) VALUES($1,$2,$3,'Legacy workflow runs',1)`, []any{iid, tid, uid}},
+		} {
+			_, e = tx.Exec(s.query, s.args...)
+			must(t, e)
+		}
+		insert := func(id, executorType, status string, deleted bool) {
+			_, e := tx.Exec(`INSERT INTO issue_runs(id,tenant_id,issue_id,executor_type,executor_id,status,deleted_at)
+				VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $7 THEN now() ELSE NULL END)`,
+				id, tid, iid, executorType, uuid.NewString(), status, deleted)
+			must(t, e)
+		}
+		insert(ids["queued"], "workflow", "queued", false)
+		insert(ids["dispatched"], "workflow", "dispatched", false)
+		insert(ids["running"], "workflow", "running", false)
+		insert(ids["completed"], "workflow", "completed", false)
+		insert(ids["deleted"], "workflow", "queued", true)
+		insert(ids["agent"], "agent", "queued", false)
+		must(t, tx.Commit())
+		return ids
+	}
+	assertUpgraded := func(t *testing.T, pool *sql.DB, ids map[string]string, stage string) {
+		t.Helper()
+		for _, id := range []string{ids["queued"], ids["dispatched"]} {
+			got := read(t, pool, id)
+			if got.status != "failed" || got.reason != "workflow_execution_unavailable" || !got.completedAt.Valid {
+				t.Fatalf("%s: settled run %s = %+v; want failed/workflow_execution_unavailable with completed_at", stage, id, got)
+			}
+			if got.version != 2 {
+				t.Fatalf("%s: settled run %s version = %d; want the correction's bump to 2", stage, id, got.version)
+			}
+		}
+		for id, want := range map[string]runShape{
+			ids["running"]:   {status: "running", version: 1},
+			ids["completed"]: {status: "completed", version: 1},
+			ids["agent"]:     {status: "queued", version: 1},
+		} {
+			got := read(t, pool, id)
+			if got.status != want.status || got.version != want.version || got.reason != "" || got.completedAt.Valid {
+				t.Fatalf("%s: untouched run %s = %+v; want %s with no correction", stage, id, got, want.status)
+			}
+		}
+		deleted := read(t, pool, ids["deleted"])
+		if deleted.status != "queued" || deleted.version != 1 || !deleted.deletedAt.Valid {
+			t.Fatalf("%s: soft-deleted run = %+v; want its stored state untouched", stage, deleted)
+		}
+	}
+
+	// assertChained pins the state the whole sequence reaches. 0056 retires every remaining unlinked
+	// non-terminal workflow row — `running`, and the soft-deleted `queued` row — because a row with no
+	// WorkflowRun can never be finished by an executor, and its validated CHECK requires a reference on
+	// every non-terminal workflow row, soft-deleted ones included.
+	assertChained := func(t *testing.T, pool *sql.DB, ids map[string]string, stage string) {
+		t.Helper()
+		for _, id := range []string{ids["queued"], ids["dispatched"]} {
+			got := read(t, pool, id)
+			if got.status != "failed" || got.reason != "workflow_execution_unavailable" || !got.completedAt.Valid {
+				t.Fatalf("%s: run %s = %+v; want 0052's settlement to stand", stage, id, got)
+			}
+		}
+		for _, id := range []string{ids["running"], ids["deleted"]} {
+			got := read(t, pool, id)
+			if got.status != "failed" || got.reason != "workflow_execution_unavailable_before_invocation_linkage" ||
+				!got.completedAt.Valid || got.version != 2 {
+				t.Fatalf("%s: unlinked run %s = %+v; want 0056 to settle it with the invocation-linkage reason", stage, id, got)
+			}
+		}
+		for id, want := range map[string]runShape{
+			ids["completed"]: {status: "completed", version: 1},
+			ids["agent"]:     {status: "queued", version: 1},
+		} {
+			got := read(t, pool, id)
+			if got.status != want.status || got.version != want.version || got.reason != "" || got.completedAt.Valid {
+				t.Fatalf("%s: untouched run %s = %+v; want %s with no correction", stage, id, got, want.status)
+			}
+		}
+		if deleted := read(t, pool, ids["deleted"]); !deleted.deletedAt.Valid {
+			t.Fatalf("%s: settled soft-deleted run = %+v; want deleted_at retained", stage, deleted)
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_wf52f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	var corrected int
+	must(t, freshPool.QueryRow(`SELECT count(*) FROM issue_runs WHERE failure_reason='workflow_execution_unavailable'`).Scan(&corrected))
+	if corrected != 0 {
+		t.Fatalf("fresh database corrected %d rows; want 0 — there is nothing to settle", corrected)
+	}
+
+	pool, _ := testSchema(t, "test_wf52_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0052_legacy_workflow_issue_run_settlement.sql"))
+	ids := seedRuns(t, pool)
+	// Apply 0052 alone so the assertions below show what this file itself changes; 0056 runs later and
+	// settles the rows 0052 deliberately left alone.
+	applyMigrationsUpTo(t, pool, []string{"0052_legacy_workflow_issue_run_settlement.sql"})
+	assertUpgraded(t, pool, ids, "0052")
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertChained(t, pool, ids, "upgrade")
+	// Repeated application is a no-op: the correction already committed, and Migrate skipped the
+	// applied file by its checksum, so nothing can bump a version a second time.
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertChained(t, pool, ids, "replay")
+}
+
+// 0055 adds the WorkflowRun Workspace release fact (circus#75 S5; specs decisions/cloud/workflow
+// 0-cloud-side-scheduler-owns-workflow-execution D3/D7). The upgrade path is what matters: a
+// deployment that stopped at 0052 can hold terminal runs that never provisioned a Workspace, terminal
+// runs whose Workspace is still live, Workspaces already deleted by a project deletion, and runs
+// still executing. The backfill records only the fact each row supports — `released` always takes an
+// observed deletion instant, never a claimed one — and the derived-state CHECK constraints refuse the
+// shapes that would claim a release without evidence. A fresh database has nothing to backfill,
+// reaches the same shape, and a second Migrate changes nothing.
+func TestMigration0055WorkflowRunWorkspaceReleaseAppliesFreshAndUpgrades(t *testing.T) {
+	columns := func(pool *sql.DB) map[string]string {
+		t.Helper()
+		rows, e := pool.Query(`SELECT column_name, is_nullable, coalesce(column_default,'')
+			FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='workflow_runs'
+			  AND column_name IN ('workspace_release_state','workspace_release_error','workspace_released_at')`)
+		must(t, e)
+		defer func() { _ = rows.Close() }()
+		out := map[string]string{}
+		for rows.Next() {
+			var name, nullable, dflt string
+			must(t, rows.Scan(&name, &nullable, &dflt))
+			out[name] = nullable + "|" + dflt
+		}
+		must(t, rows.Err())
+		return out
+	}
+	constraints := func(pool *sql.DB) map[string]string {
+		t.Helper()
+		rows, e := pool.Query(`SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid='workflow_runs'::regclass AND contype='c'
+			  AND conname IN ('workflow_run_release_released_at','workflow_run_release_abandoned_error')`)
+		must(t, e)
+		defer func() { _ = rows.Close() }()
+		out := map[string]string{}
+		for rows.Next() {
+			var name, def string
+			must(t, rows.Scan(&name, &def))
+			out[name] = def
+		}
+		must(t, rows.Err())
+		return out
+	}
+	assertShape := func(t *testing.T, pool *sql.DB, stage string) {
+		t.Helper()
+		cols := columns(pool)
+		if got := cols["workspace_release_state"]; got != "NO|'pending'::text" {
+			t.Fatalf("%s: workspace_release_state = %q; want NOT NULL default pending", stage, got)
+		}
+		if got := cols["workspace_release_error"]; got != "NO|''::text" {
+			t.Fatalf("%s: workspace_release_error = %q; want NOT NULL default ''", stage, got)
+		}
+		if got := cols["workspace_released_at"]; got != "YES|" {
+			t.Fatalf("%s: workspace_released_at = %q; want nullable with no default", stage, got)
+		}
+		cons := constraints(pool)
+		if len(cons) != 2 || !strings.Contains(cons["workflow_run_release_released_at"], "workspace_released_at IS NOT NULL") {
+			t.Fatalf("%s: release constraints = %v; want the released-at guard", stage, cons)
+		}
+		if !strings.Contains(cons["workflow_run_release_abandoned_error"], "btrim(workspace_release_error)") {
+			t.Fatalf("%s: abandoned-error constraint = %q; want a non-blank reason guard", stage, cons["workflow_run_release_abandoned_error"])
+		}
+	}
+
+	type releaseShape struct {
+		state, reason string
+		releasedAt    sql.NullTime
+		version       int64
+	}
+	read := func(t *testing.T, pool *sql.DB, id string) releaseShape {
+		t.Helper()
+		var s releaseShape
+		must(t, pool.QueryRow(`SELECT workspace_release_state, workspace_release_error, workspace_released_at, version
+			FROM workflow_runs WHERE id=$1`, id).Scan(&s.state, &s.reason, &s.releasedAt, &s.version))
+		return s
+	}
+	seedRuns := func(t *testing.T, pool *sql.DB) (ids, workspaces map[string]string) {
+		t.Helper()
+		uid, tid, space, project := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+		wf, snap := uuid.NewString(), uuid.NewString()
+		ids = map[string]string{
+			"noWorkspace": uuid.NewString(), "live": uuid.NewString(),
+			"deleted": uuid.NewString(), "running": uuid.NewString(),
+		}
+		workspaces = map[string]string{"live": uuid.NewString(), "deleted": uuid.NewString(), "running": uuid.NewString()}
+		tx, e := pool.Begin()
+		must(t, e)
+		defer func() { _ = tx.Rollback() }()
+		for _, s := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO users(id,display_name,status) VALUES($1,'Release user','active')`, []any{uid}},
+			{`INSERT INTO tenants(id,name,status) VALUES($1,'Release tenant','active')`, []any{tid}},
+			{`INSERT INTO tenant_memberships(tenant_id,user_id,role,status) VALUES($1,$2,'admin','active')`, []any{tid, uid}},
+			{`INSERT INTO collab_workspaces(id,tenant_id,name,slug,created_by) VALUES($1,$2,'Release space',$3,$4)`, []any{space, tid, "release-" + space[:8], uid}},
+			{`INSERT INTO projects(id,tenant_id,owner_user_id,space_id,name,lifecycle)
+				VALUES($1,$2,$3,$4,'Release project','active')`, []any{project, tid, uid, space}},
+			// A live project requires its main Workspace; without it the deferred aggregate check refuses
+			// the commit before the run Workspaces this test is about are ever examined.
+			{`INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_evidence,project_id,kind,desired_state,observed_state,runtime_generation,requested_ref)
+				VALUES($1,$2,$3,'unknown',$4,'main','running','ready',1,'HEAD')`, []any{uuid.NewString(), tid, uid, project}},
+			{`INSERT INTO workflows(id,tenant_id,name,graph) VALUES($1,$2,'Release workflow','{"nodes":[],"edges":[]}'::jsonb)`, []any{wf, tid}},
+			{`INSERT INTO workflow_snapshots(id,tenant_id,workflow_id,version,name,graph)
+				VALUES($1,$2,$3,1,'v1','{"nodes":[],"edges":[]}'::jsonb)`, []any{snap, tid, wf}},
+		} {
+			_, e := tx.Exec(s.query, s.args...)
+			must(t, e)
+		}
+		insertRun := func(id, status string) {
+			_, e := tx.Exec(`INSERT INTO workflow_runs(id,tenant_id,workflow_id,snapshot_id,name,status)
+				VALUES($1,$2,$3,$4,'Release run',$5)`, id, tid, wf, snap, status)
+			must(t, e)
+		}
+		insertWorkspace := func(id, runID string, deleted bool) {
+			_, e := tx.Exec(`INSERT INTO workspaces(id,tenant_id,owner_user_id,creator_evidence,project_id,kind,
+				desired_state,observed_state,runtime_generation,requested_ref,workflow_run_id,deleted_at)
+				VALUES($1,$2,$3,'unknown',$4,'isolated',CASE WHEN $6 THEN 'deleted' ELSE 'running' END,
+				CASE WHEN $6 THEN 'deleted' ELSE 'ready' END,1,'HEAD',$5,
+				CASE WHEN $6 THEN clock_timestamp() END)`, id, tid, uid, project, runID, deleted)
+			must(t, e)
+			// A live isolated Workspace carries exactly one task identity; a deleted one carries none.
+			if !deleted {
+				_, e = tx.Exec(`INSERT INTO tasks(id,workspace_id,title) VALUES($1,$2,'Release task')`, uuid.NewString(), id)
+				must(t, e)
+			}
+		}
+		insertRun(ids["noWorkspace"], "succeeded")
+		insertRun(ids["live"], "failed")
+		insertWorkspace(workspaces["live"], ids["live"], false)
+		insertRun(ids["deleted"], "cancelled")
+		insertWorkspace(workspaces["deleted"], ids["deleted"], true)
+		insertRun(ids["running"], "running")
+		insertWorkspace(workspaces["running"], ids["running"], false)
+		must(t, tx.Commit())
+		return ids, workspaces
+	}
+	assertBackfilled := func(t *testing.T, pool *sql.DB, ids, workspaces map[string]string, stage string) {
+		t.Helper()
+		for name, want := range map[string]struct {
+			state   string
+			instant bool
+		}{
+			"noWorkspace": {"not_required", false},
+			"live":        {"releasing", false},
+			"deleted":     {"released", true},
+			"running":     {"pending", false},
+		} {
+			got := read(t, pool, ids[name])
+			if got.state != want.state || got.reason != "" || got.releasedAt.Valid != want.instant {
+				t.Fatalf("%s: %s run release = %+v; want %s (instant=%v) with no reason", stage, name, got, want.state, want.instant)
+			}
+			if got.version != 1 {
+				t.Fatalf("%s: %s run version = %d; the backfill must not invent a transition", stage, name, got.version)
+			}
+		}
+		// The one run that may claim a release carries the Workspace's own deletion instant, not the
+		// migration's clock.
+		var same bool
+		must(t, pool.QueryRow(`SELECT r.workspace_released_at = w.deleted_at FROM workflow_runs r
+			JOIN workspaces w ON w.workflow_run_id=r.id WHERE r.id=$1`, ids["deleted"]).Scan(&same))
+		if !same {
+			t.Fatalf("%s: released instant does not equal the Workspace deletion instant", stage)
+		}
+		// And the live/deleted Workspaces themselves are untouched: a migration never deletes data.
+		var live, gone int
+		must(t, pool.QueryRow(`SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FILTER (WHERE deleted_at IS NOT NULL)
+			FROM workspaces WHERE id IN ($1,$2,$3)`,
+			workspaces["live"], workspaces["deleted"], workspaces["running"]).Scan(&live, &gone))
+		if live != 2 || gone != 1 {
+			t.Fatalf("%s: Workspace rows live=%d deleted=%d; want 2/1 untouched", stage, live, gone)
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_wfr53f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	assertShape(t, freshPool, "fresh")
+	var rows int
+	must(t, freshPool.QueryRow(`SELECT count(*) FROM workflow_runs`).Scan(&rows))
+	if rows != 0 {
+		t.Fatalf("fresh database has %d workflow runs; want 0", rows)
+	}
+
+	pool, _ := testSchema(t, "test_wfr55_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0055_workflow_run_workspace_release.sql"))
+	ids, workspaces := seedRuns(t, pool)
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertShape(t, pool, "upgrade")
+	assertBackfilled(t, pool, ids, workspaces, "upgrade")
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertBackfilled(t, pool, ids, workspaces, "replay")
+
+	// The constraints are the guard rail the code relies on: no state may claim a release without an
+	// observed instant, and no abandonment may be silent about why.
+	refuse := func(query string, args ...any) {
+		t.Helper()
+		tx, e := pool.Begin()
+		must(t, e)
+		defer func() { _ = tx.Rollback() }()
+		if _, e := tx.Exec(query, args...); e == nil {
+			t.Fatalf("statement %q was accepted; want the derived-state CHECK to refuse it", query)
+		}
+	}
+	refuse(`UPDATE workflow_runs SET workspace_release_state='released', workspace_released_at=NULL WHERE id=$1`, ids["running"])
+	refuse(`UPDATE workflow_runs SET workspace_release_state='abandoned', workspace_release_error='   ' WHERE id=$1`, ids["running"])
+	refuse(`UPDATE workflow_runs SET workspace_release_state='settled' WHERE id=$1`, ids["running"])
+}
+
+// 0069 gives workflow node sessions and end requests a per-attempt identity (retry decision D4). The
+// columns are NOT NULL with default 1 because every row that exists today belongs to its node's first
+// attempt; nothing is backfilled. The uniqueness of 0041/0049 is re-keyed on the attempt, so a second
+// attempt of the same node can register while the same attempt still cannot register twice. A fresh
+// database and one that stopped at 0068 must reach the same shape, and rerunning the migration must
+// change nothing.
+func TestMigration0069WorkflowNodeAttemptAppliesFreshAndUpgrades(t *testing.T) {
+	tables := []string{"execution_work", "node_executions", "thread_commands"}
+	columnShape := func(t *testing.T, pool *sql.DB, table string) (int, string) {
+		t.Helper()
+		var n int
+		var nullable, dflt sql.NullString
+		must(t, pool.QueryRow(`SELECT count(*), max(is_nullable), max(column_default)
+			FROM information_schema.columns WHERE table_schema=current_schema()
+			  AND table_name=$1 AND column_name='workflow_node_attempt'`, table).Scan(&n, &nullable, &dflt))
+		return n, nullable.String + "|" + dflt.String
+	}
+	assertAttemptColumns := func(t *testing.T, pool *sql.DB, stage string) {
+		t.Helper()
+		for _, table := range tables {
+			n, shape := columnShape(t, pool, table)
+			if n != 1 || shape != "NO|1" {
+				t.Fatalf("%s: %s.workflow_node_attempt columns %d nullable/default %q; want one NOT NULL DEFAULT 1", stage, table, n, shape)
+			}
+		}
+		// The uniqueness is re-keyed on the attempt, and stays partial: IssueRun sessions (no graph
+		// node) keep the lifetime rule of their own index, and IssueRun end commands keep none.
+		for _, index := range []string{"one_session_per_workflow_node", "one_workflow_session_end"} {
+			var def string
+			must(t, pool.QueryRow(`SELECT indexdef FROM pg_indexes
+				WHERE schemaname=current_schema() AND indexname=$1`, index).Scan(&def))
+			if !strings.Contains(def, "workflow_node_attempt") || !strings.Contains(def, "WHERE") {
+				t.Fatalf("%s: %s = %q; want a partial unique index keyed on the attempt", stage, index, def)
+			}
+		}
+	}
+
+	freshPool, _ := testSchema(t, "test_wfna69f_")
+	migratedTwice(t, newStoreOnSchema(t, freshPool))
+	assertAttemptColumns(t, freshPool, "fresh")
+
+	pool, _ := testSchema(t, "test_wfna69_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, "0069_workflow_node_attempt.sql"))
+	for _, table := range tables {
+		if n, _ := columnShape(t, pool, table); n != 0 {
+			t.Fatalf("before 0069: %s.workflow_node_attempt already exists", table)
+		}
+	}
+	// One session from before the migration. Its result is committed because 0024's pending-execution
+	// uniqueness admits only one open agent_session per operation; two rows coexist only as terminal
+	// facts.
+	operation := uuid.NewString()
+	insertSession := func(execution, attempt string) error {
+		_, e := pool.Exec(`INSERT INTO node_executions(execution_id,kind,operation_id,node_id,node_operation_id,input,result,dispatched_epoch,workflow_node_id,workflow_node_attempt)
+			VALUES($1,'agent_session',$2,'node','node-op','{}','{"outcome":"agent_session_ended","reason":"agent_failed"}',1,'a',$3)`, execution, operation, attempt)
+		return e
+	}
+	_, err := pool.Exec(`INSERT INTO node_executions(execution_id,kind,operation_id,node_id,node_operation_id,input,result,dispatched_epoch,workflow_node_id)
+		VALUES('legacy-session','agent_session',$1,'node','node-op','{}','{"outcome":"agent_session_ended","reason":"agent_failed"}',1,'a')`, operation)
+	must(t, err)
+
+	migratedTwice(t, newStoreOnSchema(t, pool))
+	assertAttemptColumns(t, pool, "upgrade")
+	var legacyAttempt int64
+	must(t, pool.QueryRow(`SELECT workflow_node_attempt FROM node_executions WHERE execution_id='legacy-session'`).Scan(&legacyAttempt))
+	if legacyAttempt != 1 {
+		t.Fatalf("legacy session reads attempt %d; want the default 1", legacyAttempt)
+	}
+	// A retry can register its own session for the same node, and the same attempt still cannot.
+	if err := insertSession("second-attempt", "2"); err != nil {
+		t.Fatalf("attempt 2 of the same node was refused: %v", err)
+	}
+	if err := insertSession("duplicate-attempt", "1"); err == nil {
+		t.Fatal("a second session for attempt 1 was accepted; want the re-keyed uniqueness to refuse it")
 	}
 }

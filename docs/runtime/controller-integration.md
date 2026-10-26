@@ -92,7 +92,7 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 | `WorkspaceOperationService` | Workspace 生命周期操作：`ClaimOperation`、`PlanEffect`、`RecordEffectResult`、`AdvanceOperation`、`DeferOperation`、`RecordProvisioningFact`、`ListLiveSandboxes` |
 | `NodeReportService` | Controller 代报它持有会话的 Node：`RegisterNode`、`ReportNodeStatus`、`EndNode`、`ReportNodeIdle` |
 | `ExecutionService` | 执行登记：`ClaimWork`、`RecordDispatch`、`TakeOverNodeEvent`、`RecordQueriedResult`、`GetDispatch`、`ListPendingDispatches` |
-| `AgentRunService` | Agent 运行：`TakeOverThreadEvents`、`ClaimThreadCommands`、`RecordThreadCommandDelivered`、`GrantRevisionUpload`、`GrantRevisionDownload` |
+| `AgentRunService` | Agent 运行：`TakeOverThreadEvents`、`ClaimThreadCommands`、`RecordThreadCommandDelivered`、`GrantRevisionUpload` |
 | `RuntimeControlService` | 运行时控制：`ListBindings`、`AcknowledgeBinding`、`GetExecutionPermit`、`GetEffectPermit`、`ListForceStops`、`ConfirmForceStop` |
 | `ControlSignalService` | `Watch` 信号流 |
 
@@ -100,8 +100,11 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 
 - `ClaimOperation` 领取最早的一个可执行操作（`queued`、到期的 `retry_wait`，或已经 `running` 的），把它置为 `running` 并记录
   当前 epoch，**版本加一**，从而让还拿着旧快照的工作者失效；它是一次写入，不是纯读。返回的快照包含该操作所需的全部内容：
-  Project（含凭据引用）、全部相关 Workspace、沙盒、Node、effect，以及这个操作已有的 clone 和插件执行，恢复中的 Controller
-  据此找到原来的执行，而不是登记第二个。
+  Project 的身份与生命周期（不带外部仓库地址、默认分支或凭据引用）、全部相关 Workspace、沙盒、Node、effect，以及这个操作
+  已有的 clone 和插件执行，恢复中的 Controller 据此找到原来的执行，而不是登记第二个。处于 `clone` 步骤的操作还带着 Cloud 从
+  Binding 当前快照冻结的 `clone_input`（Git Server 仓库地址、快照 ref、`base_commit`、`workspace_ref`），Controller 原样转交给
+  `RecordDispatch` 和 Node，没有它就不派发。Cloud 还不能交出的操作（没有快照的 `clone` 步骤、仓库 Operation 未结束时的
+  `delete_project`）在同一事务里被停放，领取继续返回下一个可执行的操作（见 [Workspace 生命周期](workspaces.md#clone-步骤从-binding-快照-clone)）。
 - `RecordProvisioningFact` 在运行 Workspace 的创建被放弃之后，按原操作、effect、执行身份补记迟到的真实事实，不重开任何东西（见
   [创建 blocked 的有界放弃](../agent-runs/startup-settlement.md#创建-blocked-的有界放弃)）。
 - `ListLiveSandboxes` 是租约持有者的只读列表，列出应当持有 Node 会话的沙盒（属于当前代次、未在终止、ensure 已成功），附带
@@ -119,21 +122,32 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 | `install_plugins`、`remove_plugins` | Workspace 操作的 `plugin` 步骤 | `node_executions` |
 | `agent_session`、`deliver_revision` | Agent 运行声明的执行工作项（`execution_work`） | `node_executions` |
 
-- `ClaimWork` 是**纯读**：返回最早的一个可领取的工作项，归属在 `RecordDispatch` 的事务里才决定，所以 Controller 在领取和
+- `ClaimWork` 是**纯读**：返回最早的一个可领取的 Agent 会话或交付工作项（clone 从来不是工作项，只随操作领取），归属在 `RecordDispatch` 的事务里才决定，所以 Controller 在领取和
   登记之间崩溃不会留下需要恢复的东西。
+- 属于 IssueRun 的会话与交付工作（工作项带 `run_id`）在其 Run 进入 `releasing`、`done` 或被软删除后，`ClaimWork`
+  跳过这些未登记工作；有 residual 的 Run 也不参与领取。WorkflowRun 的会话工作带 `workflow_run_id`，不受 IssueRun
+  收尾资格约束，仍可领取和登记。新 `RecordDispatch` 在与业务结算共用的事务锁内重新核验 Run 资格与 residual，结算前的
+  旧领取快照不能再登记会话或交付。工作行与执行记录仍保留；已有执行继续走原有幂等、查询和结果接管路径，仍受各自的
+  residual 等检查约束。退出领取队列不证明 Node 已终止或 Workspace 已物理删除（见
+  [Agent 运行收尾](../agent-runs/issue-runs.md#阶段)）。
 - `RecordDispatch` 在派发之前登记执行：Cloud 而不是 Controller 决定输入和目标 Node，登记时核对输入与操作或工作项冻结的输入
   一致、目标就是当前 Node、没有未决的同类执行。同一执行、同样输入的重放返回原登记，矛盾的输入返回冲突。
+- `install_plugins` 的输入里，agent 插件的安装项可以带一个冻结的声明关联（`agent_configuration`，字段以 proto 为准）：它是安装计划
+  冻结时从目录快照写入的身份字段，同样参与输入一致性核对，丢失或篡改关联的派发被拒绝；静态副本不出 Cloud。链路语义见
+  [插件市场](../plugins/marketplace.md#agent-声明的快照与冻结)。
 - `TakeOverNodeEvent` 按执行身份和**连续序号**接管 Node 事件并保存收据，重复事件必须与原收据逐字节一致；会话和交付的终态事件
   也走同一个序列，不能越过尚未接管的事件。
 
-**`AgentRunService`** 承载 Agent 运行的会话面：批量接管 Thread 事件、领取并确认投递 Thread 命令、为交付执行签发对象存储的
-上传和下载授权。语义见 [Thread](../agent-runs/threads.md) 与 [Revision](../agent-runs/revisions.md)。
+**`AgentRunService`** 承载 Agent 运行的会话面：批量接管 Thread 事件、领取并确认投递 Thread 命令、为交付执行签发会话 JSONL 的
+对象存储上传授权；代码经 Git Server 交付，没有下载授权。语义见 [Thread](../agent-runs/threads.md) 与 [Revision](../agent-runs/revisions.md)。
 
 **`RuntimeControlService`** 送达运行时控制绑定、签发执行和 effect 许可、执行强停，见 [运行时控制](runtime-control.md)。
 
 ## 修改契约
 
 - `buf.yaml` 使用 `STANDARD` lint 和 `FILE` 级 breaking 检查：`v1` 只接受非破坏性修改，破坏性变更用并列的 `v2` package 表达。
+  例外：改为 Git 原生的 Workspace 代码（从 Git Server 快照 clone、Revision 经 Git 交付、去掉 bundle）在 `v1` 里删除了字段、消息
+  和 RPC，`buf.yaml` 为此带一次性的 `ignore_only` 豁免，下一次修改该文件时移除。
 - 修改 `.proto` 后运行 `task proto:lint` 和 `task proto:breaking`，再运行 `task proto:generate`，把生成物和改动放在同一个提交里。
   `task check` 与 CI 都执行 lint、breaking 和生成物漂移检查。
 - 合入 main 的那个提交就是消费方可以锁定的契约版本。desktop 以 submodule 锁定 Cloud 的提交并生成自己的客户端，不复制
@@ -149,3 +163,5 @@ gRPC 状态码是主分类，`ErrorDetail{ErrorCode}` 作为 `google.rpc.Status`
 - [运行时控制由 Cloud 授权、Controller 派发、Node 在真实入口持久隔离旧资格](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260927-fenced-runtime-control-delivery.md)
 - [Internal Control gRPC 增加插件、Agent 会话与 Revision 交付三类执行](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20260928-agent-run-executions-thread-and-upload-grants.md)
 - [会话与交付执行输入增加前序 Revision，新增 `GrantRevisionDownload`](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261010-revision-restore-contract.md)
+- [clone 输入替换为 Git Server 快照输入并由 Controller 原样转交；交付与会话输入去掉 bundle，删除 `GrantRevisionDownload`](https://github.com/ora-space/specs/blob/main/decisions/cloud/controller-integration/20261016-snapshot-clone-input-and-execution-ref-grants.md)（approved；当前契约按它实现）
+- [Agent 声明随 `install_plugins` 输入携带（Agent 配置元数据决策的安装输入部分）](https://github.com/ora-space/specs/blob/main/decisions/cloud/plugin-marketplace/20261017-agent-configuration-metadata.md)

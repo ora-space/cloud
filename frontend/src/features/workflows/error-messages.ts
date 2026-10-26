@@ -19,6 +19,10 @@ const FAULT_MESSAGES: Record<string, TranslationKey> = {
   version_required: 'workflows.errors.stale',
   invalid_input: 'workflows.errors.nameBlank',
   workflow_no_published_snapshot: 'workflows.run.noPublishedSnapshot',
+  required_field_missing: 'workflows.errors.requiredField',
+  invalid_field_value: 'workflows.errors.invalidField',
+  workflow_executor_unconfigured: 'workflows.errors.executorUnconfigured',
+  workflow_graph_invalid: 'workflows.errors.graphInvalid',
 }
 
 /**

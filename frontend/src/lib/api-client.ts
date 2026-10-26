@@ -64,6 +64,17 @@ export function faultCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined
 }
 
+/**
+ * Reads one safe public Fault parameter — the identifier the backend already lets the caller act on,
+ * such as the `field` a validation rejection names. Anything but a string is ignored, so a caller
+ * never renders transport or server detail.
+ */
+export function faultParam(error: unknown, key: string): string | undefined {
+  if (!isAxiosError<{ params?: Record<string, unknown> }>(error)) return undefined
+  const value = error.response?.data?.params?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
 AXIOS_INSTANCE.interceptors.response.use(undefined, (error: unknown) => {
   if (isUnauthorizedError(error)) {
     for (const listener of unauthorizedListeners) listener()

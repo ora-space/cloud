@@ -34,12 +34,12 @@ func (s *Store) ReplacePluginCatalog(ctx context.Context, source pluginmarket.So
 		t.exec("DELETE FROM plugin_catalog_entries WHERE source_namespace=$1", source.Namespace)
 		for i := range entries {
 			e := &entries[i]
-			t.exec(`INSERT INTO plugin_catalog_entries(source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,indexed_at)
-				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			t.exec(`INSERT INTO plugin_catalog_entries(source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,agent_configuration,agent_configuration_issue,indexed_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 				source.Namespace, e.Identifier, e.Title, e.Kind, e.Version, e.Description,
 				nullable(e.Homepage), nullable(e.License), jsonValue(e.Logo), nullable(e.URL), nullable(e.SHA256),
 				jsonValue(targetsJSON(e.Targets)), jsonValue(stringsJSON(e.PackMembers)), e.Readme,
-				e.MarketplaceVisible, e.SourceURL, indexedAt)
+				e.MarketplaceVisible, e.SourceURL, agentConfigurationJSON(e.AgentConfiguration), nullable(e.AgentConfigurationIssue), indexedAt)
 		}
 		t.exec("UPDATE plugin_sources SET synced_at=$2,sync_error=NULL,updated_at=now(),version=version+1 WHERE namespace=$1", source.Namespace, indexedAt)
 		return nil
@@ -70,6 +70,16 @@ func jsonValue(v any) any {
 	return jsonText(v)
 }
 
+// agentConfigurationJSON keeps an absent association a SQL NULL rather than a JSON null: a
+// typed nil pointer inside an interface would otherwise marshal to jsonb null, which reads back
+// as a present-but-empty value instead of "no declaration".
+func agentConfigurationJSON(association *pluginmarket.AgentConfigurationMetadata) any {
+	if association == nil {
+		return nil
+	}
+	return association
+}
+
 func targetsJSON(targets []pluginmarket.ReleaseTarget) any {
 	if len(targets) == 0 {
 		return nil
@@ -91,13 +101,13 @@ func (t *transaction) pluginCatalogEntry(id string) Object {
 	if len(parts) != 2 {
 		return nil
 	}
-	return t.one(`SELECT source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,indexed_at,(source_namespace||'/'||identifier) AS id FROM plugin_catalog_entries WHERE source_namespace=$1 AND identifier=$2`, parts[0], parts[1])
+	return t.one(`SELECT source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,agent_configuration,agent_configuration_issue,indexed_at,(source_namespace||'/'||identifier) AS id FROM plugin_catalog_entries WHERE source_namespace=$1 AND identifier=$2`, parts[0], parts[1])
 }
 
 // pluginCatalog returns the full catalog snapshot (v1 decision D4: a few
 // hundred entries; filtering and search happen in the frontend).
 func pluginCatalog(t *transaction) Object {
-	items := t.list(`SELECT source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,indexed_at,(source_namespace||'/'||identifier) AS id FROM plugin_catalog_entries WHERE marketplace_visible ORDER BY source_namespace,identifier`)
+	items := t.list(`SELECT source_namespace,identifier,title,kind,version,description,homepage,license,logo,url,sha256,targets,pack_members,readme,marketplace_visible,source_url,agent_configuration,agent_configuration_issue,indexed_at,(source_namespace||'/'||identifier) AS id FROM plugin_catalog_entries WHERE marketplace_visible ORDER BY source_namespace,identifier`)
 	source := t.one("SELECT namespace,synced_at,sync_error FROM plugin_sources WHERE enabled ORDER BY synced_at NULLS FIRST,namespace LIMIT 1")
 	out := Object{"items": items}
 	if source != nil {
@@ -141,7 +151,7 @@ func pluginIdentity(id string) (namespace, identifier string, ok bool) {
 func livePluginWorkspaces(t *transaction, spaceID string) []Object {
 	// Run Workspaces install plugins through their own create_workspace step. They are not fan-out
 	// targets: a user install must not queue an operation against a Workspace the user cannot see.
-	return t.list(`SELECT w.* FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL ORDER BY w.id`, spaceID)
+	return t.list(`SELECT w.* FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$1 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL ORDER BY w.id`, spaceID)
 }
 
 // installSpacePlugin records an administrator's pinned selection. Execution waits durably;
@@ -249,7 +259,7 @@ func pluginInstanceWriteback(t *transaction, op Object, pluginID, state, version
 	if !ok {
 		return
 	}
-	row := t.one(`SELECT wi.workspace_id,wi.desired_revision,p.space_id,ws.tenant_id FROM workspace_plugin_instances wi JOIN workspaces ws ON ws.id=wi.workspace_id JOIN projects p ON p.id=ws.project_id WHERE wi.workspace_id=$1 AND wi.source_namespace=$2 AND wi.identifier=$3`,
+	row := t.one(`SELECT wi.workspace_id,wi.desired_revision,p.space_id,ws.tenant_id,ws.issue_run_id,ws.workflow_run_id FROM workspace_plugin_instances wi JOIN workspaces ws ON ws.id=wi.workspace_id JOIN projects p ON p.id=ws.project_id WHERE wi.workspace_id=$1 AND wi.source_namespace=$2 AND wi.identifier=$3`,
 		op.S("workspaceId"), namespace, identifier)
 	if row == nil || row.S("spaceId") == "" {
 		return
@@ -269,9 +279,14 @@ func pluginInstanceWriteback(t *transaction, op Object, pluginID, state, version
 	if terminal {
 		t.exec("UPDATE workspace_plugin_instances SET maintenance_operation_id=NULL,pending_reason=NULL WHERE workspace_id=$1 AND source_namespace=$2 AND identifier=$3", op.S("workspaceId"), namespace, identifier)
 	}
+	// Frozen runs may legitimately install a version older than the space's current selection.
+	// Their observed version must not overwrite that shared selection's aggregate evidence.
+	if row.S("issueRunId") != "" || row.S("workflowRunId") != "" {
+		return
+	}
 	// Run Workspace instances are execution facts for that run. They do not change the Space aggregate,
 	// so one disposable install failure cannot retire an Agent the Space still has selected.
-	states := t.list("SELECT observed_state FROM workspace_plugin_instances wi WHERE source_namespace=$1 AND identifier=$2 AND workspace_id IN (SELECT w.id FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$3 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL)", namespace, identifier, row.S("spaceId"))
+	states := t.list("SELECT observed_state FROM workspace_plugin_instances wi WHERE source_namespace=$1 AND identifier=$2 AND workspace_id IN (SELECT w.id FROM workspaces w JOIN projects p ON p.id=w.project_id WHERE p.space_id=$3 AND w.deleted_at IS NULL AND w.issue_run_id IS NULL AND w.workflow_run_id IS NULL)", namespace, identifier, row.S("spaceId"))
 	aggregate := "installed"
 	if desired := t.one("SELECT desired_state,tenant_id FROM space_plugins WHERE space_id=$1 AND source_namespace=$2 AND identifier=$3", row.S("spaceId"), namespace, identifier); desired != nil {
 		desiredState := desired.S("desiredState")

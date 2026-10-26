@@ -5,14 +5,13 @@
 `internal/controlpb` is the Go output generated from the `ora.cloud.internal.v1` contract under
 [`proto/`](../../proto/README.en.md): message types plus server stubs and clients of
 `ControllerLeaseService` / `ExecutionService` / `WorkspaceOperationService` / `NodeReportService` /
-`AgentRunService` / `ControlSignalService`. Cloud is the server of these
+`AgentRunService` / `RuntimeControlService` / `ControlSignalService`. Cloud is the server of these
 services; the client types exist for in-process tests and doubles.
 
 ## Boundaries and invariants
 
 - **Read-only**: everything here is generated; never edit by hand. Behavior changes only through editing
   `proto/` and regenerating.
-- **No business semantics**: types map one-to-one to the contract; tenant, user and membership concepts do
-  not appear here. Service implementations live in the packages that use them.
+- **No business semantics**: generated types carry the contract's identity and scope fields but decide no tenant or membership authority. Service implementations live in `internal/controlgrpc`; Core owns business validation.
 - **No drift**: `task proto:check` and CI regenerate with pinned plugins and compare; any difference from
   `proto/` fails.

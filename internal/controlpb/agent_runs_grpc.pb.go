@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	AgentRunService_PublishThreadPreview_FullMethodName         = "/ora.cloud.internal.v1.AgentRunService/PublishThreadPreview"
 	AgentRunService_TakeOverThreadEvents_FullMethodName         = "/ora.cloud.internal.v1.AgentRunService/TakeOverThreadEvents"
 	AgentRunService_ClaimThreadCommands_FullMethodName          = "/ora.cloud.internal.v1.AgentRunService/ClaimThreadCommands"
 	AgentRunService_RecordThreadCommandDelivered_FullMethodName = "/ora.cloud.internal.v1.AgentRunService/RecordThreadCommandDelivered"
 	AgentRunService_GrantRevisionUpload_FullMethodName          = "/ora.cloud.internal.v1.AgentRunService/GrantRevisionUpload"
-	AgentRunService_GrantRevisionDownload_FullMethodName        = "/ora.cloud.internal.v1.AgentRunService/GrantRevisionDownload"
+	AgentRunService_GrantScheduledArtifactUpload_FullMethodName = "/ora.cloud.internal.v1.AgentRunService/GrantScheduledArtifactUpload"
 )
 
 // AgentRunServiceClient is the client API for AgentRunService service.
@@ -32,9 +33,12 @@ const (
 //
 // What an Agent IssueRun needs beyond ExecutionService: the session execution's non-terminal
 // Thread events, Thread commands (user turns and end requests) Cloud persisted for the Node, and
-// upload grants for a delivery execution. Writes carry `submission_id` with the same replay rules as
-// ExecutionService and are fenced by the caller's lease `epoch`.
+// upload grants for a delivery execution or for the artifacts a scheduled run declared. Writes carry
+// `submission_id` with the same replay rules as ExecutionService and are fenced by the caller's lease
+// `epoch`.
 type AgentRunServiceClient interface {
+	// Replaces a bounded ephemeral snapshot. No receipt or Node Ack is produced.
+	PublishThreadPreview(ctx context.Context, in *PublishThreadPreviewRequest, opts ...grpc.CallOption) (*PublishThreadPreviewResponse, error)
 	// Takes over a contiguous batch of Thread events of one session execution in one transaction.
 	// Only after this succeeds may the Controller acknowledge those sequences to the Node.
 	TakeOverThreadEvents(ctx context.Context, in *TakeOverThreadEventsRequest, opts ...grpc.CallOption) (*TakeOverThreadEventsResponse, error)
@@ -45,9 +49,9 @@ type AgentRunServiceClient interface {
 	// Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
 	// write: nothing is recorded, and every call issues new grants.
 	GrantRevisionUpload(ctx context.Context, in *GrantRevisionUploadRequest, opts ...grpc.CallOption) (*GrantRevisionUploadResponse, error)
-	// Issues a fresh read grant for the prior Revision bundle of a registered session execution that
-	// has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
-	GrantRevisionDownload(ctx context.Context, in *GrantRevisionDownloadRequest, opts ...grpc.CallOption) (*GrantRevisionDownloadResponse, error)
+	// Issues fresh upload grants for the declared artifacts of a registered scheduled-artifact
+	// delivery execution. Not a write: nothing is recorded, and every call issues new grants.
+	GrantScheduledArtifactUpload(ctx context.Context, in *GrantScheduledArtifactUploadRequest, opts ...grpc.CallOption) (*GrantScheduledArtifactUploadResponse, error)
 }
 
 type agentRunServiceClient struct {
@@ -56,6 +60,16 @@ type agentRunServiceClient struct {
 
 func NewAgentRunServiceClient(cc grpc.ClientConnInterface) AgentRunServiceClient {
 	return &agentRunServiceClient{cc}
+}
+
+func (c *agentRunServiceClient) PublishThreadPreview(ctx context.Context, in *PublishThreadPreviewRequest, opts ...grpc.CallOption) (*PublishThreadPreviewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PublishThreadPreviewResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_PublishThreadPreview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentRunServiceClient) TakeOverThreadEvents(ctx context.Context, in *TakeOverThreadEventsRequest, opts ...grpc.CallOption) (*TakeOverThreadEventsResponse, error) {
@@ -98,10 +112,10 @@ func (c *agentRunServiceClient) GrantRevisionUpload(ctx context.Context, in *Gra
 	return out, nil
 }
 
-func (c *agentRunServiceClient) GrantRevisionDownload(ctx context.Context, in *GrantRevisionDownloadRequest, opts ...grpc.CallOption) (*GrantRevisionDownloadResponse, error) {
+func (c *agentRunServiceClient) GrantScheduledArtifactUpload(ctx context.Context, in *GrantScheduledArtifactUploadRequest, opts ...grpc.CallOption) (*GrantScheduledArtifactUploadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GrantRevisionDownloadResponse)
-	err := c.cc.Invoke(ctx, AgentRunService_GrantRevisionDownload_FullMethodName, in, out, cOpts...)
+	out := new(GrantScheduledArtifactUploadResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_GrantScheduledArtifactUpload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +128,12 @@ func (c *agentRunServiceClient) GrantRevisionDownload(ctx context.Context, in *G
 //
 // What an Agent IssueRun needs beyond ExecutionService: the session execution's non-terminal
 // Thread events, Thread commands (user turns and end requests) Cloud persisted for the Node, and
-// upload grants for a delivery execution. Writes carry `submission_id` with the same replay rules as
-// ExecutionService and are fenced by the caller's lease `epoch`.
+// upload grants for a delivery execution or for the artifacts a scheduled run declared. Writes carry
+// `submission_id` with the same replay rules as ExecutionService and are fenced by the caller's lease
+// `epoch`.
 type AgentRunServiceServer interface {
+	// Replaces a bounded ephemeral snapshot. No receipt or Node Ack is produced.
+	PublishThreadPreview(context.Context, *PublishThreadPreviewRequest) (*PublishThreadPreviewResponse, error)
 	// Takes over a contiguous batch of Thread events of one session execution in one transaction.
 	// Only after this succeeds may the Controller acknowledge those sequences to the Node.
 	TakeOverThreadEvents(context.Context, *TakeOverThreadEventsRequest) (*TakeOverThreadEventsResponse, error)
@@ -127,9 +144,9 @@ type AgentRunServiceServer interface {
 	// Issues fresh upload grants for a registered delivery execution that has no result yet. Not a
 	// write: nothing is recorded, and every call issues new grants.
 	GrantRevisionUpload(context.Context, *GrantRevisionUploadRequest) (*GrantRevisionUploadResponse, error)
-	// Issues a fresh read grant for the prior Revision bundle of a registered session execution that
-	// has no result yet. Not a write: nothing is recorded, and every call issues a new grant.
-	GrantRevisionDownload(context.Context, *GrantRevisionDownloadRequest) (*GrantRevisionDownloadResponse, error)
+	// Issues fresh upload grants for the declared artifacts of a registered scheduled-artifact
+	// delivery execution. Not a write: nothing is recorded, and every call issues new grants.
+	GrantScheduledArtifactUpload(context.Context, *GrantScheduledArtifactUploadRequest) (*GrantScheduledArtifactUploadResponse, error)
 	mustEmbedUnimplementedAgentRunServiceServer()
 }
 
@@ -140,6 +157,9 @@ type AgentRunServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentRunServiceServer struct{}
 
+func (UnimplementedAgentRunServiceServer) PublishThreadPreview(context.Context, *PublishThreadPreviewRequest) (*PublishThreadPreviewResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishThreadPreview not implemented")
+}
 func (UnimplementedAgentRunServiceServer) TakeOverThreadEvents(context.Context, *TakeOverThreadEventsRequest) (*TakeOverThreadEventsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TakeOverThreadEvents not implemented")
 }
@@ -152,8 +172,8 @@ func (UnimplementedAgentRunServiceServer) RecordThreadCommandDelivered(context.C
 func (UnimplementedAgentRunServiceServer) GrantRevisionUpload(context.Context, *GrantRevisionUploadRequest) (*GrantRevisionUploadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GrantRevisionUpload not implemented")
 }
-func (UnimplementedAgentRunServiceServer) GrantRevisionDownload(context.Context, *GrantRevisionDownloadRequest) (*GrantRevisionDownloadResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GrantRevisionDownload not implemented")
+func (UnimplementedAgentRunServiceServer) GrantScheduledArtifactUpload(context.Context, *GrantScheduledArtifactUploadRequest) (*GrantScheduledArtifactUploadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantScheduledArtifactUpload not implemented")
 }
 func (UnimplementedAgentRunServiceServer) mustEmbedUnimplementedAgentRunServiceServer() {}
 func (UnimplementedAgentRunServiceServer) testEmbeddedByValue()                         {}
@@ -174,6 +194,24 @@ func RegisterAgentRunServiceServer(s grpc.ServiceRegistrar, srv AgentRunServiceS
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentRunService_ServiceDesc, srv)
+}
+
+func _AgentRunService_PublishThreadPreview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishThreadPreviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).PublishThreadPreview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_PublishThreadPreview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).PublishThreadPreview(ctx, req.(*PublishThreadPreviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentRunService_TakeOverThreadEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -248,20 +286,20 @@ func _AgentRunService_GrantRevisionUpload_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AgentRunService_GrantRevisionDownload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GrantRevisionDownloadRequest)
+func _AgentRunService_GrantScheduledArtifactUpload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantScheduledArtifactUploadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AgentRunServiceServer).GrantRevisionDownload(ctx, in)
+		return srv.(AgentRunServiceServer).GrantScheduledArtifactUpload(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AgentRunService_GrantRevisionDownload_FullMethodName,
+		FullMethod: AgentRunService_GrantScheduledArtifactUpload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentRunServiceServer).GrantRevisionDownload(ctx, req.(*GrantRevisionDownloadRequest))
+		return srv.(AgentRunServiceServer).GrantScheduledArtifactUpload(ctx, req.(*GrantScheduledArtifactUploadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -273,6 +311,10 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "ora.cloud.internal.v1.AgentRunService",
 	HandlerType: (*AgentRunServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PublishThreadPreview",
+			Handler:    _AgentRunService_PublishThreadPreview_Handler,
+		},
 		{
 			MethodName: "TakeOverThreadEvents",
 			Handler:    _AgentRunService_TakeOverThreadEvents_Handler,
@@ -290,8 +332,8 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentRunService_GrantRevisionUpload_Handler,
 		},
 		{
-			MethodName: "GrantRevisionDownload",
-			Handler:    _AgentRunService_GrantRevisionDownload_Handler,
+			MethodName: "GrantScheduledArtifactUpload",
+			Handler:    _AgentRunService_GrantScheduledArtifactUpload_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

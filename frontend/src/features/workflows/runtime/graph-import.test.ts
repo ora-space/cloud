@@ -312,3 +312,19 @@ describe('imported agent configuration', () => {
     ).toBe(false)
   })
 })
+
+it('preserves imported region ownership and authored dimensions', () => {
+  const imported = parseImportedWorkflowDocument(
+    documentWith({
+      nodes: [
+        START_NODE,
+        { ...AGENT_NODE, parentId: 'region', initialWidth: 300, initialHeight: 200 },
+      ],
+    }),
+  )
+  expect(imported.definition.nodes[1]).toMatchObject({
+    parentId: 'region',
+    initialWidth: 300,
+    initialHeight: 200,
+  })
+})

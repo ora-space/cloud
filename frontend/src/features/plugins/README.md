@@ -4,7 +4,7 @@
 
 工作区侧栏"插件"栏的页面与数据层:上半是**已选插件**列表(desired/observed 状态徽章 + 移除),
 中间是**工作流资产**导入结果(逐文档结果,与安装状态分开),下半是**插件市场**目录网格(搜索、
-kind 筛选、安装)。它只表达 cloud 的权威选择状态;激活、停止、配置与日志属于 Node 运行时平面,
+kind 筛选、安装)。已选 Agent 提供个人配置入口，交给 `agent-configurations`；它表达 cloud 的权威选择状态;激活、停止与日志属于 Node 运行时平面,
 不在本模块。
 
 ## 文件
@@ -19,7 +19,7 @@ kind 筛选、安装)。它只表达 cloud 的权威选择状态;激活、停止
 ## 依赖与调用方
 
 - 依赖:`src/api`(orval 生成客户端)、`features/spaces`(current-space、幂等键、SSE 失效)、
-  `components/ui`。
+  `components/ui`、`features/agent-configurations`。
 - 调用方:`routes.tsx`(`/w/:slug/plugins`)、`components/layout/app-sidebar.tsx`(导航入口)。
 - 测试依赖:`mocks/handlers/plugins.ts`、`test/cloud-handlers.ts`。
 
@@ -31,6 +31,7 @@ kind 筛选、安装)。它只表达 cloud 的权威选择状态;激活、停止
   文档失败码是稳定契约,前端只做文案映射,未知码原样展示。
 - 导入行只在 `pending`/`importing` 时轮询;全部终态后停止,过期结果由 SSE 或下次挂载刷新。
 - `pack` 条目 v1 禁装:按钮恒禁用并显示"暂不支持"。
+- 「我的配置」依据已选版本的 `kind` 展示，普通成员可用，打开前不读取个人值；不依赖最新目录的类型。
 - 所有异步更新都在查询/变更的 act 边界内(clean-stderr 门禁)。
 
 ## 测试

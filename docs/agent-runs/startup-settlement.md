@@ -34,6 +34,7 @@
 |---|---|
 | 用户先结束了会话，或运行被取消 | `cancelled` |
 | 当前 Node 已初始化、已连接、30 秒内有心跳，并且**明确**不具备模型代理能力，而运行使用个人模型 | `failed`，`failureReason = model_proxy_unavailable` |
+| 同样的 Node **明确**不具备运行冻结的 Agent 声明所需的 adapter 能力（target、契约版本或协议不符） | `failed`，`failureReason = agent_adapter_unavailable` |
 | 启动窗口到期 | `failed`，`failureReason = agent_start_failed` |
 
 撤回与派发登记共用同一把事务锁，所以撤回之后迟到的登记找不到工作项。运行进入 `releasing`，交付状态为 `skipped`，排队中的用户
@@ -53,6 +54,8 @@
   `failed` 而不是 `cancelled`。
 - **结束确认窗口也到期，结果仍然未知**：在同一个事务里把运行写为 `failed`、`done`，Thread 为 `ended`，交付状态为 `failed`，并写入一行
   **残留账本** `agent_run_residuals`。Cloud **不伪造** Node 结果、收据或 Revision。
+
+结束确认窗口耗尽且原执行仍无真实终态时，同一残留行的 `stop_evidence.stop_unconfirmed` 记录命名证据：类型、来源 `cloud`、观察时间和原执行身份。重复扫描不追加副本、不续期；`reason`、`responsibility` 和资源保护不因这条证据改变。它不表示 Node 已停止，不授权强停、数据删除或清账。Node 自己的停止确认上限和原 Scope/Run 时间证据通过原执行查询可见，两侧按同一执行 / Workspace 归属对应，Cloud 的 2/6/5 窗口保持原起点和时长。
 
 ## 残留账本
 

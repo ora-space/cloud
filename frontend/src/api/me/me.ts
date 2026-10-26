@@ -25,12 +25,18 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200,
+  DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody,
+  DeleteApiV1MeExecutorSlotMappingsSlot200,
+  DeleteApiV1MeExecutorSlotMappingsSlotBody,
   DeleteApiV1MeGitIdentityBody,
   DeleteApiV1MeModelConnectionsMcid200,
   DeleteApiV1MeModelConnectionsMcidBody,
   DeleteApiV1MeModelConnectionsMcidCredential200,
   DeleteApiV1MeModelConnectionsMcidCredentialBody,
   Error,
+  GetApiV1MeExecutorSlotMappings200,
+  GetApiV1MeExecutorSlotMappingsParams,
   GetApiV1MeJoinRequests200,
   GetApiV1MeJoinRequestsParams,
   GetApiV1MeModelConnections200,
@@ -42,8 +48,15 @@ import type {
   GitIdentity,
   ModelConnection,
   ModelDefault,
+  PersonalAgentConfigurationContext,
+  PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair200,
+  PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody,
   PostApiV1MeModelConnections201,
   PostApiV1MeModelConnectionsBody,
+  PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200,
+  PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody,
+  PutApiV1MeExecutorSlotMappingsSlot200,
+  PutApiV1MeExecutorSlotMappingsSlotBody,
   PutApiV1MeGitIdentityBody,
   PutApiV1MeModelConnectionsMcid200,
   PutApiV1MeModelConnectionsMcidBody,
@@ -170,6 +183,558 @@ export function useGetApiV1Me<TData = Awaited<ReturnType<typeof getApiV1Me>>, TE
 
 
 /**
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Requires matching resource version and no active project operation. Atomically closes new execution admission. Active tickets return 409 resource_in_use without changing admission. Unknown Node activity requires later proof and remains pending/blocked. main Workspace cannot be independently deleted. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * @summary DELETE /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+export const deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier = (
+    spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string,
+    deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody: DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200>(
+      {url: `/api/v1/me/agent-configurations/${spaceId}/${pluginNamespace}/${pluginIdentifier}`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationKey = () => ['deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier'] as const;
+
+export const getDeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables> = (props) => {
+          const {spaceId,pluginNamespace,pluginIdentifier,data} = props ?? {};
+
+          return  deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier(spaceId,pluginNamespace,pluginIdentifier,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>>
+    export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationBody = DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody
+    export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationError = ErrorType<Error>
+    export type DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables = {spaceId: string;pluginNamespace: string;pluginIdentifier: string;data: DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody}
+
+    /**
+ * @summary DELETE /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+export const useDeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>,
+        TError,
+        DeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationOptions(options), queryClient);
+    }
+    /**
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * @summary GET /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+export const getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier = (
+    spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PersonalAgentConfigurationContext>(
+      {url: `/api/v1/me/agent-configurations/${spaceId}/${pluginNamespace}/${pluginIdentifier}`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryKey = (spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string,) => {
+    return [
+    `/api/v1/me/agent-configurations/${spaceId}/${pluginNamespace}/${pluginIdentifier}`
+    ] as const;
+    }
+
+
+export const getGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError = ErrorType<Error>>(spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryKey(spaceId,pluginNamespace,pluginIdentifier);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>> = ({ signal }) => getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier(spaceId,pluginNamespace,pluginIdentifier, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: spaceId !== null && spaceId !== undefined && pluginNamespace !== null && pluginNamespace !== undefined && pluginIdentifier !== null && pluginIdentifier !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>>
+export type GetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier<TData = Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError = ErrorType<Error>>(
+ spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier<TData = Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError = ErrorType<Error>>(
+ spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier<TData = Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError = ErrorType<Error>>(
+ spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+
+export function useGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier<TData = Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError = ErrorType<Error>>(
+ spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierQueryOptions(spaceId,pluginNamespace,pluginIdentifier,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * @summary PUT /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+export const putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier = (
+    spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string,
+    putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody: PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier200>(
+      {url: `/api/v1/me/agent-configurations/${spaceId}/${pluginNamespace}/${pluginIdentifier}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationKey = () => ['putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier'] as const;
+
+export const getPutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables> = (props) => {
+          const {spaceId,pluginNamespace,pluginIdentifier,data} = props ?? {};
+
+          return  putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier(spaceId,pluginNamespace,pluginIdentifier,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>>
+    export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationBody = PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody
+    export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationError = ErrorType<Error>
+    export type PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables = {spaceId: string;pluginNamespace: string;pluginIdentifier: string;data: PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierBody}
+
+    /**
+ * @summary PUT /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier
+ */
+export const usePutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>, TError,PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifier>>,
+        TError,
+        PutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierMutationOptions(options), queryClient);
+    }
+    /**
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * @summary POST /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier/repair
+ */
+export const postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair = (
+    spaceId: string,
+    pluginNamespace: string,
+    pluginIdentifier: string,
+    postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody: PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair200>(
+      {url: `/api/v1/me/agent-configurations/${spaceId}/${pluginNamespace}/${pluginIdentifier}/repair`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationKey = () => ['postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair'] as const;
+
+export const getPostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>, TError,PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>, TError,PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables, TContext> => {
+
+const mutationKey = getPostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>, PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables> = (props) => {
+          const {spaceId,pluginNamespace,pluginIdentifier,data} = props ?? {};
+
+          return  postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair(spaceId,pluginNamespace,pluginIdentifier,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationResult = NonNullable<Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>>
+    export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationBody = PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody
+    export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationError = ErrorType<Error>
+    export type PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables = {spaceId: string;pluginNamespace: string;pluginIdentifier: string;data: PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairBody}
+
+    /**
+ * @summary POST /api/v1/me/agent-configurations/:spaceId/:pluginNamespace/:pluginIdentifier/repair
+ */
+export const usePostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>, TError,PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof postApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepair>>,
+        TError,
+        PostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPostApiV1MeAgentConfigurationsSpaceIdPluginNamespacePluginIdentifierRepairMutationOptions(options), queryClient);
+    }
+    /**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary GET /api/v1/me/executor-slot-mappings
+ */
+export const getApiV1MeExecutorSlotMappings = (
+    params?: GetApiV1MeExecutorSlotMappingsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetApiV1MeExecutorSlotMappings200>(
+      {url: `/api/v1/me/executor-slot-mappings`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetApiV1MeExecutorSlotMappingsQueryKey = (params?: GetApiV1MeExecutorSlotMappingsParams,) => {
+    return [
+    `/api/v1/me/executor-slot-mappings`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetApiV1MeExecutorSlotMappingsQueryOptions = <TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetApiV1MeExecutorSlotMappingsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>> = ({ signal }) => getApiV1MeExecutorSlotMappings(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetApiV1MeExecutorSlotMappingsQueryResult = NonNullable<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>>
+export type GetApiV1MeExecutorSlotMappingsQueryError = ErrorType<Error>
+
+
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params: undefined |  GetApiV1MeExecutorSlotMappingsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>,
+          TError,
+          Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary GET /api/v1/me/executor-slot-mappings
+ */
+
+export function useGetApiV1MeExecutorSlotMappings<TData = Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError = ErrorType<Error>>(
+ params?: GetApiV1MeExecutorSlotMappingsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getApiV1MeExecutorSlotMappings>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetApiV1MeExecutorSlotMappingsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary DELETE /api/v1/me/executor-slot-mappings/:slot
+ */
+export const deleteApiV1MeExecutorSlotMappingsSlot = (
+    slot: string,
+    deleteApiV1MeExecutorSlotMappingsSlotBody: DeleteApiV1MeExecutorSlotMappingsSlotBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<DeleteApiV1MeExecutorSlotMappingsSlot200>(
+      {url: `/api/v1/me/executor-slot-mappings/${slot}`, method: 'DELETE',
+      headers: {'Content-Type': 'application/json', },
+      data: deleteApiV1MeExecutorSlotMappingsSlotBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getDeleteApiV1MeExecutorSlotMappingsSlotMutationKey = () => ['deleteApiV1MeExecutorSlotMappingsSlot'] as const;
+
+export const getDeleteApiV1MeExecutorSlotMappingsSlotMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext> => {
+
+const mutationKey = getDeleteApiV1MeExecutorSlotMappingsSlotMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables> = (props) => {
+          const {slot,data} = props ?? {};
+
+          return  deleteApiV1MeExecutorSlotMappingsSlot(slot,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationResult = NonNullable<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>>
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationBody = DeleteApiV1MeExecutorSlotMappingsSlotBody
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationError = ErrorType<Error>
+    export type DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables = {slot: string;data: DeleteApiV1MeExecutorSlotMappingsSlotBody}
+
+    /**
+ * @summary DELETE /api/v1/me/executor-slot-mappings/:slot
+ */
+export const useDeleteApiV1MeExecutorSlotMappingsSlot = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>, TError,DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteApiV1MeExecutorSlotMappingsSlot>>,
+        TError,
+        DeleteApiV1MeExecutorSlotMappingsSlotMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeleteApiV1MeExecutorSlotMappingsSlotMutationOptions(options), queryClient);
+    }
+    /**
+ * Personal executor-slot mappings of the verified user: slot name -> executor (agent CLI fixed to official/ora-space.opencode for now). Only the owner reads and writes; `default` is deliberately absent because it is the personal default model (PUT /me/model-default). The connection must be owned, enabled and contain the selected model at write time. A mapping survives its connection being deleted, disabled or losing the model — `available` computes what the run-creation gate would conclude today and `unavailableReason` names it (model_connection_unavailable, model_credential_required, model_not_found). DELETE requires a user-scoped Idempotency-Key; writes require the current resource version (a slot with no mapping is version 0).
+ * @summary PUT /api/v1/me/executor-slot-mappings/:slot
+ */
+export const putApiV1MeExecutorSlotMappingsSlot = (
+    slot: string,
+    putApiV1MeExecutorSlotMappingsSlotBody: PutApiV1MeExecutorSlotMappingsSlotBody,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PutApiV1MeExecutorSlotMappingsSlot200>(
+      {url: `/api/v1/me/executor-slot-mappings/${slot}`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: putApiV1MeExecutorSlotMappingsSlotBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getPutApiV1MeExecutorSlotMappingsSlotMutationKey = () => ['putApiV1MeExecutorSlotMappingsSlot'] as const;
+
+export const getPutApiV1MeExecutorSlotMappingsSlotMutationOptions = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext> => {
+
+const mutationKey = getPutApiV1MeExecutorSlotMappingsSlotMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, PutApiV1MeExecutorSlotMappingsSlotMutationVariables> = (props) => {
+          const {slot,data} = props ?? {};
+
+          return  putApiV1MeExecutorSlotMappingsSlot(slot,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationResult = NonNullable<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>>
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationBody = PutApiV1MeExecutorSlotMappingsSlotBody
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationError = ErrorType<Error>
+    export type PutApiV1MeExecutorSlotMappingsSlotMutationVariables = {slot: string;data: PutApiV1MeExecutorSlotMappingsSlotBody}
+
+    /**
+ * @summary PUT /api/v1/me/executor-slot-mappings/:slot
+ */
+export const usePutApiV1MeExecutorSlotMappingsSlot = <TError = ErrorType<Error>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>, TError,PutApiV1MeExecutorSlotMappingsSlotMutationVariables, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof putApiV1MeExecutorSlotMappingsSlot>>,
+        TError,
+        PutApiV1MeExecutorSlotMappingsSlotMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPutApiV1MeExecutorSlotMappingsSlotMutationOptions(options), queryClient);
+    }
+    /**
  * Restores the default git commit identity (display name and a per-user noreply address). A stated identity is removed only at its current version, otherwise 409 version_conflict; an identity that is already the default restores as a no-op whatever version is sent, which makes a retry safe without an Idempotency-Key.
  * @summary DELETE /api/v1/me/git-identity
  */

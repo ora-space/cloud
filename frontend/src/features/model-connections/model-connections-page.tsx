@@ -105,11 +105,7 @@ export function ModelConnectionsPage() {
       {!failed && (!connections.data || !selection.data) && <Skeleton className="h-24 w-full" />}
       {connections.data && selection.data && (
         <>
-          <ModelDefaultForm
-            key={`${selection.data.version}-${connections.data.map((item) => `${item.id}:${item.version}`).join(',')}`}
-            connections={connections.data}
-            selection={selection.data}
-          />
+          <ModelDefaultForm connections={connections.data} selection={selection.data} />
           <Button type="button" onClick={() => setEditor({ kind: 'new' })}>
             新建连接
           </Button>

@@ -8,6 +8,11 @@
 # `task setup` (cmd/devsetup) only turns the values below into what those services already accept:
 # CLOUD_*/GATEWAY_* environment overrides and TEST_DATABASE_URL in .local/dev.env, which
 # Taskfile.yml loads for every task, plus the client secret file the Gateway reads.
+# Cloud's residual recovery pass runs every 1m by default. Configure
+# issue_runs.residual_reconcile_interval in the Cloud YAML, or set
+# CLOUD_ISSUE_RUNS_RESIDUAL_RECONCILE_INTERVAL in the server environment. This TOML setup
+# template does not accept an [issue_runs] section. The interval must be positive; it is not
+# a cleanup-success deadline and there is no disable switch.
 
 [database]
 # PostgreSQL DSN shared by Cloud, the Gateway, `task migrate` and the test suite. Any PostgreSQL 17
@@ -42,6 +47,8 @@ client_secret = ""
 display_name_field = "userName"
 
 [plugins]
+# Enable only after Node/Controller and both plugin adapters are deployed; empty disables admission.
+personal_agent_target = ""
 # Plugin marketplace the cloud server keeps a catalog snapshot of. `task setup` turns these
 # values into CLOUD_PLUGINS_* overrides in .local/dev.env, which configs/config.yaml already
 # accepts. Leave the section unchanged to use the default marketplace.

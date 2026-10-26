@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -15,8 +16,9 @@ import (
 // deadline, abandonment committed. The lease stays seeded for the fact submissions.
 type abandonedCreation struct {
 	provisioningSeed
-	claims *Claims
-	effect string
+	claims         *Claims
+	effect         string
+	responsibility string
 }
 
 // seedAbandonedCreation parks a creation in blocked (freezing the deadline), optionally plans one
@@ -61,7 +63,30 @@ func seedAbandonedCreation(t *testing.T, store *Store, withEffect bool) abandone
 	if phase.String != "done" || status != "failed" || reason != "workspace_unavailable" {
 		t.Fatalf("seed did not abandon the creation: %s/%s/%s", phase.String, status, reason)
 	}
-	return abandonedCreation{provisioningSeed: p, claims: claims, effect: effect}
+	var responsibility string
+	if err := store.Pool.QueryRow(`SELECT responsibility::text FROM agent_run_residuals WHERE run_id=$1`, p.run).Scan(&responsibility); err != nil {
+		t.Fatal(err)
+	}
+	return abandonedCreation{provisioningSeed: p, claims: claims, effect: effect, responsibility: responsibility}
+}
+
+func assertProvisioningResponsibilityUnchanged(t *testing.T, store *Store, scene abandonedCreation) {
+	t.Helper()
+	var unchanged bool
+	if err := store.Pool.QueryRow(`SELECT responsibility=$2::jsonb FROM agent_run_residuals WHERE run_id=$1`, scene.run, scene.responsibility).Scan(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if !unchanged {
+		t.Fatal("late facts changed the original residual responsibility")
+	}
+}
+
+func assertResidualFactConflict(t *testing.T, err error) {
+	t.Helper()
+	var fault *Fault
+	if !errors.As(err, &fault) || fault.Status != 409 || fault.Code != "residual_fact_conflict" {
+		t.Fatalf("want stable residual_fact_conflict Fault409, got %v", err)
+	}
 }
 
 // submitFact drives the provisioning_fact action; a non-nil error is returned as-is for conflict
@@ -101,21 +126,36 @@ func TestProvisioningFactReceiptsLateEffectWithoutResurrecting(t *testing.T) {
 	}
 	var facts int
 	var state, external string
-	if err := store.Pool.QueryRow(`SELECT (SELECT count(*) FROM jsonb_object_keys(responsibility->'lateFacts')),
-	 responsibility->'lateFacts'->('effect:'||$2)->>'state', responsibility->'lateFacts'->('effect:'||$2)->>'externalId'
-	 FROM agent_run_residuals WHERE run_id=$1`, scene.run, scene.effect).Scan(&facts, &state, &external); err != nil {
+	if err := store.Pool.QueryRow(`SELECT jsonb_array_length(reclaim_evidence),
+	 reclaim_evidence->0->'fact'->>'state', reclaim_evidence->0->'fact'->>'externalId'
+	 FROM agent_run_residuals WHERE run_id=$1`, scene.run).Scan(&facts, &state, &external); err != nil {
 		t.Fatalf("ledger receipt read failed: %v", err)
 	}
 	if facts != 1 || state != "succeeded" || external != "sub-123" {
 		t.Fatalf("ledger receipt wrong: count=%d state=%s external=%s", facts, state, external)
 	}
-	// A different fact for the same effect identity is refused — by the live path's own evidence
-	// rules here (a succeeded effect cannot become failed), which is exactly the guarantee the
-	// entry reuses — and the ledger keeps the original receipt.
+	// A conflicting fact is durable before the stable error is returned. The canonical effect
+	// remains unchanged, and both a lost-response replay and a new submission deduplicate it.
 	conflicting := Object{"epoch": 1, "kind": "effect", "effectId": scene.effect, "state": "failed", "externalId": "sub-123", "result": Object{"error": "substrate said no"}}
-	if _, err := submitFact(t, store, scene, "fact-3", conflicting); err == nil {
-		t.Fatal("contradicting fact accepted")
+	for _, submission := range []string{"fact-3", "fact-3", "fact-4"} {
+		_, err := submitFact(t, store, scene, submission, conflicting)
+		assertResidualFactConflict(t, err)
 	}
+	var committed bool
+	if err := store.Pool.QueryRow(`SELECT jsonb_array_length(r.reclaim_evidence)=2 AND r.reclaim_conflicted_at IS NOT NULL
+	 AND r.reclaim_evidence->1->>'key'='effect:'||$2
+	 AND r.reclaim_evidence->1->'fact'->>'kind'='conflict'
+	 AND r.reclaim_evidence->1->'fact'->'incoming'->>'state'='failed'
+	 AND r.reclaim_evidence->1->'fact'->'original'->>'state'='succeeded'
+	 AND e.state='succeeded' AND e.external_id='sub-123'
+	 AND e.result=jsonb_build_object('sandboxInstanceId',$2::text,'nodeId','node-late')
+	 FROM agent_run_residuals r JOIN external_effects e ON e.id=$2::uuid WHERE r.run_id=$1`, scene.run, scene.effect).Scan(&committed); err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		t.Fatal("conflict was not retained exactly once before its error, or changed the canonical effect")
+	}
+	assertProvisioningResponsibilityUnchanged(t, store, scene)
 	phase, status, reason, _, _, _ := runFields(t, store, scene.run)
 	if phase.String != "done" || status != "failed" || reason != "workspace_unavailable" {
 		t.Fatalf("late fact resurrected the run: %s/%s/%s", phase.String, status, reason)
@@ -163,16 +203,23 @@ func TestProvisioningFactReceiptsLateCloneAndCreationOutcomes(t *testing.T) {
 	if _, err := submitFact(t, store, scene, "creation-1", Object{"epoch": 1, "kind": "creation", "outcome": "ready"}); err != nil {
 		t.Fatalf("creation fact submission replay failed: %v", err)
 	}
-	if _, err := submitFact(t, store, scene, "creation-2", Object{"epoch": 1, "kind": "creation", "outcome": "failed"}); err == nil || !strings.Contains(err.Error(), "fact_conflict") {
-		t.Fatalf("contradicting creation outcome accepted: %v", err)
+	for _, submission := range []string{"creation-2", "creation-2", "creation-3"} {
+		_, err := submitFact(t, store, scene, submission, Object{"epoch": 1, "kind": "creation", "outcome": "failed"})
+		assertResidualFactConflict(t, err)
 	}
 	var creationState string
-	if err := store.Pool.QueryRow(`SELECT responsibility->'lateFacts'->'creation'->>'state' FROM agent_run_residuals WHERE run_id=$1`, scene.run).Scan(&creationState); err != nil {
+	var conflicts int
+	if err := store.Pool.QueryRow(`SELECT
+	 (SELECT e->'fact'->>'state' FROM jsonb_array_elements(reclaim_evidence) e WHERE e->>'key'='creation' AND e->'fact'->>'kind'='creation'),
+	 (SELECT count(*) FROM jsonb_array_elements(reclaim_evidence) e WHERE e->>'key'='creation' AND e->'fact'->>'kind'='conflict'
+	   AND e->'fact'->'incoming'->>'state'='failed' AND e->'fact'->'original'->>'state'='ready' AND reclaim_conflicted_at IS NOT NULL)
+	 FROM agent_run_residuals WHERE run_id=$1`, scene.run).Scan(&creationState, &conflicts); err != nil {
 		t.Fatal(err)
 	}
-	if creationState != "ready" {
-		t.Fatalf("creation fact not receipted: %s", creationState)
+	if creationState != "ready" || conflicts != 1 {
+		t.Fatalf("creation fact or durable deduplicated conflict wrong: state=%s conflicts=%d", creationState, conflicts)
 	}
+	assertProvisioningResponsibilityUnchanged(t, store, scene)
 	// A late success is evidence only: the run keeps its business terminal and the Workspace keeps
 	// its admission fence.
 	var admissionOpen bool
@@ -286,22 +333,22 @@ func TestProvisioningEffectFactProgressesFromProvisionalToTerminal(t *testing.T)
 	if _, err := submitFact(t, store, scene, "progress-replay", terminal); err != nil {
 		t.Fatalf("identical terminal must replay: %v", err)
 	}
-	// One receipt for the identity: the terminal on top, both provisional observations retained.
-	var state string
-	var prior int
-	if err := store.Pool.QueryRow(`SELECT responsibility->'lateFacts'->('effect:'||$2)->>'state',
-		jsonb_array_length(responsibility->'lateFacts'->('effect:'||$2)->'prior')
-		FROM agent_run_residuals WHERE run_id=$1`, scene.run, scene.effect).Scan(&state, &prior); err != nil {
+	// Each observation remains an independent append-only entry in arrival order.
+	var states string
+	var entries int
+	if err := store.Pool.QueryRow(`SELECT string_agg(e->'fact'->>'state', ',' ORDER BY ordinal), count(*)
+	 FROM agent_run_residuals r, jsonb_array_elements(r.reclaim_evidence) WITH ORDINALITY AS facts(e,ordinal)
+	 WHERE r.run_id=$1 AND e->>'key'='effect:'||$2`, scene.run, scene.effect).Scan(&states, &entries); err != nil {
 		t.Fatalf("ledger receipt read failed: %v", err)
 	}
-	if state != "succeeded" || prior != 2 {
-		t.Fatalf("ledger receipt wrong: state=%s prior=%d", state, prior)
+	if states != "planned,running,succeeded" || entries != 3 {
+		t.Fatalf("ledger observations wrong: states=%s entries=%d", states, entries)
 	}
 	// A terminal is final: a contradicting outcome stays refused, by the live path's own evidence
 	// rules for the effect row, and the ledger keeps the recorded terminal.
-	if _, err := submitFact(t, store, scene, "progress-conflict", Object{"epoch": 1, "kind": "effect", "effectId": scene.effect, "state": "failed", "externalId": "sub-123", "result": Object{"error": "substrate said no"}}); err == nil {
-		t.Fatal("contradicting terminal accepted")
-	}
+	_, err = submitFact(t, store, scene, "progress-conflict", Object{"epoch": 1, "kind": "effect", "effectId": scene.effect, "state": "failed", "externalId": "sub-123", "result": Object{"error": "substrate said no"}})
+	assertResidualFactConflict(t, err)
+	assertProvisioningResponsibilityUnchanged(t, store, scene)
 	phase, status, reason, _, _, _ := runFields(t, store, scene.run)
 	if phase.String != "done" || status != "failed" || reason != "workspace_unavailable" {
 		t.Fatalf("progression resurrected the run: %s/%s/%s", phase.String, status, reason)
@@ -341,7 +388,8 @@ func TestProvisioningFactSubmissionBindsItsTarget(t *testing.T) {
 
 	// The ledger still holds exactly the two facts receipted for their original targets.
 	var facts int
-	if err := store.Pool.QueryRow(`SELECT count(*) FROM jsonb_object_keys((SELECT responsibility->'lateFacts' FROM agent_run_residuals WHERE run_id=$1))`, scene.run).Scan(&facts); err != nil || facts != 2 {
+	if err := store.Pool.QueryRow(`SELECT jsonb_array_length(reclaim_evidence) FROM agent_run_residuals WHERE run_id=$1`, scene.run).Scan(&facts); err != nil || facts != 2 {
 		t.Fatalf("ledger receipts wrong: count=%d err=%v", facts, err)
 	}
+	assertProvisioningResponsibilityUnchanged(t, store, scene)
 }

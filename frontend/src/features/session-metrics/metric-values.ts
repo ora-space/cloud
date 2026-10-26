@@ -37,6 +37,30 @@ export function metricNumber(value: number | null | undefined): string {
   return known === null ? '未知' : known.toLocaleString('zh-CN', { maximumFractionDigits: 1 })
 }
 
+/** Formats gateway-observed output speed after first output, never model-internal decode timing. */
+export function metricDecodeRate(attempt: SessionModelAttempt): string {
+  if (
+    !attempt.streamed ||
+    attempt.outcome !== 'succeeded' ||
+    !attempt.terminalObserved ||
+    !attempt.finishedAt ||
+    attempt.usage.availability !== 'complete'
+  ) {
+    return '未知'
+  }
+  const output = knownValue(attempt.usage.outputTokens)
+  const duration = knownValue(attempt.durationMs)
+  const firstOutput = knownValue(attempt.firstOutputMs)
+  if (output === null || duration === null || firstOutput === null) return '未知'
+  if (![output, duration, firstOutput].every(Number.isSafeInteger) || duration <= firstOutput) {
+    return '未知'
+  }
+  const rate = (output * 1000) / (duration - firstOutput)
+  // A positive observation must not round down to a measured zero.
+  if (rate > 0 && rate < 0.1) return '< 0.1'
+  return metricNumber(rate)
+}
+
 /** Formats measured milliseconds, including a real zero and subsecond first output. */
 export function metricDuration(value: number | null | undefined): string {
   const known = knownValue(value)

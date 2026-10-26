@@ -1,6 +1,7 @@
 import type { SessionModelAttempt } from '@/api/generated.schemas'
 import { Badge } from '@/components/ui/badge'
 import {
+  metricDecodeRate,
   metricDuration,
   metricNumber,
   metricTime,
@@ -64,6 +65,11 @@ export function RequestTable({
   return (
     <section aria-label="模型请求明细" className="space-y-3">
       <h3 className="text-sm font-medium">请求明细 · 当前页 {attempts.length} 条</h3>
+      <p className="text-xs text-muted-foreground">
+        平均 Decode 速率（估算）= 输出 Token ÷（请求时长 − 首次有效输出耗时），单位 Token/s。
+        仅统计成功结束且用量完整的流式请求；非流式、观测不完整、数据无效或时间差不为正时显示“未知”。
+        网关观测包含网络与协议收尾耗时，不代表模型内部纯 Decode 性能。
+      </p>
       <div className="overflow-x-auto rounded-xl border">
         <table className="w-full min-w-[1200px] text-left text-xs">
           <caption className="sr-only">
@@ -76,6 +82,7 @@ export function RequestTable({
                 '状态与口径',
                 '请求时长',
                 '首次有效输出',
+                '平均 Decode 速率（Token/s，估算）',
                 ...usageFields.map((field) => field.label),
               ].map((label) => (
                 <th key={label} className="p-3 font-medium">
@@ -95,6 +102,7 @@ export function RequestTable({
                 </td>
                 <td className="p-3 tabular-nums">{metricDuration(attempt.durationMs)}</td>
                 <td className="p-3 tabular-nums">{metricDuration(attempt.firstOutputMs)}</td>
+                <td className="p-3 tabular-nums">{metricDecodeRate(attempt)}</td>
                 {usageFields.map((field) => (
                   <td key={field.key} className="p-3 tabular-nums">
                     {metricNumber(attempt.usage[field.key])}
