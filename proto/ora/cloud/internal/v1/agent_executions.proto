@@ -220,6 +220,20 @@ message ScheduledArtifactManifest {
   bool walk_truncated = 4;
 }
 
+// Complete registered attempt inventory, frozen only after every writer stopped.
+message WorkflowHistoryInput {
+  string workflow_run_id = 1;
+  repeated WorkflowSessionAttempt sessions = 2;
+}
+
+message WorkflowSessionAttempt {
+  uint32 execution_order = 1;
+  string node_id = 2;
+  uint32 attempt = 3;
+  string execution_id = 4;
+  string history_key = 5;
+}
+
 message DeliverRevisionSpec {
   reserved 5;
   reserved "bundle_key";
@@ -243,6 +257,9 @@ message DeliverRevisionSpec {
   // The run Workspace's branch, from its clone input. The Node fast-forwards it to the final commit
   // after the delivery ref is pushed; failing to do so never fails the delivery.
   string workspace_ref = 10;
+  // Explicit whole-workflow variant: session_execution_id and prior_revision must be absent.
+  // history_key stores a versioned manifest, not a session JSONL.
+  WorkflowHistoryInput workflow = 11;
 }
 
 // An object the Node uploaded, as the Node measured it; Cloud verifies it before registering.
