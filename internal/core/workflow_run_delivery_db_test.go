@@ -90,8 +90,18 @@ func TestWorkflowDeliveryRegistersOneRealOwnerBeforeRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := &ControlRequest{Body: Object{"operationId": scene.run, "executionId": execution, "result": result, "sequence": int64(1), "event": "whole-run-terminal"}, verification: &revisionVerification{input: jsonText(input), valid: true}}
+	start := make(chan struct{})
+	errors := make(chan error, 2)
 	for range 2 {
-		if _, err := s.transact(t.Context(), func(tx *transaction) Object { return nodeExecutionResult(tx, request, true) }); err != nil {
+		go func() {
+			<-start
+			_, err := s.transact(t.Context(), func(tx *transaction) Object { return nodeExecutionResult(tx, request, true) })
+			errors <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errors; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -121,6 +131,46 @@ func TestWorkflowDeliveryRegistersOneRealOwnerBeforeRelease(t *testing.T) {
 	}
 	if _, err := s.Pool.Exec("UPDATE revisions SET run_id=$2 WHERE id=$1", revision.S("id"), uuid.NewString()); err == nil {
 		t.Fatal("two-owner Revision passed PostgreSQL")
+	}
+}
+
+// Verification, result, receipt, Revision and business settlement are one database transaction.
+// A failed final write must leave the original execution replayable without partial registration.
+func TestWorkflowDeliverySettlementRollbackLeavesNoReceiptOrRevision(t *testing.T) {
+	s := dispatcherDB(t)
+	scene := seedWorkflowDelivery(t, s)
+	input := scene.work.O("input")
+	execution := "rollback-delivery"
+	if _, err := s.transact(t.Context(), func(tx *transaction) Object {
+		return nodeDispatch(tx, &ControlRequest{Body: Object{"operationId": scene.run, "executionId": execution, "nodeId": scene.node, "input": input, "epoch": int64(1)}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Pool.Exec(`CREATE FUNCTION reject_workflow_save() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN IF NEW.delivery_state='saved' THEN RAISE EXCEPTION 'injected save failure'; END IF; RETURN NEW; END$$;
+ CREATE TRIGGER reject_workflow_save BEFORE UPDATE ON workflow_runs FOR EACH ROW EXECUTE FUNCTION reject_workflow_save()`); err != nil {
+		t.Fatal(err)
+	}
+	result := Object{"outcome": "revision_delivered", "node": Object{"nodeId": scene.node}, "baseCommit": input.S("baseCommit"), "finalCommit": strings.Repeat("c", 40), "revisionRef": input.S("revisionRef"), "history": Object{"key": input.S("historyKey"), "size": int64(100), "sha256": strings.Repeat("a", 64)}}
+	request := &ControlRequest{Body: Object{"operationId": scene.run, "executionId": execution, "result": result, "sequence": int64(1), "event": "rollback-event"}, verification: &revisionVerification{input: jsonText(input), valid: true}}
+	if _, err := s.transact(t.Context(), func(tx *transaction) Object { return nodeExecutionResult(tx, request, true) }); err == nil {
+		t.Fatal("injected settlement failure committed")
+	}
+	var receipts, revisions, verifications int
+	var unsettled bool
+	if err := s.Pool.QueryRow("SELECT result IS NULL,(SELECT count(*) FROM node_event_receipts WHERE execution_id=$1),(SELECT count(*) FROM revisions WHERE workflow_run_id=$2),(SELECT count(*) FROM revision_verifications WHERE execution_id=$1) FROM node_executions WHERE execution_id=$1", execution, scene.run).Scan(&unsettled, &receipts, &revisions, &verifications); err != nil {
+		t.Fatal(err)
+	}
+	if !unsettled || receipts != 0 || revisions != 0 || verifications != 0 {
+		t.Fatalf("partial commit: unsettled=%v receipt=%d revisions=%d verifications=%d", unsettled, receipts, revisions, verifications)
+	}
+	if n := countWorkflowDeleteOperations(t, s, scene.run); n != 0 {
+		t.Fatal("failed transaction declared deletion")
+	}
+	if _, err := s.Pool.Exec("DROP TRIGGER reject_workflow_save ON workflow_runs; DROP FUNCTION reject_workflow_save()"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.transact(t.Context(), func(tx *transaction) Object { return nodeExecutionResult(tx, request, true) }); err != nil {
+		t.Fatal(err)
 	}
 }
 
