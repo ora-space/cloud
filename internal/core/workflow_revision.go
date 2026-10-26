@@ -22,7 +22,7 @@ func workflowDeliveryIdentity(t *transaction, e Object) Object {
 func liveWorkflowDelivery(t *transaction, e Object) {
 	w := workflowDeliveryIdentity(t, e)
 	require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND delivery_state='delivering' AND status IN ('succeeded','failed','cancelled') AND deleted_at IS NULL", e.S("operationId")) != nil, 409, "dispatch_conflict")
-	require(w["deletedAt"] == nil && w.S("observedState") == "ready" && w.B("admissionOpen"), 409, "dispatch_conflict")
+	require(w["deletedAt"] == nil && w.S("desiredState") == "running" && (w.S("observedState") == "ready" || w.S("observedState") == "unavailable"), 409, "dispatch_conflict")
 	node := currentNode(t, w.S("id"))
 	require(node.S("nodeId") == e.S("nodeId"), 409, "dispatch_conflict")
 	c := runtimeControl(t, w.S("id"))
