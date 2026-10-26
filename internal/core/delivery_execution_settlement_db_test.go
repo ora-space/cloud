@@ -167,8 +167,9 @@ func TestNonAcceptanceContradictoryTerminalIsAuditedWithoutACK(t *testing.T) {
 	if _, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims, Body: Object{"epoch": 1, "proof": proof}}); err != nil {
 		t.Fatal(err)
 	}
+	submission := uuid.NewString()
 	for range 2 {
-		_, err := store.Control(t.Context(), &ControlRequest{Action: "clone_takeover", Service: scene.claims, Body: Object{
+		_, err := store.Control(t.Context(), &ControlRequest{Action: "clone_takeover", Service: scene.claims, SubmissionID: submission, Body: Object{
 			"epoch": 1, "operationId": scene.run, "executionId": execution, "sequence": 1, "event": "real-terminal",
 			"result": Object{"node": Object{"nodeId": scene.node}, "outcome": "scheduled_artifacts_failed", "reason": "interrupted"},
 		}})
@@ -183,6 +184,37 @@ func TestNonAcceptanceContradictoryTerminalIsAuditedWithoutACK(t *testing.T) {
 	}
 	if conflicts != 1 || receipts != 0 {
 		t.Fatalf("conflicts=%d receipts=%d; want 1/0", conflicts, receipts)
+	}
+}
+
+// A different absence proof cannot become successful merely by replaying a cached submission.
+func TestConflictingNonAcceptanceProofSubmissionReplayStaysRejected(t *testing.T) {
+	store, scene, execution := expiredDeliveryExecution(t)
+	proof := originalProof(t, store, scene)
+	if _, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims,
+		Body: Object{"epoch": 1, "proof": proof}}); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := mustObject(t, []byte(jsonText(proof)))
+	conflicting["proofId"] = uuid.NewString()
+	submission := uuid.NewString()
+	for range 2 {
+		if _, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims,
+			SubmissionID: submission, Body: Object{"epoch": 1, "proof": conflicting}}); err == nil {
+			t.Fatal("conflicting proof submission replay returned success")
+		}
+	}
+	var canonical []byte
+	if err := store.Pool.QueryRow("SELECT non_acceptance_proof FROM node_executions WHERE execution_id=$1", execution).Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	if jsonText(mustObject(t, canonical)) != jsonText(proof) {
+		t.Fatal("conflicting proof replaced canonical evidence")
+	}
+	if err := store.view(t.Context(), func(tx *transaction) {
+		requireNoResidualConflict(tx, proof.O("fence").O("origin").O("binding").S("workspaceId"))
+	}); err == nil {
+		t.Fatal("contradictory proof was treated as idle")
 	}
 }
 
