@@ -62,6 +62,9 @@ message WorkspaceListing {
   string issue_run_id = 5;
   // As of when the session work item was released.
   string run_status = 6;
+  string workflow_run_id = 7;
+  // The name frozen on the WorkflowRun, retained independently of the live workflow document.
+  string workflow_name = 8;
 }
 
 message AgentSessionSpec {

@@ -770,6 +770,9 @@ type WorkspaceListing struct {
 	IssueRunId string `protobuf:"bytes,5,opt,name=issue_run_id,json=issueRunId,proto3" json:"issue_run_id,omitempty"`
 	// As of when the session work item was released.
 	RunStatus     string `protobuf:"bytes,6,opt,name=run_status,json=runStatus,proto3" json:"run_status,omitempty"`
+	WorkflowRunId string `protobuf:"bytes,7,opt,name=workflow_run_id,json=workflowRunId,proto3" json:"workflow_run_id,omitempty"`
+	// The name frozen on the WorkflowRun, retained independently of the live workflow document.
+	WorkflowName  string `protobuf:"bytes,8,opt,name=workflow_name,json=workflowName,proto3" json:"workflow_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -842,6 +845,20 @@ func (x *WorkspaceListing) GetIssueRunId() string {
 func (x *WorkspaceListing) GetRunStatus() string {
 	if x != nil {
 		return x.RunStatus
+	}
+	return ""
+}
+
+func (x *WorkspaceListing) GetWorkflowRunId() string {
+	if x != nil {
+		return x.WorkflowRunId
+	}
+	return ""
+}
+
+func (x *WorkspaceListing) GetWorkflowName() string {
+	if x != nil {
+		return x.WorkflowName
 	}
 	return ""
 }
@@ -2252,7 +2269,7 @@ const file_ora_cloud_internal_v1_agent_executions_proto_rawDesc = "" +
 	"\x12git_repository_url\x18\x04 \x01(\tR\x10gitRepositoryUrl\x12!\n" +
 	"\fdelivery_ref\x18\x05 \x01(\tR\vdeliveryRef\x12\x1f\n" +
 	"\vbase_commit\x18\x06 \x01(\tR\n" +
-	"baseCommitJ\x04\b\x03\x10\x04R\x06bundle\"\xc6\x01\n" +
+	"baseCommitJ\x04\b\x03\x10\x04R\x06bundle\"\x93\x02\n" +
 	"\x10WorkspaceListing\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x19\n" +
@@ -2262,7 +2279,9 @@ const file_ora_cloud_internal_v1_agent_executions_proto_rawDesc = "" +
 	"\fissue_run_id\x18\x05 \x01(\tR\n" +
 	"issueRunId\x12\x1d\n" +
 	"\n" +
-	"run_status\x18\x06 \x01(\tR\trunStatus\"\xa3\x05\n" +
+	"run_status\x18\x06 \x01(\tR\trunStatus\x12&\n" +
+	"\x0fworkflow_run_id\x18\a \x01(\tR\rworkflowRunId\x12#\n" +
+	"\rworkflow_name\x18\b \x01(\tR\fworkflowName\"\xa3\x05\n" +
 	"\x10AgentSessionSpec\x12&\n" +
 	"\x0fagent_plugin_id\x18\x01 \x01(\tR\ragentPluginId\x120\n" +
 	"\x14agent_plugin_version\x18\x02 \x01(\tR\x12agentPluginVersion\x122\n" +
