@@ -21,7 +21,7 @@ func prepareWorkflowRunDelivery(t *transaction, runID string) bool {
 	// Undispatched sessions can no longer start. Registered attempts remain evidence forever.
 	t.exec("DELETE FROM execution_work WHERE workflow_run_id=$1 AND kind='agent_session' AND execution_id IS NULL", runID)
 	w := t.one("SELECT * FROM workspaces WHERE workflow_run_id=$1", runID)
-	sessions := t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind='agent_session' ORDER BY created_at,execution_id", runID)
+	sessions := t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind='agent_session' ORDER BY workflow_execution_order NULLS LAST,execution_id", runID)
 	if len(sessions) == 0 {
 		t.exec("UPDATE workflow_runs SET delivery_state='not_required',delivery_settled_at=now(),version=version+1,updated_at=now() WHERE id=$1 AND delivery_state='pending'", runID)
 		return true
@@ -38,6 +38,10 @@ func prepareWorkflowRunDelivery(t *transaction, runID string) bool {
 		return false
 	}
 	for _, session := range sessions {
+		if session["workflowExecutionOrder"] == nil {
+			failWorkflowDelivery(t, runID, "history_unavailable")
+			return false
+		}
 		if len(session.O("result")) == 0 || session["terminatedByForceStopId"] != nil {
 			// A graph deadline is not process-stop evidence. Keep asking the original attempt to end.
 			if len(session.O("result")) == 0 && session["terminatedByForceStopId"] == nil && workflowSessionTarget(t, w.S("id")) != nil && t.one("SELECT id FROM thread_commands WHERE workflow_run_id=$1 AND workflow_node_id=$2 AND workflow_node_attempt=$3 AND kind='end_session'", runID, session.S("workflowNodeId"), session.N("workflowNodeAttempt")) == nil {
@@ -82,7 +86,7 @@ func enqueueWorkflowDelivery(t *transaction, runID string, target Object, availa
 	require(run != nil, 409, "dispatch_conflict")
 	w := t.one("SELECT * FROM workspaces WHERE workflow_run_id=$1 AND deleted_at IS NULL", runID)
 	require(w != nil && w.S("id") == target.S("workspaceId") && t.store.GitServer != nil, 409, "dispatch_conflict")
-	sessions := t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind='agent_session' ORDER BY created_at,execution_id", runID)
+	sessions := t.list("SELECT * FROM node_executions WHERE operation_id=$1 AND kind='agent_session' ORDER BY workflow_execution_order NULLS LAST,execution_id", runID)
 	require(len(sessions) > 0, 409, "dispatch_conflict")
 	checkoutID := sessions[0].O("input").S("checkoutExecutionId")
 	checkout := t.one("SELECT input FROM clone_executions WHERE execution_id=$1 AND workspace_id=$2 AND result->>'outcome'='clone_ready'", checkoutID, w.S("id"))
@@ -90,9 +94,10 @@ func enqueueWorkflowDelivery(t *transaction, runID string, target Object, availa
 	id := newID()
 	prefix := "revisions/" + run.S("tenantId") + "/" + runID + "/" + id + "/"
 	attempts := make([]Object, 0, len(sessions))
-	for order, session := range sessions {
+	for _, session := range sessions {
+		require(session["workflowExecutionOrder"] != nil, 409, "dispatch_conflict")
 		require(session.S("workspaceId") == w.S("id") && session.S("nodeId") == target.S("nodeId") && session.O("input").S("checkoutExecutionId") == checkoutID && session.O("result").S("outcome") == agentSessionEndedOutcome && session["terminatedByForceStopId"] == nil, 409, "dispatch_conflict")
-		attempts = append(attempts, Object{"executionOrder": int64(order), "nodeId": session.S("workflowNodeId"), "attempt": session.N("workflowNodeAttempt"), "executionId": session.S("executionId"), "historyKey": prefix + session.S("workId") + ".jsonl"})
+		attempts = append(attempts, Object{"executionOrder": session.N("workflowExecutionOrder"), "nodeId": session.S("workflowNodeId"), "attempt": session.N("workflowNodeAttempt"), "executionId": session.S("executionId"), "historyKey": prefix + session.S("workId") + ".jsonl"})
 	}
 	input := Object{"kind": "deliver_revision", "sessionExecutionId": "", "checkoutExecutionId": checkoutID, "baseCommit": w.S("baseCommitId"), "revisionRef": "refs/ora/revisions/" + runID, "historyKey": prefix + "manifest.json", "gitRepositoryUrl": t.store.GitServer.gitRepositoryURL(w.S("tenantId"), w.S("projectId")), "deliveryRef": GitDeliveryRefPrefix + id, "workspaceRef": checkout.O("input").S("workspaceRef"), "workflow": Object{"workflowRunId": runID, "sessions": attempts}}
 	if available.IsZero() {
@@ -172,7 +177,10 @@ func (s *Store) advanceWorkflowDeliveries(ctx context.Context) error {
 
 // scanWorkflowDeliveries closes its cursor before any per-run transaction begins.
 func (s *Store) scanWorkflowDeliveries(ctx context.Context) ([]string, error) {
-	rows, err := s.Pool.QueryContext(ctx, "SELECT id FROM workflow_runs WHERE deleted_at IS NULL AND status IN ('succeeded','failed','cancelled') AND delivery_state IN ('pending','delivering') ORDER BY updated_at,id LIMIT $1", workflowAdvanceBatchSize)
+	rows, err := s.Pool.QueryContext(ctx, `SELECT r.id FROM workflow_runs r WHERE r.deleted_at IS NULL
+        AND r.status IN ('succeeded','failed','cancelled') AND r.delivery_state IN ('pending','delivering')
+        AND NOT EXISTS(SELECT 1 FROM workspaces w WHERE w.workflow_run_id=r.id AND w.deleted_at IS NOT NULL)
+        ORDER BY r.updated_at,r.id LIMIT $1`, workflowAdvanceBatchSize)
 	if err != nil {
 		return nil, err
 	}

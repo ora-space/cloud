@@ -47,6 +47,10 @@ func seedWorkflowDelivery(t *testing.T, s *Store) workflowDeliveryScene {
 		t.Fatal("workflow changed its own checkout or restored a task predecessor")
 	}
 	second := dispatchSession(t, s, run, "a2", node, secondSpec)
+	// A backwards wall-clock jump cannot reorder the frozen node inventory.
+	if _, err := s.Pool.Exec("UPDATE node_executions SET created_at=now()-interval '1 day' WHERE execution_id=$1", second); err != nil {
+		t.Fatal(err)
+	}
 	reportSessionEnd(t, s, run, second, node, "user_ended")
 	for range 3 {
 		if err := s.AdvanceWorkflowRunsOnce(t.Context()); err != nil {
