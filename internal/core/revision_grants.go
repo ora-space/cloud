@@ -14,7 +14,7 @@ import (
 func revisionGrants(t *transaction, executionID string, checksums Object) Object {
 	e := t.one("SELECT * FROM node_executions WHERE execution_id=$1 AND kind='deliver_revision'", executionID)
 	require(e != nil, 404, "not_found")
-	require(len(e.O("result")) == 0 && e["terminatedByForceStopId"] == nil, 409, "dispatch_conflict")
+	require(len(e.O("result")) == 0 && e["terminatedByForceStopId"] == nil && e["businessSettledAt"] == nil && e["nonAcceptanceProof"] == nil, 409, "dispatch_conflict")
 	liveDelivery(t, e)
 	require(t.objectStore != nil, 409, "object_store_unconfigured")
 	key := e.O("input").S("historyKey")

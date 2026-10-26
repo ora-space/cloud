@@ -198,6 +198,7 @@ func residualFactTerminal(fact Object) bool {
 
 // requireNoResidualConflict fences future mutations even after a responsibility was cleared.
 func requireNoResidualConflict(t *transaction, workspaceID string) {
+	require(!executionNonAcceptanceConflicted(t, workspaceID), 409, "execution_non_acceptance_conflict")
 	row := residualForWorkspace(t, workspaceID)
 	require(row == nil || row["reclaimConflictedAt"] == nil, 409, "residual_fact_conflict")
 }

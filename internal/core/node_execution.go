@@ -1,7 +1,9 @@
 package core
 
 // nodeExecutionColumns is the Controller-facing projection of node_executions: every column of the
-// table except workflow_node_id and workflow_node_attempt. Those columns are Cloud-internal routing —
+// table except Cloud-internal routing, administrative settlement and non-acceptance evidence.
+// The latter facts have their own RPC and are never projected into an execution result.
+// workflow_node_id and workflow_node_attempt are Cloud-internal routing —
 // which graph node a session ran for, and which attempt of it — and no Controller contract has a field
 // for either: the proto ExecutionRecord declares none, and the JSON binding's NodeExecution schema is
 // closed, so a `SELECT *` that carried the column failed the response contract the moment migration
@@ -60,7 +62,7 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE run_id=$1", runID) == nil, 409, "dispatch_conflict")
 	// The work item names its owner — IssueRun or WorkflowRun (D8); operation_id is that run's id
 	// either way, so the ownership check re-reads whichever column the row carries.
-	work := t.one("SELECT * FROM execution_work WHERE (run_id=$1 OR workflow_run_id=$1) AND execution_id IS NULL AND kind=$2", runID, input.S("kind"))
+	work := t.one("SELECT * FROM execution_work ew WHERE (run_id=$1 OR workflow_run_id=$1) AND execution_id IS NULL AND kind=$2 AND "+executionWorkEligible, runID, input.S("kind"))
 	require(work != nil, 409, "dispatch_conflict")
 	// A claim is only a snapshot. Recheck business eligibility under the same transaction lock as
 	// settlement so a pre-release claim cannot register a fresh session or delivery afterwards. Only
@@ -105,9 +107,13 @@ func dispatchRunExecution(t *transaction, r *ControlRequest, runID, execution, n
 		AND result IS NULL AND terminated_by_force_stop_id IS NULL`, runID, input.S("kind")) == nil, 409, "dispatch_conflict")
 	// The attempt is copied from the claimed work item, never from the wire: it is Cloud's routing
 	// identity for the execution (retry decision D4), and the Controller neither knows nor needs it.
-	t.exec(`INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch,workflow_node_id,workflow_node_attempt)
-		VALUES($1,$2,$3,$4,$5,$6,$1,$7,$8,NULLIF($9,''),$10)`,
-		execution, input.S("kind"), runID, work.S("id"), wid, node, jsonText(input), r.Body.N("epoch"), work.S("workflowNodeId"), work.N("workflowNodeAttempt"))
+	var origin any
+	if input.S("kind") == "deliver_revision" || input.S("kind") == "deliver_scheduled_artifacts" {
+		origin = jsonText(freezeExecutionOrigin(t, c, current, work, input, execution, r.Body.N("epoch")))
+	}
+	t.exec(`INSERT INTO node_executions(execution_id,kind,operation_id,work_id,workspace_id,node_id,node_operation_id,input,dispatched_epoch,workflow_node_id,workflow_node_attempt,dispatch_identity)
+		VALUES($1,$2,$3,$4,$5,$6,$1,$7,$8,NULLIF($9,''),$10,$11)`,
+		execution, input.S("kind"), runID, work.S("id"), wid, node, jsonText(input), r.Body.N("epoch"), work.S("workflowNodeId"), work.N("workflowNodeAttempt"), origin)
 	t.exec("UPDATE execution_work SET execution_id=$2 WHERE id=$1", work.S("id"), execution)
 	return t.one("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE execution_id=$1", execution)
 }
@@ -128,6 +134,10 @@ func nodeExecutionResult(t *transaction, r *ControlRequest, withReceipt bool) Ob
 	require(e != nil, 404, "not_found")
 	require(result.O("node").S("nodeId") == e.S("nodeId"), 409, "result_conflict")
 	validateNodeResult(e, result)
+	if e["nonAcceptanceProof"] != nil {
+		recordNonAcceptanceConflict(t, execution, Object{"result": result, "sequence": r.Body.N("sequence"), "event": r.Body.S("event")})
+		return e
+	}
 	if withReceipt && !acceptResidualReceipt(t, e, r.Body.N("sequence"), r.Body.S("event"), "node_event_receipts") {
 		return e
 	}
@@ -263,10 +273,10 @@ func pendingExecutions(t *transaction, node string) Object {
 	var clones, nodes []Object
 	if node == "" {
 		clones = t.list("SELECT * FROM clone_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL ORDER BY created_at,execution_id")
-		nodes = t.list("SELECT " + nodeExecutionColumns + " FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL ORDER BY created_at,execution_id")
+		nodes = t.list("SELECT " + nodeExecutionColumns + " FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND non_acceptance_proof IS NULL ORDER BY created_at,execution_id")
 	} else {
 		clones = t.list("SELECT * FROM clone_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
-		nodes = t.list("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
+		nodes = t.list("SELECT "+nodeExecutionColumns+" FROM node_executions WHERE result IS NULL AND terminated_by_force_stop_id IS NULL AND non_acceptance_proof IS NULL AND node_id=$1 ORDER BY created_at,execution_id", node)
 	}
 	return Object{"executions": append(clones, nodes...)}
 }

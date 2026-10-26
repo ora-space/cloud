@@ -22,7 +22,7 @@ var errScheduledDeclarationUnavailable = errors.New("scheduled artifact declarat
 func scheduledArtifactGrants(t *transaction, executionID string, requested []Object) Object {
 	e := t.one("SELECT * FROM node_executions WHERE execution_id=$1 AND kind='deliver_scheduled_artifacts'", executionID)
 	require(e != nil, 404, "not_found")
-	require(len(e.O("result")) == 0 && e["terminatedByForceStopId"] == nil, 409, "dispatch_conflict")
+	require(len(e.O("result")) == 0 && e["terminatedByForceStopId"] == nil && e["businessSettledAt"] == nil && e["nonAcceptanceProof"] == nil, 409, "dispatch_conflict")
 	require(t.objectStore != nil, 409, "object_store_unconfigured")
 	delivery := t.one("SELECT * FROM scheduled_run_artifact_deliveries WHERE issue_run_id=$1", e.S("operationId"))
 	require(delivery != nil && delivery.S("state") == "delivering", 409, "dispatch_conflict")

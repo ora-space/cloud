@@ -160,7 +160,7 @@ func claimWorkItem(t *transaction) Object {
 		FROM execution_work ew
 		WHERE execution_id IS NULL AND available_at<=clock_timestamp()
 		  AND NOT EXISTS(SELECT 1 FROM agent_run_residuals ar WHERE ar.run_id=ew.run_id)
-		  AND (ew.run_id IS NULL OR ew.run_id IN (` + executionWorkLiveRuns + `))
+		  AND ` + executionWorkEligible + `
 		ORDER BY created_at,id LIMIT 1`)
 	if work == nil {
 		return Object{"work": nil}

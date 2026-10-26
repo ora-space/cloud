@@ -261,13 +261,14 @@ type transaction struct {
 	onRunWorkspaceDeleted func(context.Context, *sql.Tx, string) error
 	onDeliverySettled     func(context.Context, *sql.Tx, string, string, Object) error
 	// onScheduledArtifactsSettled receives the verified artifact delivery of one scheduled run.
-	onScheduledArtifactsSettled func(context.Context, *sql.Tx, string, string, Object) error
-	queued                      []string
-	workSignals                 []string
-	commandSignals              []string
-	events                      []SpaceEvent
-	residualFactConflict        bool
-	residualFactSource          Object
+	onScheduledArtifactsSettled    func(context.Context, *sql.Tx, string, string, Object) error
+	queued                         []string
+	workSignals                    []string
+	commandSignals                 []string
+	events                         []SpaceEvent
+	residualFactConflict           bool
+	executionNonAcceptanceConflict bool
+	residualFactSource             Object
 }
 
 func (t *transaction) exec(q string, args ...any) {

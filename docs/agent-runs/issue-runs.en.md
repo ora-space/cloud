@@ -174,6 +174,26 @@ projections:
   and a safe error code; no Workspace, Node, repository URL, credential or raw error is exposed.
 - `revision`: metadata of the registered Revision (see [Revisions](revisions.en.md#public-reads)).
 
+## Delivery business settlement and non-acceptance proof
+
+See the [delivery settlement and non-acceptance ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-run/20261026-delivery-execution-settlement-and-non-acceptance.md).
+Cloud records an administrative delivery settlement independently of the Node result. The same
+deadline transaction closes fresh work registration, execution permits and upload grants without
+manufacturing a result, sequence, receipt or Revision. An artifact deadline only closes artifact
+upload; it does not stop a still-valid Revision delivery, and unknown responsibility remains busy.
+
+The Controller requests original-identity proof through a separate RPC. The Node must atomically
+verify absence from its acceptance ledger and persist an irreversible fence for that execution.
+Known acceptance, completed history and an empty replacement ledger cannot supply this proof.
+Only a committed Cloud takeover removes the corresponding responsibility; lost responses recover
+from explicit committed proof facts, not absence from a pending list. Global quiesce checks remain.
+
+Historical failed Runs retain their conclusions. Real late terminals use original fact takeover;
+contradictory proof/terminal facts are audited and cannot authorize ACK or idle. Legacy migration
+adds provenance without inventing the original Node instance. Missing original evidence or an
+unreachable Node retains unknown responsibility for the existing two-stage D8/controlled path.
+Protocol, schema and migration upgrades are coordinated; no extra deletion authority is granted.
+
 ## Related decisions
 
 - [An @Agent IssueRun on an Issue is orchestrated by Cloud](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-run/0-agent-run-in-disposable-isolated-workspace.md)

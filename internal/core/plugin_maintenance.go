@@ -19,6 +19,8 @@ func schedulePluginMaintenance(t *transaction) {
 		c := runtimeControl(t, w.S("id"))
 		reason := ""
 		switch {
+		case executionNonAcceptanceConflicted(t, w.S("id")):
+			reason = "waiting_idle"
 		case row.S("requestedByUserId") == "":
 			reason = "legacy_selection_unverified"
 		case w.S("observedState") == "stopped":

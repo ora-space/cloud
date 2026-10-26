@@ -546,6 +546,373 @@ func (x *GetExecutionPermitResponse) GetBinding() *RuntimeBinding {
 	return nil
 }
 
+// Immutable original dispatch scope. input_json is the canonical frozen execution input, not a
+// permit or credential; replays must keep its exact bytes and the original work identity.
+type ExecutionOrigin struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Binding       *RuntimeBinding        `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	WorkId        string                 `protobuf:"bytes,2,opt,name=work_id,json=workId,proto3" json:"work_id,omitempty"`
+	InputJson     string                 `protobuf:"bytes,3,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionOrigin) Reset() {
+	*x = ExecutionOrigin{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionOrigin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionOrigin) ProtoMessage() {}
+
+func (x *ExecutionOrigin) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionOrigin.ProtoReflect.Descriptor instead.
+func (*ExecutionOrigin) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ExecutionOrigin) GetBinding() *RuntimeBinding {
+	if x != nil {
+		return x.Binding
+	}
+	return nil
+}
+
+func (x *ExecutionOrigin) GetWorkId() string {
+	if x != nil {
+		return x.WorkId
+	}
+	return ""
+}
+
+func (x *ExecutionOrigin) GetInputJson() string {
+	if x != nil {
+		return x.InputJson
+	}
+	return ""
+}
+
+type ExecutionFence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Authority     *RuntimeBinding        `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	Origin        *ExecutionOrigin       `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionFence) Reset() {
+	*x = ExecutionFence{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionFence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionFence) ProtoMessage() {}
+
+func (x *ExecutionFence) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionFence.ProtoReflect.Descriptor instead.
+func (*ExecutionFence) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ExecutionFence) GetAuthority() *RuntimeBinding {
+	if x != nil {
+		return x.Authority
+	}
+	return nil
+}
+
+func (x *ExecutionFence) GetOrigin() *ExecutionOrigin {
+	if x != nil {
+		return x.Origin
+	}
+	return nil
+}
+
+type ExecutionNonAcceptance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProofId       string                 `protobuf:"bytes,1,opt,name=proof_id,json=proofId,proto3" json:"proof_id,omitempty"`
+	Fence         *ExecutionFence        `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecutionNonAcceptance) Reset() {
+	*x = ExecutionNonAcceptance{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecutionNonAcceptance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecutionNonAcceptance) ProtoMessage() {}
+
+func (x *ExecutionNonAcceptance) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecutionNonAcceptance.ProtoReflect.Descriptor instead.
+func (*ExecutionNonAcceptance) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ExecutionNonAcceptance) GetProofId() string {
+	if x != nil {
+		return x.ProofId
+	}
+	return ""
+}
+
+func (x *ExecutionNonAcceptance) GetFence() *ExecutionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+type ListExecutionFencesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         int64                  `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListExecutionFencesRequest) Reset() {
+	*x = ListExecutionFencesRequest{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListExecutionFencesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListExecutionFencesRequest) ProtoMessage() {}
+
+func (x *ListExecutionFencesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListExecutionFencesRequest.ProtoReflect.Descriptor instead.
+func (*ListExecutionFencesRequest) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListExecutionFencesRequest) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ListExecutionFencesRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type ListExecutionFencesResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Fences []*ExecutionFence      `protobuf:"bytes,1,rep,name=fences,proto3" json:"fences,omitempty"`
+	// Explicit committed proof facts let a reconnect recover a lost successful write response.
+	CommittedExecutionIds []string `protobuf:"bytes,2,rep,name=committed_execution_ids,json=committedExecutionIds,proto3" json:"committed_execution_ids,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *ListExecutionFencesResponse) Reset() {
+	*x = ListExecutionFencesResponse{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListExecutionFencesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListExecutionFencesResponse) ProtoMessage() {}
+
+func (x *ListExecutionFencesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListExecutionFencesResponse.ProtoReflect.Descriptor instead.
+func (*ListExecutionFencesResponse) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ListExecutionFencesResponse) GetFences() []*ExecutionFence {
+	if x != nil {
+		return x.Fences
+	}
+	return nil
+}
+
+func (x *ListExecutionFencesResponse) GetCommittedExecutionIds() []string {
+	if x != nil {
+		return x.CommittedExecutionIds
+	}
+	return nil
+}
+
+type RecordExecutionNonAcceptanceRequest struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	SubmissionId  string                  `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
+	Epoch         int64                   `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Proof         *ExecutionNonAcceptance `protobuf:"bytes,3,opt,name=proof,proto3" json:"proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordExecutionNonAcceptanceRequest) Reset() {
+	*x = RecordExecutionNonAcceptanceRequest{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordExecutionNonAcceptanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordExecutionNonAcceptanceRequest) ProtoMessage() {}
+
+func (x *RecordExecutionNonAcceptanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordExecutionNonAcceptanceRequest.ProtoReflect.Descriptor instead.
+func (*RecordExecutionNonAcceptanceRequest) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RecordExecutionNonAcceptanceRequest) GetSubmissionId() string {
+	if x != nil {
+		return x.SubmissionId
+	}
+	return ""
+}
+
+func (x *RecordExecutionNonAcceptanceRequest) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *RecordExecutionNonAcceptanceRequest) GetProof() *ExecutionNonAcceptance {
+	if x != nil {
+		return x.Proof
+	}
+	return nil
+}
+
+type RecordExecutionNonAcceptanceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordExecutionNonAcceptanceResponse) Reset() {
+	*x = RecordExecutionNonAcceptanceResponse{}
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordExecutionNonAcceptanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordExecutionNonAcceptanceResponse) ProtoMessage() {}
+
+func (x *RecordExecutionNonAcceptanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordExecutionNonAcceptanceResponse.ProtoReflect.Descriptor instead.
+func (*RecordExecutionNonAcceptanceResponse) Descriptor() ([]byte, []int) {
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{13}
+}
+
 // Fresh authority for one persisted lifecycle effect. Never inferred from an old plan replay.
 type RuntimeEffectPermit struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -563,7 +930,7 @@ type RuntimeEffectPermit struct {
 
 func (x *RuntimeEffectPermit) Reset() {
 	*x = RuntimeEffectPermit{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -575,7 +942,7 @@ func (x *RuntimeEffectPermit) String() string {
 func (*RuntimeEffectPermit) ProtoMessage() {}
 
 func (x *RuntimeEffectPermit) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[7]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -588,7 +955,7 @@ func (x *RuntimeEffectPermit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeEffectPermit.ProtoReflect.Descriptor instead.
 func (*RuntimeEffectPermit) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{7}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RuntimeEffectPermit) GetTenantId() string {
@@ -658,7 +1025,7 @@ type GetEffectPermitRequest struct {
 
 func (x *GetEffectPermitRequest) Reset() {
 	*x = GetEffectPermitRequest{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -670,7 +1037,7 @@ func (x *GetEffectPermitRequest) String() string {
 func (*GetEffectPermitRequest) ProtoMessage() {}
 
 func (x *GetEffectPermitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[8]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -683,7 +1050,7 @@ func (x *GetEffectPermitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEffectPermitRequest.ProtoReflect.Descriptor instead.
 func (*GetEffectPermitRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{8}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetEffectPermitRequest) GetEpoch() int64 {
@@ -716,7 +1083,7 @@ type GetEffectPermitResponse struct {
 
 func (x *GetEffectPermitResponse) Reset() {
 	*x = GetEffectPermitResponse{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[9]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -728,7 +1095,7 @@ func (x *GetEffectPermitResponse) String() string {
 func (*GetEffectPermitResponse) ProtoMessage() {}
 
 func (x *GetEffectPermitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[9]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -741,7 +1108,7 @@ func (x *GetEffectPermitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEffectPermitResponse.ProtoReflect.Descriptor instead.
 func (*GetEffectPermitResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{9}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetEffectPermitResponse) GetPermit() *RuntimeEffectPermit {
@@ -763,7 +1130,7 @@ type RuntimeForceStopPlan struct {
 
 func (x *RuntimeForceStopPlan) Reset() {
 	*x = RuntimeForceStopPlan{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[10]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -775,7 +1142,7 @@ func (x *RuntimeForceStopPlan) String() string {
 func (*RuntimeForceStopPlan) ProtoMessage() {}
 
 func (x *RuntimeForceStopPlan) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[10]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -788,7 +1155,7 @@ func (x *RuntimeForceStopPlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeForceStopPlan.ProtoReflect.Descriptor instead.
 func (*RuntimeForceStopPlan) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{10}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RuntimeForceStopPlan) GetId() string {
@@ -828,7 +1195,7 @@ type ListForceStopsRequest struct {
 
 func (x *ListForceStopsRequest) Reset() {
 	*x = ListForceStopsRequest{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[11]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +1207,7 @@ func (x *ListForceStopsRequest) String() string {
 func (*ListForceStopsRequest) ProtoMessage() {}
 
 func (x *ListForceStopsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[11]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +1220,7 @@ func (x *ListForceStopsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListForceStopsRequest.ProtoReflect.Descriptor instead.
 func (*ListForceStopsRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{11}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ListForceStopsRequest) GetEpoch() int64 {
@@ -872,7 +1239,7 @@ type ListForceStopsResponse struct {
 
 func (x *ListForceStopsResponse) Reset() {
 	*x = ListForceStopsResponse{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[12]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -884,7 +1251,7 @@ func (x *ListForceStopsResponse) String() string {
 func (*ListForceStopsResponse) ProtoMessage() {}
 
 func (x *ListForceStopsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[12]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -897,7 +1264,7 @@ func (x *ListForceStopsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListForceStopsResponse.ProtoReflect.Descriptor instead.
 func (*ListForceStopsResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{12}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListForceStopsResponse) GetPlans() []*RuntimeForceStopPlan {
@@ -922,7 +1289,7 @@ type ConfirmForceStopRequest struct {
 
 func (x *ConfirmForceStopRequest) Reset() {
 	*x = ConfirmForceStopRequest{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[13]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -934,7 +1301,7 @@ func (x *ConfirmForceStopRequest) String() string {
 func (*ConfirmForceStopRequest) ProtoMessage() {}
 
 func (x *ConfirmForceStopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[13]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -947,7 +1314,7 @@ func (x *ConfirmForceStopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmForceStopRequest.ProtoReflect.Descriptor instead.
 func (*ConfirmForceStopRequest) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{13}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ConfirmForceStopRequest) GetSubmissionId() string {
@@ -1009,7 +1376,7 @@ type ConfirmForceStopResponse struct {
 
 func (x *ConfirmForceStopResponse) Reset() {
 	*x = ConfirmForceStopResponse{}
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[14]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1021,7 +1388,7 @@ func (x *ConfirmForceStopResponse) String() string {
 func (*ConfirmForceStopResponse) ProtoMessage() {}
 
 func (x *ConfirmForceStopResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[14]
+	mi := &file_ora_cloud_internal_v1_runtime_control_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1034,7 +1401,7 @@ func (x *ConfirmForceStopResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmForceStopResponse.ProtoReflect.Descriptor instead.
 func (*ConfirmForceStopResponse) Descriptor() ([]byte, []int) {
-	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{14}
+	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ConfirmForceStopResponse) GetVersion() int64 {
@@ -1100,7 +1467,29 @@ const file_ora_cloud_internal_v1_runtime_control_proto_rawDesc = "" +
 	"\rcontrol_epoch\x18\x04 \x01(\x03R\fcontrolEpoch\x12!\n" +
 	"\fexecution_id\x18\x05 \x01(\tR\vexecutionId\"]\n" +
 	"\x1aGetExecutionPermitResponse\x12?\n" +
-	"\abinding\x18\x01 \x01(\v2%.ora.cloud.internal.v1.RuntimeBindingR\abinding\"\xb9\x02\n" +
+	"\abinding\x18\x01 \x01(\v2%.ora.cloud.internal.v1.RuntimeBindingR\abinding\"\x8a\x01\n" +
+	"\x0fExecutionOrigin\x12?\n" +
+	"\abinding\x18\x01 \x01(\v2%.ora.cloud.internal.v1.RuntimeBindingR\abinding\x12\x17\n" +
+	"\awork_id\x18\x02 \x01(\tR\x06workId\x12\x1d\n" +
+	"\n" +
+	"input_json\x18\x03 \x01(\tR\tinputJson\"\x95\x01\n" +
+	"\x0eExecutionFence\x12C\n" +
+	"\tauthority\x18\x01 \x01(\v2%.ora.cloud.internal.v1.RuntimeBindingR\tauthority\x12>\n" +
+	"\x06origin\x18\x02 \x01(\v2&.ora.cloud.internal.v1.ExecutionOriginR\x06origin\"p\n" +
+	"\x16ExecutionNonAcceptance\x12\x19\n" +
+	"\bproof_id\x18\x01 \x01(\tR\aproofId\x12;\n" +
+	"\x05fence\x18\x02 \x01(\v2%.ora.cloud.internal.v1.ExecutionFenceR\x05fence\"K\n" +
+	"\x1aListExecutionFencesRequest\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x03R\x05epoch\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\"\x94\x01\n" +
+	"\x1bListExecutionFencesResponse\x12=\n" +
+	"\x06fences\x18\x01 \x03(\v2%.ora.cloud.internal.v1.ExecutionFenceR\x06fences\x126\n" +
+	"\x17committed_execution_ids\x18\x02 \x03(\tR\x15committedExecutionIds\"\xa5\x01\n" +
+	"#RecordExecutionNonAcceptanceRequest\x12#\n" +
+	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12\x14\n" +
+	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12C\n" +
+	"\x05proof\x18\x03 \x01(\v2-.ora.cloud.internal.v1.ExecutionNonAcceptanceR\x05proof\"&\n" +
+	"$RecordExecutionNonAcceptanceResponse\"\xb9\x02\n" +
 	"\x13RuntimeEffectPermit\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12!\n" +
 	"\fworkspace_id\x18\x02 \x01(\tR\vworkspaceId\x12\x1d\n" +
@@ -1139,11 +1528,13 @@ const file_ora_cloud_internal_v1_runtime_control_proto_rawDesc = "" +
 	"\x12late_ensure_fenced\x18\a \x01(\bR\x10lateEnsureFenced\"R\n" +
 	"\x18ConfirmForceStopResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12\x1c\n" +
-	"\tcompleted\x18\x02 \x01(\bR\tcompleted2\xcc\x05\n" +
+	"\tcompleted\x18\x02 \x01(\bR\tcompleted2\xe4\a\n" +
 	"\x15RuntimeControlService\x12g\n" +
 	"\fListBindings\x12*.ora.cloud.internal.v1.ListBindingsRequest\x1a+.ora.cloud.internal.v1.ListBindingsResponse\x12y\n" +
 	"\x12AcknowledgeBinding\x120.ora.cloud.internal.v1.AcknowledgeBindingRequest\x1a1.ora.cloud.internal.v1.AcknowledgeBindingResponse\x12y\n" +
-	"\x12GetExecutionPermit\x120.ora.cloud.internal.v1.GetExecutionPermitRequest\x1a1.ora.cloud.internal.v1.GetExecutionPermitResponse\x12p\n" +
+	"\x12GetExecutionPermit\x120.ora.cloud.internal.v1.GetExecutionPermitRequest\x1a1.ora.cloud.internal.v1.GetExecutionPermitResponse\x12|\n" +
+	"\x13ListExecutionFences\x121.ora.cloud.internal.v1.ListExecutionFencesRequest\x1a2.ora.cloud.internal.v1.ListExecutionFencesResponse\x12\x97\x01\n" +
+	"\x1cRecordExecutionNonAcceptance\x12:.ora.cloud.internal.v1.RecordExecutionNonAcceptanceRequest\x1a;.ora.cloud.internal.v1.RecordExecutionNonAcceptanceResponse\x12p\n" +
 	"\x0fGetEffectPermit\x12-.ora.cloud.internal.v1.GetEffectPermitRequest\x1a..ora.cloud.internal.v1.GetEffectPermitResponse\x12m\n" +
 	"\x0eListForceStops\x12,.ora.cloud.internal.v1.ListForceStopsRequest\x1a-.ora.cloud.internal.v1.ListForceStopsResponse\x12s\n" +
 	"\x10ConfirmForceStop\x12..ora.cloud.internal.v1.ConfirmForceStopRequest\x1a/.ora.cloud.internal.v1.ConfirmForceStopResponseB\xe4\x01\n" +
@@ -1161,48 +1552,65 @@ func file_ora_cloud_internal_v1_runtime_control_proto_rawDescGZIP() []byte {
 	return file_ora_cloud_internal_v1_runtime_control_proto_rawDescData
 }
 
-var file_ora_cloud_internal_v1_runtime_control_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_ora_cloud_internal_v1_runtime_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_ora_cloud_internal_v1_runtime_control_proto_goTypes = []any{
-	(*RuntimeBinding)(nil),             // 0: ora.cloud.internal.v1.RuntimeBinding
-	(*ListBindingsRequest)(nil),        // 1: ora.cloud.internal.v1.ListBindingsRequest
-	(*ListBindingsResponse)(nil),       // 2: ora.cloud.internal.v1.ListBindingsResponse
-	(*AcknowledgeBindingRequest)(nil),  // 3: ora.cloud.internal.v1.AcknowledgeBindingRequest
-	(*AcknowledgeBindingResponse)(nil), // 4: ora.cloud.internal.v1.AcknowledgeBindingResponse
-	(*GetExecutionPermitRequest)(nil),  // 5: ora.cloud.internal.v1.GetExecutionPermitRequest
-	(*GetExecutionPermitResponse)(nil), // 6: ora.cloud.internal.v1.GetExecutionPermitResponse
-	(*RuntimeEffectPermit)(nil),        // 7: ora.cloud.internal.v1.RuntimeEffectPermit
-	(*GetEffectPermitRequest)(nil),     // 8: ora.cloud.internal.v1.GetEffectPermitRequest
-	(*GetEffectPermitResponse)(nil),    // 9: ora.cloud.internal.v1.GetEffectPermitResponse
-	(*RuntimeForceStopPlan)(nil),       // 10: ora.cloud.internal.v1.RuntimeForceStopPlan
-	(*ListForceStopsRequest)(nil),      // 11: ora.cloud.internal.v1.ListForceStopsRequest
-	(*ListForceStopsResponse)(nil),     // 12: ora.cloud.internal.v1.ListForceStopsResponse
-	(*ConfirmForceStopRequest)(nil),    // 13: ora.cloud.internal.v1.ConfirmForceStopRequest
-	(*ConfirmForceStopResponse)(nil),   // 14: ora.cloud.internal.v1.ConfirmForceStopResponse
-	(*Effect)(nil),                     // 15: ora.cloud.internal.v1.Effect
+	(*RuntimeBinding)(nil),                       // 0: ora.cloud.internal.v1.RuntimeBinding
+	(*ListBindingsRequest)(nil),                  // 1: ora.cloud.internal.v1.ListBindingsRequest
+	(*ListBindingsResponse)(nil),                 // 2: ora.cloud.internal.v1.ListBindingsResponse
+	(*AcknowledgeBindingRequest)(nil),            // 3: ora.cloud.internal.v1.AcknowledgeBindingRequest
+	(*AcknowledgeBindingResponse)(nil),           // 4: ora.cloud.internal.v1.AcknowledgeBindingResponse
+	(*GetExecutionPermitRequest)(nil),            // 5: ora.cloud.internal.v1.GetExecutionPermitRequest
+	(*GetExecutionPermitResponse)(nil),           // 6: ora.cloud.internal.v1.GetExecutionPermitResponse
+	(*ExecutionOrigin)(nil),                      // 7: ora.cloud.internal.v1.ExecutionOrigin
+	(*ExecutionFence)(nil),                       // 8: ora.cloud.internal.v1.ExecutionFence
+	(*ExecutionNonAcceptance)(nil),               // 9: ora.cloud.internal.v1.ExecutionNonAcceptance
+	(*ListExecutionFencesRequest)(nil),           // 10: ora.cloud.internal.v1.ListExecutionFencesRequest
+	(*ListExecutionFencesResponse)(nil),          // 11: ora.cloud.internal.v1.ListExecutionFencesResponse
+	(*RecordExecutionNonAcceptanceRequest)(nil),  // 12: ora.cloud.internal.v1.RecordExecutionNonAcceptanceRequest
+	(*RecordExecutionNonAcceptanceResponse)(nil), // 13: ora.cloud.internal.v1.RecordExecutionNonAcceptanceResponse
+	(*RuntimeEffectPermit)(nil),                  // 14: ora.cloud.internal.v1.RuntimeEffectPermit
+	(*GetEffectPermitRequest)(nil),               // 15: ora.cloud.internal.v1.GetEffectPermitRequest
+	(*GetEffectPermitResponse)(nil),              // 16: ora.cloud.internal.v1.GetEffectPermitResponse
+	(*RuntimeForceStopPlan)(nil),                 // 17: ora.cloud.internal.v1.RuntimeForceStopPlan
+	(*ListForceStopsRequest)(nil),                // 18: ora.cloud.internal.v1.ListForceStopsRequest
+	(*ListForceStopsResponse)(nil),               // 19: ora.cloud.internal.v1.ListForceStopsResponse
+	(*ConfirmForceStopRequest)(nil),              // 20: ora.cloud.internal.v1.ConfirmForceStopRequest
+	(*ConfirmForceStopResponse)(nil),             // 21: ora.cloud.internal.v1.ConfirmForceStopResponse
+	(*Effect)(nil),                               // 22: ora.cloud.internal.v1.Effect
 }
 var file_ora_cloud_internal_v1_runtime_control_proto_depIdxs = []int32{
 	0,  // 0: ora.cloud.internal.v1.ListBindingsResponse.bindings:type_name -> ora.cloud.internal.v1.RuntimeBinding
 	0,  // 1: ora.cloud.internal.v1.GetExecutionPermitResponse.binding:type_name -> ora.cloud.internal.v1.RuntimeBinding
-	7,  // 2: ora.cloud.internal.v1.GetEffectPermitResponse.permit:type_name -> ora.cloud.internal.v1.RuntimeEffectPermit
-	15, // 3: ora.cloud.internal.v1.RuntimeForceStopPlan.effects:type_name -> ora.cloud.internal.v1.Effect
-	10, // 4: ora.cloud.internal.v1.ListForceStopsResponse.plans:type_name -> ora.cloud.internal.v1.RuntimeForceStopPlan
-	1,  // 5: ora.cloud.internal.v1.RuntimeControlService.ListBindings:input_type -> ora.cloud.internal.v1.ListBindingsRequest
-	3,  // 6: ora.cloud.internal.v1.RuntimeControlService.AcknowledgeBinding:input_type -> ora.cloud.internal.v1.AcknowledgeBindingRequest
-	5,  // 7: ora.cloud.internal.v1.RuntimeControlService.GetExecutionPermit:input_type -> ora.cloud.internal.v1.GetExecutionPermitRequest
-	8,  // 8: ora.cloud.internal.v1.RuntimeControlService.GetEffectPermit:input_type -> ora.cloud.internal.v1.GetEffectPermitRequest
-	11, // 9: ora.cloud.internal.v1.RuntimeControlService.ListForceStops:input_type -> ora.cloud.internal.v1.ListForceStopsRequest
-	13, // 10: ora.cloud.internal.v1.RuntimeControlService.ConfirmForceStop:input_type -> ora.cloud.internal.v1.ConfirmForceStopRequest
-	2,  // 11: ora.cloud.internal.v1.RuntimeControlService.ListBindings:output_type -> ora.cloud.internal.v1.ListBindingsResponse
-	4,  // 12: ora.cloud.internal.v1.RuntimeControlService.AcknowledgeBinding:output_type -> ora.cloud.internal.v1.AcknowledgeBindingResponse
-	6,  // 13: ora.cloud.internal.v1.RuntimeControlService.GetExecutionPermit:output_type -> ora.cloud.internal.v1.GetExecutionPermitResponse
-	9,  // 14: ora.cloud.internal.v1.RuntimeControlService.GetEffectPermit:output_type -> ora.cloud.internal.v1.GetEffectPermitResponse
-	12, // 15: ora.cloud.internal.v1.RuntimeControlService.ListForceStops:output_type -> ora.cloud.internal.v1.ListForceStopsResponse
-	14, // 16: ora.cloud.internal.v1.RuntimeControlService.ConfirmForceStop:output_type -> ora.cloud.internal.v1.ConfirmForceStopResponse
-	11, // [11:17] is the sub-list for method output_type
-	5,  // [5:11] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	0,  // 2: ora.cloud.internal.v1.ExecutionOrigin.binding:type_name -> ora.cloud.internal.v1.RuntimeBinding
+	0,  // 3: ora.cloud.internal.v1.ExecutionFence.authority:type_name -> ora.cloud.internal.v1.RuntimeBinding
+	7,  // 4: ora.cloud.internal.v1.ExecutionFence.origin:type_name -> ora.cloud.internal.v1.ExecutionOrigin
+	8,  // 5: ora.cloud.internal.v1.ExecutionNonAcceptance.fence:type_name -> ora.cloud.internal.v1.ExecutionFence
+	8,  // 6: ora.cloud.internal.v1.ListExecutionFencesResponse.fences:type_name -> ora.cloud.internal.v1.ExecutionFence
+	9,  // 7: ora.cloud.internal.v1.RecordExecutionNonAcceptanceRequest.proof:type_name -> ora.cloud.internal.v1.ExecutionNonAcceptance
+	14, // 8: ora.cloud.internal.v1.GetEffectPermitResponse.permit:type_name -> ora.cloud.internal.v1.RuntimeEffectPermit
+	22, // 9: ora.cloud.internal.v1.RuntimeForceStopPlan.effects:type_name -> ora.cloud.internal.v1.Effect
+	17, // 10: ora.cloud.internal.v1.ListForceStopsResponse.plans:type_name -> ora.cloud.internal.v1.RuntimeForceStopPlan
+	1,  // 11: ora.cloud.internal.v1.RuntimeControlService.ListBindings:input_type -> ora.cloud.internal.v1.ListBindingsRequest
+	3,  // 12: ora.cloud.internal.v1.RuntimeControlService.AcknowledgeBinding:input_type -> ora.cloud.internal.v1.AcknowledgeBindingRequest
+	5,  // 13: ora.cloud.internal.v1.RuntimeControlService.GetExecutionPermit:input_type -> ora.cloud.internal.v1.GetExecutionPermitRequest
+	10, // 14: ora.cloud.internal.v1.RuntimeControlService.ListExecutionFences:input_type -> ora.cloud.internal.v1.ListExecutionFencesRequest
+	12, // 15: ora.cloud.internal.v1.RuntimeControlService.RecordExecutionNonAcceptance:input_type -> ora.cloud.internal.v1.RecordExecutionNonAcceptanceRequest
+	15, // 16: ora.cloud.internal.v1.RuntimeControlService.GetEffectPermit:input_type -> ora.cloud.internal.v1.GetEffectPermitRequest
+	18, // 17: ora.cloud.internal.v1.RuntimeControlService.ListForceStops:input_type -> ora.cloud.internal.v1.ListForceStopsRequest
+	20, // 18: ora.cloud.internal.v1.RuntimeControlService.ConfirmForceStop:input_type -> ora.cloud.internal.v1.ConfirmForceStopRequest
+	2,  // 19: ora.cloud.internal.v1.RuntimeControlService.ListBindings:output_type -> ora.cloud.internal.v1.ListBindingsResponse
+	4,  // 20: ora.cloud.internal.v1.RuntimeControlService.AcknowledgeBinding:output_type -> ora.cloud.internal.v1.AcknowledgeBindingResponse
+	6,  // 21: ora.cloud.internal.v1.RuntimeControlService.GetExecutionPermit:output_type -> ora.cloud.internal.v1.GetExecutionPermitResponse
+	11, // 22: ora.cloud.internal.v1.RuntimeControlService.ListExecutionFences:output_type -> ora.cloud.internal.v1.ListExecutionFencesResponse
+	13, // 23: ora.cloud.internal.v1.RuntimeControlService.RecordExecutionNonAcceptance:output_type -> ora.cloud.internal.v1.RecordExecutionNonAcceptanceResponse
+	16, // 24: ora.cloud.internal.v1.RuntimeControlService.GetEffectPermit:output_type -> ora.cloud.internal.v1.GetEffectPermitResponse
+	19, // 25: ora.cloud.internal.v1.RuntimeControlService.ListForceStops:output_type -> ora.cloud.internal.v1.ListForceStopsResponse
+	21, // 26: ora.cloud.internal.v1.RuntimeControlService.ConfirmForceStop:output_type -> ora.cloud.internal.v1.ConfirmForceStopResponse
+	19, // [19:27] is the sub-list for method output_type
+	11, // [11:19] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_ora_cloud_internal_v1_runtime_control_proto_init() }
@@ -1217,7 +1625,7 @@ func file_ora_cloud_internal_v1_runtime_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ora_cloud_internal_v1_runtime_control_proto_rawDesc), len(file_ora_cloud_internal_v1_runtime_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

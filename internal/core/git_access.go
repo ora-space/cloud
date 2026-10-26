@@ -74,6 +74,7 @@ func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID str
 	 JOIN projects p ON p.id=w.project_id AND p.tenant_id=w.tenant_id
 	 WHERE e.execution_id=$1 AND w.tenant_id=$2 AND w.id=$3 AND w.runtime_generation=$4 AND w.project_id=$5
 	 AND e.kind IN ('agent_session','deliver_revision') AND e.result IS NULL AND e.terminated_by_force_stop_id IS NULL
+	 AND e.business_settled_at IS NULL AND e.non_acceptance_proof IS NULL
 	 AND r.deleted_at IS NULL AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
 	 AND p.deleted_at IS NULL AND p.lifecycle='active'`, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation, projectID)
 	// Plugin executions never reach the repository: the kind filter above leaves them unmatched.
