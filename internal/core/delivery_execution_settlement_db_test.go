@@ -191,16 +191,20 @@ func TestNonAcceptanceContradictoryTerminalIsAuditedWithoutACK(t *testing.T) {
 func TestConflictingNonAcceptanceProofSubmissionReplayStaysRejected(t *testing.T) {
 	store, scene, execution := expiredDeliveryExecution(t)
 	proof := originalProof(t, store, scene)
-	if _, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims,
-		Body: Object{"epoch": 1, "proof": proof}}); err != nil {
+	if _, err := store.Control(t.Context(), &ControlRequest{
+		Action: "runtime_execution_non_acceptance", Service: scene.claims,
+		Body: Object{"epoch": 1, "proof": proof},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	conflicting := mustObject(t, []byte(jsonText(proof)))
 	conflicting["proofId"] = uuid.NewString()
 	submission := uuid.NewString()
 	for range 2 {
-		if _, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims,
-			SubmissionID: submission, Body: Object{"epoch": 1, "proof": conflicting}}); err == nil {
+		if _, err := store.Control(t.Context(), &ControlRequest{
+			Action: "runtime_execution_non_acceptance", Service: scene.claims,
+			SubmissionID: submission, Body: Object{"epoch": 1, "proof": conflicting},
+		}); err == nil {
 			t.Fatal("conflicting proof submission replay returned success")
 		}
 	}
