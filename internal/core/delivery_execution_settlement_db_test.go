@@ -141,11 +141,12 @@ func TestNonAcceptanceProofRefusesWrongOriginalIdentity(t *testing.T) {
 			store, scene, execution := expiredDeliveryExecution(t)
 			proof := originalProof(t, store, scene)
 			origin := proof.O("fence").O("origin")
-			if field == "workId" || field == "inputJson" {
+			switch field {
+			case "workId", "inputJson":
 				origin[field] = "different"
-			} else if field == "runtimeGeneration" {
+			case "runtimeGeneration":
 				origin.O("binding")[field] = int64(999)
-			} else {
+			default:
 				origin.O("binding")[field] = uuid.NewString()
 			}
 			_, err := store.Control(t.Context(), &ControlRequest{Action: "runtime_execution_non_acceptance", Service: scene.claims, Body: Object{"epoch": 1, "proof": proof}})
