@@ -465,8 +465,7 @@ describe('WorkflowEditor', () => {
     await waitFor(() => expect(screen.getByText('版本 2')).toBeInTheDocument())
   })
 
-  it('rolls the canvas back to a published snapshot from history', async () => {
-    const restored = workflowFixture({ version: 5, graph: EMPTY_GRAPH })
+  it('points at the version list instead of rolling back from a popover', async () => {
     const published: WorkflowSnapshot = {
       id: 'snap-1',
       tenantId: TEST_TENANT_ID,
@@ -476,24 +475,16 @@ describe('WorkflowEditor', () => {
       graph: EMPTY_GRAPH,
       createdAt: '2026-09-20T10:00:00+08:00',
     }
-    // Only the PUT needs a bespoke handler; the snapshots GET comes from
-    // renderEditor's own mock, because registering it here (before renderEditor)
-    // would be shadowed by the later-registered one and the popover would open
-    // onto an empty history.
-    server.use(
-      http.put(
-        `/api/v1/tenants/${TEST_TENANT_ID}/workflows/:wfid/snapshots/:snapshotId/restore`,
-        () => HttpResponse.json(restored),
-      ),
-    )
     renderEditor({ snapshots: [published] })
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
-    fireEvent.click(await screen.findByRole('button', { name: '回滚到版本 1' }))
-    fireEvent.click(screen.getByRole('button', { name: '回滚' }))
-
-    await waitFor(() => expect(screen.getByText('版本 5')).toBeInTheDocument())
-    expect(screen.queryByText('开始 1')).not.toBeInTheDocument()
+    // Rolling back replaces the live document, which is a decision about a version rather than an
+    // edit on the canvas; the toolbar therefore leaves it to the versions tab it links to. The
+    // editor mounts bare here, so the path's prefix is whatever slug context it was given and only
+    // the destination is asserted.
+    const link = screen.getByRole('link', { name: '版本历史' })
+    expect(link.getAttribute('href')).toMatch(
+      new RegExp(`/workflows/${published.workflowId}/versions$`),
+    )
   })
 
   it('renames a node from the inspector header, and saves the new title', async () => {
@@ -662,7 +653,7 @@ describe('WorkflowEditor iteration regions', () => {
     // The drop was refused: no new card appeared (still four nodes)...
     expect(screen.getByText(/4 个节点/)).toBeInTheDocument()
     // ...and the hint explains why.
-    expect(screen.getByText(/成员请从迭代区域入口添加/)).toBeInTheDocument()
+    expect(screen.getByText(/成员请从区域入口或循环成员端口的 \+ 添加/)).toBeInTheDocument()
   })
 
   it('asks before deleting a region with members, and honours the refusal', async () => {
@@ -1027,7 +1018,7 @@ describe('WorkflowEditor structured output', () => {
 })
 
 describe('WorkflowEditor run tools', () => {
-  it('disables the run button and shows an empty history before any snapshot exists', async () => {
+  it('disables the run button and links the run list before any snapshot exists', async () => {
     renderEditor()
 
     // The button only drops out once the empty snapshot list resolves; until
@@ -1035,8 +1026,11 @@ describe('WorkflowEditor run tools', () => {
     const runButton = screen.getByRole('button', { name: '运行' })
     await waitFor(() => expect(runButton).toBeDisabled())
 
-    fireEvent.click(screen.getByRole('button', { name: '运行历史' }))
-    expect(screen.getByText('还没有运行记录。')).toBeInTheDocument()
+    // History is its own tab now, so the toolbar offers the way there and never renders a second,
+    // popover-shaped copy of the same list.
+    const link = screen.getByRole('link', { name: '运行记录' })
+    expect(link.getAttribute('href')).toMatch(/\/workflows\/[0-9a-f-]+\/runs$/)
+    expect(screen.queryByText('还没有运行记录。')).not.toBeInTheDocument()
   })
 
   it('starts the published version in the Project the member picks', async () => {

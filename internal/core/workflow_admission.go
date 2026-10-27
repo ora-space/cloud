@@ -1,5 +1,10 @@
 package core
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 // Workflow run admission: the one place a workflow execution intent is judged before anything is
 // created.
 //
@@ -55,6 +60,8 @@ func workflowLatestSnapshot(t *transaction, tid, wid string) Object {
 
 // requireWorkflowRunInput refuses a run whose input does not answer the variables the frozen graph
 // declares: a required Start variable with no value, or a value of the wrong type for its control.
+// Structured Start JSON text is decoded in place so persistence and simulation receive the same
+// native value as direct API callers. Only array/object declarations are decoded, exactly once.
 //
 // The reserved `input` kickoff selector is checked before the declared variables: when present it must
 // be a string, and a null is treated as absent, the way desktop's kickoff_input is. Then only the
@@ -100,6 +107,18 @@ func requireWorkflowRunInput(graph, input Object) {
 				rejectWith(400, "required_field_missing", Object{"field": field.Key})
 			}
 			continue
+		}
+		valueType := field.jsonValueType
+		if valueType == "object" || valueType == "array" || strings.HasPrefix(valueType, "array[") {
+			if text, ok := v.(string); ok {
+				if err := json.Unmarshal([]byte(text), &v); err != nil {
+					rejectWith(400, "invalid_field_value", Object{"field": field.Key})
+				}
+			}
+			if !workflowValueMatchesType(v, valueType) {
+				rejectWith(400, "invalid_field_value", Object{"field": field.Key})
+			}
+			input[field.Key] = v
 		}
 		if !validFieldValue(field, v) {
 			rejectWith(400, "invalid_field_value", Object{"field": field.Key})

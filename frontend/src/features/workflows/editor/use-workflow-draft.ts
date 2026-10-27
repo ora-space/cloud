@@ -23,8 +23,12 @@ import {
   applyIterationFrameResize,
   insertIterationMember,
   repairIterationGraphAfterNodeDeletion,
-  type WorkflowIterationInsertion,
 } from '@/features/workflows/runtime/iteration-graph'
+import {
+  insertLoopMember,
+  loopExitInsertion,
+  type WorkflowContainerInsertion,
+} from '@/features/workflows/runtime/loop-graph'
 import {
   createWorkflowLoopGroup,
   createWorkflowNode,
@@ -81,8 +85,8 @@ export interface WorkflowDraft {
   addNode: (kind: WorkflowNodeKind, position: XYPosition) => void
   /** Adds a loopExit into the given loop's body. */
   addLoopExit: (loopId: string) => void
-  /** Adds one region member through an iteration insertion seam. */
-  addIterationMember: (insertion: WorkflowIterationInsertion, kind: WorkflowNodeKind) => void
+  /** Adds one container member through an iteration or loop-body insertion seam. */
+  addIterationMember: (insertion: WorkflowContainerInsertion, kind: WorkflowNodeKind) => void
   /** Folds or unfolds one iteration frame; members stay in the graph. */
   toggleIterationCollapsed: (iterationId: string) => void
   /** Replaces the graph nodes after an iteration drag correction. */
@@ -97,11 +101,7 @@ export interface WorkflowDraft {
   replaceLaunchFields: (fields: WorkflowLaunchField[]) => void
   /** Re-arranges the graph into execution order. */
   organize: () => void
-  /**
-   * Replaces the whole draft with a fresh workflow's graph, an external replace
-   * such as a version restore rather than an edit. The restored graph becomes
-   * the new base, so nothing left over from the discarded draft persists.
-   */
+  /** Replaces the whole draft from a fresh workflow record, e.g. after reloading the document. */
   reset: (workflow: CloudWorkflow) => void
   /**
    * Snapshots the current authored content for a history step. The viewport is
@@ -173,7 +173,7 @@ export function useWorkflowDraft(
     replaceState(appendConnection(stateRef.current, connection))
   }
   const addIterationMember = (
-    insertion: WorkflowIterationInsertion,
+    insertion: WorkflowContainerInsertion,
     kind: WorkflowNodeKind,
   ): void => {
     replaceState(insertMember(stateRef.current, insertion, kind, translate))
@@ -203,8 +203,6 @@ export function useWorkflowDraft(
     })
   }
 
-  // Reseeds the whole draft for an external replace; the seed closure reads
-  // only from `next`, so the reset carries no stale session state with it.
   const reset = (next: CloudWorkflow): void => {
     replaceState(seedDraft(next))
   }
@@ -320,33 +318,19 @@ function appendNode(
   return { ...current, nodes: [...current.nodes, node] }
 }
 
-/** Appends one loopExit into `loopId`'s body, offset from the loop it belongs to. */
+/**
+ * Appends one loopExit into `loopId`'s body, after its right-most member.
+ *
+ * The inspector action goes through the same seam as a member port's "+", so the exit is
+ * wired, placed clear of the round and grows the Loop instead of landing on a fixed point.
+ */
 function appendLoopExitNode(
   current: DraftState,
   loopId: string,
   translate: WorkflowNodeTranslator,
 ): DraftState {
-  const loop = current.nodes.find((node) => node.id === loopId && node.data.kind === 'loop')
-  if (loop === undefined) {
-    return current
-  }
-  const sequence = nextWorkflowNodeSequence(
-    'loopExit',
-    current.nodes.map((node) => node.id),
-  )
-  const node = createWorkflowNode({
-    kind: 'loopExit',
-    sequence,
-    position: { x: 320, y: 240 },
-    translate,
-  })
-  return {
-    ...current,
-    nodes: [
-      ...current.nodes,
-      { ...node, parentId: loopId, data: { ...node.data, containerId: loopId } },
-    ],
-  }
+  const insertion = loopExitInsertion(current, loopId)
+  return insertion === null ? current : insertMember(current, insertion, 'loopExit', translate)
 }
 
 /** Adds an edge, unless the gesture would create a self-loop or a duplicate. */
@@ -362,7 +346,7 @@ function appendConnection(current: DraftState, connection: Connection): DraftSta
       ? { ...edge, sourceHandle: edge.sourceHandle || 'else' }
       : edge,
   )
-  if (!isValidWorkflowConnection(candidate, edges)) {
+  if (!isValidWorkflowConnection(candidate, { nodes: current.nodes, edges })) {
     return current
   }
   const { source, target, targetHandle } = candidate
@@ -382,14 +366,15 @@ function appendConnection(current: DraftState, connection: Connection): DraftSta
   }
 }
 
-/** Adds one region member through an explicit iteration insertion seam. */
+/** Adds one container member through an explicit iteration or loop-body seam. */
 function insertMember(
   current: DraftState,
-  insertion: WorkflowIterationInsertion,
+  insertion: WorkflowContainerInsertion,
   kind: WorkflowNodeKind,
   translate: WorkflowNodeTranslator,
 ): DraftState {
-  if (!current.nodes.some((node) => node.id === insertion.iterationId)) {
+  const containerId = insertion.type === 'loop-output' ? insertion.loopId : insertion.iterationId
+  if (!current.nodes.some((node) => node.id === containerId)) {
     return current
   }
   const sequence = nextWorkflowNodeSequence(
@@ -404,7 +389,9 @@ function insertMember(
     position: { x: 0, y: 207 },
     translate,
   })
-  return insertIterationMember(current, insertion, node)
+  return insertion.type === 'loop-output'
+    ? insertLoopMember(current, insertion, node)
+    : insertIterationMember(current, insertion, node)
 }
 
 /** Folds or unfolds one iteration frame; members stay in the graph. */

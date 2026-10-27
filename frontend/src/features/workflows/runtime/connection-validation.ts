@@ -1,4 +1,6 @@
+import { effectiveWorkflowContainer } from '@/features/workflows/runtime/container-layout'
 import type { WorkflowLayoutEdge } from '@/features/workflows/runtime/layout'
+import type { WorkflowNodeKind } from '@/features/workflows/runtime/types'
 
 /** Port identities distinguish parallel branch edges between the same nodes. */
 interface WorkflowConnectionHandles {
@@ -12,35 +14,89 @@ export interface WorkflowConnectionCandidate extends WorkflowConnectionHandles {
   target: string | null
 }
 
+/** The node fields the connection gate reads to place an endpoint in its scope. */
+export interface WorkflowConnectionNode {
+  id: string
+  parentId?: string | undefined
+  data: {
+    kind: WorkflowNodeKind
+    containerId?: string | undefined
+  }
+}
+
+/** The graph a candidate connection would join. */
+export interface WorkflowConnectionGraph {
+  nodes: readonly WorkflowConnectionNode[]
+  edges: readonly (WorkflowLayoutEdge & WorkflowConnectionHandles)[]
+}
+
+/** The iteration frame's internal start port, which feeds only that frame's members. */
+const ITERATION_ENTRY_HANDLE = 'iteration-entry'
+
 /**
  * Decides whether a connection gesture may become an edge.
  *
- * Three cases are rejected because each produces a graph the runtime cannot
- * execute and the editor cannot repair:
+ * Every rejected case produces a graph the publish gate refuses or the runtime cannot
+ * execute, so refusing at the gesture keeps the author from drawing it at all:
  *
  * - a self-loop, which would make a node depend on itself;
  * - a duplicate, which would run the same node twice from one predecessor;
- * - an incomplete gesture, released on empty canvas.
+ * - an incomplete gesture, released on empty canvas;
+ * - an edge out of a loopExit, which is terminal inside its round;
+ * - an edge between scopes (a loop body, an iteration region, the top level), which the
+ *   backend rejects because a round can never see the other scope's state;
+ * - an iteration's internal start feeding anything but that iteration's own members.
+ *
+ * Scope follows the backend rule (`containerId`, else `parentId`), and only an owner that is
+ * really a loop or iteration in this graph counts, so a dangling key reads as top level.
  *
  * @param candidate - Endpoints React Flow is proposing.
- * @param edges - Edges already in the graph.
+ * @param graph - The nodes and edges already in the graph.
  * @returns Whether the edge may be added.
  */
 export function isValidWorkflowConnection(
   candidate: WorkflowConnectionCandidate,
-  edges: readonly (WorkflowLayoutEdge & WorkflowConnectionHandles)[],
+  graph: WorkflowConnectionGraph,
 ): boolean {
   const { source, target } = candidate
   if (source === null || target === null || source === target) {
     return false
   }
-  return !edges.some(
+  if (!respectsWorkflowScopes(source, target, candidate.sourceHandle ?? null, graph.nodes)) {
+    return false
+  }
+  return !graph.edges.some(
     (edge) =>
       edge.source === source &&
       edge.target === target &&
       (edge.sourceHandle || null) === (candidate.sourceHandle || null) &&
       (edge.targetHandle || null) === (candidate.targetHandle || null),
   )
+}
+
+/** Whether an edge stays inside one scope, allowing an iteration's entry into its own region. */
+function respectsWorkflowScopes(
+  source: string,
+  target: string,
+  sourceHandle: string | null,
+  nodes: readonly WorkflowConnectionNode[],
+): boolean {
+  const nodeById = new Map(nodes.map((node) => [node.id, node] as const))
+  const sourceNode = nodeById.get(source)
+  if (sourceNode?.data.kind === 'loopExit') {
+    return false
+  }
+  const scopeOf = (nodeId: string): string | undefined => {
+    const node = nodeById.get(nodeId)
+    const owner = node === undefined ? undefined : effectiveWorkflowContainer(node)
+    const ownerKind = owner === undefined ? undefined : nodeById.get(owner)?.data.kind
+    return ownerKind === 'loop' || ownerKind === 'iteration' ? owner : undefined
+  }
+  const targetScope = scopeOf(target)
+  if (sourceHandle === ITERATION_ENTRY_HANDLE) {
+    return sourceNode?.data.kind === 'iteration' && targetScope === source
+  }
+  return scopeOf(source) === targetScope
 }
 
 /**

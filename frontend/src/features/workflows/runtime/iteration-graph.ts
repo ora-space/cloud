@@ -268,22 +268,34 @@ export function repairIterationGraphAfterNodeDeletion<TGraph extends WorkflowIte
   }
 }
 
-/** Resolves members and incident edges that must join an iteration container deletion. */
+/**
+ * Resolves members and incident edges that must join a container deletion.
+ *
+ * Both container kinds take their whole body along — Loop members are owned through either
+ * key, so a member written with only `parentId` (an older import) is not left floating — but
+ * only iteration members count toward `memberCount`, the number the deletion confirmation
+ * quotes; a Loop always has a body, and its deletion is one undoable step instead.
+ */
 export function resolveIterationDeletionCascade(
   graph: WorkflowIterationGraph,
   requestedNodeIds: ReadonlySet<string>,
 ): WorkflowIterationDeletionCascade {
-  const iterationIds = new Set(
+  const containerKinds = new Map(
     graph.nodes
-      .filter((node) => requestedNodeIds.has(node.id) && node.data.kind === 'iteration')
-      .map((node) => node.id),
+      .filter(
+        (node) =>
+          requestedNodeIds.has(node.id) &&
+          (node.data.kind === 'iteration' || node.data.kind === 'loop'),
+      )
+      .map((node) => [node.id, node.data.kind] as const),
   )
   const nodeIds = new Set(requestedNodeIds)
   let memberCount = 0
   for (const node of graph.nodes) {
-    if (node.parentId !== undefined && iterationIds.has(node.parentId)) {
+    const ownerKind = node.parentId === undefined ? undefined : containerKinds.get(node.parentId)
+    if (ownerKind !== undefined) {
       nodeIds.add(node.id)
-      memberCount += 1
+      memberCount += ownerKind === 'iteration' ? 1 : 0
     }
   }
   let added = true
@@ -569,27 +581,36 @@ function resizeIterationFrames<TGraph extends WorkflowIterationGraph>(
 }
 
 /**
- * Mirrors a manual React Flow resize gesture onto iteration frames' authored size.
+ * Mirrors container resizes onto the frames' authored size.
+ *
+ * A manual resize gesture (a `dimensions` change with `resizing` set) sets an iteration or
+ * Loop frame to the dragged size. A Loop also grows reactively: React Flow's `expandParent`
+ * reports the enlarged parent as a `dimensions` change with `setAttributes`, which is mirrored
+ * only as growth so a later measurement can never shrink a box the author or a member opened.
+ * Plain measurements carry neither flag and never touch the authored size.
  *
  * Generic over the node type so the editor feeds its canvas nodes in and gets
  * the same shape back: the transform only copies nodes through and widens the
- * iteration frames it owns, so nothing changes about callers' concrete types.
+ * frames it owns, so nothing changes about callers' concrete types.
  */
 export function applyIterationFrameResize<TNode extends WorkflowIterationNode>(
   nodes: readonly TNode[],
   changes: readonly WorkflowIterationFrameChange[],
 ): TNode[] {
-  const resizedSizes = new Map<string, { width: number; height: number }>()
+  const resizedSizes = new Map<string, { width: number; height: number; grow: boolean }>()
   for (const change of changes) {
-    // Only gesture frames carry `resizing`; plain measurements must never
-    // overwrite the authored frame size. Add-changes carry no id and no size.
+    // Add-changes carry no id and no size.
     if (
-      change.type === 'dimensions' &&
-      change.resizing === true &&
-      change.dimensions !== undefined &&
-      change.id !== undefined
+      change.type !== 'dimensions' ||
+      change.dimensions === undefined ||
+      change.id === undefined
     ) {
-      resizedSizes.set(change.id, change.dimensions)
+      continue
+    }
+    if (change.resizing === true) {
+      resizedSizes.set(change.id, { ...change.dimensions, grow: false })
+    } else if (change.setAttributes !== undefined && change.setAttributes !== false) {
+      resizedSizes.set(change.id, { ...change.dimensions, grow: true })
     }
   }
   if (resizedSizes.size === 0) {
@@ -598,13 +619,17 @@ export function applyIterationFrameResize<TNode extends WorkflowIterationNode>(
   let changed = false
   const resized = nodes.map((node) => {
     const size = resizedSizes.get(node.id)
-    // Members resize through node.width; only iteration frames keep their editable
-    // size in initialWidth/initialHeight.
-    if (size === undefined || node.data.kind !== 'iteration') {
+    // Members resize through node.width; only container frames keep their editable
+    // size in initialWidth/initialHeight, and only a Loop grows with its members.
+    const isFrame =
+      node.data.kind === 'loop' || (node.data.kind === 'iteration' && size?.grow === false)
+    if (size === undefined || !isFrame) {
       return node
     }
-    const width = snapSize(size.width)
-    const height = snapSize(size.height)
+    const width = snapSize(size.grow ? Math.max(size.width, node.initialWidth ?? 0) : size.width)
+    const height = snapSize(
+      size.grow ? Math.max(size.height, node.initialHeight ?? 0) : size.height,
+    )
     if (node.initialWidth === width && node.initialHeight === height) {
       return node
     }

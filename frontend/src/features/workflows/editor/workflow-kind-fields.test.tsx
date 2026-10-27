@@ -349,6 +349,69 @@ describe('LoopNodeFields', () => {
     return { data, rerenderPanel }
   }
 
+  /** A body member of loop-1, owned through both keys as the factory writes them. */
+  function bodyNode(id: string, kind: WorkflowNodeData['kind'], x: number): WorkflowCanvasNode {
+    return {
+      id,
+      type: 'workflow',
+      position: { x, y: 145 },
+      parentId: 'loop-1',
+      data: { ...nodeData({ kind }), containerId: 'loop-1' },
+    }
+  }
+
+  /** Renders the panel over a body made of the given members, with the exit action wired. */
+  function renderWithBody(members: WorkflowCanvasNode[]) {
+    const onAddExit = vi.fn<() => void>()
+    renderWithProviders(
+      <LoopNodeFields
+        {...LOOP_PROPS}
+        graphNodes={[
+          {
+            id: 'loop-1',
+            type: 'workflow',
+            position: { x: 0, y: 0 },
+            data: nodeData({ kind: 'loop' }),
+          },
+          ...members,
+        ]}
+        data={nodeData({ kind: 'loop', loopConfig: LOOP_CONFIG })}
+        onChange={vi.fn<(data: WorkflowNodeData) => void>()}
+        onAddExit={onAddExit}
+      />,
+    )
+    return { onAddExit, button: screen.getByRole('button', { name: '添加早退节点' }) }
+  }
+
+  it('offers the early exit after a body step that does round work', () => {
+    const { onAddExit, button } = renderWithBody([
+      bodyNode('entry', 'start', 40),
+      bodyNode('worker', 'agent', 350),
+    ])
+
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+    expect(onAddExit).toHaveBeenCalledOnce()
+  })
+
+  it('withholds the early exit when only the body start and conditions could precede it', () => {
+    const { button } = renderWithBody([
+      bodyNode('entry', 'start', 40),
+      bodyNode('branch', 'condition', 350),
+    ])
+
+    // After Start the exit would end every round at once; after a Condition it would take ELSE.
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/请点那个分支端口的 \+ 添加/)).toBeInTheDocument()
+  })
+
+  it('asks for a first step when the body has nothing an exit could follow', () => {
+    const { button } = renderWithBody([bodyNode('entry', 'start', 40)])
+
+    expect(button).toBeDisabled()
+    expect(screen.getByText('先在循环体里添加一个步骤，早退会接在它后面。')).toBeInTheDocument()
+  })
+
   it('clamps the round ceiling and writes a variable first-round value', () => {
     const { data, rerenderPanel } = setUpLoopPanel()
 

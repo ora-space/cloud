@@ -10,9 +10,10 @@ import {
   type WorkflowIterationGraph,
   type WorkflowIterationNode,
 } from '@/features/workflows/runtime/iteration-graph'
+import { loopFrameSize } from '@/features/workflows/runtime/loop-graph'
 
 /**
- * Enforces iteration membership after a drag, never inferring it from geometry.
+ * Enforces container membership after a drag, never inferring it from geometry.
  *
  * Existing members keep their `parentId` and may expand their owner; an outer node whose
  * center was dropped over a region returns to its drag start position so the canvas cannot
@@ -43,8 +44,13 @@ export function applyIterationDragRules<TWorkflow extends WorkflowIterationGraph
   // collapsed bar size while folded. A collapsed region is a small bar on the canvas,
   // so a drop on it must not grant membership the author never drew.
   const frames = workflow.nodes
-    .filter((node) => node.data.kind === 'iteration')
+    .filter((node) => node.data.kind === 'iteration' || node.data.kind === 'loop')
     .map((node) => {
+      if (node.data.kind === 'loop') {
+        // A Loop frame never folds; its box is the authored (or member-grown) size.
+        const { width, height } = loopFrameSize(node, workflow.nodes)
+        return { node, width, height, visibleWidth: width, visibleHeight: height }
+      }
       const expanded = iterationExpandedSize(node)
       const open = node.data.collapsed !== true
       return {
@@ -85,7 +91,8 @@ export function applyIterationDragRules<TWorkflow extends WorkflowIterationGraph
     return { ...node, position: { ...original.position } }
   })
   const withRejectedDropsRestored = changed ? ({ ...workflow, nodes } as TWorkflow) : workflow
-  // Only members that moved widen their owner: a drag already ran `expandIterationFrames`,
+  // Only iteration members that moved widen their owner (a Loop grows through `expandParent`);
+  // a drag already ran `expandIterationFrames`,
   // and replaying the same gesture against an already-wide frame must not ratchet it again.
   const affectedIterationIds = workflow.nodes.flatMap((node): string[] => {
     const parentId = node.parentId

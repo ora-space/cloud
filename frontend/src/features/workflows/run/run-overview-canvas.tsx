@@ -29,6 +29,7 @@ import {
   RunOverviewStatesProvider,
 } from '@/features/workflows/run/run-overview-node'
 import type { RunNodeEntry } from '@/features/workflows/run/run-node-state'
+import type { RunContainer } from '@/features/workflows/run/run-rounds'
 
 const NODE_TYPE = 'workflow' as const
 const FIT_PADDING = 0.18
@@ -62,18 +63,22 @@ const ACTIVE_EDGE_STROKE = 'color-mix(in oklch, var(--foreground) 72%, transpare
  *
  * @param props.definitionSnapshot - The frozen graph document (ops of the run). May be
  * missing for a legacy run row, which then renders an empty canvas.
- * @param props.nodeStates - Per-node run rows keyed by node id.
+ * @param props.nodeStates - Per-node run rows keyed by node id; container members already show
+ * their container's selected round.
+ * @param props.containers - The round projection the Loop and Iteration frames summarize.
  * @param props.selectedNodeId - Node the reader opened in the inspector, if any.
  * @param props.onSelectNode - Receives a node click, or `null` when the canvas clears.
  */
 export function RunOverviewCanvas({
   definitionSnapshot,
   nodeStates,
+  containers,
   selectedNodeId,
   onSelectNode,
 }: {
   definitionSnapshot: Record<string, unknown> | null | undefined
   nodeStates: Record<string, RunNodeEntry>
+  containers?: Record<string, RunContainer>
   selectedNodeId: string | null
   onSelectNode: (nodeId: string | null) => void
 }) {
@@ -89,8 +94,9 @@ export function RunOverviewCanvas({
       aria-label={t('workflows.run.overview.label')}
     >
       <ReactFlowProvider>
-        <RunOverviewStatesProvider states={nodeStates}>
+        <RunOverviewStatesProvider states={nodeStates} containers={containers}>
           <WorkflowIterationActionsProvider
+            graph={graph}
             readOnly
             onInsert={() => {}}
             onToggleCollapsed={() => {}}

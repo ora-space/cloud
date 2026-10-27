@@ -176,6 +176,10 @@ func admitScheduledTaskDue(t *transaction, taskID string) {
 		failScheduledOccurrenceWithReason(t, taskID, due, "target_unavailable")
 		return
 	}
+	if !scheduledTaskSpaceActive(t, task.S("tenantId"), agent.S("spaceId")) {
+		failScheduledOccurrenceWithReason(t, taskID, due, "target_unavailable")
+		return
+	}
 	if !agentRunGateOK(t, issue, agent) {
 		failScheduledOccurrenceWithReason(t, taskID, due, "target_unavailable")
 		return
@@ -193,6 +197,13 @@ func admitScheduledTaskDue(t *transaction, taskID string) {
 	// instead of rolling back the ledger row and later being mistaken for a missed schedule point.
 	if personal, gap := taskAgentModelGap(t, task.S("creatorUserId"), agent, task.S("model")); personal && gap != "" {
 		failScheduledOccurrenceWithReason(t, taskID, due, scheduledAgentBindingReason(gap))
+		return
+	}
+
+	// 任务对话准入（D5）：enqueueAdmittedRun 不经过 enqueueRun 的对话守卫，这里按同一规则预检。
+	// 对话暂停或有未解决的 failed 消息时运行永远领不到，有 waiting 消息时定时运行会插到它前面。
+	if gap := taskConversationInputGap(t, task.S("tenantId"), task.S("issueId")); gap != "" {
+		failScheduledOccurrenceWithReason(t, taskID, due, gap)
 		return
 	}
 

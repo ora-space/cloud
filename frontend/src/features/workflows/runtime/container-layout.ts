@@ -54,3 +54,30 @@ export function workflowContainerNodes<T extends WorkflowContainerNode>(nodes: r
   }
   return ordered
 }
+
+/** The node fields that decide which container owns a node. */
+interface WorkflowContainerOwnedNode {
+  parentId?: string | undefined
+  data: {
+    containerId?: string | undefined
+  }
+}
+
+/**
+ * Resolves the container that owns a node: a non-empty `containerId` wins, otherwise `parentId`.
+ *
+ * This is the same rule the backend's `workflowContainerID` applies, so the editor and the
+ * publish gate agree on membership even when an imported graph carries only one of the two keys.
+ * An empty string on either key means "not set", never a container called `""`.
+ *
+ * @param node - The node whose owner is being asked for.
+ * @returns The owning container id, or `undefined` for a top-level node.
+ */
+export function effectiveWorkflowContainer(node: WorkflowContainerOwnedNode): string | undefined {
+  const containerId = node.data.containerId
+  if (containerId !== undefined && containerId !== '') {
+    return containerId
+  }
+  const parentId = node.parentId
+  return parentId !== undefined && parentId !== '' ? parentId : undefined
+}

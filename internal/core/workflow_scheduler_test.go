@@ -221,6 +221,11 @@ func TestWorkflowRunFailureReasonFallbacks(t *testing.T) {
 		nil,
 	))
 	if reason := workflowRunFailureReason(graph, map[string]workflowNodeState{
+		"a": {Status: "failed", Error: "agent_output_truncated", SessionEndReason: "idle_timeout"},
+	}); reason != "agent_output_truncated" {
+		t.Fatalf("agent failure = %q; want the failure diagnosis, not session evidence", reason)
+	}
+	if reason := workflowRunFailureReason(graph, map[string]workflowNodeState{
 		"a": {Status: "failed"},
 	}); reason != "node failed" {
 		t.Fatalf("reasonless failure = %q; want node failed", reason)

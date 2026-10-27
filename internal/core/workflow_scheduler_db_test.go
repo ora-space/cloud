@@ -422,8 +422,8 @@ func TestWorkflowAdvanceFailsRunOnProjectlessAgentNode(t *testing.T) {
 	if agent.S("status") != "failed" {
 		t.Fatalf("agent node status = %q; want failed", agent.S("status"))
 	}
-	if agent.O("output").S("reason") != "workflow_run_project_required" {
-		t.Fatalf("agent node reason = %q; want workflow_run_project_required", agent.O("output").S("reason"))
+	if agent.S("sessionEndReason") != "workflow_run_project_required" {
+		t.Fatalf("agent node reason = %q; want workflow_run_project_required", agent.S("sessionEndReason"))
 	}
 	if _, ran := states["o"]; ran {
 		t.Fatal("output node downstream of the failed agent committed a state")

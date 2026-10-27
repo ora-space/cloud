@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import type { ReactNode } from 'react'
@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GetApiV1TenantsTidWorkflowsWfidRuns200, WorkflowRun } from '@/api/generated.schemas'
 import {
   WORKFLOW_RUN_POLL_MS,
-  mergeRunPage,
   mergeRunRead,
+  runHistoryRows,
   runPollInterval,
   runsPollInterval,
   useWorkflowRun,
@@ -48,12 +48,13 @@ function runFixture(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 /** The same run after it settled, with the node output the poll is meant to deliver. */
-function settledRun(): WorkflowRun {
+function settledRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return runFixture({
     status: 'succeeded',
     finishedAt: '2026-09-20T02:00:10.000Z',
     updatedAt: '2026-09-20T02:00:10.000Z',
     nodeStates: { 'agent-1': { status: 'succeeded', output: '审查通过' } },
+    ...overrides,
   })
 }
 
@@ -77,9 +78,17 @@ function cachedRun(queryClient: QueryClient): WorkflowRun | undefined {
   return queryClient.getQueryState<WorkflowRun>([RUN_URL])?.data
 }
 
-/** The cached history page, as {@link cachedRun} reads the cached run. */
-function cachedPage(queryClient: QueryClient): GetApiV1TenantsTidWorkflowsWfidRuns200 | undefined {
-  return queryClient.getQueryState<GetApiV1TenantsTidWorkflowsWfidRuns200>([RUNS_URL])?.data
+/** The cached history walk, as {@link cachedRun} reads the cached run. */
+function cachedHistory(
+  queryClient: QueryClient,
+): InfiniteData<GetApiV1TenantsTidWorkflowsWfidRuns200> | undefined {
+  return queryClient.getQueryState<InfiniteData<GetApiV1TenantsTidWorkflowsWfidRuns200>>([RUNS_URL])
+    ?.data
+}
+
+/** The first (newest) row of the cached history. */
+function cachedFirstRow(queryClient: QueryClient): WorkflowRun | undefined {
+  return cachedHistory(queryClient)?.pages[0]?.items[0]
 }
 
 /** Mounts a hook under the query client, with no other provider it does not need. */
@@ -87,6 +96,23 @@ function wrapperFor(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   }
+}
+
+/**
+ * Walks a mounted history hook to its second page.
+ *
+ * Several cases assert on how a read refreshes a page below the head, and each has to load that page
+ * the same way: wait for the head to report a cursor, then fetch it.
+ *
+ * @param result - The mounted hook, read at call time so the wait sees the newest value.
+ */
+async function loadSecondPage(result: {
+  current: ReturnType<typeof useWorkflowRuns>
+}): Promise<void> {
+  await settleUntil(() => expect(result.current.hasNextPage).toBe(true))
+  await act(async () => {
+    await result.current.fetchNextPage()
+  })
 }
 
 afterEach(() => {
@@ -177,26 +203,6 @@ describe('mergeRunRead', () => {
         'start-1': { status: 'succeeded', output: '收到输入' },
       },
     })
-  })
-})
-
-describe('mergeRunPage', () => {
-  it('follows the incoming page for membership and merges each run it returns', () => {
-    const settled = settledRun()
-    const held = pageFixture([settled, runFixture({ id: 'run-2' })])
-    const next = pageFixture([
-      runFixture({ status: 'running', updatedAt: '2026-09-20T02:00:00.000Z' }),
-      runFixture({ id: 'run-3' }),
-    ])
-
-    const merged = mergeRunPage(held, next)
-
-    // The server decides which runs exist: the dropped row is gone and the new
-    // one is in, while the settled run keeps what the list already showed.
-    expect(merged.items.map((run) => run.id)).toEqual([RUN_ID, 'run-3'])
-    expect(merged.items[0]).toBe(settled)
-    expect(merged.items[1]).toEqual(next.items[1])
-    expect(merged.nextCursor).toBe('')
   })
 })
 
@@ -362,15 +368,61 @@ describe('useWorkflowRuns', () => {
       wrapper: wrapperFor(newQueryClient()),
     })
 
-    await settleUntil(() => expect(result.current.data?.[0]?.status).toBe('running'))
+    await settleUntil(() => expect(result.current.data?.pages[0]?.items[0]?.status).toBe('running'))
 
     await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS))
 
-    await settleUntil(() => expect(result.current.data?.[0]?.status).toBe('succeeded'))
+    await settleUntil(() =>
+      expect(result.current.data?.pages[0]?.items[0]?.status).toBe('succeeded'),
+    )
     expect(reads).toBe(2)
 
     await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS * 3))
     expect(reads).toBe(2)
+  })
+
+  it('walks the history by cursor instead of stopping at the first page', async () => {
+    const requested: string[] = []
+    server.use(
+      http.get(RUNS_URL, ({ request }) => {
+        const after = new URL(request.url).searchParams.get('after') ?? ''
+        requested.push(after)
+        return HttpResponse.json(
+          after === ''
+            ? {
+                items: [runFixture({ id: 'run-1', name: '第一页' })],
+                nextCursor: 'run-1',
+              }
+            : {
+                items: [runFixture({ id: 'run-2', name: '第二页' })],
+                nextCursor: '',
+              },
+        )
+      }),
+    )
+    const { result } = renderHook(() => useWorkflowRuns(TEST_TENANT_ID, WORKFLOW_ID), {
+      wrapper: wrapperFor(newQueryClient()),
+    })
+
+    await loadSecondPage(result)
+
+    // The second request carries the cursor the first page reported, and the walk ends when the
+    // server stops offering one — that is what makes every run reachable, not just the first page.
+    expect(requested).toEqual(['', 'run-1'])
+    await settleUntil(() => expect(result.current.hasNextPage).toBe(false))
+    expect(result.current.data?.pages).toHaveLength(2)
+  })
+
+  it('flattens loaded pages newest first without repeating a run', () => {
+    const run = runFixture({ id: 'run-1' })
+    const rows = runHistoryRows([
+      { items: [run, runFixture({ id: 'run-2' })], nextCursor: 'run-2' },
+      // A refetch answered from a page that overlaps the previous one must not render twice.
+      { items: [runFixture({ id: 'run-2' }), runFixture({ id: 'run-3' })], nextCursor: '' },
+    ])
+
+    expect(rows.map((row) => row.id)).toEqual(['run-1', 'run-2', 'run-3'])
+    expect(runHistoryRows(undefined)).toEqual([])
   })
 
   it('keeps a settled history row from flipping back on a stale page', async () => {
@@ -386,7 +438,7 @@ describe('useWorkflowRuns', () => {
     const { result } = renderHook(() => useWorkflowRuns(TEST_TENANT_ID, WORKFLOW_ID), {
       wrapper: wrapperFor(queryClient),
     })
-    const firstRow = () => cachedPage(queryClient)?.items[0]
+    const firstRow = () => cachedFirstRow(queryClient)
 
     await settleUntil(() => expect(firstRow()?.status).toBe('running'))
     await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS))
@@ -404,5 +456,103 @@ describe('useWorkflowRuns', () => {
     expect(reads).toBe(3)
     expect(settled?.status).toBe('succeeded')
     expect(firstRow()).toBe(settled)
+  })
+
+  it('refreshes a running run on a later page even when the newest page is settled', async () => {
+    // The head page being terminal says nothing about the pages below it: the run that is still
+    // moving is wherever the cursor walk put it. Reading only the head would freeze that row.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const laterRunId = 'run-later'
+    let laterReads = 0
+    server.use(
+      http.get(RUNS_URL, ({ request }) => {
+        const after = new URL(request.url).searchParams.get('after') ?? ''
+        if (after === '') {
+          return HttpResponse.json({ items: [settledRun()], nextCursor: RUN_ID })
+        }
+        laterReads += 1
+        return HttpResponse.json({
+          items: [
+            laterReads === 1 ? runFixture({ id: laterRunId }) : settledRun({ id: laterRunId }),
+          ],
+          nextCursor: '',
+        })
+      }),
+    )
+    const { result } = renderHook(() => useWorkflowRuns(TEST_TENANT_ID, WORKFLOW_ID), {
+      wrapper: wrapperFor(newQueryClient()),
+    })
+
+    await loadSecondPage(result)
+    await settleUntil(() => expect(result.current.data?.pages[1]?.items[0]?.status).toBe('running'))
+
+    await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS))
+
+    await settleUntil(() =>
+      expect(result.current.data?.pages[1]?.items[0]?.status).toBe('succeeded'),
+    )
+    expect(laterReads).toBe(2)
+
+    // The whole walk is terminal now, so the interval cleared instead of spending reads.
+    await act(() => vi.advanceTimersByTimeAsync(WORKFLOW_RUN_POLL_MS * 2))
+    expect(laterReads).toBe(2)
+  })
+
+  it('keeps a settled run terminal when a new run above it moves it onto another page', async () => {
+    // A run created at the head shifts every page boundary below it. The page that now holds the
+    // moved run is a different page than the one that held it before, so merging by page position
+    // would compare it against another run entirely and reopen it with the stale read.
+    const firstPageRun = 'run-a'
+    const secondPageRun = 'run-b'
+    const insertedRun = 'run-new'
+    let shifted = false
+    server.use(
+      http.get(RUNS_URL, ({ request }) => {
+        const after = new URL(request.url).searchParams.get('after') ?? ''
+        if (!shifted) {
+          if (after === '') {
+            return HttpResponse.json({
+              items: [settledRun({ id: firstPageRun })],
+              nextCursor: firstPageRun,
+            })
+          }
+          return HttpResponse.json({ items: [settledRun({ id: secondPageRun })], nextCursor: '' })
+        }
+        // A new run was created, so the first page holds it alone and the settled run it displaced
+        // is now the second page — read back by a copy that has not caught up with the settlement.
+        if (after === '') {
+          return HttpResponse.json({
+            items: [settledRun({ id: insertedRun })],
+            nextCursor: insertedRun,
+          })
+        }
+        if (after === insertedRun) {
+          return HttpResponse.json({
+            items: [runFixture({ id: firstPageRun, updatedAt: '2026-09-20T02:00:00.000Z' })],
+            nextCursor: firstPageRun,
+          })
+        }
+        return HttpResponse.json({ items: [], nextCursor: '' })
+      }),
+    )
+    const queryClient = newQueryClient()
+    const { result } = renderHook(() => useWorkflowRuns(TEST_TENANT_ID, WORKFLOW_ID), {
+      wrapper: wrapperFor(queryClient),
+    })
+
+    await loadSecondPage(result)
+    await settleUntil(() => expect(result.current.data?.pages).toHaveLength(2))
+
+    shifted = true
+    await act(async () => {
+      await result.current.refetch()
+    })
+
+    // Membership follows the server, but the moved run keeps the settled status the list already
+    // showed rather than the running status of the stale copy behind it. The cache is read rather
+    // than the hook result, because the observer hands the new value to React a macrotask later.
+    const rows = runHistoryRows(cachedHistory(queryClient)?.pages)
+    expect(rows.map((row) => row.id)).toEqual([insertedRun, firstPageRun])
+    expect(rows.map((row) => row.status)).toEqual(['succeeded', 'succeeded'])
   })
 })

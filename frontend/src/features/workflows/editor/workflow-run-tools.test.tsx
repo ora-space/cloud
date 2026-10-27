@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, renderHook, screen, waitFor } from '@testing-library/react'
+import { fireEvent, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { WorkflowRun, WorkflowSnapshot } from '@/api/generated.schemas'
@@ -206,22 +206,15 @@ describe('WorkflowRunTools', () => {
   })
 
   it('lists run history and opens a run from a row', async () => {
-    const router = renderRunTools({
+    renderRunTools({
       runs: [runFixture('run-1', '巡检运行'), runFixture('run-2', '发布检查')],
     })
 
-    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
-
-    fireEvent.click(await screen.findByRole('button', { name: '打开运行 巡检运行' }))
-    await waitFor(() => expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`))
-  })
-
-  it('shows the quiet empty state when nothing has ever run', async () => {
-    renderRunTools({ runs: [] })
-
-    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
-
-    expect(await screen.findByText('还没有运行记录。')).toBeInTheDocument()
+    // The history is its own tab now: the toolbar links to it rather than rendering a popover, and
+    // the link carries the workspace slug the browser route uses.
+    const link = await screen.findByRole('link', { name: '运行记录' })
+    expect(link).toHaveAttribute('href', `${EDITOR_PATH}/runs`)
+    expect(screen.queryByText('巡检运行')).not.toBeInTheDocument()
   })
 })
 
@@ -263,25 +256,30 @@ describe('workflow run navigation through the app routes', () => {
     expect(bodies).toHaveLength(1)
   })
 
-  it('opens an existing run from the history with the same slug and creates nothing', async () => {
+  it('opens an existing run from the run list with the same slug and creates nothing', async () => {
     const { router, bodies } = renderAppAt(EDITOR_PATH, [runFixture('run-1', '巡检运行')])
-    fireEvent.click(await screen.findByRole('button', { name: '运行历史' }))
 
-    fireEvent.click(await screen.findByRole('button', { name: '打开运行 巡检运行' }))
+    // The history is a tab: the editor's tab bar is the canonical way there, and the run is
+    // opened from the list rather than from a popover inside the editor.
+    const tabs = await screen.findByRole('navigation', { name: '工作流的分区' })
+    fireEvent.click(within(tabs).getByRole('link', { name: '运行记录' }))
+    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs`)
 
-    expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`)
+    fireEvent.click(await screen.findByRole('link', { name: '打开运行 巡检运行' }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`))
     expect(bodies).toHaveLength(0)
   })
 
-  it('opens and reloads the run URL directly, with a breadcrumb back to the editor', async () => {
+  it('opens and reloads the run URL directly, with a breadcrumb back to the run list', async () => {
     const { router } = renderAppAt(`${EDITOR_PATH}/runs/run-1`, [runFixture('run-1', '巡检运行')])
 
     expect(await screen.findByRole('heading', { name: '运行详情' })).toBeInTheDocument()
     expect(router.state.location.pathname).toBe(`${EDITOR_PATH}/runs/run-1`)
-    expect(await screen.findByRole('link', { name: '工作流' })).toHaveAttribute(
+    // Browsing history returns to the history, not to the editor, so the next run is one click away.
+    expect(await screen.findByRole('link', { name: '安全审查 · 运行记录' })).toHaveAttribute(
       'href',
-      `/w/${WORKSPACE_SLUG}/workflows`,
+      `${EDITOR_PATH}/runs`,
     )
   })
 })

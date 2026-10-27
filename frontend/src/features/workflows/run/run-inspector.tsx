@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { workflowNodeMetadata } from '@/features/workflows/editor/node-metadata'
@@ -22,14 +23,19 @@ import type { RunNodeEntry } from '@/features/workflows/run/run-node-state'
  * idle badge — no fabricated output or timings.
  *
  * @param props.data - The frozen node definition the run pinned.
- * @param props.entry - The run's row for the node, or `undefined` when it never ran.
+ * @param props.entry - The run's row for the node, or `undefined` when it never ran. A container
+ * member's row is the one from its container's selected round.
+ * @param props.rounds - The round section of a container or of a container member, when the
+ * node belongs to one.
  */
 export function RunInspector({
   data,
   entry,
+  rounds,
 }: {
   data: WorkflowNodeData
   entry: RunNodeEntry | undefined
+  rounds?: ReactNode
 }) {
   return (
     <div
@@ -37,6 +43,7 @@ export function RunInspector({
       className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto border-l border-border p-4"
     >
       <InspectorIdentity data={data} entry={entry} />
+      {rounds}
       <InspectorConfig data={data} />
       <InspectorExecution entry={entry} />
       <InspectorOutput entry={entry} />

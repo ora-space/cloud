@@ -126,7 +126,27 @@ func Document() map[string]any {
 	commentProps["seq"] = number()
 	s["Label"] = resource("id tenantId name color version createdAt updatedAt deletedAt", "deletedAt")
 	s["Workflow"] = resource("id tenantId name description graph version createdAt updatedAt deletedAt", "deletedAt")
-	properties(s, "Workflow")["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The authored graph document: nodes, edges, viewport, editor annotations and global variables. Stored and returned whole; the editor is its only reader."}
+	workflowProps := properties(s, "Workflow")
+	workflowProps["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The authored graph document: nodes, edges, viewport, editor annotations and global variables. Stored and returned whole; the editor is its only reader."}
+	// The newest run belongs to a workflow *list* row, so a member can say when a workflow last ran
+	// without a request per row. It is an inline nullable object rather than a $ref: OpenAPI 3.0
+	// ignores every sibling of $ref, so a referenced schema could not also be nullable. Null means
+	// the workflow has never run, which is different from a run still pending. The detail read does
+	// not carry it — a run starting must not rewrite every read of the workflow resource.
+	workflowProps["latestRun"] = optional(obj{
+		"type": "object", "additionalProperties": false,
+		"description": "List rows only. The workflow's most recent run (the order the run history walks), or null when it has never run.",
+		"properties": obj{
+			"id":         uuid(),
+			"name":       str(),
+			"status":     enumeration("pending", "running", "succeeded", "failed", "cancelled"),
+			"snapshotId": uuid(),
+			"createdAt":  timestamp(),
+			"startedAt":  optional(timestamp()),
+			"finishedAt": optional(timestamp()),
+		},
+		"required": []string{"id", "name", "status", "snapshotId", "createdAt", "startedAt", "finishedAt"},
+	})
 	s["WorkflowSnapshot"] = resource("id tenantId workflowId version name graph createdAt", "")
 	properties(s, "WorkflowSnapshot")["graph"] = obj{"type": "object", "additionalProperties": true, "description": "The graph document frozen at publish time; restoring this snapshot writes it back to the workflow's live graph."}
 	s["WorkflowRun"] = resource("id tenantId workflowId snapshotId name status input nodeStates rounds error startedAt finishedAt createdAt updatedAt workflowName cancelRequestedAt pluginVersion", "startedAt finishedAt cancelRequestedAt pluginVersion")
@@ -137,7 +157,7 @@ func Document() map[string]any {
 	workflowRunProps["status"] = enumeration("pending", "running", "succeeded", "failed", "cancelled")
 	workflowRunProps["pluginVersion"] = optional(obj{"type": "string", "description": "The agent plugin version frozen into the run at creation: the frozen identity the run's agent sessions execute with. Null only when the space declared no plugin at creation (or the run predates migration 0042); the first agent node then fails with `agent_plugin_version_unfrozen`."})
 	workflowRunProps["input"] = obj{"type": "object", "additionalProperties": true, "description": "The run's input object: each form value keyed by variable name, plus the reserved `input` key carrying the kickoff text the run submitted. A run that submitted no kickoff evaluates against the Start node's authored instruction instead."}
-	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts."}
+	workflowRunProps["nodeStates"] = obj{"type": "object", "additionalProperties": true, "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `sessionEndReason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. On successful session settlement, `output.output` contains the final complete assistant answer from the initial turn when present; `sessionEndReason` retains execution evidence separately from variable roots."}
 	workflowRunProps["rounds"] = array(obj{"type": "object", "additionalProperties": true})
 	// definitionSnapshot lives only on a detail read (the history list trips without it);
 	// it is optional so one schema serves both list rows and the composed run page.
@@ -253,6 +273,7 @@ func Document() map[string]any {
 		"unattendedPolicy":      optional(str()),
 		"unattendedConsentedAt": optional(timestamp()),
 		"disabledReason":        optional(str()),
+		"nextDueAt":             optional(timestamp()),
 		"createdAt":             timestamp(), "updatedAt": timestamp(),
 	}, "id", "issueId", "creatorUserId", "name", "prompt", "agentId", "schedule", "timezone", "revision", "version", "enabled", "createdAt", "updatedAt")
 	s["ScheduledTaskList"] = object(obj{"tasks": array(ref("ScheduledTask")), "acceptanceEnabled": boolean()}, "tasks", "acceptanceEnabled")

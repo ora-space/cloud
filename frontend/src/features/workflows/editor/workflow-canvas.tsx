@@ -29,7 +29,6 @@ import type { WorkflowNodeKind } from '@/features/workflows/runtime/types'
 import {
   repairIterationGraphAfterNodeDeletion,
   resolveIterationDeletionCascade,
-  type WorkflowIterationInsertion,
 } from '@/features/workflows/runtime/iteration-graph'
 import { applyIterationDragRules } from '@/features/workflows/runtime/iteration-containment'
 import {
@@ -37,6 +36,8 @@ import {
   workflowPointInsideIterationFrame,
 } from '@/features/workflows/editor/workflow-iteration-region'
 import { WorkflowIterationActionsProvider } from '@/features/workflows/editor/workflow-iteration-actions'
+import { isValidWorkflowConnection } from '@/features/workflows/runtime/connection-validation'
+import type { WorkflowContainerInsertion } from '@/features/workflows/runtime/loop-graph'
 import { WorkflowNodeCard } from '@/features/workflows/editor/workflow-node-card'
 import { WorkflowNodeCatalog } from '@/features/workflows/editor/workflow-node-catalog'
 import type {
@@ -105,7 +106,7 @@ export interface WorkflowCanvasProps {
   /** Reports the viewport once a pan or zoom settles, so it can be saved. */
   onViewportChange?: (viewport: Viewport) => void
   /** Iteration region authoring, wired by the editable editor only. */
-  onIterationInsert?: (insertion: WorkflowIterationInsertion, kind: WorkflowNodeKind) => void
+  onIterationInsert?: (insertion: WorkflowContainerInsertion, kind: WorkflowNodeKind) => void
   /** Folds or unfolds one iteration frame. */
   onToggleIterationCollapsed?: (iterationId: string) => void
   /** Replaces the draft nodes after an iteration drag containment correction. */
@@ -139,9 +140,14 @@ export interface WorkflowCanvasProps {
  * @param props - The graph, the change handlers and the read-only flag.
  */
 export function WorkflowCanvas(props: WorkflowCanvasProps) {
+  const graph = useMemo(
+    () => ({ nodes: props.nodes, edges: props.edges }),
+    [props.nodes, props.edges],
+  )
   return (
     <ReactFlowProvider>
       <WorkflowIterationActionsProvider
+        graph={graph}
         readOnly={props.readOnly ?? false}
         onInsert={(kind, insertion) => {
           props.onIterationInsert?.(insertion, kind)
@@ -292,6 +298,8 @@ async function confirmAndResolveDeletion(
   const cascade = resolveIterationDeletionCascade(graph, requestedNodeIds)
   const repair = repairIterationGraphAfterNodeDeletion(graph, cascade.nodeIds)
   const deletedIteration = request.nodes.find((node) => node.data.kind === 'iteration')
+  const deletedContainer =
+    deletedIteration ?? request.nodes.find((node) => node.data.kind === 'loop')
   if (deletedIteration !== undefined && cascade.memberCount > 0) {
     if (services.onConfirmIterationDeletion === undefined) {
       return false
@@ -310,12 +318,12 @@ async function confirmAndResolveDeletion(
       }
     }
   }
-  if (deletedIteration === undefined) {
+  if (deletedContainer === undefined) {
     // An ordinary node delete: React Flow removes it and its edges, and the
     // draft's change pipeline runs the collect-selector repair it needs.
     return true
   }
-  // Deleting a region container takes its members and their edges along.
+  // Deleting a container takes its members and their edges along in one step.
   return {
     nodes: [...cascade.nodeIds].flatMap((id) => {
       const node = editor.graphNodes.find((candidate) => candidate.id === id)
@@ -458,6 +466,11 @@ function WorkflowCanvasInner({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          // The draft re-checks every connection; this only stops the port lighting up for a
+          // target the gesture could never be connected to.
+          isValidConnection={(connection) =>
+            isValidWorkflowConnection(connection, { nodes: graphNodes, edges: graphEdges })
+          }
           onNodeDragStart={handleNodeDragStart}
           onNodeDragStop={handleNodeDragStop}
           onBeforeDelete={handleBeforeDelete}

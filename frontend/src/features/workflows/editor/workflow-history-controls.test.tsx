@@ -61,9 +61,14 @@ function renderTools(history: WorkflowHistoryControls) {
   return renderWithProviders(<WorkflowHistoryTools history={history} />)
 }
 
-/** Opens the change-history popover from the toolbar's history button. */
+/**
+ * Opens the change-history popover from the toolbar's history button.
+ *
+ * The control reads 「编辑历史」 rather than 「历史记录」: a workflow also carries a run history and
+ * a version list, and this is the session's edits — the one that is neither of those.
+ */
 async function openPanel(): Promise<void> {
-  fireEvent.click(screen.getByRole('button', { name: '历史记录' }))
+  fireEvent.click(screen.getByRole('button', { name: '编辑历史' }))
   await screen.findByRole('dialog', { hidden: true })
 }
 

@@ -40,6 +40,10 @@ rejection count). Do not mock internal modules.
 
 The creation entry trusts the Cloud list response’s `acceptanceEnabled`; this module does not choose the gate, and the server independently validates writes. The form may select a model from the creator's default connection; its connection and credential are frozen at admission, while no selection uses the then-current default model. A disabled create is an unauthorised draft and sends no approval; a stopped task must re-check the risk disclosure before it can be enabled.
 
+The card’s “next run” only renders `nextDueAt`, which Cloud recomputes on every read, formatted in the task timezone; the frontend never evaluates the schedule itself, and a disabled task has no value.
+
 Artifact lists contain metadata only. Download links target same-origin Cloud routes; each click rechecks authorization and verifies the file before serving a safe attachment. Browsers receive no storage URL, credentials or expiry; artifact content is never rendered inside the app.
 
 History uses `artifactsExpired` to identify artifacts removed after successful delivery; a run that produced none is never labeled expired.
+
+The failure reasons `task_paused` and `task_handoff_pending` render as a pointer to the task conversation: they are resolved there, not in the task or Agent configuration. Other failure reasons keep their raw code.

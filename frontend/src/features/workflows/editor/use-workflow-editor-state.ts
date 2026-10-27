@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import type { Workflow as CloudWorkflow } from '@/api/generated.schemas'
 import { useUpdateWorkflowGraph } from '@/features/workflows/api'
 import { isAuthoredNodeChange } from '@/features/workflows/runtime/layout'
-import type { WorkflowIterationInsertion } from '@/features/workflows/runtime/iteration-graph'
+import type { WorkflowContainerInsertion } from '@/features/workflows/runtime/loop-graph'
 import type {
   WorkflowGlobalVariable,
   WorkflowLaunchField,
@@ -45,7 +45,7 @@ export interface WorkflowEditorHandlers {
   onOrganize: () => void
   onNodeDataUpdate: (data: WorkflowNodeData) => void
   /** Adds one region member through an iteration insertion seam. */
-  onIterationInsert: (insertion: WorkflowIterationInsertion, kind: WorkflowNodeKind) => void
+  onIterationInsert: (insertion: WorkflowContainerInsertion, kind: WorkflowNodeKind) => void
   /** Folds or unfolds one iteration frame; members stay in the graph. */
   onToggleIterationCollapsed: (iterationId: string) => void
   /** Replaces the graph nodes after an iteration drag correction. */
@@ -102,10 +102,10 @@ export interface WorkflowEditorState extends WorkflowEditorHandlers {
    * Publish calls this first so a released version is never stale.
    */
   flushDraft: () => Promise<boolean>
+  /** Drops an unsaved draft after the member explicitly chooses to leave. */
+  discardDraft: () => void
   /** The document version the server last confirmed; its value guards a restore. */
   committedVersion: number
-  /** Replaces the draft with a fresh workflow, e.g. after a version restore. */
-  resetDraft: (workflow: CloudWorkflow) => void
   /** Serializes the live draft, unsaved edits included, into the graph document. */
   draftGraph: () => Record<string, unknown>
   /** Replaces the workflow-wide declarations as one history step. */
@@ -192,18 +192,6 @@ export function useWorkflowEditorState(
   // edits included, so what the download previews is what the file will hold.
   const draftGraph = useCallback(() => snapshot(viewportRef.current), [snapshot])
 
-  // An external replace (a version restore) reseeds the draft and adopts the new
-  // version as the guard for later writes and a later restore.
-  const resetDraft = useCallback(
-    (next: CloudWorkflow) => {
-      draft.reset(next)
-      versionRef.current = next.version
-      setCommittedVersion(next.version)
-      cancel()
-    },
-    [cancel, draft],
-  )
-
   return {
     ...useWorkflowDraftHandlers(draft, markDirty, history, t),
     ...globalVariablesSaver,
@@ -218,8 +206,8 @@ export function useWorkflowEditorState(
     status,
     saveNow,
     flushDraft: flush,
+    discardDraft: cancel,
     committedVersion,
-    resetDraft,
     draftGraph,
     onViewportChange,
     history: workflowHistoryControls(draft, history),
@@ -474,7 +462,7 @@ function useWorkflowActionRecorder(
   )
 
   const onIterationInsert = useCallback(
-    (insertion: WorkflowIterationInsertion, kind: WorkflowNodeKind) => {
+    (insertion: WorkflowContainerInsertion, kind: WorkflowNodeKind) => {
       recordNodeAddition(kind, () => addIterationMember(insertion, kind))
     },
     [addIterationMember, recordNodeAddition],

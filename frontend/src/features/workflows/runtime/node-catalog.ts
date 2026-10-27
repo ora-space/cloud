@@ -47,6 +47,7 @@ export const WORKFLOW_NODE_PALETTE: readonly WorkflowNodeKind[] = [
   'iteration',
   'output',
   // Offered only by a loop body's insert menu: the marker is meaningless outside a container.
+  // Output is never offered there: the publish gate refuses an Output inside a loop body.
   'loopExit',
 ]
 
@@ -73,9 +74,9 @@ function defineNodeType(
  */
 const NODE_TYPE_DEFINITIONS: Record<WorkflowNodeKind, WorkflowNodeTypeDefinition> = {
   start: defineNodeType('start', ['initialPrompt'], ['workflow']),
-  agent: defineNodeType('agent', ['agent'], ['workflow', 'iteration']),
-  condition: defineNodeType('condition', ['condition'], ['workflow', 'iteration']),
-  aggregator: defineNodeType('aggregator', ['aggregator'], ['workflow', 'iteration']),
+  agent: defineNodeType('agent', ['agent'], ['workflow', 'iteration', 'loop']),
+  condition: defineNodeType('condition', ['condition'], ['workflow', 'iteration', 'loop']),
+  aggregator: defineNodeType('aggregator', ['aggregator'], ['workflow', 'iteration', 'loop']),
   tool: defineNodeType('tool', ['tool'], ['workflow']),
   junction: defineNodeType('junction', ['waitStrategy', 'failureStrategy'], ['workflow']),
   human: defineNodeType('human', ['approvalPrompt'], ['workflow']),

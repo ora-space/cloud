@@ -187,7 +187,7 @@ describe('useWorkflowDraft', () => {
     ])
   })
 
-  it('adds a loopExit at relative coordinates inside a displaced loop and ignores an unknown loop', () => {
+  it('adds a loopExit after the right-most body member, wired and owned by the loop, and ignores an unknown loop', () => {
     const { result } = setup(fixtureWithGraph([outputNode()]))
 
     act(() => {
@@ -200,7 +200,16 @@ describe('useWorkflowDraft', () => {
     const exit = result.current.nodes.find((node) => node.data.kind === 'loopExit')
     expect(exit?.data.containerId).toBe('loop-1')
     expect(exit?.parentId).toBe('loop-1')
-    expect(exit?.position).toEqual({ x: 320, y: 240 })
+    // One column right of the starter agent at {350,145}: relative to the loop, whatever its
+    // position on the canvas.
+    expect(exit?.position).toEqual({ x: 680, y: 145 })
+    expect(result.current.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: 'loop-1-agent', target: exit?.id }),
+      ]),
+    )
+    const loop = result.current.nodes.find((node) => node.id === 'loop-1')
+    expect(loop?.initialWidth).toBe(960)
 
     act(() => {
       result.current.addLoopExit('missing-loop')

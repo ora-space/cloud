@@ -8,6 +8,7 @@ import type {
   ProjectRepository,
   RepositoryOperation,
   Workflow,
+  WorkflowSnapshot,
   WorkspaceBranch,
   WorkspaceListItem,
 } from '@/api/generated.schemas'
@@ -118,6 +119,28 @@ export function workflowFixture(overrides: Partial<Workflow> = {}): Workflow {
     createdAt: '2026-09-20T10:00:00+08:00',
     updatedAt: '2026-09-20T10:00:00+08:00',
     deletedAt: null,
+    ...overrides,
+  }
+}
+
+/**
+ * A published version of the fixture workflow, as the snapshot endpoints return it.
+ *
+ * Versions are numbered per workflow and immutable, so the id and the default name both derive
+ * from the number; a test that cares about the label passes one.
+ */
+export function workflowSnapshotFixture(
+  version: number,
+  overrides: Partial<WorkflowSnapshot> = {},
+): WorkflowSnapshot {
+  return {
+    id: `snap-${version}`,
+    tenantId: TEST_TENANT_ID,
+    workflowId: '44444444-4444-4444-4444-444444444444',
+    name: `版本 ${version}`,
+    version,
+    graph: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+    createdAt: '2026-09-20T10:00:00+08:00',
     ...overrides,
   }
 }

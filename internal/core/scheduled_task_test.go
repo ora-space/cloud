@@ -225,3 +225,138 @@ func TestLatestDueRespectsDSTWallClockPolicy(t *testing.T) {
 		}
 	})
 }
+
+func mustLoadLocation(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
+}
+
+// The displayed next due point must be exactly the point the worker's latestDue admits next: the
+// worker lands on it once the clock reaches it, and no other point becomes due before it.
+func TestNextScheduledDueMatchesWorkerLatestDue(t *testing.T) {
+	newYork := mustLoadLocation(t, "America/New_York")
+	berlin := mustLoadLocation(t, "Europe/Berlin")
+	shanghai := mustLoadLocation(t, "Asia/Shanghai")
+	cases := []struct {
+		name     string
+		schedule scheduledTaskSchedule
+		loc      *time.Location
+		anchor   time.Time
+		from     time.Time
+	}{
+		{"every_hours_utc", scheduledTaskSchedule{Kind: "every_hours", IntervalHours: 5}, time.UTC, time.Date(2026, 1, 1, 10, 17, 3, 0, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"every_hours_spring_forward", scheduledTaskSchedule{Kind: "every_hours", IntervalHours: 3}, newYork, time.Date(2026, 3, 6, 23, 40, 0, 0, newYork), time.Date(2026, 3, 6, 0, 0, 0, 0, newYork)},
+		{"every_hours_fall_back", scheduledTaskSchedule{Kind: "every_hours", IntervalHours: 1}, newYork, time.Date(2026, 10, 31, 22, 5, 0, 0, newYork), time.Date(2026, 10, 31, 0, 0, 0, 0, newYork)},
+		{"daily_spring_forward_gap", scheduledTaskSchedule{Kind: "daily", Hour: 2, Minute: 30}, newYork, time.Date(2026, 3, 1, 12, 0, 0, 0, newYork), time.Date(2026, 3, 5, 0, 0, 0, 0, newYork)},
+		{"daily_fall_back_repeat", scheduledTaskSchedule{Kind: "daily", Hour: 1, Minute: 30}, newYork, time.Date(2026, 10, 25, 12, 0, 0, 0, newYork), time.Date(2026, 10, 29, 0, 0, 0, 0, newYork)},
+		{"daily_berlin_fall_back", scheduledTaskSchedule{Kind: "daily", Hour: 2, Minute: 30}, berlin, time.Date(2026, 10, 20, 12, 0, 0, 0, berlin), time.Date(2026, 10, 22, 0, 0, 0, 0, berlin)},
+		{"weekly_shanghai", scheduledTaskSchedule{Kind: "weekly", Hour: 18, Weekdays: []time.Weekday{time.Monday, time.Friday}}, shanghai, time.Date(2026, 1, 1, 9, 0, 0, 0, shanghai), time.Date(2026, 1, 1, 0, 0, 0, 0, shanghai)},
+		{"weekly_spring_forward_gap", scheduledTaskSchedule{Kind: "weekly", Hour: 2, Minute: 30, Weekdays: []time.Weekday{time.Sunday}}, newYork, time.Date(2026, 2, 20, 12, 0, 0, 0, newYork), time.Date(2026, 2, 25, 0, 0, 0, 0, newYork)},
+		{"weekly_fall_back_repeat", scheduledTaskSchedule{Kind: "weekly", Hour: 1, Minute: 30, Weekdays: []time.Weekday{time.Sunday}}, newYork, time.Date(2026, 10, 20, 12, 0, 0, 0, newYork), time.Date(2026, 10, 25, 0, 0, 0, 0, newYork)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 17-minute steps over three weeks cross every slot, the DST transition, and the
+			// before-anchor window from several offsets.
+			for now := tc.from; now.Before(tc.from.Add(21 * 24 * time.Hour)); now = now.Add(17 * time.Minute) {
+				next := tc.schedule.nextScheduledDue(tc.anchor, now, tc.loc)
+				if next.IsZero() || !next.After(now) || !next.After(tc.anchor) {
+					t.Fatalf("now %v: nextScheduledDue = %v, want a point after now and the anchor %v", now, next, tc.anchor)
+				}
+				if got := tc.schedule.latestDue(tc.anchor, next, tc.loc); !got.Equal(next) {
+					t.Fatalf("now %v: worker at next %v admits %v instead", now, next, got)
+				}
+				before, current := tc.schedule.latestDue(tc.anchor, next.Add(-time.Nanosecond), tc.loc), tc.schedule.latestDue(tc.anchor, now, tc.loc)
+				if !before.Equal(current) {
+					t.Fatalf("now %v: worker admits %v before the projected next %v", now, before, next)
+				}
+			}
+		})
+	}
+}
+
+func TestNextScheduledDueExamples(t *testing.T) {
+	newYork := mustLoadLocation(t, "America/New_York")
+	hourly := scheduledTaskSchedule{Kind: "every_hours", IntervalHours: 2}
+	anchor := time.Date(2026, 1, 1, 10, 17, 0, 0, time.UTC)
+	// nextDue(now) would answer 15:00; the worker's grid is anchored at 10:17.
+	if got := hourly.nextScheduledDue(anchor, time.Date(2026, 1, 1, 13, 0, 0, 0, time.UTC), time.UTC); !got.Equal(time.Date(2026, 1, 1, 14, 17, 0, 0, time.UTC)) {
+		t.Fatalf("every_hours next = %v, want 14:17 on the anchor grid", got)
+	}
+	if got := hourly.nextScheduledDue(anchor, anchor, time.UTC); !got.Equal(anchor.Add(2 * time.Hour)) {
+		t.Fatalf("every_hours next at the anchor = %v, want anchor plus one interval", got)
+	}
+	if got := hourly.nextScheduledDue(anchor, anchor.Add(-time.Hour), time.UTC); !got.Equal(anchor.Add(2 * time.Hour)) {
+		t.Fatalf("every_hours next before the anchor = %v, want anchor plus one interval", got)
+	}
+	widest := scheduledTaskSchedule{Kind: "every_hours", IntervalHours: int(maxScheduledTaskIntervalHours)}
+	if got := widest.nextScheduledDue(anchor, anchor.Add(time.Hour), time.UTC); got.IsZero() || !got.After(anchor) {
+		t.Fatalf("widest every_hours next = %v, want a point after the anchor without overflow", got)
+	}
+
+	daily := scheduledTaskSchedule{Kind: "daily", Hour: 2, Minute: 30}
+	dailyAnchor := time.Date(2026, 3, 1, 12, 0, 0, 0, newYork)
+	// 2026-03-08 02:30 does not exist in New York; the next admitted point is the following day.
+	if got := daily.nextScheduledDue(dailyAnchor, time.Date(2026, 3, 8, 0, 0, 0, 0, newYork), newYork); !got.Equal(time.Date(2026, 3, 9, 2, 30, 0, 0, newYork)) {
+		t.Fatalf("daily next across spring forward = %v, want 2026-03-09 02:30", got)
+	}
+	repeat := scheduledTaskSchedule{Kind: "daily", Hour: 1, Minute: 30}
+	firstOccurrence := time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC) // 01:30 EDT
+	if got := repeat.nextScheduledDue(dailyAnchor, time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC), newYork); !got.Equal(firstOccurrence) {
+		t.Fatalf("daily next before fall back = %v, want first occurrence %v", got, firstOccurrence)
+	}
+	// Between the two 01:30s only the first is admitted, so the next point is the following day.
+	if got := repeat.nextScheduledDue(dailyAnchor, time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC), newYork); !got.Equal(time.Date(2026, 11, 2, 1, 30, 0, 0, newYork)) {
+		t.Fatalf("daily next after the first repeated 01:30 = %v, want 2026-11-02 01:30", got)
+	}
+	// An anchor later than now (re-enabled just now) still selects the first slot after the anchor.
+	lateAnchor := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	if got := (scheduledTaskSchedule{Kind: "daily", Hour: 9}).nextScheduledDue(lateAnchor, lateAnchor.Add(-time.Minute), time.UTC); !got.Equal(lateAnchor.AddDate(0, 0, 1)) {
+		t.Fatalf("daily next with a slot exactly at the anchor = %v, want the following day", got)
+	}
+}
+
+func TestScheduledTaskNextDueAtFollowsEnableAnchor(t *testing.T) {
+	now := time.Date(2026, 1, 1, 13, 0, 0, 0, time.UTC)
+	task := func(enabled bool, enabledAt string) Object {
+		return Object{
+			"enabled":   enabled,
+			"enabledAt": enabledAt,
+			"timezone":  "Asia/Shanghai",
+			"schedule":  Object{"kind": "every_hours", "intervalHours": 2},
+		}
+	}
+	if got := scheduledTaskNextDueAt(task(true, "2026-01-01T10:17:00Z"), now); got != "2026-01-01T14:17:00Z" {
+		t.Fatalf("enabled nextDueAt = %v, want 2026-01-01T14:17:00Z", got)
+	}
+	// Manual disable keeps the anchor (D2) but the task is off: nothing is due.
+	if got := scheduledTaskNextDueAt(task(false, "2026-01-01T10:17:00Z"), now); got != nil {
+		t.Fatalf("manually disabled nextDueAt = %v, want none", got)
+	}
+	// Automatic disable clears the anchor.
+	if got := scheduledTaskNextDueAt(task(false, ""), now); got != nil {
+		t.Fatalf("auto-disabled nextDueAt = %v, want none", got)
+	}
+	// enable moves the anchor to the database clock; the projection follows the new anchor.
+	if got := scheduledTaskNextDueAt(task(true, "2026-01-01T12:59:30Z"), now); got != "2026-01-01T14:59:30Z" {
+		t.Fatalf("re-enabled nextDueAt = %v, want 2026-01-01T14:59:30Z", got)
+	}
+	daily := Object{"enabled": true, "enabledAt": "2026-01-01T00:00:00Z", "timezone": "Asia/Shanghai", "schedule": Object{"kind": "daily", "hour": 9, "minute": 0}}
+	if got := scheduledTaskNextDueAt(daily, now); got != "2026-01-02T01:00:00Z" {
+		t.Fatalf("daily nextDueAt in task timezone = %v, want 2026-01-02T01:00:00Z (09:00 +08:00)", got)
+	}
+	for name, broken := range map[string]Object{
+		"unknown_timezone": {"enabled": true, "enabledAt": "2026-01-01T10:17:00Z", "timezone": "Mars/Base", "schedule": Object{"kind": "daily", "hour": 9, "minute": 0}},
+		"no_timezone":      {"enabled": true, "enabledAt": "2026-01-01T10:17:00Z", "schedule": Object{"kind": "daily", "hour": 9, "minute": 0}},
+		"corrupt_schedule": {"enabled": true, "enabledAt": "2026-01-01T10:17:00Z", "timezone": "UTC", "schedule": Object{"kind": "cron"}},
+		"invalid_anchor":   {"enabled": true, "enabledAt": "yesterday", "timezone": "UTC", "schedule": Object{"kind": "daily", "hour": 9, "minute": 0}},
+	} {
+		if got := scheduledTaskNextDueAt(broken, now); got != nil {
+			t.Fatalf("%s nextDueAt = %v, want none", name, got)
+		}
+	}
+}

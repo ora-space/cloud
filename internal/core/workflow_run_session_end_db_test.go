@@ -125,7 +125,7 @@ func TestWorkflowSessionEndsAfterSuccessfulTurn(t *testing.T) {
 		t.Fatalf("run settled %q error %q states=%v; want succeeded", status, runErr, states)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "succeeded" || agent.O("output").S("reason") != "idle_timeout" {
+	if agent == nil || agent.S("status") != "succeeded" || agent.S("sessionEndReason") != "idle_timeout" {
 		t.Fatalf("agent state = %v; want succeeded/idle_timeout", states["a"])
 	}
 	assertRunWorkspaceReleased(t, store, runID)
@@ -229,7 +229,7 @@ func TestWorkflowSessionEndDeadlineFailsNode(t *testing.T) {
 		t.Fatalf("run settled %q error %q states=%v; want the end deadline failure", status, runErr, states)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "failed" || agent.O("output").S("reason") != "session_end_deadline_exceeded" {
+	if agent == nil || agent.S("status") != "failed" || agent.S("sessionEndReason") != "session_end_deadline_exceeded" {
 		t.Fatalf("agent state = %v; want the end deadline failure", states["a"])
 	}
 	if got := agent.S("error"); got != "session_end_deadline_exceeded" {

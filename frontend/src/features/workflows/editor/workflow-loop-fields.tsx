@@ -23,6 +23,7 @@ import type {
 } from '@/features/workflows/runtime/types'
 import type { TranslationKey } from '@/i18n/i18n-instance'
 import { InspectorField } from '@/features/workflows/editor/workflow-inspector-fields'
+import { loopExitInsertion } from '@/features/workflows/runtime/loop-graph'
 import {
   LocalizedChoiceSelect,
   WorkflowChoiceSelect,
@@ -104,15 +105,54 @@ export function LoopNodeFields({
         choices={choices}
       />
       {onAddExit === undefined ? null : (
-        <Button type="button" variant="outline" size="sm" onClick={onAddExit}>
-          <Plus />
-          {t('workflows.loop.addExitNode')}
-        </Button>
+        <LoopExitAction
+          nodeId={nodeId}
+          graphNodes={graphNodes}
+          edges={edges}
+          onAddExit={onAddExit}
+        />
       )}
       <p className="rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
         {loopConfig === undefined ? t('workflows.loop.legacyUnsupported') : null}
       </p>
     </>
+  )
+}
+
+/**
+ * The inspector's "add early exit" action, offered only where it has a seam.
+ *
+ * The exit is appended after the right-most body member that does round work; with only the body
+ * Start and Conditions there is none (an exit after Start would end every round at once, and one
+ * after a Condition would silently take its ELSE). The action is then disabled and says where a
+ * branch's exit comes from instead.
+ */
+function LoopExitAction({
+  nodeId,
+  graphNodes,
+  edges,
+  onAddExit,
+}: Pick<LoopFieldsProps, 'nodeId' | 'graphNodes' | 'edges'> & { onAddExit: () => void }) {
+  const { t } = useTranslation()
+  const available =
+    loopExitInsertion({ nodes: [...graphNodes], edges: [...edges] }, nodeId) !== null
+  // With a Condition in the body the exit belongs on one of its branches; without one there is
+  // simply no step yet to end the round after.
+  const hasBranch = graphNodes.some(
+    (node) => node.data.kind === 'condition' && (node.data.containerId ?? node.parentId) === nodeId,
+  )
+  return (
+    <div className="space-y-1.5">
+      <Button type="button" variant="outline" size="sm" disabled={!available} onClick={onAddExit}>
+        <Plus />
+        {t('workflows.loop.addExitNode')}
+      </Button>
+      {!available && (
+        <p className="text-[11px] leading-5 text-muted-foreground">
+          {t(hasBranch ? 'workflows.loop.addExitFromBranch' : 'workflows.loop.addExitNeedsStep')}
+        </p>
+      )}
+    </div>
   )
 }
 

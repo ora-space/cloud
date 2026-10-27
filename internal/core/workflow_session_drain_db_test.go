@@ -41,11 +41,11 @@ func TestWorkflowLoopTimeoutDrainsBeforeFailure(t *testing.T) {
 			status, detail, raw, version := readWorkflowRun(t, store, id)
 			states = workflowStatesFromJSON(raw)
 			loop := states["l"].Loop
-			if status != "failed" || detail != wantError || loop.Round != 1 || len(loop.Completed) != 1 || states["l"].Status != "failed" || states["agg"].Output.S("reason") != wantReason {
+			if status != "failed" || detail != wantError || loop.Round != 1 || len(loop.Completed) != 1 || states["l"].Status != "failed" || states["agg"].SessionEndReason != wantReason || states["agg"].Output != nil {
 				t.Fatalf("loop drain lost failure: %s %s %v", status, detail, raw)
 			}
 			archive, _ := asWorkflowObject(loop.Completed[0])
-			if archive.O("states").O("agg").O("output").S("reason") != wantReason {
+			if archive.O("states").O("agg").S("sessionEndReason") != wantReason || archive.O("states").O("agg")["output"] != nil {
 				t.Fatal("loop archive disagrees with member diagnosis")
 			}
 			assertRunWorkspaceReleased(t, store, id)
@@ -111,7 +111,7 @@ func TestWorkflowIterationTimeoutDrainsBeforeNextRound(t *testing.T) {
 					t.Fatalf("confirmed timeout did not continue: %s %v", status, raw)
 				}
 				archive, _ := asWorkflowObject(states["it"].Iteration.Completed[0])
-				if archive.O("states").O("agg").O("output").S("reason") != workflowSessionTurnDeadlineExceeded {
+				if archive.O("states").O("agg").S("sessionEndReason") != workflowSessionTurnDeadlineExceeded || archive.O("states").O("agg")["output"] != nil {
 					t.Fatal("termination acknowledgement replaced timeout diagnosis")
 				}
 			} else {
@@ -125,7 +125,7 @@ func TestWorkflowIterationTimeoutDrainsBeforeNextRound(t *testing.T) {
 					t.Fatalf("unconfirmed session continued or lost archive: %s %v", status, raw)
 				}
 				_, detail, _, _ := readWorkflowRun(t, store, id)
-				if detail != "session end deadline exceeded" || states["agg"].Error != "session_end_deadline_exceeded" || states["agg"].Output.S("reason") != "session_end_deadline_exceeded" {
+				if detail != "session end deadline exceeded" || states["agg"].Error != "session_end_deadline_exceeded" || states["agg"].SessionEndReason != "session_end_deadline_exceeded" || states["agg"].Output != nil {
 					t.Fatal("end-confirmation timeout does not follow D4 diagnostics")
 				}
 				assertRunWorkspaceReleased(t, store, id)

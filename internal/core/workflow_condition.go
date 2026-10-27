@@ -17,9 +17,7 @@ import (
 // `structured_output` when the node declares an output contract; output: `output`; condition: none),
 // and nested walks object fields past the root.
 //
-// Today only the start node actually writes roots. Agent and output roots are declared by the
-// contract but stay unassigned until cloud#70/#74 completes the variable passing, so a selector on
-// them reads the same declared-but-unassigned state desktop has before a node produces its output.
+// Agent output stays unassigned until its successful turn and session terminal evidence commit.
 // Cloud's runtime has no declaration set — the states map cannot tell an unassigned variable from one
 // the graph never declared — so the publish gate refuses selectors naming an unknown node or a root
 // its kind does not expose (`condition_selector_undeclared`), which desktop's pool reports as

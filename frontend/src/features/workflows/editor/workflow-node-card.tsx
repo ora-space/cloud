@@ -10,6 +10,7 @@ import {
 } from '@/features/workflows/runtime/node-geometry'
 import { NodeParameterSummary } from '@/features/workflows/editor/node-parameter-summary'
 import { IterationNodeFrame } from '@/features/workflows/editor/iteration-node-frame'
+import { LoopNodeFrame } from '@/features/workflows/editor/loop-node-frame'
 import { NodeIdentity } from '@/features/workflows/editor/node-identity'
 import { WorkflowNodeSourceHandles } from '@/features/workflows/editor/workflow-node-source-handles'
 import { useWorkflowTranslator } from '@/features/workflows/editor/use-workflow-translator'
@@ -42,6 +43,9 @@ export const WorkflowNodeCard = memo(function WorkflowNodeCard({
 
   if (data.kind === 'iteration') {
     return <IterationNodeFrame id={id} data={data} selected={selected} deletable={deletable} />
+  }
+  if (data.kind === 'loop') {
+    return <LoopNodeFrame id={id} data={data} selected={selected} deletable={canDelete} />
   }
 
   return (

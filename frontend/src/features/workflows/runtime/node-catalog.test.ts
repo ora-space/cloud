@@ -29,8 +29,14 @@ describe('workflow node catalog', () => {
     expect(supportsWorkflowNodeScope('start', 'iteration')).toBe(false)
   })
 
-  it('offers only the early-exit marker inside a loop body', () => {
-    expect(workflowPaletteNodeTypes('loop').map((entry) => entry.kind)).toEqual(['loopExit'])
+  it('offers a loop body the nodes a round can run plus its early exit, but never an Output', () => {
+    // The publish gate refuses an Output inside a loop body (loop_body_output_unsupported).
+    expect(workflowPaletteNodeTypes('loop').map((entry) => entry.kind)).toEqual([
+      'agent',
+      'condition',
+      'aggregator',
+      'loopExit',
+    ])
   })
 
   it('allows only the nodes a region can run in the iteration scope', () => {

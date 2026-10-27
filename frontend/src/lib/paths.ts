@@ -33,6 +33,8 @@ export function workspacePaths(slug: string) {
     projectDetail: (id: string) => `${base}/projects/${id}`,
     workflows: `${base}/workflows`,
     workflowDetail: (id: string) => `${base}/workflows/${id}`,
+    workflowRuns: (workflowId: string) => `${base}/workflows/${workflowId}/runs`,
+    workflowVersions: (workflowId: string) => `${base}/workflows/${workflowId}/versions`,
     workflowRun: (workflowId: string, runId: string) =>
       `${base}/workflows/${workflowId}/runs/${runId}`,
     spaces: `${base}/spaces`,

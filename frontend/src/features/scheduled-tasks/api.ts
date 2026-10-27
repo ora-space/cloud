@@ -172,6 +172,32 @@ export function scheduleSummary(schedule: ScheduledTaskSchedule): string {
   }
 }
 
+/**
+ * Renders the server-projected next due point in the task's own timezone ("2026-10-28 09:00").
+ * The value is display-only and recomputed by Cloud on every read; an unknown zone falls back to
+ * the viewer's locale rather than hiding the time.
+ */
+export function nextDueSummary(nextDueAt: string, timezone: string): string {
+  const at = new Date(nextDueAt)
+  const options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }
+  let parts: Intl.DateTimeFormatPart[]
+  try {
+    parts = new Intl.DateTimeFormat('en-CA', { ...options, timeZone: timezone }).formatToParts(at)
+  } catch {
+    return at.toLocaleString()
+  }
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`
+}
+
 const FAULT_MESSAGES: Record<string, string> = {
   artifact_unavailable: '产物已不可用，可能已过期或被清理',
   artifact_invalid: '产物下载地址不可用，请重试',

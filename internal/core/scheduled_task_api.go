@@ -42,8 +42,8 @@ func nilIfEmpty(s string) any {
 
 // scheduledTaskOut is the REST projection of one definition. The frozen prompt, the schedule shape
 // and the consent fact are the definition's own fields; occurrences and run outcomes live in
-// history, not here.
-func scheduledTaskOut(task Object) Object {
+// history, not here. `now` is the database clock the worker also evaluates against.
+func scheduledTaskOut(task Object, now time.Time) Object {
 	return Object{
 		"id":                    task.S("id"),
 		"issueId":               task.S("issueId"),
@@ -60,9 +60,39 @@ func scheduledTaskOut(task Object) Object {
 		"unattendedPolicy":      task.S("unattendedPolicy"),
 		"unattendedConsentedAt": task["unattendedConsentedAt"],
 		"disabledReason":        nilIfEmpty(task.S("disabledReason")),
+		"nextDueAt":             scheduledTaskNextDueAt(task, now),
 		"createdAt":             task["createdAt"],
 		"updatedAt":             task["updatedAt"],
 	}
+}
+
+// scheduledTaskNextDueAt projects the next due point (ADR D1/D2) for display: recomputed on every
+// read from the schedule, the task timezone and the enable anchor with the worker's own rules, never
+// stored. A disabled task, or a row the worker itself could not evaluate, has none.
+func scheduledTaskNextDueAt(task Object, now time.Time) any {
+	if !task.B("enabled") || task.S("enabledAt") == "" {
+		return nil
+	}
+	anchor, err := time.Parse(time.RFC3339Nano, task.S("enabledAt"))
+	if err != nil {
+		return nil
+	}
+	if task.S("timezone") == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(task.S("timezone"))
+	if err != nil {
+		return nil
+	}
+	schedule, err := parseScheduledTaskSchedule(task["schedule"])
+	if err != nil {
+		return nil
+	}
+	due := schedule.nextScheduledDue(anchor, now, loc)
+	if due.IsZero() {
+		return nil
+	}
+	return due.UTC().Format(time.RFC3339Nano)
 }
 
 // scheduledTaskCreate persists one definition (POST /scheduled-tasks). The creator is the caller;
@@ -126,7 +156,7 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 		id, r.TenantID, issueID, uid, agentID, name, prompt, nilIfEmpty(model), jsonText(scheduleDoc), timezone,
 		enabled, enabledAt, policy, consentedAt)
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1", id)
-	return scheduledTaskOut(task)
+	return scheduledTaskOut(task, dbNow(t))
 }
 
 // nilTime is the NULL timestamptz value for optional instants.
@@ -199,7 +229,7 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 		  AND version=$11`, name, prompt, nilIfEmpty(model), agentID, jsonText(scheduleDoc), timezone,
 		revision, task.S("id"), r.TenantID, uid, body.N("version"))
 	require(updated == 1, 409, "version_conflict")
-	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
+	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")), dbNow(t))
 }
 
 // scheduleDocJSONChanged compares the stored schedule document with the candidate after
@@ -263,7 +293,7 @@ func scheduledTaskEnable(t *transaction, r *PublicRequest, uid string) Object {
 		SET enabled=true, enabled_at=now(), disabled_reason=NULL,
 		    unattended_policy=$2, unattended_consented_at=$3, updated_at=now()
 		WHERE id=$1 AND enabled=false`, task.S("id"), policy, consentedAt)
-	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
+	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")), dbNow(t))
 }
 
 // scheduledTaskDisable turns the task off (POST .../disable). Only future admissions stop; the
@@ -273,7 +303,7 @@ func scheduledTaskDisable(t *transaction, r *PublicRequest, uid string) Object {
 	t.exec(`UPDATE scheduled_tasks
 		SET enabled=false, disabled_reason='manual', updated_at=now()
 		WHERE id=$1 AND enabled`, task.S("id"))
-	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
+	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")), dbNow(t))
 }
 
 // scheduledTaskRevokeConsent clears the unattended consent and disables the task (D5: 撤销同意自动
@@ -286,7 +316,7 @@ func scheduledTaskRevokeConsent(t *transaction, r *PublicRequest, uid string) Ob
 		SET unattended_policy=NULL, unattended_consented_at=NULL,
 		    enabled=false, disabled_reason='consent_revoked', updated_at=now()
 		WHERE id=$1`, task.S("id"))
-	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")))
+	return scheduledTaskOut(t.one("SELECT * FROM scheduled_tasks WHERE id=$1", task.S("id")), dbNow(t))
 }
 
 // scheduledTaskDelete soft-deletes the definition (D7: 墓碑保留，既有运行关联不变). History stays

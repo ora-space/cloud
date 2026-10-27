@@ -82,13 +82,26 @@ func runActivityDetails(runID, executorType, executorID string, extra Object) Ob
 // dispatches: dispatch is the caller's post-commit responsibility.
 func enqueueRun(t *transaction, tid, iid, executorType, executorID string, input Object, triggerKind string, triggerRef any, actorType, actorID string) Object {
 	if executorType == "agent" && isSpaceAgentRun(t, tid, executorID) {
-		// Direct inputs cannot create a newer pending Run that prevents the earlier message
-		// from materializing its own Run (the pending-executor uniqueness is unchanged).
-		require(t.one(`SELECT 1 FROM task_conversations WHERE tenant_id=$1 AND issue_id=$2 AND paused_run_id IS NOT NULL`, tid, iid) == nil, 409, "task_paused")
-		require(t.one(`SELECT 1 FROM task_conversation_messages WHERE tenant_id=$1 AND issue_id=$2 AND state='failed' LIMIT 1`, tid, iid) == nil, 409, "task_paused")
-		require(t.one(`SELECT 1 FROM task_conversation_messages WHERE tenant_id=$1 AND issue_id=$2 AND state='waiting' LIMIT 1`, tid, iid) == nil, 409, "task_handoff_pending")
+		gap := taskConversationInputGap(t, tid, iid)
+		require(gap == "", 409, gap)
 	}
 	return enqueueAdmittedRun(t, tid, iid, executorType, executorID, input, triggerKind, triggerRef, actorType, actorID)
+}
+
+// taskConversationInputGap reports why the issue's task conversation refuses a new Space Agent
+// input: task_paused while it is paused or holds an unresolved failed message, task_handoff_pending
+// while an earlier message is still waiting. Direct inputs cannot create a newer pending Run that
+// prevents the earlier message from materializing its own Run (the pending-executor uniqueness is
+// unchanged). Empty means the conversation accepts the input.
+func taskConversationInputGap(t *transaction, tid, iid string) string {
+	if t.one(`SELECT 1 FROM task_conversations WHERE tenant_id=$1 AND issue_id=$2 AND paused_run_id IS NOT NULL`, tid, iid) != nil ||
+		t.one(`SELECT 1 FROM task_conversation_messages WHERE tenant_id=$1 AND issue_id=$2 AND state='failed' LIMIT 1`, tid, iid) != nil {
+		return "task_paused"
+	}
+	if t.one(`SELECT 1 FROM task_conversation_messages WHERE tenant_id=$1 AND issue_id=$2 AND state='waiting' LIMIT 1`, tid, iid) != nil {
+		return "task_handoff_pending"
+	}
+	return ""
 }
 
 // enqueueAdmittedRun persists a Run only after the caller owns input admission. Direct creation

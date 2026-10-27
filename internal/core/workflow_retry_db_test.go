@@ -65,7 +65,7 @@ func requireRetrying(t *testing.T, state Object, attempt int64) time.Time {
 	if state.S("startedAt") == "" {
 		t.Fatalf("state = %v; the failed attempt's start instant must be kept", state)
 	}
-	if state.S("error") != "agent_failed" || state.O("output").S("reason") != "agent_failed" {
+	if state.S("error") != "agent_failed" || state.S("sessionEndReason") != "agent_failed" {
 		t.Fatalf("state = %v; want the failed attempt's reason kept as agent_failed", state)
 	}
 	at, err := time.Parse(time.RFC3339, state.S("retryAt"))
@@ -234,7 +234,7 @@ func TestWorkflowRetryWaitsThenStartsTheNextAttempt(t *testing.T) {
 	}
 	agent, _ := asWorkflowObject(states["a"])
 	outs, _ := asWorkflowObject(states["o"])
-	if agent == nil || agent.S("status") != "succeeded" || agent.N("attempt") != 2 || agent.O("output").S("reason") != "idle_timeout" {
+	if agent == nil || agent.S("status") != "succeeded" || agent.N("attempt") != 2 || agent.S("sessionEndReason") != "idle_timeout" {
 		t.Fatalf("agent state = %v; want succeeded attempt 2 with its own result", states["a"])
 	}
 	if outs == nil || outs.S("status") != "succeeded" {
@@ -591,7 +591,7 @@ func TestWorkflowRetryDecidesOnTheSessionReasonNotItsDetail(t *testing.T) {
 	}
 	agent, _ := asWorkflowObject(states["a"])
 	if agent == nil || agent.S("status") != "failed" || agent.N("attempt") != 2 || agent.S("retryAt") != "" ||
-		agent.S("error") != "agent_plugin_unavailable" || agent.O("output").S("reason") != "agent_plugin_unavailable" {
+		agent.S("error") != "agent_plugin_unavailable" || agent.S("sessionEndReason") != "agent_plugin_unavailable" {
 		t.Fatalf("agent state = %v; want failed attempt 2 with the lifted reason and no retryAt", states["a"])
 	}
 	var unregistered int
@@ -637,7 +637,7 @@ func TestWorkflowRunCancelWhileRetryingStartsNoAttempt(t *testing.T) {
 	if agent == nil || agent.S("status") != "cancelled" || agent.N("attempt") != 1 {
 		t.Fatalf("agent state = %v; want cancelled keeping attempt 1", states["a"])
 	}
-	if agent.S("retryAt") != "" || agent.S("finishedAt") == "" || agent.S("error") != "" || agent.O("output").S("reason") != "cancelled" {
+	if agent.S("retryAt") != "" || agent.S("finishedAt") == "" || agent.S("error") != "" || agent.S("sessionEndReason") != "cancelled" {
 		t.Fatalf("agent state = %v; a cancelled wait is finished, unscheduled and carries no error", agent)
 	}
 	var unregistered, sessions int

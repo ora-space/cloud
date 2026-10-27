@@ -23,6 +23,9 @@ and importing workflows from plugins.
   checks nothing about completeness: a half-written draft is a legitimate document. Only **publishing** judges
   whether a graph can execute, returning problems together with the node or slot at fault so the editor can mark
   them. A frozen published version is a graph Cloud has agreed to execute.
+  Switching tabs or leaving through an editor toolbar link waits for an outstanding draft save. If it fails, the
+  author may stay in the editor or discard unsaved changes and leave, avoiding both a stale canvas on return and a
+  failed draft that traps them in the editor.
 - **Versions are immutable.** Published versions (`workflow_snapshots`) are stored under a per-workflow increasing
   version number and are never modified or soft-deleted, so the graph a run rendered never drifts with the document.
   Publishing locks the workflow row, so two concurrent publishes never get the same version number. A snapshot's
@@ -88,6 +91,18 @@ after upgrading. No bindings still produce an empty object, and committed termin
 recomputed. Publication admission cannot retroactively protect old snapshots; inspect their Output
 bindings before upgrading.
 
+## Agent inputs and outputs
+
+Before dispatch, an Agent prompt uses the Condition template renderer for `{{#node.root#}}`, reading
+committed variables in its current scope and frozen globals. Missing variables, invalid paths and
+unterminated templates fail the node without sending unresolved placeholders to the model. Retries
+render again; loop and iteration members read their current round's variables.
+After the initial turn succeeds and the session terminal evidence commits, the final complete visible
+answer is stored in the Agent state's `output.output`, exposed as `{agent}.output` to bindings.
+Tool preambles, other turns and older attempts do not become deliverables. No answer leaves the root
+unassigned; truncated history is never published as a complete answer. Execution evidence lives in
+`sessionEndReason`, outside the variable roots. Already terminal historical runs are not backfilled.
+
 ## Executor slots
 
 Agent nodes do not hard-code an Agent CLI or model ID in the graph; they reference an **executor slot**:
@@ -124,6 +139,13 @@ Workflows have three start entries, all sharing one admission gate:
    keys the graph does not declare are not checked (a run's input also carries the platform's own material).
 3. Check executor slots (see above).
 
+For Start JSON controls declaring `array`, a typed array or `object`, all three entries decode JSON text
+once before creating a run and check its shape and element types against the selected version. Native
+arrays/objects from API callers are also accepted; the run stores the decoded value. Malformed JSON,
+type mismatches and the text `null` return `400 invalid_field_value` with `params.field` naming the field.
+Plain strings, `any` and the reserved `input` kickoff are not decoded; absent values and native `null`
+retain the required-field rules.
+
 If any check fails, no run, claimed interaction or activity is left behind. The executed version is frozen onto the
 run, so the run still knows which version it executed after the workflow is edited or published again.
 
@@ -137,6 +159,23 @@ there is nothing to default to, and the run's Workspace, its clone and its whole
 was named. A run Workspace belongs to the run that created it: `workspaces.workflow_run_id` is mutually exclusive
 with an IssueRun's `issue_run_id`, and the `maintenance` reserved for it in runtime control is recorded against the
 same run identity (see [Runtime control](../runtime/runtime-control.en.md)).
+
+**The run history pages by `(created_at, id)`, newest first.** `GET .../workflows/:wfid/runs` returns the newest run
+first, caps `limit` at 100, and takes the last row's WorkflowRun UUID as `after`: the server resolves that row's
+`created_at` and continues strictly below `(created_at, id)`, so several runs created in the same instant are ordered by
+`id` and paging neither repeats nor skips one. The cursor is only a row UUID and carries no timestamp; a cursor that
+resolves to no row (another workflow's, or a purged one) answers an empty page instead of restarting from the top, and a
+value that is not a UUID answers `400 invalid_cursor`. Every workflow **list** row carries `latestRun`, the first run
+of that same order — `null` when the workflow has never run. It holds the status, snapshot and timestamps only; a history
+row is what carries node states and inputs. The detail read carries no such field: a run starting must not rewrite every
+read of the workflow resource, so a reader that wants the label asks the list or the history.
+
+The run-history page distinguishes loading, no runs, a retryable read failure, and missing permission. On initial entry,
+workflow detail and run history are independent reads: a detail `403` also shows missing permission, retrying a transient
+detail failure reads the detail again, and only `not_found` says the workflow is missing. A later paging or refresh
+failure keeps the loaded history, and retry repeats the read that failed. History rows show start and finish
+independently: a run cancelled before starting has no start time but still shows its finish time. Viewing history and
+retrying a read never create a run.
 
 **Cancellation is a request, not a transition.** `POST .../workflows/:wfid/runs/:rid/cancel` records the request on
 the run row and answers `202` with the instant it was recorded; repeating the request (even under a fresh idempotency
@@ -207,7 +246,7 @@ seconds):
   (`maxRetries` ranges 0–5 and defaults to 2), and the next attempt starts after `initialDelaySeconds × 2^(n-1)`
   (`initialDelaySeconds` ranges 0–300 and defaults to 10, with a 600-second cap per wait). While it waits, the node
   commits `retrying`: the run stays `running`, the node keeps the failed attempt's `startedAt`, `error` and
-  `output.reason`, records `retryAt` from the database clock and clears `finishedAt`; it keeps the run's single
+  `sessionEndReason`, records `retryAt` from the database clock and clears `finishedAt`; it keeps the run's single
   session slot until `retryAt` arrives. The new attempt has its own execution identity (`workflow_node_attempt`), so
   the previous attempt's result and end request are never reused. A spent budget, a disabled policy or a reason
   outside `agent_failed` fails the node with the last reason, and the run reaches a terminal state and releases its
@@ -286,6 +325,11 @@ Publication resolves effective membership from non-empty `data.containerId`, fal
 Body consumers read only region predecessors, the container's outer ancestors, globals / sys and current
 carried or item / index inputs. Loop feedback, until and outputs read the completed body snapshot.
 Iteration accepts at most 100 items.
+
+An edge from an iteration to its own member with `sourceHandle = "iteration-entry"` is saved and
+published unchanged, preserving Cloud editor and Desktop graphs. Entry edges are optional and do
+not participate in regional scheduling dependencies or predecessor calculations: members never
+wait for their iteration owner to finish. Other cross-container edges are still rejected at publication.
 
 Every composite state commit measures compact UTF-8 JSON, including every duplicated value.
 Iteration inputs, collect values and member archives, and loop carried-plus-member archives and final

@@ -261,6 +261,8 @@ type workflowNodeState struct {
 	// replaces a failure, it does not erase it.
 	Error  string
 	Output Object
+	// SessionEndReason is execution evidence, never a declared variable root.
+	SessionEndReason string
 	// Loop is the round progress of a loop node and nil for every other kind. The active round's
 	// member states stay in the run's flat node_states map (so the session, retry and viewer paths see
 	// one shape); completed rounds are archived here for audit and recovery.
@@ -296,6 +298,9 @@ func (s *workflowNodeState) object() Object {
 	if s.Output != nil {
 		out["output"] = s.Output
 	}
+	if s.SessionEndReason != "" {
+		out["sessionEndReason"] = s.SessionEndReason
+	}
 	if s.Loop != nil {
 		out["loop"] = s.Loop.object()
 	}
@@ -317,13 +322,14 @@ func workflowStatesFromJSON(raw Object) map[string]workflowNodeState {
 			continue
 		}
 		state := workflowNodeState{
-			Status:      node.S("status"),
-			DisplayName: node.S("displayName"),
-			StartedAt:   node.S("startedAt"),
-			FinishedAt:  node.S("finishedAt"),
-			Attempt:     node.N("attempt"),
-			RetryAt:     node.S("retryAt"),
-			Error:       node.S("error"),
+			Status:           node.S("status"),
+			DisplayName:      node.S("displayName"),
+			StartedAt:        node.S("startedAt"),
+			FinishedAt:       node.S("finishedAt"),
+			Attempt:          node.N("attempt"),
+			RetryAt:          node.S("retryAt"),
+			Error:            node.S("error"),
+			SessionEndReason: node.S("sessionEndReason"),
 		}
 		if output, ok := asWorkflowObject(node["output"]); ok {
 			state.Output = output
@@ -631,7 +637,17 @@ func advanceWorkflowRun(t *transaction, runID string, unreachableAfter time.Dura
 		if !workflowRetryDue(t, runID, nodeID) {
 			return
 		}
-		startWorkflowAgentSession(t, run, node, version, states)
+		readStates := states
+		if node.Container != "" {
+			owner := states[node.Container]
+			if owner.Iteration != nil {
+				iteration := owner.Iteration
+				readStates = workflowIterationReadStates(graph, node.Container, states, ambient, iteration.Items[iteration.Round], iteration.Round)
+			} else {
+				readStates = workflowLoopReadStates(graph, node.Container, states, ambient)
+			}
+		}
+		startWorkflowAgentSession(t, run, node, version, states, workflowConditionStates(workflowPredecessorStates(graph, node, readStates), ambient))
 		return
 	}
 	// A committed running agent node settles from its session execution's terminal evidence before
@@ -703,7 +719,7 @@ func advanceWorkflowRun(t *transaction, runID string, unreachableAfter time.Dura
 			// spec from the frozen per-slot bindings, commit running and release the work item.
 			// The pass returns either way — a started session commits running, and the next tick
 			// settles it from terminal evidence.
-			startWorkflowAgentSession(t, run, node, version, states)
+			startWorkflowAgentSession(t, run, node, version, states, workflowConditionStates(workflowPredecessorStates(graph, node, states), ambient))
 			return
 		}
 		if node.Kind == "loop" {
@@ -1057,6 +1073,9 @@ func workflowRunFailureReason(graph workflowGraphView, states map[string]workflo
 		state := states[node.ID]
 		if state.Status != "failed" {
 			continue
+		}
+		if node.Kind == "agent" && state.Error != "" {
+			return state.Error
 		}
 		if reason := state.Output.S("reason"); reason != "" {
 			return reason

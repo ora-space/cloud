@@ -13,8 +13,8 @@ export const historyTranslations = {
   'zh-CN': {
     'workflows.history.undo': '撤销',
     'workflows.history.redo': '重做',
-    'workflows.history.history': '历史记录',
-    'workflows.history.historyHint': '查看本次编辑的操作记录',
+    'workflows.history.history': '编辑历史',
+    'workflows.history.historyHint': '查看本次编辑的操作记录（撤销/重做），与运行记录、版本无关',
     'workflows.history.undoHint': '撤销上一步操作（Ctrl+Z）',
     'workflows.history.redoHint': '重做被撤销的操作（Ctrl+Shift+Z）',
     'workflows.history.current': '当前状态',
@@ -38,8 +38,9 @@ export const historyTranslations = {
   'en-US': {
     'workflows.history.undo': 'Undo',
     'workflows.history.redo': 'Redo',
-    'workflows.history.history': 'History',
-    'workflows.history.historyHint': 'Review the edits made in this session',
+    'workflows.history.history': 'Edit history',
+    'workflows.history.historyHint':
+      'Review the edits made in this session (undo/redo), not runs or versions',
     'workflows.history.undoHint': 'Undo the last edit (Ctrl+Z)',
     'workflows.history.redoHint': 'Redo the last undone edit (Ctrl+Shift+Z)',
     'workflows.history.current': 'Current state',

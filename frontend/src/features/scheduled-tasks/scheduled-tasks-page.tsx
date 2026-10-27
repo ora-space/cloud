@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
+  nextDueSummary,
   scheduledTaskFailure,
   scheduleSummary,
   useDeleteScheduledTask,
@@ -68,6 +69,11 @@ function ScheduledTaskCard({
       <p className="text-sm text-muted-foreground">
         {scheduleSummary(task.schedule)} · {task.timezone}
       </p>
+      {task.enabled && task.nextDueAt && (
+        <p className="text-sm">
+          下次运行：{nextDueSummary(task.nextDueAt, task.timezone)}（{task.timezone}）
+        </p>
+      )}
       {task.disabledReason && (
         <p className="text-xs text-muted-foreground">停用原因：{task.disabledReason}</p>
       )}

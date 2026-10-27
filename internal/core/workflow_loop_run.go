@@ -343,11 +343,11 @@ func advanceWorkflowLoop(
 		return true
 	}
 	if ready, ok := projection.readyNode(); ok {
+		readStates := workflowLoopReadStates(graph, node.ID, states, ambient)
 		if ready.Kind == "agent" {
-			startWorkflowAgentSession(t, run, ready, version, states)
+			startWorkflowAgentSession(t, run, ready, version, states, workflowConditionStates(workflowPredecessorStates(graph, ready, readStates), ambient))
 			return false
 		}
-		readStates := workflowLoopReadStates(graph, node.ID, states, ambient)
 		states[ready.ID] = executeWorkflowNode(ready, run.O("input"), workflowPredecessorStates(graph, ready, readStates), ambient)
 		return true
 	}
@@ -569,6 +569,9 @@ func workflowBodyFailure(body workflowGraphView, states map[string]workflowNodeS
 			continue
 		}
 		reason := state.Output.S("reason")
+		if member.Kind == "agent" {
+			reason = state.Error
+		}
 		if reason == "" {
 			reason = "node failed"
 		}

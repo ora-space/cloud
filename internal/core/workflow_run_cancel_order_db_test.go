@@ -118,7 +118,7 @@ func TestWorkflowRunCancelRacesTheSchedulerPass(t *testing.T) {
 	if status != "cancelled" || runErr != "" {
 		t.Fatalf("final run = %q error %q; want cancelled", status, runErr)
 	}
-	if agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.O("output").S("reason") != "cancelled" {
+	if agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.S("sessionEndReason") != "cancelled" {
 		t.Fatalf("final node a = %v; want cancelled with reason cancelled", states["a"])
 	}
 	assertRunWorkspaceReleased(t, store, runID)
@@ -175,7 +175,7 @@ func TestWorkflowRunCancelAndTheSessionCallbackRace(t *testing.T) {
 		}
 		status, runErr, states, _ := readWorkflowRun(t, store, runID)
 		agent, _ := asWorkflowObject(states["a"])
-		if runErr != "" || agent == nil || agent.S("status") != "succeeded" || agent.O("output").S("reason") != "idle_timeout" {
+		if runErr != "" || agent == nil || agent.S("status") != "succeeded" || agent.S("sessionEndReason") != "idle_timeout" {
 			t.Fatalf("attempt %d: final state run=%q error=%q states=%v; want the idle_timeout result kept", attempt, status, runErr, states)
 		}
 		recorded := readCancelRequestedAt(t, store, runID)
@@ -271,10 +271,10 @@ func TestWorkflowRunCancelWindowAndALateCallbackRace(t *testing.T) {
 			t.Fatalf("attempt %d: final node a is missing", attempt)
 		}
 		switch {
-		case agent.S("status") == "succeeded" && agent.O("output").S("reason") == "idle_timeout":
+		case agent.S("status") == "succeeded" && agent.S("sessionEndReason") == "idle_timeout":
 			// The pass read the committed result: the node keeps what actually ran.
 			t.Logf("attempt %d: the pass read the committed result; node a kept idle_timeout", attempt)
-		case agent.S("status") == "cancelled" && agent.O("output").S("reason") == "cancelled" && agent.S("error") == "":
+		case agent.S("status") == "cancelled" && agent.S("sessionEndReason") == "cancelled" && agent.S("error") == "":
 			// The pass settled first: the callback's result belongs to the execution row only.
 			t.Logf("attempt %d: the pass settled first; the late result stayed on the execution row", attempt)
 		default:

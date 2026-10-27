@@ -76,8 +76,9 @@ func TestRequireWorkflowRunInput(t *testing.T) {
 			input: Object{"topic": "auth", "items": []any{"a", "b"}},
 		},
 		{
-			name:  "a JSON document for a structured variable",
+			name:  "an object cannot answer an array variable",
 			input: Object{"topic": "auth", "items": Object{"a": 1}},
+			want:  &Fault{Code: "invalid_field_value", Status: 400, Params: Object{"field": "items"}},
 		},
 		{
 			// `input` is the reserved kickoff selector rather than a declared variable. Desktop
@@ -108,6 +109,50 @@ func TestRequireWorkflowRunInput(t *testing.T) {
 			got := faultOf(t, func() { requireWorkflowRunInput(graph, tc.input) })
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("fault = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkflowRunStructuredInput(t *testing.T) {
+	for _, tc := range []struct {
+		name, valueType string
+		value, want     any
+		invalid         bool
+	}{
+		{"array text", "array", `["甲","乙"]`, []any{"甲", "乙"}, false},
+		{"native array", "array", []any{"甲", "乙"}, []any{"甲", "乙"}, false},
+		{"empty array", "array", `[]`, []any{}, false},
+		{"object text", "object", `{"nested":[1,true]}`, map[string]any{"nested": []any{float64(1), true}}, false},
+		{"native object", "object", Object{"a": 1}, Object{"a": 1}, false},
+		{"typed array", "array[string]", `["a"]`, []any{"a"}, false},
+		{"typed array mismatch", "array[string]", `[1]`, nil, true},
+		{"native typed mismatch", "array[object]", []any{"a"}, nil, true},
+		{"malformed", "array", `[`, nil, true},
+		{"trailing document", "array", `[] []`, nil, true},
+		{"wrong shape", "array", `{}`, nil, true},
+		{"object shape", "object", `[]`, nil, true},
+		{"scalar", "array", `42`, nil, true},
+		{"encoded null", "array", `null`, nil, true},
+		{"double encoded", "array", `"[]"`, nil, true},
+		{"plain text", "string", `["a"]`, `["a"]`, false},
+		{"any remains text", "any", `["a"]`, `["a"]`, false},
+		{"optional null", "array", nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := inputGraph(t, []any{Object{"name": "value", "valueType": tc.valueType}})
+			input := Object{"value": tc.value, "input": "[]", "extra": "{}"}
+			if tc.invalid {
+				got := faultOf(t, func() { requireWorkflowRunInput(graph, input) })
+				want := &Fault{Code: "invalid_field_value", Status: 400, Params: Object{"field": "value"}}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("fault = %+v, want %+v", got, want)
+				}
+				return
+			}
+			noFault(t, func() { requireWorkflowRunInput(graph, input) })
+			if !reflect.DeepEqual(input["value"], tc.want) || input["input"] != "[]" || input["extra"] != "{}" {
+				t.Fatalf("normalized input = %#v, want value %#v and untouched platform keys", input, tc.want)
 			}
 		})
 	}

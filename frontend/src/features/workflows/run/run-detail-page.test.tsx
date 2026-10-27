@@ -164,3 +164,104 @@ describe('WorkflowRunDetailPage', () => {
     expect(within(inspector).getByRole('region', { name: '输出' })).toHaveTextContent('审查通过')
   })
 })
+
+/** A frozen Loop whose body is an entry, a writer and an early exit. */
+const LOOP_SNAPSHOT: Record<string, unknown> = {
+  nodes: [
+    {
+      id: 'loop-1',
+      type: 'workflow',
+      position: { x: 0, y: 0 },
+      initialWidth: 620,
+      initialHeight: 300,
+      data: {
+        kind: 'loop',
+        title: '循环',
+        description: '',
+        loopConfig: {
+          maxIterations: 5,
+          variables: [],
+          until: { logic: 'and', conditions: [] },
+          outputs: [],
+        },
+      },
+    },
+    ...[
+      ['entry', 'start', 40],
+      ['writer', 'agent', 300],
+      ['exit', 'loopExit', 560],
+    ].map(([id, kind, x]) => ({
+      id,
+      type: 'workflow',
+      position: { x, y: 145 },
+      parentId: 'loop-1',
+      data: { kind, title: id, description: '', containerId: 'loop-1' },
+    })),
+  ],
+  edges: [{ id: 'e-entry-writer', source: 'entry', target: 'writer' }],
+  viewport: { x: 0, y: 0, zoom: 1 },
+}
+
+describe('WorkflowRunDetailPage loop rounds', () => {
+  /** Two rounds: the first continued, the second left through the early exit. */
+  function loopRun(): WorkflowRun {
+    const ok = { status: 'succeeded' }
+    return runFixture({
+      definitionSnapshot: LOOP_SNAPSHOT,
+      nodeStates: {
+        'loop-1': {
+          status: 'succeeded',
+          loop: {
+            round: 2,
+            maxIterations: 5,
+            carried: {},
+            completed: [
+              { index: 1, carried: {}, states: { entry: ok, writer: { ...ok, output: '初稿' } } },
+              {
+                index: 2,
+                carried: {},
+                states: { entry: ok, writer: { ...ok, output: '终稿' }, exit: ok },
+              },
+            ],
+          },
+        },
+        entry: ok,
+        writer: { ...ok, output: '终稿' },
+        exit: ok,
+      },
+    })
+  }
+
+  it('summarizes the loop on its frame and paints its members from the latest round', async () => {
+    renderRun(() => Promise.resolve(HttpResponse.json(loopRun())))
+
+    await waitFor(() => {
+      expect(screen.getByText('第 2 / 5 轮 · 早退')).toBeInTheDocument()
+    })
+    expect(runCard('exit')).toHaveAttribute('aria-label', 'exit: 成功')
+  })
+
+  it('switches every member to the round the reader picks, each round listed once', async () => {
+    renderRun(() => Promise.resolve(HttpResponse.json(loopRun())))
+    const frame = await waitFor(() => {
+      const element = document.querySelector('[data-workflow-loop-frame]')
+      if (!(element instanceof HTMLElement)) {
+        throw new Error('no loop frame yet')
+      }
+      return element
+    })
+
+    fireEvent.click(frame)
+    const rounds = await screen.findByRole('region', { name: '轮次' })
+    const buttons = within(rounds).getAllByRole('button')
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      '第 1 轮进入下一轮',
+      '第 2 轮早退',
+    ])
+
+    fireEvent.click(within(rounds).getByRole('button', { name: /第 1 轮/ }))
+
+    expect(runCard('exit')).toHaveAttribute('aria-label', 'exit: 未到达')
+    expect(within(rounds).getByText('初稿')).toBeInTheDocument()
+  })
+})

@@ -35,6 +35,8 @@ type FormField struct {
 	// never serialized: descriptors still render it as a textarea, while a direct run input accepts
 	// the array or object the author declared instead of only its JSON text.
 	jsonField bool
+	// jsonValueType keeps the Start declaration for run admission without changing the wire descriptor.
+	jsonValueType string
 }
 
 // FormOption is one allowed value for a select / multi_select field.

@@ -4393,6 +4393,11 @@
           "name": {
             "type": "string"
           },
+          "nextDueAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
           "prompt": {
             "type": "string"
           },
@@ -5788,6 +5793,58 @@
             "format": "uuid",
             "type": "string"
           },
+          "latestRun": {
+            "additionalProperties": false,
+            "description": "List rows only. The workflow's most recent run (the order the run history walks), or null when it has never run.",
+            "nullable": true,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "finishedAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "snapshotId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "startedAt": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "running",
+                  "succeeded",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status",
+              "snapshotId",
+              "createdAt",
+              "startedAt",
+              "finishedAt"
+            ],
+            "type": "object"
+          },
           "name": {
             "type": "string"
           },
@@ -5996,7 +6053,7 @@
           },
           "nodeStates": {
             "additionalProperties": true,
-            "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts.",
+            "description": "Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `sessionEndReason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. On successful session settlement, `output.output` contains the final complete assistant answer from the initial turn when present; `sessionEndReason` retains execution evidence separately from variable roots.",
             "type": "object"
           },
           "pluginVersion": {

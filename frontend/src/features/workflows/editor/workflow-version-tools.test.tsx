@@ -10,24 +10,14 @@ import {
   installWorkflowPublish,
   TEST_TENANT_ID,
   workflowFixture,
+  workflowSnapshotFixture,
 } from '@/test/cloud-handlers'
 import { server } from '@/test/msw-server'
-import { renderWithProviders } from '@/test/render'
+import { renderAtRoute, renderWithProviders } from '@/test/render'
 
 const WORKFLOW_ID = '44444444-4444-4444-4444-444444444444'
-
-/** A published snapshot as the backend stores it. */
-function snapshotFixture(version: number, name = `版本 ${version}`): WorkflowSnapshot {
-  return {
-    id: `snap-${version}`,
-    tenantId: TEST_TENANT_ID,
-    workflowId: WORKFLOW_ID,
-    name,
-    version,
-    graph: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
-    createdAt: '2026-09-20T10:00:00+08:00',
-  }
-}
+/** The workspace slug the browser route carries, which every link must be built from. */
+const WORKSPACE_SLUG = 'cloud-dev'
 
 /** Installs the version endpoints: history listing plus the rollback write. */
 function installHistory(
@@ -56,7 +46,7 @@ function installHistory(
 
 /** Installs the publish endpoint against the shared test handler. */
 function installPublish(onBody: (body: unknown) => void, status = 200): void {
-  installWorkflowPublish(onBody, snapshotFixture(1, '发布 v1'), status)
+  installWorkflowPublish(onBody, workflowSnapshotFixture(1, { name: '发布 v1' }), status)
 }
 
 /** Mounts the publish dialog, always open, with the given close callback. */
@@ -72,8 +62,11 @@ function renderPublishDialog(onOpenChange: (open: boolean) => void): void {
 }
 
 /**
- * Mounts the history popover with the given snapshots behind it, returning the
+ * Mounts the version panel with the given snapshots behind it, returning the
  * rollback spy the workflow is handed once a restore lands.
+ *
+ * The panel is the 「版本」 tab body, so it is mounted directly: there is no
+ * popover left to open before the list is reachable.
  */
 function renderHistory(
   snapshots: WorkflowSnapshot[],
@@ -266,12 +259,10 @@ describe('WorkflowPublishDialog', () => {
 describe('WorkflowVersionHistory', () => {
   it('lists published versions newest first', async () => {
     renderHistory([
-      snapshotFixture(3, '第三版'),
-      snapshotFixture(1, '首发'),
-      snapshotFixture(2, '第二版'),
+      workflowSnapshotFixture(3, { name: '第三版' }),
+      workflowSnapshotFixture(1, { name: '首发' }),
+      workflowSnapshotFixture(2, { name: '第二版' }),
     ])
-
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
 
     const list = await screen.findByRole('list')
     const labels = within(list)
@@ -283,15 +274,15 @@ describe('WorkflowVersionHistory', () => {
   it('shows the empty state when nothing was published', async () => {
     renderHistory([])
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
-
     expect(await screen.findByText('还没有已发布的版本。发布一个以随时回滚。')).toBeInTheDocument()
   })
 
   it('filters the list by a version name', async () => {
-    renderHistory([snapshotFixture(2, '巡检报告'), snapshotFixture(1, '每周发布')])
+    renderHistory([
+      workflowSnapshotFixture(2, { name: '巡检报告' }),
+      workflowSnapshotFixture(1, { name: '每周发布' }),
+    ])
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
     await screen.findByRole('button', { name: '回滚到版本 2' })
     fireEvent.change(screen.getByLabelText('搜索版本名称或编号'), {
       target: { value: '巡检' },
@@ -303,9 +294,8 @@ describe('WorkflowVersionHistory', () => {
 
   it('restores a snapshot over the live document', async () => {
     const restored = workflowFixture({ version: 4 })
-    const onRestored = renderHistory([snapshotFixture(1, '首发')], restored)
+    const onRestored = renderHistory([workflowSnapshotFixture(1, { name: '首发' })], restored)
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
     fireEvent.click(await screen.findByRole('button', { name: '回滚到版本 1' }))
     expect(await screen.findByRole('heading', { name: '回滚到版本 1？' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '回滚' }))
@@ -314,9 +304,8 @@ describe('WorkflowVersionHistory', () => {
   })
 
   it('cancelling the confirmation leaves the document untouched', async () => {
-    const onRestored = renderHistory([snapshotFixture(1, '首发')])
+    const onRestored = renderHistory([workflowSnapshotFixture(1, { name: '首发' })])
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
     fireEvent.click(await screen.findByRole('button', { name: '回滚到版本 1' }))
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
 
@@ -325,9 +314,8 @@ describe('WorkflowVersionHistory', () => {
   })
 
   it('reports a rejected restore over the confirmation', async () => {
-    const onRestored = renderHistory([snapshotFixture(1, '首发')], undefined, 409)
+    const onRestored = renderHistory([workflowSnapshotFixture(1, { name: '首发' })], undefined, 409)
 
-    fireEvent.click(screen.getByRole('button', { name: '版本历史' }))
     fireEvent.click(await screen.findByRole('button', { name: '回滚到版本 1' }))
     fireEvent.click(screen.getByRole('button', { name: '回滚' }))
 
@@ -337,18 +325,26 @@ describe('WorkflowVersionHistory', () => {
 })
 
 describe('WorkflowVersionTools', () => {
-  it('blocks the publish dialog when the draft could not be flushed', async () => {
-    installHistory([snapshotFixture(1)])
-    const flushDraft = vi.fn<() => Promise<boolean>>().mockResolvedValue(false)
-    renderWithProviders(
+  /**
+   * Mounts the toolbar controls at the real editor route, so the versions link is built from the
+   * workspace slug the browser carries rather than from the tenant id the API is scoped by.
+   */
+  function renderVersionTools(flushDraft: () => Promise<boolean>) {
+    return renderAtRoute(
+      '/w/:workspaceSlug/workflows/:workflowId',
       <WorkflowVersionTools
         tenantId={TEST_TENANT_ID}
         workflowId={WORKFLOW_ID}
-        committedVersion={1}
         flushDraft={flushDraft}
-        onRestored={vi.fn<(workflow: CloudWorkflow) => void>()}
       />,
+      `/w/${WORKSPACE_SLUG}/workflows/${WORKFLOW_ID}`,
     )
+  }
+
+  it('blocks the publish dialog when the draft could not be flushed', async () => {
+    installHistory([workflowSnapshotFixture(1)])
+    const flushDraft = vi.fn<() => Promise<boolean>>().mockResolvedValue(false)
+    renderVersionTools(flushDraft)
 
     fireEvent.click(screen.getByRole('button', { name: '发布' }))
 
@@ -357,20 +353,22 @@ describe('WorkflowVersionTools', () => {
   })
 
   it('opens the publish dialog once the draft is flushed', async () => {
-    installHistory([snapshotFixture(1)])
+    installHistory([workflowSnapshotFixture(1)])
     installPublish(() => {}, 200)
-    renderWithProviders(
-      <WorkflowVersionTools
-        tenantId={TEST_TENANT_ID}
-        workflowId={WORKFLOW_ID}
-        committedVersion={1}
-        flushDraft={vi.fn<() => Promise<boolean>>().mockResolvedValue(true)}
-        onRestored={vi.fn<(workflow: CloudWorkflow) => void>()}
-      />,
-    )
+    renderVersionTools(vi.fn<() => Promise<boolean>>().mockResolvedValue(true))
 
     fireEvent.click(screen.getByRole('button', { name: '发布' }))
 
     expect(await screen.findByRole('heading', { name: '发布版本' })).toBeInTheDocument()
+  })
+
+  it('links the version list on its own tab instead of a popover', () => {
+    installHistory([workflowSnapshotFixture(1)])
+    renderVersionTools(vi.fn<() => Promise<boolean>>().mockResolvedValue(true))
+
+    expect(screen.getByRole('link', { name: '版本历史' })).toHaveAttribute(
+      'href',
+      `/w/${WORKSPACE_SLUG}/workflows/${WORKFLOW_ID}/versions`,
+    )
   })
 })

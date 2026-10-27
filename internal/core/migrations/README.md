@@ -6,7 +6,7 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 
 ## 文件索引
 
-当前共 73 个 SQL 文件。
+当前共 75 个 SQL 文件。
 
 | SQL 文件 | schema 变化 |
 |---|---|
@@ -83,7 +83,8 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | 工作流节点工作项、执行与结束请求的尝试序号 |
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | D8 无原删除操作的显式来源标记与互斥约束 |
 | [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | 定时任务可选模型选择 |
-| [0072_delivery_execution_settlement.sql](0072_delivery_execution_settlement.sql) | 独立交付业务结算、冻结原派发身份、未受理证明及矛盾事实审计 |
+| [0072_scheduled_task_conversation_reasons.sql](0072_scheduled_task_conversation_reasons.sql) | 定时任务接纳的任务对话拒绝原因 |
+| [0073_delivery_execution_settlement.sql](0073_delivery_execution_settlement.sql) | 独立交付业务结算、冻结原派发身份、未受理证明及矛盾事实审计 |
 
 0050 不复制个人连接或 Key，不回填历史运行；清除配置保留 revision，运行选项独立于共享运行输入保存。
 
@@ -92,6 +93,8 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 0070 给受控回收意图增加默认关闭的 `legacy_delete_operation_missing`。有原删除操作的 D8 和残留账本意图保持原值；仅明确选择无删除操作变体时才可记录缺失，不回填或修改 Run 历史。空库、前一版升级、重复迁移和矛盾来源拒绝由 `TestControlledD8MissingDeleteMigrationUpgradesAndRepeats` 覆盖。
 
 0071 为 `scheduled_tasks` 添加可空的 `model`。升级不为既有定义猜测模型；每次接纳才按创建者当前可用连接解析该选择，并将解析结果冻结到新 IssueRun。空值仍表示该次接纳使用创建者默认模型。升级与重放由 `TestMigration0071ScheduledTaskModelUpgradeAndReplay` 覆盖。
+
+0072 只放宽 `scheduled_task_occurrences.failure_reason` 的 CHECK，加入 `task_paused` 与 `task_handoff_pending`：绑定 issue 的任务对话已暂停、有未解决的 failed 消息或有 waiting 消息时，接纳记这两个原因、不建运行。既有行不改写。升级与重放由 `TestMigration0072ScheduledTaskConversationReasonsUpgradeAndReplay` 覆盖。
 
 - 已应用 SQL 不改内容、不改文件名；更正用新的前向迁移。重复应用跳过 checksum 相同的已应用文件。
 - `CheckSchema` 只读检查缺失迁移、checksum 不符和未知数据库版本，发现不一致拒绝启动。生产服务不执行 DDL，运维用 [cloudctl](../../../cmd/cloudctl/README.md) 应用迁移。

@@ -1,14 +1,13 @@
-import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
-import { PageHeader } from '@/components/layout/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useWorkflow } from '@/features/workflows/api'
+import { WorkflowDetailShell } from '@/features/workflows/workflow-detail-shell'
 import { WorkflowEditor } from '@/features/workflows/editor/workflow-editor'
 import { workspacePaths } from '@/lib/paths'
 
 /**
- * The workflow a member opened, in the editor.
+ * The 「编辑」 tab of a workflow: the canvas, under the workflow's own name.
  *
  * The page owns the fetch and nothing else: it resolves the workflow, then hands
  * the loaded record to the editor, which owns the draft from that point on. The
@@ -24,52 +23,35 @@ export function WorkflowEditorPage({ slug }: { slug: string }) {
   const paths = workspacePaths(workspaceSlug ?? slug)
   const workflow = useWorkflow(slug, workflowId)
   const title = t('workflows.list.title')
-  const breadcrumb = { label: title, to: paths.workflows }
+  const id = workflowId ?? ''
 
   if (workflow.isPending) {
     return (
-      <WorkflowPageShell title={title} breadcrumb={breadcrumb}>
+      <WorkflowDetailShell title={title} workflowId={id}>
         <div className="flex-1 p-4">
           <Skeleton className="h-24 w-full" />
         </div>
-      </WorkflowPageShell>
+      </WorkflowDetailShell>
     )
   }
 
   if (!workflow.data) {
     return (
-      <WorkflowPageShell title={title} breadcrumb={breadcrumb}>
+      <WorkflowDetailShell title={title} workflowId={id}>
         <p className="p-4 text-sm text-muted-foreground">{t('workflows.detail.notFound')}</p>
-      </WorkflowPageShell>
+      </WorkflowDetailShell>
     )
   }
 
   return (
-    <WorkflowPageShell title={workflow.data.name} breadcrumb={breadcrumb}>
+    <WorkflowDetailShell title={workflow.data.name} workflowId={workflow.data.id}>
       <WorkflowEditor
         key={workflow.data.id}
         tenantId={slug}
         workflow={workflow.data}
+        guardNavigation
         onImported={(importedId) => navigate(paths.workflowDetail(importedId))}
       />
-    </WorkflowPageShell>
-  )
-}
-
-/** The header and full-height column every state of the page shares. */
-function WorkflowPageShell({
-  title,
-  breadcrumb,
-  children,
-}: {
-  title: string
-  breadcrumb: { label: string; to: string }
-  children: ReactNode
-}) {
-  return (
-    <div className="flex h-full flex-col">
-      <PageHeader title={title} breadcrumb={breadcrumb} />
-      {children}
-    </div>
+    </WorkflowDetailShell>
   )
 }

@@ -266,6 +266,33 @@ func (s scheduledTaskSchedule) latestDue(anchor, now time.Time, loc *time.Locati
 	}
 }
 
+// nextScheduledDue returns the earliest scheduled point strictly after `now` that latestDue lands
+// on for the same enable anchor, i.e. the next point the worker will evaluate. It is a read-side
+// projection only (never persisted, never an occurrence). every_hours stays on the anchor grid like
+// latestDue rather than stepping from `now` as nextDue does. The zero time means none can be computed.
+func (s scheduledTaskSchedule) nextScheduledDue(anchor, now time.Time, loc *time.Location) time.Time {
+	if anchor.IsZero() {
+		return time.Time{}
+	}
+	if s.Kind == "every_hours" {
+		step, ok := scheduledEveryHoursDuration(s.IntervalHours)
+		if !ok {
+			return time.Time{}
+		}
+		if !now.After(anchor) {
+			return anchor.Add(step)
+		}
+		// Two Adds keep steps*step+step from overflowing Duration for the widest intervals.
+		steps := now.Sub(anchor) / step
+		return anchor.Add(steps * step).Add(step)
+	}
+	after := now
+	if anchor.After(after) {
+		after = anchor
+	}
+	return s.nextDue(after, loc)
+}
+
 // scheduledWeekdayNames renders the persisted weekday set for storage.
 func scheduledWeekdayNames(weekdays []time.Weekday) []string {
 	byName := map[time.Weekday]string{
@@ -334,6 +361,14 @@ func scheduledTaskAgentReady(t *transaction, tenantID, agentID string) (Object, 
 	return agentRunEvidence(t, tenantID, agentID)
 }
 
+// scheduledTaskSpaceActive reports whether the agent's Space is still unarchived (ADR D5: Space 未归档，
+// 每次接纳校验). It is checked explicitly so every plugin is rejected, not only those whose declared
+// configuration happens to resolve Space membership. ok=false maps to target_unavailable.
+func scheduledTaskSpaceActive(t *transaction, tenantID, spaceID string) bool {
+	return t.one(`SELECT 1 FROM collab_workspaces
+		WHERE id=$1 AND tenant_id=$2 AND archived_at IS NULL`, spaceID, tenantID) != nil
+}
+
 // creatorModelReady approximates the save-time model-configured check of ADR D5: the creator has
 // either a declared personal agent configuration for the agent's plugin backed by an enabled
 // connection with a credential, or a personal default backed by one. The authoritative freeze and
@@ -381,7 +416,7 @@ func failScheduledOccurrenceWithReason(t *transaction, taskID string, due time.T
 // being unavailable.
 func scheduledFailureReason(kind string) string {
 	switch kind {
-	case "model_unavailable", "approval_policy_invalid":
+	case "model_unavailable", "approval_policy_invalid", "task_paused", "task_handoff_pending":
 		return kind
 	default:
 		return "target_unavailable"

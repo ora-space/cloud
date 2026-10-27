@@ -2016,6 +2016,8 @@ export interface ScheduledTask {
   /** @nullable */
   model?: string | null;
   name: string;
+  /** @nullable */
+  nextDueAt?: string | null;
   prompt: string;
   revision: number;
   schedule: ScheduledTaskSchedule;
@@ -2563,6 +2565,33 @@ export interface User {
  */
 export type WorkflowGraph = { [key: string]: unknown };
 
+export type WorkflowLatestRunStatus = typeof WorkflowLatestRunStatus[keyof typeof WorkflowLatestRunStatus];
+
+
+export const WorkflowLatestRunStatus = {
+  pending: 'pending',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * List rows only. The workflow's most recent run (the order the run history walks), or null when it has never run.
+ * @nullable
+ */
+export type WorkflowLatestRun = {
+  createdAt: string;
+  /** @nullable */
+  finishedAt: string | null;
+  id: string;
+  name: string;
+  snapshotId: string;
+  /** @nullable */
+  startedAt: string | null;
+  status: WorkflowLatestRunStatus;
+} | null;
+
 export interface Workflow {
   createdAt: string;
   /** @nullable */
@@ -2571,6 +2600,11 @@ export interface Workflow {
   /** The authored graph document: nodes, edges, viewport, editor annotations and global variables. Stored and returned whole; the editor is its only reader. */
   graph: WorkflowGraph;
   id: string;
+  /**
+     * List rows only. The workflow's most recent run (the order the run history walks), or null when it has never run.
+     * @nullable
+     */
+  latestRun?: WorkflowLatestRun;
   name: string;
   tenantId: string;
   updatedAt: string;
@@ -2649,7 +2683,7 @@ export type WorkflowRunDefinitionSnapshot = { [key: string]: unknown } | null;
 export type WorkflowRunInput = { [key: string]: unknown };
 
 /**
- * Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts.
+ * Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `sessionEndReason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. On successful session settlement, `output.output` contains the final complete assistant answer from the initial turn when present; `sessionEndReason` retains execution evidence separately from variable roots.
  */
 export type WorkflowRunNodeStates = { [key: string]: unknown };
 
@@ -2695,7 +2729,7 @@ export interface WorkflowRun {
      */
   modelBindings?: WorkflowRunModelBinding[] | null;
   name: string;
-  /** Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `output.reason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. */
+  /** Per-node execution state keyed by node id: status, displayName, startedAt, finishedAt, output, and error — the reason, present only when the node failed or is retrying. An agent node can be `retrying`, which means its last attempt failed with a retryable reason and the run is waiting for the next one: `retryAt` is the database-clock instant that attempt becomes due, `error` and `sessionEndReason` name the failed attempt's reason, `startedAt` is the failed attempt's start, `finishedAt` is empty, and the run itself stays `running`. `attempt` is the 1-based attempt the state describes, present whenever the node has started at least once, so a terminal node states which attempt ended it; a node's retry budget is `maxRetries + 1` attempts. On successful session settlement, `output.output` contains the final complete assistant answer from the initial turn when present; `sessionEndReason` retains execution evidence separately from variable roots. */
   nodeStates: WorkflowRunNodeStates;
   /**
      * The agent plugin version frozen into the run at creation: the frozen identity the run's agent sessions execute with. Null only when the space declared no plugin at creation (or the run predates migration 0042); the first agent node then fails with `agent_plugin_version_unfrozen`.

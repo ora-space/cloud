@@ -42,6 +42,17 @@ const VERDICT_LABELS: Record<string, string> = {
   range_unresolved: '范围未确定',
 }
 
+// Admission refusals the creator resolves in the issue's task conversation, not in the task or
+// Agent configuration; other reasons keep their raw code.
+const FAILURE_REASON_LABELS: Record<string, string> = {
+  task_paused: '任务对话已暂停或有失败消息，请先在任务对话中处理',
+  task_handoff_pending: '任务对话中有等待执行的消息，本次未运行',
+}
+
+function failureReasonLabel(reason: string): string {
+  return FAILURE_REASON_LABELS[reason] ?? reason
+}
+
 /** The run's own business verdict; a run that never reported one is shown as 未报告. */
 function verdictLabel(verdict?: string | null): string {
   return verdict ? (VERDICT_LABELS[verdict] ?? verdict) : '未报告'
@@ -99,7 +110,7 @@ export function ScheduledTaskHistory({
                     </Badge>
                     {entry.failureReason && (
                       <span className="truncate text-xs text-muted-foreground">
-                        {entry.failureReason}
+                        {failureReasonLabel(entry.failureReason)}
                       </span>
                     )}
                   </div>{' '}

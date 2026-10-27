@@ -34,6 +34,12 @@ export const loopTranslations = {
     'workflows.loop.field.until': '结束条件',
     'workflows.loop.addUntilRule': '添加条件',
     'workflows.loop.addExitNode': '添加早退节点',
+    'workflows.loop.addExitFromBranch':
+      '循环体里还没有可以接早退的步骤。要在某个条件分支上早退，请点那个分支端口的 + 添加。',
+    'workflows.loop.addExitNeedsStep': '先在循环体里添加一个步骤，早退会接在它后面。',
+    'workflows.loop.frameSummary': '最多 {{max}} 轮',
+    'workflows.loop.addAfter': '在 {{name}} 之后添加节点',
+    'workflows.loop.addAfterBranch': '在 {{name}} 的 {{branch}} 分支之后添加节点',
     'workflows.loop.removeUntilRule': '删除条件',
     'workflows.loop.field.outputs': '输出',
     'workflows.loop.field.outputName': '输出名',
@@ -73,6 +79,13 @@ export const loopTranslations = {
     'workflows.loop.field.until': 'Exit condition',
     'workflows.loop.addUntilRule': 'Add condition',
     'workflows.loop.addExitNode': 'Add early-exit node',
+    'workflows.loop.addExitFromBranch':
+      "The body has no step to end the round after yet. To exit on a condition branch, use that branch port's +.",
+    'workflows.loop.addExitNeedsStep':
+      'Add a step to the loop body first; the early exit follows it.',
+    'workflows.loop.frameSummary': 'Up to {{max}} rounds',
+    'workflows.loop.addAfter': 'Add a node after {{name}}',
+    'workflows.loop.addAfterBranch': 'Add a node after the {{branch}} branch of {{name}}',
     'workflows.loop.removeUntilRule': 'Remove condition',
     'workflows.loop.field.outputs': 'Outputs',
     'workflows.loop.field.outputName': 'Output name',

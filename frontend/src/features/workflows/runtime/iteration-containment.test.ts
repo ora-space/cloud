@@ -53,6 +53,23 @@ describe('iteration drag rules', () => {
     expect(result.workflow.nodes[1]?.parentId).toBeUndefined()
   })
 
+  it('returns an outer node dropped on the measured part of a Loop frame', () => {
+    const loop: WorkflowIterationNode = {
+      ...workflowNode('loop', 'loop', { x: 0, y: 0 }),
+      initialWidth: 620,
+      initialHeight: 300,
+      measured: { width: 628, height: 363 },
+    }
+    const before = workflowOf([loop, workflowNode('fix', 'agent', { x: 900, y: 40 })])
+    // The card's centre lands at y≈330: below the authored 300, inside the drawn 363.
+    const after = workflowOf([loop, workflowNode('fix', 'agent', { x: 100, y: 281 })])
+
+    const result = applyIterationDragRules(after, before, ['fix'])
+
+    expect(result.rejectedNodeIds).toEqual(['fix'])
+    expect(result.workflow.nodes[1]?.position).toEqual({ x: 900, y: 40 })
+  })
+
   it('never grants membership when a node moves over a frame', () => {
     const before = workflowOf([
       workflowNode('iter', 'iteration', { x: 0, y: 0 }),

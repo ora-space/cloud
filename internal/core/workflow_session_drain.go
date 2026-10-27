@@ -11,7 +11,8 @@ func drainWorkflowTimedOutSession(t *transaction, runID string, version int64, n
 		AND workflow_node_id=$2 AND workflow_node_attempt=$3 AND kind='agent_session' AND result IS NOT NULL`, runID, node.ID, attempt)
 	if ended != nil {
 		state.Status, state.FinishedAt = "failed", nowRFC3339()
-		state.Output = Object{"reason": workflowSessionTurnDeadlineExceeded}
+		state.Output = nil
+		state.SessionEndReason = workflowSessionTurnDeadlineExceeded
 		states[node.ID] = state
 		settleWorkflowAgentFailure(t, runID, version, node, states, workflowSessionTurnDeadlineExceeded)
 		return states, false
@@ -22,7 +23,8 @@ func drainWorkflowTimedOutSession(t *transaction, runID string, version int64, n
 		AND created_at<=clock_timestamp()-make_interval(secs=>$2)`, cmd.S("id"), window.Seconds()) != nil {
 		state.Status, state.FinishedAt = "failed", nowRFC3339()
 		state.Error = "session_end_deadline_exceeded"
-		state.Output = Object{"reason": "session_end_deadline_exceeded"}
+		state.Output = nil
+		state.SessionEndReason = "session_end_deadline_exceeded"
 		states[node.ID] = state
 		finishWorkflowUndrainedSession(t, runID, version, node, states, "session_end_deadline_exceeded")
 	}

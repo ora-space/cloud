@@ -267,8 +267,8 @@ func TestWorkflowSessionRunsEndToEnd(t *testing.T) {
 	if agent == nil || outs == nil || agent.S("status") != "succeeded" || outs.S("status") != "succeeded" {
 		t.Fatalf("node states = %v", states)
 	}
-	if reason := agent.O("output").S("reason"); reason != "idle_timeout" {
-		t.Fatalf("agent output reason = %q; want idle_timeout", reason)
+	if reason := agent.S("sessionEndReason"); reason != "idle_timeout" {
+		t.Fatalf("agent session end reason = %q; want idle_timeout", reason)
 	}
 	// Terminal cleanup: no unregistered work, and the Workspace deletion is declared.
 	assertRunWorkspaceReleased(t, store, runID)
@@ -302,7 +302,7 @@ func TestWorkflowSessionRunsTwoAgentNodesInOrder(t *testing.T) {
 	if status != "running" || runErr != "" {
 		t.Fatalf("run settled %q error %q states=%v; want running with a2 in flight", status, runErr, states)
 	}
-	if a1 == nil || a1.S("status") != "succeeded" || a1.O("output").S("reason") != "idle_timeout" {
+	if a1 == nil || a1.S("status") != "succeeded" || a1.S("sessionEndReason") != "idle_timeout" {
 		t.Fatalf("a1 state = %v; want succeeded/idle_timeout", states["a1"])
 	}
 	if a2 == nil || a2.S("status") != "running" {
@@ -331,8 +331,8 @@ func TestWorkflowSessionRunsTwoAgentNodesInOrder(t *testing.T) {
 		t.Fatalf("node states = %v; want both agents and the output succeeded", states)
 	}
 	// Each node carries its own evidence: a2's reason is its own, not a1's.
-	if reason := a2.O("output").S("reason"); reason != "user_ended" {
-		t.Fatalf("a2 output reason = %q; want user_ended (a1 ended idle_timeout)", reason)
+	if reason := a2.S("sessionEndReason"); reason != "user_ended" {
+		t.Fatalf("a2 session end reason = %q; want user_ended (a1 ended idle_timeout)", reason)
 	}
 
 	// Two executions, each registered against the work item of the node it ran for.
@@ -463,7 +463,7 @@ func TestWorkflowSessionFailureFailsRun(t *testing.T) {
 		t.Fatalf("run settled %q error %q states=%v; want failed/agent_failed", status, runErr, states)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "failed" || agent.O("output").S("reason") != "agent_failed" {
+	if agent == nil || agent.S("status") != "failed" || agent.S("sessionEndReason") != "agent_failed" {
 		t.Fatalf("agent state = %v; want failed with agent_failed", states["a"])
 	}
 	// A failed node carries its reason as `error`, the field the run viewer's Error section reads.
@@ -493,7 +493,7 @@ func TestWorkflowSessionCancelledReleasesTheRunWorkspace(t *testing.T) {
 		t.Fatalf("run settled %q error %q states=%v; want cancelled/cancelled", status, runErr, states)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "cancelled" || agent.O("output").S("reason") != "cancelled" {
+	if agent == nil || agent.S("status") != "cancelled" || agent.S("sessionEndReason") != "cancelled" {
 		t.Fatalf("agent state = %v; want cancelled carrying the session's own reason", states["a"])
 	}
 	// A cancelled node was cancelled, not broken, so it carries no error: the viewer's Error section
@@ -669,7 +669,7 @@ func TestWorkflowSessionRefusesAnUnfrozenPluginVersion(t *testing.T) {
 		t.Fatalf("run settled %q error %q; want failed/agent_plugin_version_unfrozen", status, runErr)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "failed" || agent.O("output").S("reason") != "agent_plugin_version_unfrozen" {
+	if agent == nil || agent.S("status") != "failed" || agent.S("sessionEndReason") != "agent_plugin_version_unfrozen" {
 		t.Fatalf("agent state = %v; want the unfrozen-version failure", states["a"])
 	}
 	// Nothing was dispatched: the run must not have reached the Node with a version read from the space.
@@ -732,7 +732,7 @@ func TestWorkflowSessionRefusesUnusablePinnedPlugin(t *testing.T) {
 				t.Fatalf("run settled %q error %q; want failed/agent_plugin_unavailable", status, runErr)
 			}
 			agent, _ := asWorkflowObject(states["a"])
-			if agent == nil || agent.S("status") != "failed" || agent.S("error") != "agent_plugin_unavailable" || agent.O("output").S("reason") != "agent_plugin_unavailable" {
+			if agent == nil || agent.S("status") != "failed" || agent.S("error") != "agent_plugin_unavailable" || agent.S("sessionEndReason") != "agent_plugin_unavailable" {
 				t.Fatalf("agent state = %v; want failed/agent_plugin_unavailable", states["a"])
 			}
 			var work int
@@ -791,7 +791,7 @@ func TestWorkflowSessionPluginFailureReachesThePublicRow(t *testing.T) {
 				t.Fatalf("run settled %q error %q; want failed/%s", status, runErr, tc.want)
 			}
 			agent, _ := asWorkflowObject(states["a"])
-			if agent == nil || agent.S("status") != "failed" || agent.S("error") != tc.want || agent.O("output").S("reason") != tc.want {
+			if agent == nil || agent.S("status") != "failed" || agent.S("error") != tc.want || agent.S("sessionEndReason") != tc.want {
 				t.Fatalf("agent state = %v; want failed/%s", states["a"], tc.want)
 			}
 		})
@@ -821,7 +821,7 @@ func TestWorkflowSessionStartDeadlineFailsNode(t *testing.T) {
 		t.Fatalf("run settled %q error %q states=%v; want the deadline failure", status, runErr, states)
 	}
 	agent, _ := asWorkflowObject(states["a"])
-	if agent == nil || agent.S("status") != "failed" || agent.O("output").S("reason") != "session_start_deadline_exceeded" {
+	if agent == nil || agent.S("status") != "failed" || agent.S("sessionEndReason") != "session_start_deadline_exceeded" {
 		t.Fatalf("agent state = %v; want the deadline failure", states["a"])
 	}
 	if got := agent.S("error"); got != "session_start_deadline_exceeded" {
@@ -1064,8 +1064,8 @@ func TestWorkflowSessionNodeGoneSettlesTheNodeFailed(t *testing.T) {
 			if agent == nil || agent.S("status") != "failed" || agent.S("error") != workflowSessionNodeUnavailable {
 				t.Fatalf("node a = %v; want failed under %s", states["a"], workflowSessionNodeUnavailable)
 			}
-			if reason := agent.O("output").S("reason"); reason != workflowSessionNodeUnavailable {
-				t.Fatalf("node a output = %v; want reason %s", agent.O("output"), workflowSessionNodeUnavailable)
+			if reason := agent.S("sessionEndReason"); reason != workflowSessionNodeUnavailable {
+				t.Fatalf("node a session end reason = %v; want reason %s", agent.S("sessionEndReason"), workflowSessionNodeUnavailable)
 			}
 			if agent.S("finishedAt") == "" {
 				t.Fatalf("node a = %v; a settled node carries finishedAt", states["a"])
@@ -1207,8 +1207,8 @@ func TestWorkflowSessionDisconnectedWithinWindowHoldsUntilExpired(t *testing.T) 
 	if status != "failed" || runErr != workflowSessionNodeUnavailable || agent == nil || agent.S("status") != "failed" || agent.S("error") != workflowSessionNodeUnavailable {
 		t.Fatalf("past the disconnected window: run %q error %q states=%v; want failed/%s", status, runErr, states, workflowSessionNodeUnavailable)
 	}
-	if reason := agent.O("output").S("reason"); reason != workflowSessionNodeUnavailable {
-		t.Fatalf("node a output = %v; want reason %s", agent.O("output"), workflowSessionNodeUnavailable)
+	if reason := agent.S("sessionEndReason"); reason != workflowSessionNodeUnavailable {
+		t.Fatalf("node a session end reason = %v; want reason %s", agent.S("sessionEndReason"), workflowSessionNodeUnavailable)
 	}
 }
 
@@ -1264,7 +1264,7 @@ func TestWorkflowRunCancelDisconnectedWithinWindowWaitsForEndConfirmation(t *tes
 	}
 	status, runErr, states, _ = readWorkflowRun(t, store, runID)
 	agent, _ = asWorkflowObject(states["a"])
-	if status != "cancelled" || runErr != "" || agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.O("output").S("reason") != "cancelled" {
+	if status != "cancelled" || runErr != "" || agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.S("sessionEndReason") != "cancelled" {
 		t.Fatalf("after EndSession confirmation expires: run %q error %q states=%v; want cancelled with no error", status, runErr, states)
 	}
 }

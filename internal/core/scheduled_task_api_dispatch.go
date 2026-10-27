@@ -41,7 +41,7 @@ func scheduledTaskPublicRead(t *transaction, r *PublicRequest, uid string, accep
 	case r.ScheduledTaskID != "" && strings.HasSuffix(r.Path, "/history"):
 		return scheduledTaskHistory(t, r)
 	case r.ScheduledTaskID != "":
-		return scheduledTaskOut(readableScheduledTask(t, r))
+		return scheduledTaskOut(readableScheduledTask(t, r), dbNow(t))
 	default:
 		return Object{"tasks": scheduledTaskList(t, r.TenantID), "acceptanceEnabled": acceptanceEnabled}
 	}
@@ -51,5 +51,10 @@ func scheduledTaskPublicRead(t *transaction, r *PublicRequest, uid string, accep
 // can read them (D1: visibility follows the bound issue, and issues are member-readable), so no
 // per-task creator filter applies to the read.
 func scheduledTaskList(t *transaction, tenantID string) []Object {
-	return t.list("SELECT * FROM scheduled_tasks WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY created_at, id", tenantID)
+	tasks := t.list("SELECT * FROM scheduled_tasks WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY created_at, id", tenantID)
+	now := dbNow(t)
+	for _, task := range tasks {
+		task["nextDueAt"] = scheduledTaskNextDueAt(task, now)
+	}
+	return tasks
 }

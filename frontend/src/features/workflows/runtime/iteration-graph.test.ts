@@ -400,6 +400,71 @@ describe('iteration graph transforms', () => {
     })
   })
 
+  it('takes a Loop body along when the Loop is deleted, without counting it for confirmation', () => {
+    const loopBody = {
+      nodes: [
+        node('loop', 'loop'),
+        { ...node('body-start', 'start', { x: 40, y: 145 }, 'loop') },
+        // An older import may carry only containerId; the cascade still finds it.
+        {
+          id: 'body-agent',
+          position: { x: 350, y: 145 },
+          data: { kind: 'agent' as const, containerId: 'loop' },
+        },
+        node('outer', 'agent'),
+      ],
+      edges: [
+        { id: 'body', source: 'body-start', target: 'body-agent' },
+        { id: 'out', source: 'loop', target: 'outer' },
+      ],
+    }
+    expect(resolveIterationDeletionCascade(loopBody, new Set(['loop']))).toEqual({
+      nodeIds: new Set(['loop', 'body-start', 'body-agent']),
+      edgeIds: new Set(['body', 'out']),
+      memberCount: 0,
+    })
+  })
+
+  it('mirrors a Loop resize gesture, and grows it as expandParent reports a larger body', () => {
+    const loop = { ...node('loop', 'loop'), initialWidth: 620, initialHeight: 300 }
+    const resized = applyIterationFrameResize(
+      [loop],
+      [{ id: 'loop', type: 'dimensions', resizing: true, dimensions: { width: 501, height: 271 } }],
+    )
+    expect(resized).toEqual([{ ...loop, initialWidth: 520, initialHeight: 280 }])
+
+    const grown = applyIterationFrameResize(
+      [loop],
+      [
+        {
+          id: 'loop',
+          type: 'dimensions',
+          setAttributes: true,
+          dimensions: { width: 700, height: 200 },
+        },
+      ],
+    )
+    // Growth never shrinks the authored height the members did not reach.
+    expect(grown).toEqual([{ ...loop, initialWidth: 700, initialHeight: 300 }])
+  })
+
+  it('never grows an iteration frame from expandParent, whose box only the author sizes', () => {
+    const frame = { ...node('iter', 'iteration'), initialWidth: 560, initialHeight: 340 }
+    expect(
+      applyIterationFrameResize(
+        [frame],
+        [
+          {
+            id: 'iter',
+            type: 'dimensions',
+            setAttributes: true,
+            dimensions: { width: 900, height: 900 },
+          },
+        ],
+      ),
+    ).toEqual([frame])
+  })
+
   it('mirrors a manual resize gesture onto the persisted frame size', () => {
     const frame = { ...node('iter', 'iteration'), initialWidth: 560, initialHeight: 340 }
     const resizing = applyIterationFrameResize(

@@ -1,4 +1,10 @@
-import { replaceEqualDeep, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  replaceEqualDeep,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import type {
   Error as ApiError,
   GetApiV1TenantsTidWorkflowsWfidRuns200,
@@ -324,6 +330,15 @@ export interface RestoreWorkflowSnapshotInput {
 export const WORKFLOW_RUN_POLL_MS = 5000
 
 /**
+ * Rows per page of the run history.
+ *
+ * The backend caps `limit` at 100 and the list stays below that: the first screen arrives quickly
+ * and "load more" is a small step. The size only decides how many clicks a long history takes —
+ * paging is by cursor, so it never decides which runs are reachable.
+ */
+export const WORKFLOW_RUN_PAGE_SIZE = 50
+
+/**
  * How often a run read polls, given the outcome of the last attempt.
  *
  * A settled run stops the poll: nothing can change it again, so re-reading it
@@ -346,22 +361,23 @@ export function runPollInterval(
 }
 
 /**
- * How often the run history polls: while any listed run can still change.
+ * How often the run history polls: while any run of the loaded walk can still change.
  *
  * A failed read keeps polling for the same reason the single-run read does:
  * the failure says nothing about whether the listed runs settled, so the next
  * attempt must still happen.
  *
- * @param items - Runs of the last successful page, or `undefined` when no read has succeeded yet.
+ * The rows come from every loaded page, not from the head alone: a running run
+ * is wherever the cursor walk put it, and the newest page being settled says
+ * nothing about the older ones.
+ *
+ * @param rows - Every run of the loaded history, or `undefined` when no read has succeeded yet.
  * @param failed - Whether the last attempt failed instead of returning a page.
  * @returns The interval in milliseconds, or `false` when every listed run is settled.
  */
-export function runsPollInterval(
-  items: WorkflowRun[] | undefined,
-  failed: boolean,
-): number | false {
-  if (items === undefined) return failed ? WORKFLOW_RUN_POLL_MS : false
-  return items.some((run) => !isTerminalRunStatus(run.status)) ? WORKFLOW_RUN_POLL_MS : false
+export function runsPollInterval(rows: WorkflowRun[] | undefined, failed: boolean): number | false {
+  if (rows === undefined) return failed ? WORKFLOW_RUN_POLL_MS : false
+  return rows.some((run) => !isTerminalRunStatus(run.status)) ? WORKFLOW_RUN_POLL_MS : false
 }
 
 /**
@@ -425,8 +441,7 @@ function mergeNodeStates(
 }
 
 /**
- * Merges a run-history page into the one already held, so one run cannot read
- * differently in the list and on its detail page.
+ * Merges one history page into the copies already held for the runs it returns.
  *
  * Membership follows the incoming page: the server decides which runs exist, and
  * the page is capped, so keeping rows the server no longer returns would grow
@@ -434,16 +449,20 @@ function mergeNodeStates(
  * with the same rule the detail page uses, which is what keeps the two surfaces
  * agreeing.
  *
- * @param previous - The page already cached, if any.
+ * The copies are looked up by run id across the whole loaded walk rather than at
+ * the same page position: a run created at the head shifts every boundary below
+ * it, so a settled run can move from one page to the next between two reads.
+ * Pairing pages positionally would then compare a row against a different run,
+ * and a stale copy of the moved row could reopen the settled one.
+ *
+ * @param held - Every row already held, keyed by run id.
  * @param next - The page the latest read returned.
  * @returns The page to keep.
  */
-export function mergeRunPage(
-  previous: GetApiV1TenantsTidWorkflowsWfidRuns200 | undefined,
+function mergeRunPage(
+  held: Map<string, WorkflowRun>,
   next: GetApiV1TenantsTidWorkflowsWfidRuns200,
 ): GetApiV1TenantsTidWorkflowsWfidRuns200 {
-  if (previous === undefined) return next
-  const held = new Map(previous.items.map((run) => [run.id, run]))
   return { ...next, items: next.items.map((run) => mergeRunRead(held.get(run.id), run)) }
 }
 
@@ -497,41 +516,108 @@ function shareRunRead(previous: unknown, next: unknown): unknown {
   return replaceEqualDeep(held, mergeRunRead(held, next))
 }
 
-/** The `structuralSharing` adapter for the run history, over {@link mergeRunPage}'s rule. */
-function shareRunPage(previous: unknown, next: unknown): unknown {
-  if (!isMergeableRunPage(next)) return next
-  const held = isMergeableRunPage(previous) ? previous : undefined
-  return replaceEqualDeep(held, mergeRunPage(held, next))
+/**
+ * The `structuralSharing` adapter for the run history, over {@link mergeRunPage}'s rule.
+ *
+ * A refresh derives each later page's cursor from the newly read previous page, so a new run can
+ * move an existing row across page boundaries. The held copies are therefore indexed across the
+ * whole walk before the pages are merged, and pages the walk gained have no copy of their own —
+ * `mergeRunRead` answers those with the incoming rows.
+ */
+function shareRunHistory(previous: unknown, next: unknown): unknown {
+  if (!isMergeableRunHistory(next)) return next
+  const held = isMergeableRunHistory(previous) ? previous : undefined
+  const heldRows = new Map(runHistoryRows(held?.pages).map((run) => [run.id, run]))
+  const pages = next.pages.map((page) => mergeRunPage(heldRows, page))
+  return replaceEqualDeep(held, { ...next, pages })
+}
+
+/** The cache shape TanStack hands `structuralSharing` for a paginated history. */
+interface RunHistoryCache {
+  pages: GetApiV1TenantsTidWorkflowsWfidRuns200[]
+  pageParams: unknown[]
+}
+
+/** True when a value is the paginated history whose pages the merge can read. */
+function isMergeableRunHistory(value: unknown): value is RunHistoryCache {
+  const record = asJsonRecord(value)
+  if (record === undefined) return false
+  const { pages, pageParams } = record
+  if (!Array.isArray(pages) || !Array.isArray(pageParams)) return false
+  const loaded: unknown[] = pages
+  return loaded.every(isMergeableRunPage)
 }
 
 /**
- * A workflow's run history, newest first.
+ * A workflow's run history, newest first, read as a cursor walk.
  *
- * The backend pages runs by row UUID, so the query fetches up to 100 rows and
- * sorts by `createdAt` client-side. It keeps re-reading while a listed run is
- * still moving, so the popover shows a run settling without being reopened.
+ * The list pages by `nextCursor` instead of asking for one capped window: the backend orders runs
+ * by `(created_at, id)`, so every page continues strictly below the previous one and a workflow
+ * with hundreds of runs stays fully browsable. The backend sorts, so the page arrives in display
+ * order; re-sorting here would only hide a disagreement between the two sides.
+ *
+ * A run's status is the one thing in the walk that still moves, so the query keeps re-reading
+ * while any run of the loaded walk is unsettled and stops once the whole walk is terminal. Every
+ * loaded page is refreshed in order, deriving each later cursor from the newly read previous page,
+ * so a running run stays live wherever the walk put it, not only on the newest page. `pages` is
+ * flattened by {@link runHistoryRows}, which keeps a stale cached overlap from rendering twice.
  *
  * @param tenantId - Tenant the workflow belongs to.
  * @param workflowId - Workflow whose runs to read.
- * @returns The runs, newest `createdAt` first, or `undefined` while resolving.
+ * @returns The paginated history: `data.pages` is the loaded walk, plus `fetchNextPage` until
+ *   `hasNextPage` is false.
  */
 export function useWorkflowRuns(tenantId: string | undefined, workflowId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: workflowRunsKey(tenantId, workflowId),
-    queryFn: ({ signal }) =>
+    queryFn: ({ pageParam, signal }) =>
       getApiV1TenantsTidWorkflowsWfidRuns(
         tenantId ?? '',
         workflowId ?? '',
-        { limit: 100 },
+        { limit: WORKFLOW_RUN_PAGE_SIZE, ...(pageParam === '' ? {} : { after: pageParam }) },
         undefined,
         signal,
       ),
+    initialPageParam: '',
+    getNextPageParam: (page) => (page.nextCursor === '' ? undefined : page.nextCursor),
     enabled: !!tenantId && !!workflowId,
-    select: (page) => [...page.items].toSorted((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    refetchInterval: (query) =>
-      runsPollInterval(query.state.data?.items, query.state.status === 'error'),
-    structuralSharing: shareRunPage,
+    refetchInterval: (query) => {
+      const pages = query.state.data?.pages
+      return runsPollInterval(
+        // No successful read yet is not the same as an empty history: a failed first read keeps
+        // polling, because another attempt is how a transient failure recovers.
+        pages === undefined ? undefined : runHistoryRows(pages),
+        query.state.status === 'error',
+      )
+    },
+    structuralSharing: shareRunHistory,
   })
+}
+
+/**
+ * The runs of every loaded page, newest first and with no run twice.
+ *
+ * Deduplication is by run id rather than by position because a poll refreshes every loaded page at
+ * its own cursor: a run created between two reads shifts the head page, and the boundary it shifts
+ * across could otherwise be rendered from two pages at once.
+ *
+ * @param pages - The loaded pages, oldest page last.
+ * @returns One row per run, in the order the backend returned them.
+ */
+export function runHistoryRows(
+  pages: GetApiV1TenantsTidWorkflowsWfidRuns200[] | undefined,
+): WorkflowRun[] {
+  if (pages === undefined) return []
+  const seen = new Set<string>()
+  const rows: WorkflowRun[] = []
+  for (const page of pages) {
+    for (const run of page.items) {
+      if (seen.has(run.id)) continue
+      seen.add(run.id)
+      rows.push(run)
+    }
+  }
+  return rows
 }
 
 /**

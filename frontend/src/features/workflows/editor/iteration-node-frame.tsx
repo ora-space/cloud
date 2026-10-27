@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Handle,
   NodeResizeControl,
@@ -42,6 +42,8 @@ export interface IterationNodeFrameProps {
   data: WorkflowCanvasNode['data']
   selected: boolean
   deletable: boolean
+  /** Replaces the member-count chip, such as the run viewer's item summary. */
+  badge?: ReactNode
 }
 
 /**
@@ -53,7 +55,13 @@ export interface IterationNodeFrameProps {
  * graph. The frame's size is authored (`initialWidth` / `initialHeight`) so an
  * empty region stays droppable and a save/load round trip survives.
  */
-export function IterationNodeFrame({ id, data, selected, deletable }: IterationNodeFrameProps) {
+export function IterationNodeFrame({
+  id,
+  data,
+  selected,
+  deletable,
+  badge,
+}: IterationNodeFrameProps) {
   const { t } = useTranslation()
   const translate = useWorkflowTranslator()
   const updateNodeInternals = useUpdateNodeInternals()
@@ -126,6 +134,7 @@ export function IterationNodeFrame({ id, data, selected, deletable }: IterationN
         tone={metadata.tone}
         title={data.title}
         memberCount={memberCount}
+        badge={badge}
         collapsed={collapsed}
         selected={selected}
         canDelete={canDelete}
@@ -138,7 +147,12 @@ export function IterationNodeFrame({ id, data, selected, deletable }: IterationN
             </span>
           )}
           <IterationStartSeam id={id} title={data.title} />
-          {!iterationActions.readOnly && <IterationFrameResize />}
+          {!iterationActions.readOnly && (
+            <ContainerFrameResize
+              minWidth={WORKFLOW_ITERATION_NODE_WIDTH}
+              minHeight={WORKFLOW_ITERATION_NODE_HEIGHT}
+            />
+          )}
         </>
       )}
     </div>
@@ -156,6 +170,7 @@ function IterationFrameHeader({
   tone,
   title,
   memberCount,
+  badge,
   collapsed,
   selected,
   canDelete,
@@ -165,6 +180,7 @@ function IterationFrameHeader({
   tone: string
   title: string
   memberCount: number
+  badge: ReactNode | undefined
   collapsed: boolean
   selected: boolean
   canDelete: boolean
@@ -181,9 +197,11 @@ function IterationFrameHeader({
         <Icon className="size-4" strokeWidth={1.9} />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</span>
-      <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-        {t('workflows.iteration.regionSummary', { total: memberCount })}
-      </span>
+      {badge ?? (
+        <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {t('workflows.iteration.regionSummary', { total: memberCount })}
+        </span>
+      )}
       {!readOnly && (
         <button
           type="button"
@@ -269,14 +287,26 @@ function IterationStartSeam({ id, title }: { id: string; title: string }) {
   )
 }
 
-/** The Dify-style corner resize affordance with a forgiving hit zone. */
-function IterationFrameResize() {
+/**
+ * The Dify-style corner resize affordance with a forgiving hit zone, shared by every container
+ * frame. The gesture's `resizing` dimension changes are what the draft mirrors onto the
+ * authored `initialWidth` / `initialHeight`.
+ *
+ * @param props.minWidth - Smallest box the gesture may leave; the container's default size.
+ */
+export function ContainerFrameResize({
+  minWidth,
+  minHeight,
+}: {
+  minWidth: number
+  minHeight: number
+}) {
   return (
     <NodeResizeControl
       variant={ResizeControlVariant.Handle}
       position="bottom-right"
-      minWidth={WORKFLOW_ITERATION_NODE_WIDTH}
-      minHeight={WORKFLOW_ITERATION_NODE_HEIGHT}
+      minWidth={minWidth}
+      minHeight={minHeight}
       className="group/iteration-resize"
       style={{
         left: 'auto',
@@ -300,7 +330,7 @@ function IterationFrameResize() {
         viewBox="0 0 16 16"
         fill="none"
         className={cn(
-          'absolute right-px bottom-px text-foreground opacity-0 transition-opacity duration-150 group-hover/iteration-frame:opacity-100 group-hover/iteration-resize:opacity-100',
+          'absolute right-px bottom-px text-foreground opacity-0 transition-opacity duration-150 group-hover/iteration-frame:opacity-100 group-hover/loop-frame:opacity-100 group-hover/iteration-resize:opacity-100',
         )}
       >
         <path

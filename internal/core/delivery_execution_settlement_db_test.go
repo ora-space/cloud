@@ -370,7 +370,7 @@ func TestDeliverySettlementMigrationPreservesLegacyHistoryAndRepeats(t *testing.
 		ALTER TABLE node_executions DROP CONSTRAINT delivery_business_settlement_pair,
 		DROP CONSTRAINT delivery_business_settlement_kind,DROP CONSTRAINT execution_non_acceptance_proof_shape,
 		DROP COLUMN business_settled_at,DROP COLUMN business_settlement_source,DROP COLUMN dispatch_identity,DROP COLUMN non_acceptance_proof;
-		DELETE FROM schema_migrations WHERE version='0072_delivery_execution_settlement.sql'`); err != nil {
+		DELETE FROM schema_migrations WHERE version='0073_delivery_execution_settlement.sql'`); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {

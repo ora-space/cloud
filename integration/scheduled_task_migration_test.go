@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	scheduledTaskMigration      = "0061_scheduled_tasks.sql"
-	scheduledTaskModelMigration = "0071_scheduled_task_model.sql"
+	scheduledTaskMigration                    = "0061_scheduled_tasks.sql"
+	scheduledTaskModelMigration               = "0071_scheduled_task_model.sql"
+	scheduledTaskConversationReasonsMigration = "0072_scheduled_task_conversation_reasons.sql"
 )
 
 // seedScheduledTaskAgent inserts the one space_agents row a definition binds, returning its id.
@@ -175,6 +176,39 @@ func TestMigration0071ScheduledTaskModelUpgradeAndReplay(t *testing.T) {
 	must(t, pool.QueryRow(`SELECT model FROM scheduled_tasks WHERE id=$1`, taskID).Scan(&model))
 	if !model.Valid || model.String != "vendor/model-v2" {
 		t.Fatalf("replaying 0071 must preserve selected model, got %#v", model)
+	}
+}
+
+// TestMigration0072ScheduledTaskConversationReasonsUpgradeAndReplay widens the failure reason set
+// without rewriting an existing failed occurrence, and still refuses a reason outside D7.
+func TestMigration0072ScheduledTaskConversationReasonsUpgradeAndReplay(t *testing.T) {
+	pool, _ := testSchema(t, "test_scheduled72u_")
+	applyMigrationsUpTo(t, pool, migrationsBefore(t, scheduledTaskConversationReasonsMigration))
+	s := seedAgentIssueRunSkeleton(t, pool)
+	agentID := seedScheduledTaskAgent(t, pool, s)
+	taskID := insertScheduledTask(t, pool, s, agentID, "")
+	occurrence := func(at, reason string) error {
+		_, err := pool.Exec(`INSERT INTO scheduled_task_occurrences(tenant_id, task_id, scheduled_at, outcome, failure_reason, task_revision, observed_at)
+			VALUES($1,$2,$3::timestamptz,'failed',$4,1,now())`, s.tenantID, taskID, at, reason)
+		return err
+	}
+	must(t, occurrence("2026-01-01T00:00:00Z", "target_unavailable"))
+	if occurrence("2026-01-01T01:00:00Z", "task_paused") == nil {
+		t.Fatal("before 0072 the failure reason set must not accept task_paused")
+	}
+
+	store := newStoreOnSchema(t, pool)
+	must(t, store.Migrate(context.Background()))
+	must(t, store.Migrate(context.Background()))
+	must(t, occurrence("2026-01-01T01:00:00Z", "task_paused"))
+	must(t, occurrence("2026-01-01T02:00:00Z", "task_handoff_pending"))
+	if occurrence("2026-01-01T03:00:00Z", "skipped_busy") == nil {
+		t.Fatal("0072 must still refuse a failure reason outside D7")
+	}
+	var reason string
+	must(t, pool.QueryRow(`SELECT failure_reason FROM scheduled_task_occurrences WHERE task_id=$1 AND scheduled_at='2026-01-01T00:00:00Z'`, taskID).Scan(&reason))
+	if reason != "target_unavailable" {
+		t.Fatalf("0072 must not rewrite an existing occurrence, got %q", reason)
 	}
 }
 

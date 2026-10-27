@@ -64,5 +64,14 @@ export const WORKFLOW_LOOP_NODE_WIDTH = 620
 /** Height of an expanded Loop frame. See {@link WORKFLOW_LOOP_NODE_WIDTH}. */
 export const WORKFLOW_LOOP_NODE_HEIGHT = 300
 
+/**
+ * Smallest box a manual resize may leave a Loop frame at: room for the body start and one
+ * card. Matches desktop, so a graph resized there imports without being clamped here.
+ */
+export const WORKFLOW_LOOP_MIN_WIDTH = 480
+
+/** Smallest Loop frame height. See {@link WORKFLOW_LOOP_MIN_WIDTH}. */
+export const WORKFLOW_LOOP_MIN_HEIGHT = 260
+
 /** Width a Condition card assumes until the browser measures the real one. */
 export const WORKFLOW_CONDITION_NODE_WIDTH = 320

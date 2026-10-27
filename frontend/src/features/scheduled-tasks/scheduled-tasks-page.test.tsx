@@ -107,6 +107,29 @@ describe('ScheduledTasksPage', () => {
     expect(second).toHaveTextContent('已启用')
   })
 
+  it('shows the next due point in the task timezone only while the task is enabled', async () => {
+    serve([
+      task({ enabled: true, nextDueAt: '2026-10-28T01:00:00Z' }),
+      task({
+        id: 'st2',
+        name: '纽约日报',
+        timezone: 'America/New_York',
+        enabled: true,
+        nextDueAt: '2026-11-02T14:00:00Z',
+      }),
+      task({ id: 'st3', name: '已停任务', disabledReason: 'manual', nextDueAt: null }),
+    ])
+    renderPage()
+    const shanghai = await screen.findByRole('article', { name: '每日同步' })
+    expect(shanghai).toHaveTextContent('下次运行：2026-10-28 09:00（Asia/Shanghai）')
+    const newYork = await screen.findByRole('article', { name: '纽约日报' })
+    expect(newYork).toHaveTextContent('下次运行：2026-11-02 09:00（America/New_York）')
+    const disabled = await screen.findByRole('article', { name: '已停任务' })
+    expect(disabled).toHaveTextContent('已停用')
+    expect(disabled).toHaveTextContent('停用原因：manual')
+    expect(disabled).not.toHaveTextContent('下次运行')
+  })
+
   it('hides creation while the deployed acceptance gate is closed', async () => {
     serve()
     renderPage()

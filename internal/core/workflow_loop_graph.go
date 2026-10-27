@@ -189,7 +189,10 @@ func validateWorkflowContainers(nodes, edges []any) []workflowGraphProblem {
 			problems = append(problems, workflowGraphProblem{Code: "loop_body_output_unsupported", NodeID: id})
 		}
 	}
-	// Edge rules: an edge may not cross a container boundary. Both endpoints are known here because
+	// Edge rules: only an iteration's editor entry edge may cross into its own body. This edge
+	// preserves the wire graph; body scheduling and predecessor walks use only same-region edges,
+	// so it does not make a member wait for its running owner. Entry edges remain optional.
+	// Both endpoints are known here because
 	// validateWorkflowEdges reports unknown endpoints separately; skipping them keeps one mistake
 	// from being reported as a container error too.
 	crossContainer := map[string]bool{}
@@ -202,6 +205,9 @@ func validateWorkflowContainers(nodes, edges []any) []workflowGraphProblem {
 		sourceNode, sourceOK := info[source]
 		targetNode, targetOK := info[target]
 		if !sourceOK || !targetOK {
+			continue
+		}
+		if sourceNode.kind == "iteration" && targetNode.container == source && edge.S("sourceHandle") == "iteration-entry" {
 			continue
 		}
 		if sourceNode.container != targetNode.container {

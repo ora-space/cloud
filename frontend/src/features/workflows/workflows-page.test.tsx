@@ -53,6 +53,41 @@ describe('WorkflowsPage', () => {
     expect(await screen.findByText('还没有工作流')).toBeInTheDocument()
   })
 
+  it('labels each row with its newest run and links straight into the run list', async () => {
+    installWorkflowHandlers([
+      workflowFixture({
+        name: '安全审查',
+        latestRun: {
+          id: '77777777-7777-7777-7777-777777777777',
+          name: '巡检运行',
+          status: 'failed',
+          snapshotId: '88888888-8888-8888-8888-888888888888',
+          createdAt: '2026-10-24T02:00:00.000Z',
+          startedAt: '2026-10-24T02:00:01.000Z',
+          finishedAt: '2026-10-24T02:00:09.000Z',
+        },
+      }),
+      workflowFixture({ id: '55555555-5555-5555-5555-555555555555', name: '发布流程' }),
+    ])
+    renderList()
+
+    // The last run is part of the workflow row, so "did it work last time" is answerable without
+    // opening the editor or the history.
+    expect(await screen.findByText('失败')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '打开安全审查最近一次运行' })).toHaveAttribute(
+      'href',
+      '/w/cloud-dev/workflows/44444444-4444-4444-4444-444444444444/runs/77777777-7777-7777-7777-777777777777',
+    )
+    // A workflow that never ran says so instead of rendering a status for nothing.
+    expect(screen.getByText('从未运行')).toBeInTheDocument()
+    // Both rows offer the run list without going through the editor first.
+    const runsLinks = screen.getAllByRole('link', { name: '运行记录' })
+    expect(runsLinks.map((link) => link.getAttribute('href'))).toEqual([
+      '/w/cloud-dev/workflows/44444444-4444-4444-4444-444444444444/runs',
+      '/w/cloud-dev/workflows/55555555-5555-5555-5555-555555555555/runs',
+    ])
+  })
+
   it('filters rows and reports a search that matches nothing', async () => {
     installWorkflowHandlers([
       workflowFixture({ name: '安全审查' }),

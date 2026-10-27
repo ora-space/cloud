@@ -225,7 +225,7 @@ func TestWorkflowRunCancelStopsTheRunningSession(t *testing.T) {
 	if status != "cancelled" || runErr != "" {
 		t.Fatalf("run settled %q error %q states=%v; want cancelled", status, runErr, states)
 	}
-	if agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.O("output").S("reason") != "cancelled" {
+	if agent == nil || agent.S("status") != "cancelled" || agent.S("error") != "" || agent.S("sessionEndReason") != "cancelled" {
 		t.Fatalf("node a = %v; want cancelled with no error and reason cancelled", states["a"])
 	}
 	assertRunWorkspaceReleased(t, store, runID)
@@ -266,7 +266,7 @@ func TestWorkflowRunCancelKeepsACommittedSessionResult(t *testing.T) {
 	if status != "cancelled" || runErr != "" {
 		t.Fatalf("run settled %q error %q states=%v; want cancelled", status, runErr, states)
 	}
-	if agent == nil || agent.S("status") != "succeeded" || agent.O("output").S("reason") != "idle_timeout" {
+	if agent == nil || agent.S("status") != "succeeded" || agent.S("sessionEndReason") != "idle_timeout" {
 		t.Fatalf("node a = %v; want the committed idle_timeout result kept", states["a"])
 	}
 	assertRunWorkspaceReleased(t, store, runID)
@@ -402,7 +402,7 @@ func TestWorkflowRunCancelReusesTheExistingEndRequest(t *testing.T) {
 	if status != "cancelled" || runErr != "" {
 		t.Fatalf("run settled %q error %q states=%v; want cancelled", status, runErr, states)
 	}
-	if agent == nil || agent.S("status") != "succeeded" || agent.O("output").S("reason") != "idle_timeout" {
+	if agent == nil || agent.S("status") != "succeeded" || agent.S("sessionEndReason") != "idle_timeout" {
 		t.Fatalf("node a = %v; want the session's own succeeded result kept", states["a"])
 	}
 	assertRunWorkspaceReleased(t, store, runID)

@@ -55,7 +55,7 @@ func TestWorkflowSessionTurnDeadlineFailsNode(t *testing.T) {
 	}
 	agent, _ := asWorkflowObject(states["a"])
 	if agent == nil || agent.S("status") != "failed" || agent.S("error") != workflowSessionTurnDeadlineExceeded ||
-		agent.O("output").S("reason") != workflowSessionTurnDeadlineExceeded {
+		agent.S("sessionEndReason") != workflowSessionTurnDeadlineExceeded {
 		t.Fatalf("agent state = %v; want failed/%s", states["a"], workflowSessionTurnDeadlineExceeded)
 	}
 	assertRunWorkspaceReleased(t, store, runID)

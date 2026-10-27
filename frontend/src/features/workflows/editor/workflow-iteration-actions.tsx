@@ -15,25 +15,43 @@ import {
   workflowPaletteNodeTypes,
   type WorkflowNodeTypeDefinition,
 } from '@/features/workflows/runtime/node-catalog'
-import type { WorkflowIterationInsertion } from '@/features/workflows/runtime/iteration-graph'
+import {
+  loopOutputInsertion,
+  type WorkflowContainerInsertion,
+  type WorkflowLoopOutputInsertion,
+} from '@/features/workflows/runtime/loop-graph'
+import type { WorkflowIterationGraph } from '@/features/workflows/runtime/iteration-graph'
 import type { WorkflowNodeKind } from '@/features/workflows/runtime/types'
 
 /**
- * Graph-aware iteration authoring actions exposed to composite chrome.
+ * Graph-aware container authoring actions exposed to composite chrome.
  *
- * The frame and its insert seams read this context instead of accepting one
- * callback each, because the same menu renders at several seams and every seam
- * needs the same gate: which node kinds the region accepts and whether the
- * canvas is read-only.
+ * Frames, their insert seams and loop-member ports read this context instead of
+ * accepting one callback each, because the same menu renders at several seams and
+ * every seam needs the same gate: which node kinds the container accepts and
+ * whether the canvas is read-only.
  */
 export interface WorkflowIterationActions {
-  /** Palette entries the region accepts, in menu order. */
-  nodeTypes: readonly WorkflowNodeTypeDefinition[]
+  /** Palette entries a seam accepts, in menu order: loop bodies and iteration regions differ. */
+  nodeTypesFor: (insertion: WorkflowContainerInsertion) => readonly WorkflowNodeTypeDefinition[]
   readOnly: boolean
-  /** Adds a member of `kind` through an explicit region insertion seam. */
-  insert: (kind: WorkflowNodeKind, insertion: WorkflowIterationInsertion) => void
+  /** Adds a member of `kind` through an explicit container insertion seam. */
+  insert: (kind: WorkflowNodeKind, insertion: WorkflowContainerInsertion) => void
   /** Folds or unfolds one iteration frame; members stay in the graph. */
   toggleCollapsed: (iterationId: string) => void
+  /**
+   * The append seam behind one output port of a loop body member, or `null` when the port
+   * belongs to a node outside a loop (or the canvas is read-only).
+   */
+  loopOutputInsertion: (
+    nodeId: string,
+    sourceHandle: string | null,
+  ) => WorkflowLoopOutputInsertion | null
+}
+
+/** The editor scope whose palette a seam offers. */
+function insertionScope(insertion: WorkflowContainerInsertion): 'loop' | 'iteration' {
+  return insertion.type === 'loop-output' ? 'loop' : 'iteration'
 }
 
 const WorkflowIterationActionsContext = createContext<WorkflowIterationActions | null>(null)
@@ -47,26 +65,42 @@ export function useWorkflowIterationActions(): WorkflowIterationActions {
   return value
 }
 
-/** Provides graph-aware iteration authoring actions to custom nodes. */
+/**
+ * Reads container actions where a card may also render outside an authoring canvas (a bare
+ * React Flow in a test, a preview): without a provider there are no seams to offer.
+ */
+export function useOptionalWorkflowIterationActions(): WorkflowIterationActions | null {
+  return useContext(WorkflowIterationActionsContext)
+}
+
+/**
+ * Provides graph-aware container authoring actions to custom nodes.
+ *
+ * @param props.graph - The persisted graph, read to decide which ports open a loop seam.
+ */
 export function WorkflowIterationActionsProvider({
+  graph,
   readOnly,
   onInsert,
   onToggleCollapsed,
   children,
 }: {
+  graph: WorkflowIterationGraph
   readOnly: boolean
-  onInsert: (kind: WorkflowNodeKind, insertion: WorkflowIterationInsertion) => void
+  onInsert: (kind: WorkflowNodeKind, insertion: WorkflowContainerInsertion) => void
   onToggleCollapsed: (iterationId: string) => void
   children: ReactNode
 }) {
   const value = useMemo<WorkflowIterationActions>(
     () => ({
-      nodeTypes: workflowPaletteNodeTypes('iteration'),
+      nodeTypesFor: (insertion) => workflowPaletteNodeTypes(insertionScope(insertion)),
       readOnly,
       insert: onInsert,
       toggleCollapsed: onToggleCollapsed,
+      loopOutputInsertion: (nodeId, sourceHandle) =>
+        readOnly ? null : loopOutputInsertion(graph, nodeId, sourceHandle),
     }),
-    [onInsert, onToggleCollapsed, readOnly],
+    [graph, onInsert, onToggleCollapsed, readOnly],
   )
   return (
     <WorkflowIterationActionsContext.Provider value={value}>
@@ -78,7 +112,7 @@ export function WorkflowIterationActionsProvider({
 /** Props shared by every insert-seam trigger. */
 interface IterationInsertMenuProps {
   /** The graph seam the picker inserts at. */
-  insertion: WorkflowIterationInsertion
+  insertion: WorkflowContainerInsertion
   /** Accessible label of the trigger, naming the seam. */
   label: string
   /** Controlled menu state for seams whose port doubles as the trigger. */
@@ -104,7 +138,8 @@ export function IterationInsertMenu({
   className,
 }: IterationInsertMenuProps) {
   const translate = useWorkflowTranslator()
-  const { nodeTypes, readOnly, insert } = useWorkflowIterationActions()
+  const { nodeTypesFor, readOnly, insert } = useWorkflowIterationActions()
+  const nodeTypes = nodeTypesFor(insertion)
   if (readOnly || nodeTypes.length === 0) {
     return null
   }

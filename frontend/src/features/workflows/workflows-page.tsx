@@ -38,6 +38,8 @@ function WorkflowListBody({
   workflows,
   query,
   hrefFor,
+  runsHrefFor,
+  runHrefFor,
   onRename,
   onDelete,
 }: {
@@ -45,6 +47,8 @@ function WorkflowListBody({
   workflows: CloudWorkflow[]
   query: string
   hrefFor: (id: string) => string
+  runsHrefFor: (id: string) => string
+  runHrefFor: (workflowId: string, runId: string) => string
   onRename: (workflow: CloudWorkflow) => void
   onDelete: (workflow: CloudWorkflow) => void
 }) {
@@ -82,6 +86,8 @@ function WorkflowListBody({
           key={workflow.id}
           workflow={workflow}
           href={hrefFor(workflow.id)}
+          runsHref={runsHrefFor(workflow.id)}
+          runHref={(runId) => runHrefFor(workflow.id, runId)}
           onRename={onRename}
           onDelete={onDelete}
         />
@@ -145,6 +151,8 @@ export function WorkflowsPage({ slug }: { slug: string }) {
           workflows={workflows}
           query={query}
           hrefFor={paths.workflowDetail}
+          runsHrefFor={paths.workflowRuns}
+          runHrefFor={paths.workflowRun}
           onRename={setRenaming}
           onDelete={setDeleting}
         />

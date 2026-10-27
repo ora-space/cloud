@@ -197,11 +197,11 @@ func advanceWorkflowIteration(
 		return true
 	}
 	if ready, ok := projection.readyNode(); ok {
+		readStates := workflowIterationReadStates(graph, node.ID, states, ambient, item, iteration.Round)
 		if ready.Kind == "agent" {
-			startWorkflowAgentSession(t, run, ready, version, states)
+			startWorkflowAgentSession(t, run, ready, version, states, workflowConditionStates(workflowPredecessorStates(graph, ready, readStates), ambient))
 			return false
 		}
-		readStates := workflowIterationReadStates(graph, node.ID, states, ambient, item, iteration.Round)
 		states[ready.ID] = executeWorkflowNode(ready, run.O("input"), workflowPredecessorStates(graph, ready, readStates), ambient)
 		return true
 	}

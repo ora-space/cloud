@@ -1,25 +1,23 @@
-import { format } from 'date-fns'
 import { Play, ScrollText } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router-dom'
-import type { WorkflowRun, WorkflowRunStatus } from '@/api/generated.schemas'
-import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { useWorkflowRuns, useWorkflowSnapshots } from '@/features/workflows/api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import type { WorkflowRun } from '@/api/generated.schemas'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { useWorkflowSnapshots } from '@/features/workflows/api'
 import { WorkflowRunDialog } from '@/features/workflows/editor/workflow-run-dialog'
-import { RunStatusBadge } from '@/features/workflows/run/run-status-mark'
 import { workspacePaths } from '@/lib/paths'
 
 /**
- * The toolbar's run controls: start one run, or browse the run history.
+ * The toolbar's run controls: start one run, or open the run history.
  *
- * A run executes against a published snapshot, so the primary button is disabled while
- * the workflow has none — there is nothing honest to execute a draft against. Starting a
- * run opens {@link WorkflowRunDialog}, which is where the version and the run's own input
- * are chosen; a started run then navigates to its read-only detail page, while browsing
- * history opens the popover whose rows lead to each run's page.
+ * A run executes against a published snapshot, so the primary button is disabled while the
+ * workflow has none — there is nothing honest to execute a draft against. Starting a run opens
+ * {@link WorkflowRunDialog}, which is where the version and the run's own input are chosen; a
+ * started run then navigates to its read-only detail page.
+ *
+ * Browsing history is a link, not a popover: the history has its own tab, so the same URL a member
+ * can share is the one this control opens, and opening it never starts anything.
  *
  * @param props.tenantId - Tenant the workflow belongs to; scopes the API calls only, never a
  * browser path segment (the route's workspace slug is the one paths are built from).
@@ -40,8 +38,6 @@ export function WorkflowRunTools({
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
   const paths = workspacePaths(workspaceSlug ?? tenantId)
   const snapshots = useWorkflowSnapshots(tenantId, workflowId)
-  const runs = useWorkflowRuns(tenantId, workflowId)
-  const [historyOpen, setHistoryOpen] = useState(false)
   const [startOpen, setStartOpen] = useState(false)
 
   const noSnapshot = snapshots.data !== undefined && snapshots.data.length === 0
@@ -58,6 +54,14 @@ export function WorkflowRunTools({
         <Play className="size-3.5" fill="currentColor" />
         {t('workflows.run.runNow')}
       </Button>
+      <Link
+        to={paths.workflowRuns(workflowId)}
+        title={t('workflows.run.historyHint')}
+        className={buttonVariants({ variant: 'outline', size: 'sm' })}
+      >
+        <ScrollText className="size-4" />
+        {t('workflows.run.history')}
+      </Link>
       <WorkflowRunDialog
         tenantId={tenantId}
         workflowId={workflowId}
@@ -65,95 +69,12 @@ export function WorkflowRunTools({
         onOpenChange={setStartOpen}
         onStarted={openStartedRun}
       />
-      <Popover
-        open={historyOpen}
-        onOpenChange={(next) => {
-          setHistoryOpen(next)
-          if (next) {
-            void runs.refetch()
-          }
-        }}
-      >
-        <PopoverTrigger
-          render={
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label={t('workflows.run.history')}
-              title={t('workflows.run.historyHint')}
-            />
-          }
-        >
-          <ScrollText className="size-4" />
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 p-0">
-          <div className="border-b border-border px-3 py-2.5">
-            <h3 className="text-sm font-semibold">{t('workflows.run.history')}</h3>
-          </div>
-          <RunHistoryList runs={runs.data ?? []} isPending={runs.isPending} onOpen={openRun} />
-        </PopoverContent>
-      </Popover>
     </>
   )
 
   /** Leaves the dialog for the run the server just created. */
   function openStartedRun(run: WorkflowRun): void {
     setStartOpen(false)
-    setHistoryOpen(false)
     void navigate(paths.workflowRun(run.workflowId, run.id))
   }
-
-  /** Navigates to a run's read-only detail page. */
-  function openRun(runId: string): void {
-    setHistoryOpen(false)
-    void navigate(paths.workflowRun(workflowId, runId))
-  }
-}
-
-/** The run history rows: loading / empty / the runs newest first. */
-function RunHistoryList({
-  runs,
-  isPending,
-  onOpen,
-}: {
-  runs: Array<{ id: string; name: string; status: WorkflowRunStatus; createdAt: string }>
-  isPending: boolean
-  onOpen: (runId: string) => void
-}) {
-  const { t } = useTranslation()
-  if (runs.length === 0) {
-    return (
-      <ScrollArea className="max-h-72 min-w-fit p-2">
-        <p className="px-2.5 py-3 text-xs text-muted-foreground">
-          {isPending ? t('workflows.detail.loading') : t('workflows.run.historyEmpty')}
-        </p>
-      </ScrollArea>
-    )
-  }
-  return (
-    <ScrollArea className="max-h-72 min-w-fit p-2">
-      <ul className="space-y-1">
-        {runs.map((run) => (
-          <li key={run.id}>
-            <button
-              type="button"
-              aria-label={t('workflows.run.openRun', { name: run.name })}
-              onClick={() => onOpen(run.id)}
-              className="w-full rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <RunStatusBadge status={run.status} className="shrink-0 px-1.5 py-0 text-[9px]" />
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">{run.name}</span>
-              </span>
-              <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                {t('workflows.run.startedAt', {
-                  time: format(new Date(run.createdAt), 'M月d日 HH:mm'),
-                })}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </ScrollArea>
-  )
 }

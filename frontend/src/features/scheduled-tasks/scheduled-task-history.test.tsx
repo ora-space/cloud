@@ -62,4 +62,26 @@ describe('ScheduledTaskHistory', () => {
     expect(await screen.findByText(/结论 未报告/)).toBeInTheDocument()
     expect(screen.getByText(/产物 0 项/)).toBeInTheDocument()
   })
+
+  it('points a task conversation refusal at the conversation instead of a raw code', async () => {
+    renderHistory([
+      entry({
+        scheduledAt: '2026-10-22T02:00:00Z',
+        outcome: 'failed',
+        failureReason: 'task_paused',
+        runId: null,
+      }),
+      entry({ outcome: 'failed', failureReason: 'task_handoff_pending', runId: null }),
+    ])
+    expect(
+      await screen.findByText('任务对话已暂停或有失败消息，请先在任务对话中处理'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('任务对话中有等待执行的消息，本次未运行')).toBeInTheDocument()
+    expect(screen.queryByText('task_paused')).not.toBeInTheDocument()
+  })
+
+  it('keeps other failure reasons as their code', async () => {
+    renderHistory([entry({ outcome: 'failed', failureReason: 'model_unavailable', runId: null })])
+    expect(await screen.findByText('model_unavailable')).toBeInTheDocument()
+  })
 })

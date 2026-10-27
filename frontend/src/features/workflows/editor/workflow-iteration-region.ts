@@ -10,6 +10,7 @@ import {
   iterationExpandedSize,
   projectIterationEdges,
 } from '@/features/workflows/runtime/iteration-graph'
+import { loopFrameSize } from '@/features/workflows/runtime/loop-graph'
 import type { WorkflowPosition } from '@/features/workflows/runtime/types'
 
 /**
@@ -154,13 +155,22 @@ function presentationZIndex(node: WorkflowCanvasNode, isFrame: boolean): number 
  *
  * @param nodes - Graph nodes, for the frames to test.
  * @param point - Flow-space point, from `screenToFlowPosition`.
- * @returns Whether the point lies inside any iteration frame.
+ * @returns Whether the point lies inside any iteration or Loop frame.
  */
 export function workflowPointInsideIterationFrame(
   nodes: readonly WorkflowCanvasNode[],
   point: WorkflowPosition,
 ): boolean {
   return nodes.some((node) => {
+    if (node.data.kind === 'loop') {
+      const size = loopFrameSize(node, nodes)
+      return (
+        point.x >= node.position.x &&
+        point.x <= node.position.x + size.width &&
+        point.y >= node.position.y &&
+        point.y <= node.position.y + size.height
+      )
+    }
     if (node.data.kind !== 'iteration') {
       return false
     }

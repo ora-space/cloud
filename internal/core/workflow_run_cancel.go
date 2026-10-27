@@ -156,6 +156,7 @@ func advanceCancelledWorkflowRun(t *transaction, run Object, version int64, stat
 	if e := t.one(`SELECT result FROM node_executions
 		WHERE operation_id=$1 AND workflow_node_id=$2 AND workflow_node_attempt=$3 AND kind='agent_session' AND result IS NOT NULL`, runID, nodeID, attempt); e != nil {
 		applyWorkflowAgentTerminal(states, nodeID, e.O("result"))
+		assignWorkflowAgentOutput(t, runID, nodeID, states)
 		finishWorkflowRun(t, runID, version, "cancelled", "", states)
 		return
 	}
@@ -199,7 +200,8 @@ func applyWorkflowAgentTerminal(states map[string]workflowNodeState, nodeID stri
 	state.Attempt = state.attemptNumber()
 	state.RetryAt = ""
 	state.FinishedAt = nowRFC3339()
-	state.Output = Object{"reason": reason}
+	state.Output = nil
+	state.SessionEndReason = reason
 	if state.Status == "failed" {
 		state.Error = reason
 	}
@@ -230,6 +232,7 @@ func cancelWorkflowAgentNode(states map[string]workflowNodeState, nodeID string)
 	state.RetryAt = ""
 	state.FinishedAt = nowRFC3339()
 	state.Error = ""
-	state.Output = Object{"reason": "cancelled"}
+	state.Output = nil
+	state.SessionEndReason = "cancelled"
 	states[nodeID] = state
 }

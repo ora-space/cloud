@@ -17,7 +17,7 @@
 | `navigation.test.ts` | 验证替换与还原语义。 |
 | `pagination.ts` / `pagination.test.ts` | 顺序读取所有游标页，确保空间、成员和申请列表不会只显示首页；测试跨页顺序。 |
 | `paths.test.ts` | 验证 `safeReturnTo` 的拒绝规则、私有加入链接的收窄、`loginPath` 的编码与所有工作区路由的 `/w/` 前缀。 |
-| `paths.ts` | 保留的工作区前缀 `WORKSPACE_ROUTE_PREFIX`（`/w`）及其路由模式 `WORKSPACE_ROUTE_PATTERN`、工作区路由构造 `workspacePaths`（含资源详情页构造器 `issueDetail` / `projectDetail` / `agentDetail` / `squadDetail` / `workflowDetail`，以及插件路由、设置下的凭据路由 `gitCredentials` 与 Git 身份路由 `gitIdentity`）、登录路由 `loginPath`、不受信 `returnTo` 的收窄 `safeReturnTo`（单个前导 `/`、不允许 `//`、反斜杠或控制字符、最长 2048）、空间地址预览 `workspaceUrlPrefix`（`host/w/`，显示在 slug 输入框前的固定部分），以及同源邀请/申请链接的构造 `joinUrl` 与校验 `joinedLinkPath`。 |
+| `paths.ts` | 保留的工作区前缀 `WORKSPACE_ROUTE_PREFIX`（`/w`）及其路由模式 `WORKSPACE_ROUTE_PATTERN`、工作区路由构造 `workspacePaths`（含资源详情页构造器 `issueDetail` / `projectDetail` / `agentDetail` / `squadDetail` / `workflowDetail`，工作流详情页三个标签页的路由 `workflowRuns`、`workflowVersions` 与运行详情 `workflowRun`，以及插件路由、设置下的凭据路由 `gitCredentials` 与 Git 身份路由 `gitIdentity`）、登录路由 `loginPath`、不受信 `returnTo` 的收窄 `safeReturnTo`（单个前导 `/`、不允许 `//`、反斜杠或控制字符、最长 2048）、空间地址预览 `workspaceUrlPrefix`（`host/w/`，显示在 slug 输入框前的固定部分），以及同源邀请/申请链接的构造 `joinUrl` 与校验 `joinedLinkPath`。 |
 | `mock-api-client.ts` | MSW mock 域（`/mock-api/*`）的 axios 客户端，与真实后端生成客户端分离。把真实 space slug 重写为 demo 种子 workspace，使尚无后端的页面在任意 Space 下继续显示演示数据，直到它们接入真实 API。mock 域没有认证。 |
 | `utils.ts` | 重新导出 `cn`（Tailwind 感知的类名合并），shadcn 组件通过 `@/lib/utils` 引用。 |
 
@@ -38,3 +38,5 @@
 `workspacePaths` 还负责会话列表（`sessions`）和 Agent 详情（`agentSession`）路径；`paths.test.ts` 验证它们始终位于选定工作区前缀之下。
 
 mock API 边界拒绝字符串响应（包括 worker 尚未接管时的 SPA HTML 回退），不把它缓存为领域对象；请求失败可由查询恢复。
+
+

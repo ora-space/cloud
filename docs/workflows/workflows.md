@@ -18,6 +18,7 @@
 
 - **草稿与已发布分开。** 保存只要求请求体里的图是一个 JSON 对象，不检查完整性：写到一半的草稿是合法的文档。只有**发布**判断图能否执行，
   把问题连同出错的节点或槽位一起返回，让编辑器标出来。被冻结的已发布版本就是 Cloud 同意执行的图。
+  编辑器中切换标签页或通过工具栏离开时，会等未完成的草稿保存结束；保存失败时让作者选择留在编辑器，或放弃未保存的修改并离开，避免返回时从旧缓存重建画布，也不会把作者困在失败的草稿里。
 - **版本不可变。** 已发布版本（`workflow_snapshots`）按工作流内递增的版本号保存，从不修改、从不软删除；运行渲染的图因此不会随文档变化而
   漂移。发布时锁定工作流行，两次并发发布不会拿到同一个版本号。快照名称默认取工作流名称。
 - **恢复**把当前文档换成某个版本的图，并像其他编辑一样推进文档版本；它不改动任何已发布版本。
@@ -60,6 +61,14 @@ Output 检查器可添加、命名和删除 `data.outputs` 绑定，从该节点
 缺值时以 `output_value_unset` 失败，路径非法时以 `output_invalid_path` 失败。因此升级后旧快照和在途恢复可能出现新的失败或新增输出。
 没有绑定仍得到空对象；已经提交的终态结果不会因升级重新计算。发布门禁不能追溯保护旧快照，升级前应检查其中的 Output 绑定。
 
+## Agent 输入与输出
+
+Agent 的 prompt 在派发前复用 Condition 的模板实现渲染 `{{#node.root#}}`，读取已提交的当前作用域变量和冻结全局变量。
+缺失变量、非法路径或未闭合模板使节点失败，不把原始占位符发送给模型。重试重新渲染，loop / iteration 使用当前轮的变量。
+初始回合成功结束且会话终态提交后，最后一条完整可见回答写入 Agent 节点的 `output.output`，供 `{agent}.output` 绑定读取。
+工具前说明、其他回合和旧尝试的回答不进入产物；没有回答时保持未赋值，截断 history 不作为完整回答发布。
+结束证据保存在节点的 `sessionEndReason`，不占用变量根；历史已结束运行保持原状，不回填输出。
+
 ## 执行器槽位
 
 Agent 节点不在图里写死 Agent CLI 或模型 ID，而是引用一个**执行器槽位**：
@@ -89,6 +98,10 @@ Agent 节点不在图里写死 Agent CLI 或模型 ID，而是引用一个**执�
 2. 用该版本的图校验输入：Start 节点声明的必填变量必须有值、类型必须匹配；图没有声明的键不检查（运行输入里还有平台自己写入的内容）。
 3. 检查执行器槽位（见上文）。
 
+Start 的 JSON 控件声明 `array`、带元素类型的数组或 `object` 时，三个入口都在创建运行前把 JSON 文本解析一次，并按已选版本的声明检查结构和元素类型。
+直接 API 提交的原生数组/对象同样接受；运行保存解析后的值。非法 JSON、类型不匹配或文本 `null` 返回 `400 invalid_field_value`，`params.field` 指向该字段。
+普通字符串、`any` 和保留的 `input` kickoff 不做 JSON 转换；缺省或原生 `null` 仍按必填规则处理。
+
 任何一项不通过都不会留下运行、已认领的交互或活动。被执行的版本冻结在运行上，运行之后工作流再被编辑或发布，它仍然知道自己执行的是哪个版本。
 
 **运行的身份在创建时冻结。** 三个入口共用创建函数：直接启动的 Project 来自请求体 `projectId`，Confirm/manual 来自 Issue 的 `project_ref`。
@@ -97,6 +110,18 @@ Project 缺失时统一返回 `409 workflow_run_project_required`，不可用、
 属于租户而不是某个 Project，没有可以默认的对象，而运行的 Workspace、它的 clone 和整份检出都落在被指定的 Project 里。运行 Workspace 归属于创建它的那次运行：
 `workspaces.workflow_run_id` 与 IssueRun 的 `issue_run_id` 互斥，运行时控制里为它预留的 `maintenance` 同样按运行身份记录（见
 [运行时控制](../runtime/runtime-control.md)）。
+
+**运行历史按 `(created_at, id)` 倒序分页。** `GET .../workflows/:wfid/runs` 返回最新在前，`limit` 上限 100，
+`after` 是上一页最后一行的工作流运行 UUID：服务端用它定位该行的 `created_at`，再按 `(created_at, id)` 严格小于它继续取，
+所以同一时刻的多条运行由 `id` 决胜负，翻页不重不漏。游标只是行 UUID，不含时间戳；解析不到该行的游标（例如别的工作流或
+已不存在的行）返回空页而不是从头部重来，非法 UUID 返回 `400 invalid_cursor`。工作流**列表**的每一行带 `latestRun`，
+是这条顺序上的第一条运行，从未运行时为 `null`；它只含状态、快照与时间，运行历史行才带节点状态和输入。详情读不带这个
+字段：运行开始不应该改写工作流资源的每一次读取，需要标签的读者读列表或运行历史。
+
+运行记录页分别呈现加载中、没有记录、读取失败可重试与无权限。首次进入时，工作流详情和运行历史是独立的读取：
+详情返回 `403` 也显示无权限，临时失败的重试重新读取详情，只有 `not_found` 才显示工作流不存在。
+后续翻页或刷新失败保留已加载的历史，重试会重新执行失败的那次读取。历史行独立展示开始和结束时刻：开始前取消的运行没有开始时刻，
+但仍显示已有的结束时刻。查看记录和重试读取都不创建运行。
 
 **取消是请求，不是状态切换。** `POST .../workflows/:wfid/runs/:rid/cancel` 在运行行上记录请求，返回 `202` 和记录的时刻；重复请求（即使换一个幂等键）
 返回同一个时刻。请求只写 `workflow_runs.cancel_requested_at`，不改动运行的状态、节点状态、会话或 Workspace——结算由调度器在下一轮完成（见下文）。
@@ -138,7 +163,7 @@ WorkflowRun 由 Cloud server 里的调度循环推进（`AdvanceWorkflowRunsOnce
 - **Agent 节点重试由冻结在节点上的 `agentConfig.retry` 决定。** 只有会话以 `agent_failed` 结束、策略启用且预算未用完时才重试：预算是
   `maxRetries + 1` 次尝试（`maxRetries` 取值 0–5，默认 2），下一次尝试在 `initialDelaySeconds × 2^(n-1)` 之后开始（`initialDelaySeconds`
   取值 0–300，默认 10，单次等待上限 600 秒）。等待期间节点提交 `retrying`：运行仍是 `running`，节点保留失败尝试的 `startedAt`、
-  `error` 和 `output.reason`，写入数据库时钟计算的 `retryAt` 并清空 `finishedAt`；它继续占用运行唯一的会话位置，直到 `retryAt` 到达才启动
+  `error` 和 `sessionEndReason`，写入数据库时钟计算的 `retryAt` 并清空 `finishedAt`；它继续占用运行唯一的会话位置，直到 `retryAt` 到达才启动
   下一次尝试。新尝试使用自己的执行身份（`workflow_node_attempt`），上一次尝试的结果和结束请求不会被它复用。预算用完、策略关闭或原因不在
   `agent_failed` 内时，节点以最后一次的原因失败，运行进入终态并释放 Workspace。发布时 `agentConfig.retry` 必须是完整对象，缺失或为 `null`
   表示默认策略，未知键忽略；已冻结的历史快照不重新校验，无法解析的策略按默认值执行。
@@ -186,6 +211,10 @@ WorkflowRun 的实际状态更新成功后，在同一事务里将状态、时�
 复合节点的发布门禁按有效容器隔离前驱：非空 `data.containerId` 优先，否则读取 `parentId`。
 body 只能读取本区域前驱、容器的外层祖先、globals / sys 与本轮 carried 或 item / index；
 loop 的 feedback、until、outputs 在轮末读取本 body 完成快照。iteration 最多 100 项。
+
+iteration 指向自身成员、`sourceHandle = "iteration-entry"` 的入口边可以原样保存和发布，
+兼容 Cloud 编辑器及 Desktop 图；入口边可选，不强制添加。它不进入区域内部的调度依赖或前驱计算，
+成员不会等待 iteration 容器完成。其他跨容器连线仍在发布时拒绝。
 
 复合运行在每次状态提交前按紧凑 UTF-8 JSON 计量，包括全部重复保存的值。
 iteration 单项输入、collect 值和成员归档，以及 loop 的 carried 加成员归档和最终 outputs，各有 1 MiB 上限；

@@ -46,6 +46,11 @@ describe('workspacePaths', () => {
     expect(p.issueDetail('42')).toBe('/w/acme/issues/42')
     expect(p.scheduledTasks).toBe('/w/acme/scheduled-tasks')
     expect(p.workflowDetail('42')).toBe('/w/acme/workflows/42')
+    // The run list and the version list are tabs of the same workflow, so each is a sibling route of
+    // the editor rather than a query parameter — they have to be linkable on their own.
+    expect(p.workflowRuns('42')).toBe('/w/acme/workflows/42/runs')
+    expect(p.workflowVersions('42')).toBe('/w/acme/workflows/42/versions')
+    expect(p.workflowRun('42', 'run-1')).toBe('/w/acme/workflows/42/runs/run-1')
     expect(p.spaces).toBe('/w/acme/spaces')
     expect(p.skills).toBe('/w/acme/skills')
     expect(p.plugins).toBe('/w/acme/plugins')

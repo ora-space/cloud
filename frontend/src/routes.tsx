@@ -29,6 +29,8 @@ import { SquadsPage } from '@/features/squads/squads-page'
 import { useCurrentSpace } from '@/features/spaces/current-space'
 import { WorkflowRunDetailPage } from '@/features/workflows/run/run-detail-page'
 import { WorkflowEditorPage } from '@/features/workflows/workflow-editor-page'
+import { WorkflowRunsPage } from '@/features/workflows/workflow-runs-page'
+import { WorkflowVersionsPage } from '@/features/workflows/workflow-versions-page'
 import { WorkflowsPage } from '@/features/workflows/workflows-page'
 import { SessionListPage } from '@/features/sessions/session-list-page'
 import { SessionDetailPage } from '@/features/sessions/session-detail-page'
@@ -130,6 +132,14 @@ export const routes: RouteObject[] = [
       {
         path: 'workflows/:workflowId',
         element: <CloudScope component={WorkflowEditorPage} />,
+      },
+      {
+        path: 'workflows/:workflowId/runs',
+        element: <CloudScope component={WorkflowRunsPage} />,
+      },
+      {
+        path: 'workflows/:workflowId/versions',
+        element: <CloudScope component={WorkflowVersionsPage} />,
       },
       {
         path: 'workflows/:workflowId/runs/:runId',
