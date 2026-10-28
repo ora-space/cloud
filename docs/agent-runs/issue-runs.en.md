@@ -188,6 +188,10 @@ Known acceptance, completed history and an empty replacement ledger cannot suppl
 Only a committed Cloud takeover removes the corresponding responsibility; lost responses recover
 from explicit committed proof facts, not absence from a pending list. Global quiesce checks remain.
 
+One delivery execution's contradiction does not prevent a peer from committing its real result,
+receipt and Revision. Business settlement may enter releasing and declare cleanup intent, while
+quiesce, idle and physical cleanup remain fenced; declaring intent does not prove resource release.
+
 Historical failed Runs retain their conclusions. Real late terminals use original fact takeover;
 contradictory proof/terminal facts are audited and cannot authorize ACK or idle. Legacy migration
 adds provenance without inventing the original Node instance. Missing original evidence or an
