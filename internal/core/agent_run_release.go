@@ -98,6 +98,9 @@ func (s *Store) releaseAfterDelivery(t *transaction, o Object, state, revisionID
 // SQLSTATE 42P18. The `revisionId` cast also makes the empty string mean NULL, which is what a
 // failed delivery passes.
 func recordDeliveryOutcome(t *transaction, o Object, state, revisionID string) {
+	if state == deliveryStateFailed {
+		settleDeliveryExecutions(t, o.S("id"), "deliver_revision", "revision_abandoned")
+	}
 	t.exec(`
 		UPDATE issue_runs
 		SET result = COALESCE(result, '{}'::jsonb) || jsonb_build_object('revisionId', NULLIF($3::text,'')::uuid, 'deliveryState', $2::text),

@@ -11,6 +11,10 @@ service RuntimeControlService {
   rpc AcknowledgeBinding(AcknowledgeBindingRequest) returns (AcknowledgeBindingResponse);
   // Read-only and intentionally not submission-replayed: every dispatch obtains current authority.
   rpc GetExecutionPermit(GetExecutionPermitRequest) returns (GetExecutionPermitResponse);
+  // Reads administrative cuts that still need original-Node proof, never execution authority.
+  rpc ListExecutionFences(ListExecutionFencesRequest) returns (ListExecutionFencesResponse);
+  // Commits a separate non-acceptance fact; it is not a Node terminal event or event ACK.
+  rpc RecordExecutionNonAcceptance(RecordExecutionNonAcceptanceRequest) returns (RecordExecutionNonAcceptanceResponse);
   rpc GetEffectPermit(GetEffectPermitRequest) returns (GetEffectPermitResponse);
   rpc ListForceStops(ListForceStopsRequest) returns (ListForceStopsResponse);
   rpc ConfirmForceStop(ConfirmForceStopRequest) returns (ConfirmForceStopResponse);
@@ -59,6 +63,37 @@ message GetExecutionPermitRequest {
   string execution_id = 5;
 }
 message GetExecutionPermitResponse { RuntimeBinding binding = 1; }
+
+// Immutable original dispatch scope. input_json is the canonical frozen execution input, not a
+// permit or credential; replays must keep its exact bytes and the original work identity.
+message ExecutionOrigin {
+  RuntimeBinding binding = 1;
+  string work_id = 2;
+  string input_json = 3;
+}
+message ExecutionFence {
+  RuntimeBinding authority = 1;
+  ExecutionOrigin origin = 2;
+}
+message ExecutionNonAcceptance {
+  string proof_id = 1;
+  ExecutionFence fence = 2;
+}
+message ListExecutionFencesRequest {
+  int64 epoch = 1;
+  string node_id = 2;
+}
+message ListExecutionFencesResponse {
+  repeated ExecutionFence fences = 1;
+  // Explicit committed proof facts let a reconnect recover a lost successful write response.
+  repeated string committed_execution_ids = 2;
+}
+message RecordExecutionNonAcceptanceRequest {
+  string submission_id = 1;
+  int64 epoch = 2;
+  ExecutionNonAcceptance proof = 3;
+}
+message RecordExecutionNonAcceptanceResponse {}
 
 
 // Fresh authority for one persisted lifecycle effect. Never inferred from an old plan replay.

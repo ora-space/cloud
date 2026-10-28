@@ -56,6 +56,9 @@ func recordedSubmission(t *transaction, r *ControlRequest, hash string, apply fu
 	if t.residualFactConflict {
 		out["residualFactConflict"] = true
 	}
+	if t.executionNonAcceptanceConflict {
+		out["executionNonAcceptanceConflict"] = true
+	}
 	t.exec("INSERT INTO control_submissions(submission_id,holder_id,request_hash,response) VALUES($1,$2,$3,$4)", r.SubmissionID, r.Service.Subject, hash, jsonText(out))
 	return out
 }

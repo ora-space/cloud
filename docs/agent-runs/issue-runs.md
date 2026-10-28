@@ -112,6 +112,24 @@ D4/D5 业务收尾后的残留由独立账本对账继续处理，证据足够�
 `failureReason = workspace_unavailable`。运行 Workspace 行**不**软删除，仍指向这个运行；沙盒和数据不会被自动回收，只能由运维
 处置，公开 API 对运行 Workspace 的删除始终是 `404`。所有时间都按数据库时钟比较。
 
+## 交付执行的业务结算与未受理证明
+
+对应规则见[交付执行结算与未受理证明 ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/issue-run/20261026-delivery-execution-settlement-and-non-acceptance.md)。
+交付截止结算独立于 Node 的执行结果。Cloud 在截止事务中记录行政结算并拒绝原 work 的新登记、原
+execution 的新许可和上传授权；这不会写 Node result、sequence、receipt 或新的 Revision，也不会把
+未知执行算作 idle。产物截止只封闭产物上传，不中断仍有效的 Revision。
+
+Controller 通过专门 RPC 请求原身份的未受理证明。Node 只有在与受理互斥的 SQLite 事务里确认原
+execution 不存在，并永久封闭该身份的输入后，才能回复证明；已受理、已完成或新实例的空 ledger
+都不能替代它。Cloud 真实持久接管后才解除对应责任；丢失响应由已提交证明事实恢复，不能凭 pending
+列表中消失推断成功。quiesce 仍检查其他责任、准入代次及 Node 状态。
+
+原失败 Run 保持历史结论；迟到真实终态按原身份接管，矛盾证明/终态留审计且不能 ACK 或用于 idle。
+一个交付执行的矛盾不阻止另一交付执行提交真实结果、回执和 Revision；业务结算可以进入 releasing
+并声明删除意图，但实际 quiesce、idle 与物理清理仍受矛盾事实保护，声明意图不等于资源已释放。
+存量迁移只补明确来源，不补造原 Node 实例。无可靠原实例证据或原 Node 不可达时保留未知责任，按
+既有 D8/受控残留两阶段处理。协议、schema 与迁移须一起升级；本文不授予额外数据删除权限。
+
 ## 运行开始前固定的输入
 
 运行的行为由创建和启动时固定的快照决定，之后的变化不影响已经在跑的运行：

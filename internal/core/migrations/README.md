@@ -6,7 +6,7 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 
 ## 文件索引
 
-当前共 73 个 SQL 文件。
+当前共 75 个 SQL 文件。
 
 | SQL 文件 | schema 变化 |
 |---|---|
@@ -84,6 +84,7 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | D8 无原删除操作的显式来源标记与互斥约束 |
 | [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | 定时任务可选模型选择 |
 | [0072_scheduled_task_conversation_reasons.sql](0072_scheduled_task_conversation_reasons.sql) | 定时任务接纳的任务对话拒绝原因 |
+| [0073_delivery_execution_settlement.sql](0073_delivery_execution_settlement.sql) | 独立交付业务结算、冻结原派发身份、未受理证明及矛盾事实审计 |
 
 0050 不复制个人连接或 Key，不回填历史运行；清除配置保留 revision，运行选项独立于共享运行输入保存。
 

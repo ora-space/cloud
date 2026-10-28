@@ -6,6 +6,10 @@ import "fmt"
 // acknowledge Node evidence, but cannot assign a holder, epoch or target chosen by a user.
 func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 	switch r.Action {
+	case "runtime_execution_fences":
+		return Object{"fences": executionFences(t, r), "committed": committedNonAcceptanceExecutions(t, r.Body.S("nodeId"))}
+	case "runtime_execution_non_acceptance":
+		return recordExecutionNonAcceptance(t, r)
 	case "runtime_pending":
 		return Object{"bindings": runtimeBindings(t)}
 	case "runtime_ack":
@@ -55,7 +59,11 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 			step = "plugin"
 		}
 		if c.S("maintenanceRunId") != "" {
-			require(e != nil && (e.S("kind") == "agent_session" || e.S("kind") == "deliver_revision") && e.S("operationId") == c.S("maintenanceRunId") && e.S("nodeId") == n.S("nodeId") && e["result"] == nil && e["terminatedByForceStopId"] == nil, 409, "stale_execution")
+			require(e != nil && (e.S("kind") == "agent_session" || e.S("kind") == "deliver_revision" || e.S("kind") == "deliver_scheduled_artifacts") && e.S("operationId") == c.S("maintenanceRunId") && e.S("nodeId") == n.S("nodeId") && e["result"] == nil && e["terminatedByForceStopId"] == nil && e["businessSettledAt"] == nil && e["nonAcceptanceProof"] == nil, 409, "stale_execution")
+			if e.S("kind") == "deliver_scheduled_artifacts" {
+				require(t.one(`SELECT issue_run_id FROM scheduled_run_artifact_deliveries
+					WHERE issue_run_id=$1 AND state='delivering' AND deadline_at>clock_timestamp()`, e.S("operationId")) != nil, 409, "stale_execution")
+			}
 			work := t.one("SELECT target FROM execution_work WHERE id=$1", e.S("workId"))
 			require(work.O("target").S("sandboxInstanceId") == n.S("sandboxInstanceId"), 409, "stale_node")
 			// The maintenance holder is a live run of either kind (D8): the IssueRun join first, the

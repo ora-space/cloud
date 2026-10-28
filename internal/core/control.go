@@ -46,6 +46,9 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 	}
 	out, err := s.transact(ctx, func(t *transaction) (response Object) {
 		defer func() {
+			if t.executionNonAcceptanceConflict && response != nil {
+				response["executionNonAcceptanceConflict"] = true
+			}
 			if t.residualFactConflict && response != nil {
 				response["residualFactConflict"] = true
 			}
@@ -108,6 +111,9 @@ func (s *Store) Control(ctx context.Context, r *ControlRequest) (Object, error) 
 		// return the recorded response, not fail the version check it already passed.
 		return submitted(t, r, func() Object { return operationCommand(t, r) })
 	})
+	if err == nil && out.B("executionNonAcceptanceConflict") {
+		return nil, &Fault{Status: 409, Code: "execution_non_acceptance_conflict", Params: Object{}}
+	}
 	if err == nil && out.B("residualFactConflict") {
 		return nil, &Fault{Status: 409, Code: "residual_fact_conflict", Params: Object{}}
 	}

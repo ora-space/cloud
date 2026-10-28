@@ -16,8 +16,13 @@ import (
 // contract declares either: the proto ExecutionRecord has none, and the JSON binding's NodeExecution
 // schema is closed.
 var nodeExecutionInternalColumns = map[string]bool{
-	"workflow_node_id":      true,
-	"workflow_node_attempt": true,
+	// Administrative cuts and proof evidence use their own RPC, never ExecutionRecord.result.
+	"business_settled_at":        true,
+	"business_settlement_source": true,
+	"dispatch_identity":          true,
+	"non_acceptance_proof":       true,
+	"workflow_node_id":           true,
+	"workflow_node_attempt":      true,
 }
 
 // TestControllerExecutionProjectionIsExplicit is the regression guard for the contract break

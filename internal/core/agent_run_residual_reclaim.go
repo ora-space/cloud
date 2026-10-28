@@ -112,6 +112,7 @@ func checkResidualOperation(t *transaction, op Object) Object {
 // guards remain. Unknown executions are physically closed only when every writable original
 // sandbox/ensure identity is dual-confirmed, never by result=NULL or a ticket timeout.
 func checkResidualCleanupActivities(t *transaction, w, op Object) {
+	require(!executionNonAcceptanceConflicted(t, w.S("id")), 409, "execution_non_acceptance_conflict")
 	row := checkResidualOperation(t, op)
 	if row != nil && row.S("reclaimMode") == "controlled" {
 		return

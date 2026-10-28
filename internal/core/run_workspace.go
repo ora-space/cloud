@@ -124,7 +124,9 @@ func deleteRunWorkspace(t *transaction, runID string) Object {
 	w := t.one("SELECT * FROM workspaces WHERE issue_run_id=$1", runID)
 	require(w != nil, 404, "not_found")
 	requireNoControlledReclamation(t, w.S("id"), "")
-	requireNoResidualConflict(t, w.S("id"))
+	// Declaring cleanup is part of business settlement, not proof of physical quiescence.
+	// Execution contradictions remain fenced by the later idle/effect/cleanup checks.
+	requireNoResidualReclaimConflict(t, w.S("id"))
 	require(t.one("SELECT run_id FROM agent_run_residuals WHERE workspace_id=$1 AND cleared_at IS NULL", w.S("id")) == nil, 409, "resource_in_use")
 	if w["deletedAt"] != nil {
 		return Object{"busy": false, "workspace": w}

@@ -6,7 +6,7 @@ SQL is embedded in the binary through `embed.FS` in `core/store.go`. `Store.Migr
 
 ## File index
 
-There are currently 73 SQL files.
+There are currently 75 SQL files.
 
 | SQL file | Schema change |
 |---|---|
@@ -84,6 +84,7 @@ There are currently 73 SQL files.
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | Explicit D8 missing-delete provenance and mutually exclusive identity constraints |
 | [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | Optional selected model on scheduled tasks |
 | [0072_scheduled_task_conversation_reasons.sql](0072_scheduled_task_conversation_reasons.sql) | Task-conversation rejection reasons for scheduled admission |
+| [0073_delivery_execution_settlement.sql](0073_delivery_execution_settlement.sql) | Separate delivery business settlement, frozen dispatch origin, non-acceptance proof and contradiction audit |
 
 0050 copies no personal connection or key and backfills no historical run. Clearing configuration retains its revision; run options are stored separately from shared run input.
 

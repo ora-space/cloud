@@ -119,6 +119,9 @@ func (s *Store) settleScheduledArtifacts(t *transaction, runID, executionID stri
 // closeArtifactDelivery settles the delivery row and releases the run when its Revision delivery has
 // already settled as well.
 func (s *Store) closeArtifactDelivery(t *transaction, o Object, state, reason string) error {
+	if reason == scheduledArtifactDeadlineExpired {
+		settleDeliveryExecutions(t, o.S("id"), "deliver_scheduled_artifacts", "artifact_deadline")
+	}
 	if state == "failed" || state == "partial" {
 		// A whole-batch failure (including expiry before dispatch) has no per-object result.
 		// The work item's frozen session binding still names the complete accepted manifest.
