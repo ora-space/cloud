@@ -139,6 +139,39 @@ Agent 成员引用 `v2_space_agents` 里观测为已安装的插件，候选由�
 
 小队与成员关系不授予私人模型、Git 凭据或运行时权限，也不触发 Agent 执行、leader 路由或自动委派。
 
+### 任务
+
+任务使用独立候选契约 [`tasks.openapi.json`](tasks.openapi.json)。正式 Cloud 的任务挂在 issue 与
+运行之下，没有这样一条独立任务记录，本批不修改 `api/openapi.json`；正式契约收敛时替换这一适配。
+
+| 路由 | 行为 |
+|---|---|
+| `GET /api/v2/tenants/{tid}/tasks` | 列出工作区全部任务，最近变更在前 |
+| `POST /api/v2/tenants/{tid}/tasks` | 创建任务，返回 201，初始状态 `pending`、version 为 1；不接受调用方给 version |
+| `GET /api/v2/tenants/{tid}/tasks/{taskid}` | 任务详情 |
+| `PUT /api/v2/tenants/{tid}/tasks/{taskid}` | 携带 version 修改标题、描述与所属项目 |
+| `POST /api/v2/tenants/{tid}/tasks/{taskid}/status` | 携带 version 按生命周期推进状态 |
+| `PUT /api/v2/tenants/{tid}/tasks/{taskid}/assignment` | 携带 version 指派或清除指派人，显式 `null` 表示清除 |
+
+任务归属于一个工作区项目，`projectId` 必须在同一工作区内，否则 400 `invalid_project`。指派人显式类型化，
+与小队成员一致：`human` 引用当前有效的租户成员，`agent` 引用同工作区活动且已安装的 Space Agent，
+`squad` 引用未归档小队；名字与 Agent 的 `namespace/identifier` 由实时 join 读取，不在任务行上复制。
+`squad` 只表示该小队负责这件事，不派发给某个成员。指派接口里缺 `assignee` 字段是 400
+`invalid_assignee`，只有显式 `null` 才清除，避免客户端缺陷悄悄解除指派。
+
+状态为 `pending → running → review → done`，`cancelled` 可从任一未终结状态到达，`done` 与 `cancelled`
+终结且不能重开；跳过验收是 400 `invalid_transition`，不是版本冲突。同一函数
+[`store.CanTransitionTask`](internal/store/tasks.go) 供人工推进和执行服务共用，执行服务经
+`TransitionTaskStatus(ctx, tenant, id, from, to)` 在运行开始与结束时移动任务，`from` 防止过期运行覆盖人工修改。
+
+当前工作区任意成员都可读写、指派与推进任务：v2 没有任务级归属，谁来改由版本号防止互相覆盖。
+过期 version 返回 409 `version_conflict`，缺 version 返回 428 `version_required`；跨租户的任务与项目
+一律按不存在处理（404 或 400 `invalid_project`）。请求大小限制 64 KiB，拒绝未知字段与多余的 JSON 值。
+任务评论、附件与运行记录属于后续批次，本期不提供。
+
+HTTP 集成测试按此候选 OpenAPI 校验每一次响应，并覆盖创建、编辑、合法与非法状态迁移、三种指派、
+版本冲突和越权读取；数据库测试另覆盖跨租户隔离与执行服务的推进。
+
 ### 项目仓库
 
 项目使用独立同步候选契约 [`projects.openapi.json`](internal/projectrepos/projects.openapi.json)：

@@ -12,9 +12,10 @@ import { archiveSquad, addSquadMember, createSquad, getSquad, listSquads, remove
 import { MemberPicker } from './member-picker'
 import { SquadCard } from './squad-card'
 import { SquadDetailView } from './squad-detail'
-import { SquadDialog } from './squad-dialog'
+import { PanelDialog } from './panel-dialog'
 import { SquadForm, type SquadDraft } from './squad-form'
 import { canMaintain, isLeader, squadTotals } from './squad-model'
+import { TaskBoard } from './task-board'
 import './collaboration.css'
 
 type Panel = { kind: 'create' } | { kind: 'detail'; id: string } | { kind: 'edit'; id: string } | { kind: 'members'; id: string } | null
@@ -109,22 +110,28 @@ export default function Page() {
     <div className="mc-content">
       <header className="mc-page-header">
         <div>
-          <h1>协作<Badge variant="secondary" aria-hidden="true">{items.length}</Badge></h1>
-          <p>小队把人和 Agent 编在一起承接工作；自动委派与 leader 路由尚未支持。</p>
+          <h1>协作</h1>
+          <p>任务把活指派给人、Agent 或小队；小队把人和 Agent 编在一起承接工作。</p>
         </div>
-        <Button onClick={openCreate} disabled={!tenantId || list.isLoading || list.isError}><Plus data-icon="inline-start" />新建小队</Button>
       </header>
 
-      <div className="mc-summary" aria-label="编组概览">
-        <div className="mc-summary-counts">
-          <span><i className="mc-dot human" />人类成员 <b>{totals.humans}</b></span>
-          <span><i className="mc-dot agent" />Agent 成员 <b>{totals.agents}</b></span>
-          <span><i className="mc-dot maintainer" />维护者 <b>{totals.maintainers}</b></span>
-        </div>
-        <span className="mc-summary-note">编组不等于执行能力</span>
-      </div>
+      <TaskBoard tenantId={tenantId} squads={items} />
 
-      <section className="mc-list-section" aria-label="小队列表">
+      <section className="mc-list-section mc-squad-section" aria-label="小队列表">
+        <header className="mc-section-head">
+          <h2>小队 <Badge variant="secondary">{items.length}</Badge></h2>
+          <Button onClick={openCreate} disabled={!tenantId || list.isLoading || list.isError}><Plus data-icon="inline-start" />新建小队</Button>
+        </header>
+
+        <div className="mc-summary" aria-label="编组概览">
+          <div className="mc-summary-counts">
+            <span><i className="mc-dot human" />人类成员 <b>{totals.humans}</b></span>
+            <span><i className="mc-dot agent" />Agent 成员 <b>{totals.agents}</b></span>
+            <span><i className="mc-dot maintainer" />维护者 <b>{totals.maintainers}</b></span>
+          </div>
+          <span className="mc-summary-note">编组不等于执行能力</span>
+        </div>
+
         {tenants.isLoading || list.isLoading
           ? <p role="status">正在加载小队…</p>
           : tenants.isError || list.isError
@@ -143,28 +150,28 @@ export default function Page() {
 
     {toast && <div className="mc-toast" role="status">{toast}</div>}
 
-    {panel?.kind === 'create' && <SquadDialog title="新建小队" subtitle="创建后你会是本队的人类维护者。" onClose={close}>
+    {panel?.kind === 'create' && <PanelDialog icon={<Users size={14} />} eyebrow="小队" title="新建小队" subtitle="创建后你会是本队的人类维护者。" onClose={close}>
       <SquadForm submitLabel="创建小队" saving={create.isPending} error={error} onSave={draft => create.mutate(draft)} onCancel={close} />
-    </SquadDialog>}
+    </PanelDialog>}
 
-    {panel?.kind === 'edit' && squad && <SquadDialog title={`编辑 ${squad.name}`} subtitle="修改名称、简介与协作说明。" onClose={close}>
+    {panel?.kind === 'edit' && squad && <PanelDialog icon={<Users size={14} />} eyebrow="小队" title={`编辑 ${squad.name}`} subtitle="修改名称、简介与协作说明。" onClose={close}>
       <SquadForm initial={{ name: squad.name, description: squad.description, charter: squad.charter }} submitLabel="保存修改" saving={save.isPending} error={error} onSave={draft => save.mutate({ draft, target: squad })} onCancel={close} />
-    </SquadDialog>}
+    </PanelDialog>}
 
-    {panel?.kind === 'detail' && <SquadDialog title={squad?.name ?? '小队详情'} subtitle={squad?.archivedAt ? '已归档的小队只保留历史。' : '成员按类型分开显示；维护者可以编辑或归档。'} onClose={close}>
+    {panel?.kind === 'detail' && <PanelDialog icon={<Users size={14} />} eyebrow="小队" title={squad?.name ?? '小队详情'} subtitle={squad?.archivedAt ? '已归档的小队只保留历史。' : '成员按类型分开显示；维护者可以编辑或归档。'} onClose={close}>
       {detail.isLoading
         ? <p role="status" className="mc-dialog-status">正在加载小队…</p>
         : detail.isError
           ? <p role="alert" className="mc-dialog-status">小队加载失败，请关闭后重试。</p>
           : squad && <SquadDetailView squad={squad} userId={me.id} canMaintain={canMaintain(squad, me.id, workspaceRole)} archiving={archive.isPending} removing={removing} updating={updating} error={error} onEdit={() => { setError(''); setPanel({ kind: 'edit', id: squad.id }) }} onArchive={() => archive.mutate(squad)} onAddMembers={() => { setError(''); setPanel({ kind: 'members', id: squad.id }) }} onRemove={member => { setError(''); remove.mutate({ member, target: squad }) }} onToggleMaintainer={member => { setError(''); toggleMaintainer.mutate({ member, target: squad }) }} onSetLeader={member => { setError(''); setLeader.mutate({ member, target: squad }) }} />}
-    </SquadDialog>}
+    </PanelDialog>}
 
-    {panel?.kind === 'members' && squad && <SquadDialog title={`添加成员到 ${squad.name}`} subtitle="可以加入当前工作区的有效成员或已安装的 Agent；移出小队不影响工作区成员资格。" onClose={close}>
+    {panel?.kind === 'members' && squad && <PanelDialog icon={<Users size={14} />} eyebrow="小队" title={`添加成员到 ${squad.name}`} subtitle="可以加入当前工作区的有效成员或已安装的 Agent；移出小队不影响工作区成员资格。" onClose={close}>
       <MemberPicker squad={squad} tenantId={tenantId} adding={add.isPending || addAgent.isPending} error={error}
         onAdd={(member, role) => { setError(''); add.mutate({ member, role, target: squad }) }}
         onAddAgent={(plugin, role) => { setError(''); addAgent.mutate({ plugin, role, target: squad }) }}
         onClose={() => { setError(''); setPanel({ kind: 'detail', id: squad.id }) }} />
-    </SquadDialog>}
+    </PanelDialog>}
   </div>
 }
 

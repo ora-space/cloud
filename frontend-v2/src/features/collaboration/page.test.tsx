@@ -16,6 +16,8 @@ vi.mock('@/api/spaces/spaces', () => ({
   useGetApiV1TenantsTidSpaces: () => ({ data: { items: [{ id: 'space-1' }], nextCursor: '' }, isLoading: false, isError: false }),
   useGetApiV1TenantsTidSpacesSpaceIdPlugins: () => ({ data: spacePlugins, isLoading: false, isError: false }),
 }))
+// The task board has its own tests; the page tests stay on the squad section.
+vi.mock('./task-board', () => ({ TaskBoard: () => null }))
 vi.mock('./api/generated', () => ({
   listSquads: vi.fn(), getSquad: vi.fn(), createSquad: vi.fn(), updateSquad: vi.fn(), archiveSquad: vi.fn(),
   addSquadMember: vi.fn(), removeSquadMember: vi.fn(), updateSquadMember: vi.fn(),
