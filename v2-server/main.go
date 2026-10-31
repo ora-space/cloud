@@ -23,6 +23,7 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/executionruntime"
 	"github.com/wanglongan587/cloud/v2-server/internal/nodeservices"
+	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/v2-server/internal/projectrepos"
 	"github.com/wanglongan587/cloud/v2-server/internal/scheduler"
 	"github.com/wanglongan587/cloud/v2-server/internal/server"
@@ -155,6 +156,40 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 		}
 		return checkFixture(ctx, runtime, scope, demo.ID, filepath.Join(base, "nodes"))
 	}
+	marketURL, e := pluginmarket.NormalizeSourceURL(envOr(
+		"V2_PLUGIN_MARKETPLACE_URL",
+		"https://github.com/ora-space/marketplace",
+	))
+	if e != nil {
+		return e
+	}
+	marketBranch := envOr("V2_PLUGIN_MARKETPLACE_BRANCH", "main")
+	if !pluginmarket.ValidBranch(marketBranch) {
+		return fmt.Errorf("V2_PLUGIN_MARKETPLACE_BRANCH is not a supported Git branch")
+	}
+	marketInterval, e := time.ParseDuration(envOr("V2_PLUGIN_MARKETPLACE_INTERVAL", "5m"))
+	if e != nil || marketInterval <= 0 {
+		return fmt.Errorf("V2_PLUGIN_MARKETPLACE_INTERVAL must be a positive duration")
+	}
+	market := &pluginmarket.Syncer{
+		Source: pluginmarket.Source{
+			Namespace: "official", URL: marketURL, Branch: marketBranch,
+		},
+		WorkDir: filepath.Join(base, "marketplace"),
+	}
+	if e := market.Sync(ctx, db, time.Now()); e != nil {
+		slog.Warn("initial plugin marketplace sync failed; retaining previous snapshot", "error", e)
+	}
+	marketCtx, cancelMarket := context.WithCancel(ctx)
+	marketDone := make(chan struct{})
+	go func() {
+		defer close(marketDone)
+		market.Loop(marketCtx, marketInterval, db)
+	}()
+	defer func() {
+		cancelMarket()
+		<-marketDone
+	}()
 
 	options := withWorkflowDomain(server.Options{
 		SessionTTL: 7 * 24 * time.Hour,
