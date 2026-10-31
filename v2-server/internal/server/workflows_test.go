@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -399,5 +400,55 @@ func TestWorkflowRoutePatternsStayDistinct(t *testing.T) {
 	status, _ := call("POST", "/api/v2/tenants/"+tid+"/workflows/analyze", map[string]any{"graph": "{}"})
 	if status != 200 || calls.Load() != 1 {
 		t.Fatalf("analyze route = %d, analyzer calls = %d", status, calls.Load())
+	}
+}
+
+func TestWorkflowVersionEdgeCases(t *testing.T) {
+	call := workflowServer(t, nil)
+	tid := workflowTenant(t, call)
+	base := "/api/v2/tenants/" + tid + "/workflows"
+	_, created := call("POST", base, map[string]any{"name": "版本边界", "graph": nil})
+	id := created["workflow"].(map[string]any)["id"].(string)
+
+	// A user version is any single addressable path segment, including spaces and non-ASCII text.
+	unicode := "版本 1"
+	status, published := call("POST", base+"/"+id+"/publish", map[string]any{"version": unicode})
+	if status != 200 || published["snapshot"].(map[string]any)["version"] != unicode {
+		t.Fatalf("unicode version = %d %v", status, published)
+	}
+	status, byVersion := call("GET", base+"/"+id+"/versions/"+url.PathEscape(unicode), nil)
+	if status != 200 || byVersion["snapshot"].(map[string]any)["version"] != unicode {
+		t.Fatalf("read unicode version = %d %v", status, byVersion)
+	}
+
+	// The bound is 128 bytes, and dot segments or path separators are not addressable versions.
+	if status, _ := call("POST", base+"/"+id+"/publish", map[string]any{"version": strings.Repeat("a", 128)}); status != 200 {
+		t.Fatalf("128-byte version = %d", status)
+	}
+	for _, bad := range []string{".", "..", strings.Repeat("a", 129), `a\b`, "a\u0001b"} {
+		status, failure := call("POST", base+"/"+id+"/publish", map[string]any{"version": bad})
+		if status != 400 || failure["code"] != "workflow_version_invalid" {
+			t.Fatalf("invalid version %q = %d %v", bad, status, failure)
+		}
+	}
+}
+
+func TestWorkflowSnapshotLookupIsScopedToItsWorkflow(t *testing.T) {
+	call := workflowServer(t, nil)
+	tid := workflowTenant(t, call)
+	base := "/api/v2/tenants/" + tid + "/workflows"
+	_, first := call("POST", base, map[string]any{"name": "第一个", "graph": nil})
+	firstID := first["workflow"].(map[string]any)["id"].(string)
+	_, published := call("POST", base+"/"+firstID+"/publish", map[string]any{"version": "v1"})
+	snapshotID := published["snapshot"].(map[string]any)["id"].(string)
+	_, second := call("POST", base, map[string]any{"name": "第二个", "graph": nil})
+	secondID := second["workflow"].(map[string]any)["id"].(string)
+
+	if status, _ := call("GET", base+"/"+firstID+"/snapshots/"+snapshotID, nil); status != 200 {
+		t.Fatalf("own snapshot = %d", status)
+	}
+	status, failure := call("GET", base+"/"+secondID+"/snapshots/"+snapshotID, nil)
+	if status != 404 || failure["code"] != "workflow_snapshot_not_found" {
+		t.Fatalf("foreign snapshot = %d %v", status, failure)
 	}
 }
