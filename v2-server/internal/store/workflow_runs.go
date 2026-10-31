@@ -255,14 +255,17 @@ type WorkflowNodeRunInput struct {
 func (s *Store) CreateWorkflowNodeRun(ctx context.Context, tenant, runID string, in WorkflowNodeRunInput) (WorkflowNodeRun, error) {
 	var node WorkflowNodeRun
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Lock the run row: deleting a run takes the same lock, so a dispatch cannot slip a live node
+		// into a run that is being deleted and leave an orphan attempt behind.
 		var active bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (SELECT 1 FROM v2_workflow_runs
-				WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL)`, tenant, runID).Scan(&active); err != nil {
-			return fmt.Errorf("check run: %w", err)
-		}
-		if !active {
+		err := tx.QueryRow(ctx, `
+			SELECT true FROM v2_workflow_runs
+			WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`, tenant, runID).Scan(&active)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrWorkflowRunNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock run: %w", err)
 		}
 		scopeID := in.ScopeID
 		if scopeID == "" {
@@ -280,7 +283,6 @@ func (s *Store) CreateWorkflowNodeRun(ctx context.Context, tenant, runID string,
 		if !scopeBelongs {
 			return ErrWorkflowRunNotFound
 		}
-		var err error
 		node, err = scanNodeRun(tx.QueryRow(ctx, `
 			INSERT INTO v2_workflow_node_runs
 				(tenant_id, run_id, scope_id, node_id, node_type, status, input, iteration, started_at)

@@ -143,6 +143,7 @@ func TestWorkflowRunLifecycleRefusals(t *testing.T) {
 		{"node missing", server.ErrWorkflowNodeNotFound, "workflow_node_not_found", 404, "POST", "/nodes/agent-1/complete", map[string]any{"force": false}},
 		{"run missing", store.ErrWorkflowRunNotFound, "workflow_run_not_found", 404, "POST", "/start", nil},
 		{"stop unconfirmed", server.ErrWorkflowRunStopUnconfirmed, "workflow_run_stop_unconfirmed", 503, "POST", "/cancel", nil},
+		{"state conflict", store.ErrWorkflowRunState, "workflow_run_state_conflict", 409, "POST", "/start", nil},
 		{"input invalid", &server.WorkflowRunInputInvalid{Variable: "count", Reason: "must be a number"}, "workflow_run_input_invalid", 400, "PATCH", "/input", map[string]any{"input": "x"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

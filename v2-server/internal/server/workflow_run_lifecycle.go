@@ -186,6 +186,8 @@ func workflowRunLifecycleFault(w http.ResponseWriter, err error, op string) {
 		fault(w, http.StatusNotFound, "workflow_node_not_found")
 	case errors.Is(err, ErrWorkflowRunStopUnconfirmed):
 		fault(w, http.StatusServiceUnavailable, "workflow_run_stop_unconfirmed")
+	case errors.Is(err, store.ErrWorkflowRunState), errors.Is(err, store.ErrWorkflowNodeRunState):
+		fault(w, http.StatusConflict, "workflow_run_state_conflict")
 	case errors.As(err, &invalid):
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"code":      "workflow_run_input_invalid",

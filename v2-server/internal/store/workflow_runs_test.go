@@ -356,3 +356,39 @@ func TestWorkflowRunCreationAndDeletionSerialize(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkflowNodeDispatchAndRunDeletionSerialize covers the race between a dispatch and deleting
+// the run: the run row lock makes it impossible to leave a live node on a deleted run.
+func TestWorkflowNodeDispatchAndRunDeletionSerialize(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "dispatch-delete-owner")
+	project := workflowProject(t, s, user, tenant, "project-dispatch-delete")
+	w, _ := publishedWorkflow(t, s, tenant, "派发删除", "v1")
+	for i := range 6 {
+		ctx := context.Background()
+		run, err := s.CreateWorkflowRun(ctx, tenant, w.ID, "", store.WorkflowRunInput{ProjectID: project.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var createErr, deleteErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, createErr = s.CreateWorkflowNodeRun(ctx, tenant, run.ID, store.WorkflowNodeRunInput{
+				NodeID: "agent-1", NodeType: "agent",
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			deleteErr = s.DeleteWorkflowRun(ctx, tenant, run.ID)
+		}()
+		wg.Wait()
+		switch {
+		case createErr == nil && errors.Is(deleteErr, store.ErrWorkflowRunActive):
+		case errors.Is(createErr, store.ErrWorkflowRunNotFound) && deleteErr == nil:
+		default:
+			t.Fatalf("round %d: dispatch=%v delete=%v", i, createErr, deleteErr)
+		}
+	}
+}

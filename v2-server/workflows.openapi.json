@@ -322,6 +322,7 @@
           "400": {"$ref": "#/components/responses/WorkflowError"},
           "401": {"$ref": "#/components/responses/WorkflowError"},
           "404": {"$ref": "#/components/responses/WorkflowError"},
+          "409": {"$ref": "#/components/responses/WorkflowError"},
           "500": {"$ref": "#/components/responses/WorkflowError"},
           "503": {"$ref": "#/components/responses/WorkflowError"}
         }
@@ -337,6 +338,7 @@
           "400": {"$ref": "#/components/responses/WorkflowError"},
           "401": {"$ref": "#/components/responses/WorkflowError"},
           "404": {"$ref": "#/components/responses/WorkflowError"},
+          "409": {"$ref": "#/components/responses/WorkflowError"},
           "500": {"$ref": "#/components/responses/WorkflowError"},
           "503": {"$ref": "#/components/responses/WorkflowError"}
         }
@@ -370,6 +372,7 @@
           "400": {"$ref": "#/components/responses/WorkflowError"},
           "401": {"$ref": "#/components/responses/WorkflowError"},
           "404": {"$ref": "#/components/responses/WorkflowError"},
+          "409": {"$ref": "#/components/responses/WorkflowError"},
           "500": {"$ref": "#/components/responses/WorkflowError"},
           "503": {"$ref": "#/components/responses/WorkflowError"}
         }
