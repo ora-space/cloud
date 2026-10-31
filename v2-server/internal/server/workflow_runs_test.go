@@ -101,6 +101,16 @@ func TestWorkflowRunsOverHTTP(t *testing.T) {
 		t.Fatalf("delete referenced workflow = %d %v", status, failure)
 	}
 
+	// The run froze v1 even though v2 is now the published version.
+	status, frozen := call("GET", "/api/v2/tenants/"+tid+"/workflow-runs/"+runID+"/snapshot", nil)
+	if status != 200 || frozen["snapshot"].(map[string]any)["version"] != "v1" {
+		t.Fatalf("frozen snapshot = %d %v", status, frozen)
+	}
+	status, failure = call("GET", "/api/v2/tenants/"+tid+"/workflow-runs/00000000-0000-0000-0000-000000000000/snapshot", nil)
+	if status != 404 || failure["code"] != "workflow_run_not_found" {
+		t.Fatalf("unknown run snapshot = %d %v", status, failure)
+	}
+
 	_, detail := call("GET", "/api/v2/tenants/"+tid+"/workflow-runs/"+runID, nil)
 	if len(detail["nodes"].([]any)) != 0 || len(detail["scopes"].([]any)) != 0 {
 		t.Fatalf("empty detail = %v", detail)

@@ -297,6 +297,21 @@
         }
       }
     },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/snapshot": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
+      "get": {
+        "operationId": "getWorkflowRunSnapshot",
+        "tags": ["workflowRuns"],
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowSnapshotResponse"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
     "/api/v2/tenants/{tid}/workflow-runs/{rid}/nodes": {
       "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
       "get": {

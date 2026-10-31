@@ -442,6 +442,24 @@ func (s *Store) WorkflowRunNodes(ctx context.Context, tenant, runID string) ([]W
 	return nodes, nil
 }
 
+// WorkflowRunSnapshot returns the snapshot a run froze. The run keeps its own pointer, so history
+// still renders the executed graph after the definition publishes a newer version.
+func (s *Store) WorkflowRunSnapshot(ctx context.Context, tenant, runID string) (WorkflowSnapshot, error) {
+	var snapshotID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT snapshot_id FROM v2_workflow_runs
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`, tenant, runID).Scan(&snapshotID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowSnapshot{}, ErrWorkflowRunNotFound
+	}
+	if err != nil {
+		return WorkflowSnapshot{}, fmt.Errorf("read run snapshot: %w", err)
+	}
+	return scanWorkflowSnapshot(s.pool.QueryRow(ctx, "SELECT "+workflowSnapshotColumns+`
+		FROM v2_workflow_snapshots
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`, tenant, snapshotID))
+}
+
 func scanNodeRun(row pgx.Row) (WorkflowNodeRun, error) {
 	var node WorkflowNodeRun
 	err := row.Scan(&node.ID, &node.TenantID, &node.RunID, &node.ScopeID, &node.NodeID,

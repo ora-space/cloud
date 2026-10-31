@@ -133,6 +133,7 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/runs", h.authed(h.listWorkflowRuns))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs", h.authed(h.listWorkflowRuns))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}", h.authed(h.getWorkflowRun))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/snapshot", h.authed(h.getWorkflowRunSnapshot))
 	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/workflow-runs/{rid}", h.authed(h.deleteWorkflowRun))
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/start", h.authed(h.startWorkflowRun))
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/cancel", h.authed(h.cancelWorkflowRun))

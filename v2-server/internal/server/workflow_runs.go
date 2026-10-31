@@ -19,6 +19,7 @@ type WorkflowRunStore interface {
 	WorkflowRun(context.Context, string, string) (store.WorkflowRun, error)
 	WorkflowRunNodes(context.Context, string, string) ([]store.WorkflowNodeRun, error)
 	WorkflowRunScopes(context.Context, string, string) ([]store.WorkflowScope, error)
+	WorkflowRunSnapshot(context.Context, string, string) (store.WorkflowSnapshot, error)
 	DeleteWorkflowRun(context.Context, string, string) error
 }
 
@@ -330,6 +331,26 @@ func (h *handler) listWorkflowRunNodes(w http.ResponseWriter, r *http.Request, u
 		views = append(views, toWorkflowNodeRunView(node))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": views})
+}
+
+// getWorkflowRunSnapshot serves the frozen graph a run executed, so history does not depend on the
+// definition's current published version.
+func (h *handler) getWorkflowRunSnapshot(w http.ResponseWriter, r *http.Request, u store.User) {
+	s, tenant, ok := h.workflowRunScope(w, r, u)
+	if !ok {
+		return
+	}
+	runID := r.PathValue("rid")
+	if !workflowUUID.MatchString(runID) {
+		fault(w, http.StatusNotFound, "workflow_run_not_found")
+		return
+	}
+	snapshot, err := s.WorkflowRunSnapshot(r.Context(), tenant, runID)
+	if err != nil {
+		workflowRunFault(w, err, "get workflow run snapshot")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": toWorkflowSnapshotView(snapshot)})
 }
 
 // deleteWorkflowRun removes a finished run with its node attempts. A running run or one with an

@@ -127,6 +127,13 @@ func TestWorkflowDeletionProtectsRunReferences(t *testing.T) {
 	if _, err := s.PublishWorkflow(ctx, tenant, w.ID, "v2", nil); err != nil {
 		t.Fatal(err)
 	}
+	frozen, err := s.WorkflowRunSnapshot(ctx, tenant, run.ID)
+	if err != nil || frozen.ID != v1.ID || frozen.Version != "v1" {
+		t.Fatalf("frozen snapshot = %+v %v", frozen, err)
+	}
+	if _, err := s.WorkflowRunSnapshot(ctx, tenant, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, store.ErrWorkflowRunNotFound) {
+		t.Fatalf("snapshot of unknown run = %v", err)
+	}
 	// v1 is no longer active but a live run froze it, so history must keep resolving.
 	if _, err := s.DeleteWorkflowSnapshot(ctx, tenant, w.ID, "v1"); !errors.Is(err, store.ErrWorkflowSnapshotInUse) {
 		t.Fatalf("delete referenced version = %v", err)

@@ -235,6 +235,7 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 | `GET …/workflows/{wid}/runs` | 该定义的全部运行（最新创建在后，与 desktop 的列表顺序一致），带冻结版本号 |
 | `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
 | `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
+| `GET …/workflow-runs/{rid}/snapshot` | 运行冻结的快照图；定义发布新版本后历史仍按原图渲染 |
 | `DELETE …/workflow-runs/{rid}` | 软删已结束的运行及其节点；running 或还有 pending/running 节点时拒绝 |
 | `POST …/workflow-runs/{rid}/start` | 交给执行桥启动运行 |
 | `POST …/workflow-runs/{rid}/cancel` | 取消运行；停止未确认时返回 `503 workflow_run_stop_unconfirmed` |
