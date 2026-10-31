@@ -144,17 +144,9 @@ func (s *Store) FailWorkflowNodeRun(
 		if current.Status != WorkflowStatusRunning {
 			return ErrWorkflowNodeRunState
 		}
-		var attempt int
-		if err := tx.QueryRow(ctx, `
-			SELECT COUNT(*)::int + 1 FROM v2_workflow_node_runs failed
-			WHERE failed.run_id = $1 AND failed.node_id = $2
-				AND failed.iteration IS NOT DISTINCT FROM $3
-				AND failed.deleted_at IS NOT NULL
-				AND (failed.scope_id = $4 OR NOT EXISTS (
-					SELECT 1 FROM v2_workflow_scopes round
-					WHERE round.id = $4 AND round.parent_loop_node_run_id IS NOT NULL))`,
-			runID, current.NodeID, current.Iteration, current.ScopeID).Scan(&attempt); err != nil {
-			return fmt.Errorf("count attempts: %w", err)
+		attempt, err := workflowNodeAttempt(ctx, tx, runID, current)
+		if err != nil {
+			return err
 		}
 		payload := current.Payload
 		if buildPayload != nil {
@@ -172,6 +164,115 @@ func (s *Store) FailWorkflowNodeRun(
 		return err
 	})
 	return node, err
+}
+
+// WorkflowNodeRetry replaces a failed attempt with the next attempt. The replacement starts as a
+// running row without a start instant, so the bridge can arm its retry wait (payload) and wake it
+// later without pretending the agent already ran.
+type WorkflowNodeRetry struct {
+	// Failure is what the attempt being replaced records publicly.
+	Failure WorkflowNodeFailure
+	// FailurePayload builds that attempt's detail payload with the number the store assigned.
+	FailurePayload func(attempt int) ([]byte, error)
+	// NextPayload is the replacement's payload, typically the retry wait the bridge armed.
+	NextPayload []byte
+}
+
+// RetryWorkflowNodeRun atomically fails and soft-deletes the current attempt, then inserts the next
+// attempt for the same (scope, node, iteration) identity. The attempt counter sees the replaced row
+// as soon as it is soft-deleted, so a chain of retries numbers 1, 2, 3 as desktop does.
+func (s *Store) RetryWorkflowNodeRun(ctx context.Context, tenant, runID, nodeRunID string, retry WorkflowNodeRetry) (WorkflowNodeRun, error) {
+	var next WorkflowNodeRun
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockWorkflowRun(ctx, tx, tenant, runID); err != nil {
+			return err
+		}
+		current, err := lockWorkflowNodeRun(ctx, tx, tenant, runID, nodeRunID)
+		if err != nil {
+			return err
+		}
+		if current.Status != WorkflowStatusRunning {
+			return ErrWorkflowNodeRunState
+		}
+		attempt, err := workflowNodeAttempt(ctx, tx, runID, current)
+		if err != nil {
+			return err
+		}
+		payload := current.Payload
+		if retry.FailurePayload != nil {
+			payload, err = retry.FailurePayload(attempt)
+			if err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE v2_workflow_node_runs
+			SET status = 'failed', error = $4, output = COALESCE($5, output), payload = $6,
+				finished_at = now(), updated_at = now(), deleted_at = now()
+			WHERE tenant_id = $1 AND run_id = $2 AND id = $3 AND deleted_at IS NULL`,
+			tenant, runID, nodeRunID, retry.Failure.Error, retry.Failure.Output, payload); err != nil {
+			return fmt.Errorf("replace failed attempt: %w", err)
+		}
+		next, err = scanNodeRun(tx.QueryRow(ctx, `
+			INSERT INTO v2_workflow_node_runs
+				(tenant_id, run_id, scope_id, node_id, node_type, status, input, payload, iteration)
+			VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, $8)
+			RETURNING `+workflowNodeRunColumns,
+			tenant, runID, current.ScopeID, current.NodeID, current.NodeType, current.Input,
+			retry.NextPayload, current.Iteration))
+		return err
+	})
+	return next, err
+}
+
+// WakeWorkflowNodeRun starts a waiting attempt: it stamps the start instant and replaces the
+// payload the bridge used for the wait (its retry wait key is no longer true). Waking an attempt
+// that already started is a no-op.
+func (s *Store) WakeWorkflowNodeRun(ctx context.Context, tenant, runID, nodeRunID string, payload []byte) (WorkflowNodeRun, error) {
+	var node WorkflowNodeRun
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockWorkflowRun(ctx, tx, tenant, runID); err != nil {
+			return err
+		}
+		current, err := lockWorkflowNodeRun(ctx, tx, tenant, runID, nodeRunID)
+		if err != nil {
+			return err
+		}
+		if current.Status != WorkflowStatusRunning {
+			return ErrWorkflowNodeRunState
+		}
+		if current.StartedAt != nil {
+			node = current
+			return nil
+		}
+		node, err = scanNodeRun(tx.QueryRow(ctx, `
+			UPDATE v2_workflow_node_runs
+			SET started_at = now(), payload = COALESCE($4, payload), updated_at = now()
+			WHERE tenant_id = $1 AND run_id = $2 AND id = $3 AND deleted_at IS NULL
+			RETURNING `+workflowNodeRunColumns, tenant, runID, nodeRunID, payload))
+		return err
+	})
+	return node, err
+}
+
+// workflowNodeAttempt counts how many attempts of this node identity already ran, including the
+// attempt being failed: the number a new failure records is that count plus one. Inside a Loop
+// round only that round's replaced rows count, matching desktop's per-round retry budget.
+func workflowNodeAttempt(ctx context.Context, tx pgx.Tx, runID string, current WorkflowNodeRun) (int, error) {
+	var attempt int
+	err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)::int + 1 FROM v2_workflow_node_runs failed
+		WHERE failed.run_id = $1 AND failed.node_id = $2
+			AND failed.iteration IS NOT DISTINCT FROM $3
+			AND failed.deleted_at IS NOT NULL
+			AND (failed.scope_id = $4 OR NOT EXISTS (
+				SELECT 1 FROM v2_workflow_scopes round
+				WHERE round.id = $4 AND round.parent_loop_node_run_id IS NOT NULL))`,
+		runID, current.NodeID, current.Iteration, current.ScopeID).Scan(&attempt)
+	if err != nil {
+		return 0, fmt.Errorf("count attempts: %w", err)
+	}
+	return attempt, nil
 }
 
 // FinishWorkflowRun closes a run that reached a terminal outcome. Only succeeded and failed are

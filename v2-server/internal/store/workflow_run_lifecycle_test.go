@@ -199,3 +199,91 @@ func TestWorkflowLoopRoundScopes(t *testing.T) {
 		t.Fatalf("round list = %+v %v", scopes, err)
 	}
 }
+
+func TestWorkflowNodeRetryChain(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "retry-owner")
+	ctx := context.Background()
+	run, _ := startedRun(t, s, user, tenant, "重试")
+	input := "第一次输入"
+	node, err := s.CreateWorkflowNodeRun(ctx, tenant, run.ID, store.WorkflowNodeRunInput{
+		NodeID: "agent-1", NodeType: "agent", Input: &input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var attempts []int
+	next, err := s.RetryWorkflowNodeRun(ctx, tenant, run.ID, node.ID, store.WorkflowNodeRetry{
+		Failure: store.WorkflowNodeFailure{Error: "第一次失败"},
+		FailurePayload: func(attempt int) ([]byte, error) {
+			attempts = append(attempts, attempt)
+			return []byte(`{"error_detail":{"attempt":` + string(rune('0'+attempt)) + `}}`), nil
+		},
+		NextPayload: []byte(`{"retry_wait":{"attempt":1}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0] != 1 {
+		t.Fatalf("first retry attempt numbers = %v", attempts)
+	}
+	if next.ID == node.ID || next.Status != store.WorkflowStatusRunning || next.StartedAt != nil {
+		t.Fatalf("replacement attempt = %+v", next)
+	}
+	if next.SessionID != nil {
+		t.Fatalf("replacement inherited a session: %v", *next.SessionID)
+	}
+	if next.Input == nil || *next.Input != input {
+		t.Fatalf("replacement input = %v", next.Input)
+	}
+	if next.Payload == nil || string(next.Payload) != `{"retry_wait": {"attempt": 1}}` {
+		t.Fatalf("replacement payload = %s", next.Payload)
+	}
+	// Only the replacement is live; the replaced attempt stays as history.
+	nodes, err := s.WorkflowRunNodes(ctx, tenant, run.ID)
+	if err != nil || len(nodes) != 1 || nodes[0].ID != next.ID {
+		t.Fatalf("live attempts = %+v %v", nodes, err)
+	}
+
+	// The soft-deleted row counts, so the next failure is attempt 2.
+	second, err := s.RetryWorkflowNodeRun(ctx, tenant, run.ID, next.ID, store.WorkflowNodeRetry{
+		Failure: store.WorkflowNodeFailure{Error: "第二次失败"},
+		FailurePayload: func(attempt int) ([]byte, error) {
+			attempts = append(attempts, attempt)
+			return []byte(`{"error_detail":{"attempt":2}}`), nil
+		},
+		NextPayload: []byte(`{"retry_wait":{"attempt":2}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 2 || attempts[1] != 2 {
+		t.Fatalf("second retry attempt numbers = %v", attempts)
+	}
+
+	// Waking the waiting attempt stamps the start and replaces the wait payload; repeating is a no-op.
+	woken, err := s.WakeWorkflowNodeRun(ctx, tenant, run.ID, second.ID, []byte(`{"retry_wait":null}`))
+	if err != nil || woken.StartedAt == nil {
+		t.Fatalf("wake = %+v %v", woken, err)
+	}
+	if woken.Payload == nil || string(woken.Payload) != `{"retry_wait": null}` {
+		t.Fatalf("woken payload = %s", woken.Payload)
+	}
+	again, err := s.WakeWorkflowNodeRun(ctx, tenant, run.ID, second.ID, []byte(`{"other":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Payload == nil || string(again.Payload) != `{"retry_wait": null}` {
+		t.Fatalf("second wake rewrote payload: %s", again.Payload)
+	}
+
+	// A finished attempt cannot be retried.
+	output := "完成"
+	if _, err := s.CompleteWorkflowNodeRun(ctx, tenant, run.ID, second.ID, store.WorkflowNodeResult{Output: &output}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RetryWorkflowNodeRun(ctx, tenant, run.ID, second.ID, store.WorkflowNodeRetry{}); !errors.Is(err, store.ErrWorkflowNodeRunState) {
+		t.Fatalf("retry completed attempt = %v", err)
+	}
+}
