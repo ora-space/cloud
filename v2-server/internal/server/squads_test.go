@@ -68,6 +68,7 @@ func newSquadServer(t *testing.T) *squadFixture {
 		t.Fatal(e)
 	}
 	t.Cleanup(s.Close)
+	seedTestPluginCatalog(t, s)
 	storetest.SignIn(t, s, "squad-demo", "演示用户", store.RoleOwner)
 	srv := httptest.NewServer(server.New(s, server.Options{SessionTTL: time.Hour}))
 	t.Cleanup(srv.Close)
