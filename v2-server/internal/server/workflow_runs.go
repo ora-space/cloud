@@ -19,6 +19,7 @@ type WorkflowRunStore interface {
 	WorkflowRun(context.Context, string, string) (store.WorkflowRun, error)
 	WorkflowRunNodes(context.Context, string, string) ([]store.WorkflowNodeRun, error)
 	WorkflowRunScopes(context.Context, string, string) ([]store.WorkflowScope, error)
+	DeleteWorkflowRun(context.Context, string, string) error
 }
 
 type workflowRunView struct {
@@ -331,6 +332,25 @@ func (h *handler) listWorkflowRunNodes(w http.ResponseWriter, r *http.Request, u
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": views})
 }
 
+// deleteWorkflowRun removes a finished run with its node attempts. A running run or one with an
+// in-flight node is refused, so deleting a row never abandons a session the execution bridge owns.
+func (h *handler) deleteWorkflowRun(w http.ResponseWriter, r *http.Request, u store.User) {
+	s, tenant, ok := h.workflowRunScope(w, r, u)
+	if !ok {
+		return
+	}
+	runID := r.PathValue("rid")
+	if !workflowUUID.MatchString(runID) {
+		fault(w, http.StatusNotFound, "workflow_run_not_found")
+		return
+	}
+	if err := s.DeleteWorkflowRun(r.Context(), tenant, runID); err != nil {
+		workflowRunFault(w, err, "delete workflow run")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runId": runID})
+}
+
 // workflowRunFault maps run refusals onto the contract's stable codes and leaves definition errors
 // to the shared definition mapping.
 func workflowRunFault(w http.ResponseWriter, err error, op string) {
@@ -343,6 +363,8 @@ func workflowRunFault(w http.ResponseWriter, err error, op string) {
 		fault(w, http.StatusBadRequest, "workflow_run_cannot_use_draft_snapshot")
 	case errors.Is(err, store.ErrProjectNotFound):
 		fault(w, http.StatusNotFound, "project_not_found")
+	case errors.Is(err, store.ErrWorkflowRunActive):
+		fault(w, http.StatusBadRequest, "workflow_run_active")
 	case errors.Is(err, store.ErrWorkflowRunState):
 		fault(w, http.StatusConflict, "workflow_run_state_conflict")
 	default:

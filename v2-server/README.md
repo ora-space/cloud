@@ -235,11 +235,12 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 | `GET …/workflows/{wid}/runs` | 该定义的全部运行（最新创建在后，与 desktop 的列表顺序一致），带冻结版本号 |
 | `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
 | `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
+| `DELETE …/workflow-runs/{rid}` | 软删已结束的运行及其节点；running 或还有 pending/running 节点时拒绝 |
 | `GET …/workflow-runs/{rid}/nodes` | 只要节点行 |
 
 - **冻结与身份**：`triggerKind`/`triggerRef` 记录手动或定时触发的稳定身份，定时侧只创建与跟踪，不复制图校验或引擎；运行与节点身份稳定，Loop 轮次是 `v2_workflow_scopes` 的一行（同一 Loop 同时最多一个活动轮），Iteration 轮次是节点行的 `iteration`（0 基）。
 - **attempt 就是软删行**：失败尝试把节点行软删，再插入下一次尝试；同一 `(scope, node, 迭代轮)` 只允许一行未删记录，数据库唯一索引兜住并发派发。
-- **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；草稿和活跃版本的原有拒绝不变。
+- **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；把已结束的唯一运行删掉（`DELETE …/workflow-runs/{rid}`）后，版本和定义才重新可删。运行中或还有未完成节点的运行拒删（`400 workflow_run_active`），避免删掉执行桥仍在写的会话行。
 - **尚未包含**：`start`/`cancel`/节点完成等生命周期入口、失败尝试列表、变量与 condition 决策投影仍由执行桥的工作流运行 PR 提供；本批已经提供它们需要的行模型、行锁与 `awaitingInput` 派生。节点 payload 的键由工作流领域定义，这一层不解释，因此 `failedAttempts` 与变量投影不在本批伪造。
 
 ### 对话

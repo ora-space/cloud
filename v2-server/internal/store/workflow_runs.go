@@ -31,6 +31,8 @@ var (
 	ErrWorkflowSnapshotInUse = errors.New("workflow snapshot is in use")
 	// ErrWorkflowActiveRuns reports a definition a live run still references.
 	ErrWorkflowActiveRuns = errors.New("workflow has live runs")
+	// ErrWorkflowRunActive reports a run that still has work in flight.
+	ErrWorkflowRunActive = errors.New("workflow run is active")
 )
 
 // WorkflowRunStatuses are the states a run and its node rows share. Awaiting input is deliberately
@@ -337,6 +339,44 @@ func (s *Store) ParkWorkflowNodeRun(ctx context.Context, tenant, runID, nodeRunI
 		return WorkflowNodeRun{}, ErrWorkflowNodeRunNotFound
 	}
 	return WorkflowNodeRun{}, ErrWorkflowNodeRunState
+}
+
+// DeleteWorkflowRun soft-deletes a finished run with its node rows. A running run or one with a
+// pending/running node is refused, because deleting it would abandon work a live session still
+// answers; the attempt history stays recoverable as soft-deleted rows.
+func (s *Store) DeleteWorkflowRun(ctx context.Context, tenant, runID string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var status string
+		err := tx.QueryRow(ctx, `
+			SELECT status FROM v2_workflow_runs
+			WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE`, tenant, runID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrWorkflowRunNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock workflow run: %w", err)
+		}
+		var active bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM v2_workflow_node_runs
+				WHERE run_id = $1 AND deleted_at IS NULL AND status IN ('pending', 'running'))`, runID).Scan(&active); err != nil {
+			return fmt.Errorf("check active nodes: %w", err)
+		}
+		if status == WorkflowStatusRunning || active {
+			return ErrWorkflowRunActive
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE v2_workflow_node_runs SET deleted_at = now(), updated_at = now()
+			WHERE run_id = $1 AND deleted_at IS NULL`, runID); err != nil {
+			return fmt.Errorf("delete node runs: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE v2_workflow_runs SET deleted_at = now(), updated_at = now()
+			WHERE tenant_id = $1 AND id = $2`, tenant, runID); err != nil {
+			return fmt.Errorf("delete workflow run: %w", err)
+		}
+		return nil
+	})
 }
 
 // WorkflowRuns lists live runs of one definition, one project, or the whole tenant, oldest first as

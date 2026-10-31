@@ -144,4 +144,30 @@ func TestWorkflowRunsOverHTTP(t *testing.T) {
 	if status != 404 || failure["code"] != "workflow_run_not_found" {
 		t.Fatalf("malformed run id = %d %v", status, failure)
 	}
+
+	// A run with work in flight cannot be deleted; a pending one can, and then its definition and
+	// frozen version are free again.
+	status, failure = call("DELETE", "/api/v2/tenants/"+tid+"/workflow-runs/"+runID, nil)
+	if status != 400 || failure["code"] != "workflow_run_active" {
+		t.Fatalf("delete running run = %d %v", status, failure)
+	}
+	_, second := call("POST", base, map[string]any{"name": "可释放", "graph": nil})
+	secondID := second["workflow"].(map[string]any)["id"].(string)
+	_, secondPublished := call("POST", base+"/"+secondID+"/publish", map[string]any{"version": "v1"})
+	if secondPublished["snapshot"] == nil {
+		t.Fatalf("publish = %v", secondPublished)
+	}
+	_, secondRun := call("POST", base+"/"+secondID+"/runs", map[string]any{"projectId": project.ID})
+	secondRunID := secondRun["run"].(map[string]any)["id"].(string)
+	status, deleted := call("DELETE", "/api/v2/tenants/"+tid+"/workflow-runs/"+secondRunID, nil)
+	if status != 200 || deleted["runId"] != secondRunID {
+		t.Fatalf("delete pending run = %d %v", status, deleted)
+	}
+	status, failure = call("GET", "/api/v2/tenants/"+tid+"/workflow-runs/"+secondRunID, nil)
+	if status != 404 || failure["code"] != "workflow_run_not_found" {
+		t.Fatalf("deleted run still readable = %d %v", status, failure)
+	}
+	if status, deletedWorkflow := call("DELETE", base+"/"+secondID, nil); status != 200 || deletedWorkflow["workflowId"] != secondID {
+		t.Fatalf("delete released workflow = %d %v", status, deletedWorkflow)
+	}
 }

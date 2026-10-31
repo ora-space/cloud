@@ -283,6 +283,18 @@
           "500": {"$ref": "#/components/responses/WorkflowError"},
           "503": {"$ref": "#/components/responses/WorkflowError"}
         }
+      },
+      "delete": {
+        "operationId": "deleteWorkflowRun",
+        "tags": ["workflowRuns"],
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunDeleted"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
       }
     },
     "/api/v2/tenants/{tid}/workflow-runs/{rid}/nodes": {
@@ -558,6 +570,12 @@
         "required": ["run"],
         "additionalProperties": false,
         "properties": {"run": {"$ref": "#/components/schemas/WorkflowRun"}}
+      },
+      "WorkflowRunDeleted": {
+        "type": "object",
+        "required": ["runId"],
+        "additionalProperties": false,
+        "properties": {"runId": {"type": "string", "format": "uuid"}}
       },
       "WorkflowNodeRun": {
         "type": "object",

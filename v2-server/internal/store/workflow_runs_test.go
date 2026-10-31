@@ -120,7 +120,8 @@ func TestWorkflowDeletionProtectsRunReferences(t *testing.T) {
 	ctx := context.Background()
 	project := workflowProject(t, s, user, tenant, "project-3")
 	w, v1 := publishedWorkflow(t, s, tenant, "引用保护", "v1")
-	if _, err := s.CreateWorkflowRun(ctx, tenant, w.ID, v1.ID, store.WorkflowRunInput{ProjectID: project.ID}); err != nil {
+	run, err := s.CreateWorkflowRun(ctx, tenant, w.ID, v1.ID, store.WorkflowRunInput{ProjectID: project.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PublishWorkflow(ctx, tenant, w.ID, "v2", nil); err != nil {
@@ -136,6 +137,30 @@ func TestWorkflowDeletionProtectsRunReferences(t *testing.T) {
 	// The active version keeps its own refusal.
 	if _, err := s.DeleteWorkflowSnapshot(ctx, tenant, w.ID, "v2"); !errors.Is(err, store.ErrWorkflowActiveVersion) {
 		t.Fatalf("delete active version = %v", err)
+	}
+
+	// A started run is still working; deleting it would abandon its live node.
+	if _, err := s.StartWorkflowRun(ctx, tenant, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteWorkflowRun(ctx, tenant, run.ID); !errors.Is(err, store.ErrWorkflowRunActive) {
+		t.Fatalf("delete running run = %v", err)
+	}
+	if err := s.DeleteWorkflowRun(ctx, tenant, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, store.ErrWorkflowRunNotFound) {
+		t.Fatalf("delete unknown run = %v", err)
+	}
+
+	// A pending run has no work in flight: deleting it releases its frozen version and definition.
+	released, releasedVersion := publishedWorkflow(t, s, tenant, "可释放", "v1")
+	releasedRun, err := s.CreateWorkflowRun(ctx, tenant, released.ID, releasedVersion.ID, store.WorkflowRunInput{ProjectID: project.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteWorkflowRun(ctx, tenant, releasedRun.ID); err != nil {
+		t.Fatalf("delete pending run: %v", err)
+	}
+	if err := s.DeleteWorkflow(ctx, tenant, released.ID); err != nil {
+		t.Fatalf("delete workflow after releasing its only run: %v", err)
 	}
 }
 
