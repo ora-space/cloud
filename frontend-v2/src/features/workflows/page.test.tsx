@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { defaultWorkflowSidebar, useUiStore } from "@/lib/workflows/host/ui-store";
-import { LocalWorkflowBackend } from "@/lib/workflows/data/local-workflow-backend";
+import { LocalWorkflowBackend, browserWorkflowStorage } from "@/lib/workflows/data/local-workflow-backend";
 import {
   memoryWorkflowStorage,
   sampleWorkflowBackend,
@@ -120,6 +120,23 @@ describe("workflow page", () => {
       await screen.findByText("服务端暂时不能检查和发布工作流，草稿已保存。"),
     ).toBeInTheDocument();
     expect(screen.getByText("暂未发布")).toBeInTheDocument();
+  });
+
+  it("offers once to import the workflows this browser kept", async () => {
+    const user = userEvent.setup();
+    new LocalWorkflowBackend({ storage: browserWorkflowStorage }).create({ name: "本机旧流程", graph: null });
+    const first = await renderPage();
+    const notice = await screen.findByRole("region", { name: "本机旧工作流" });
+    expect(notice).toHaveTextContent("还有 1 个旧的本机工作流");
+
+    await user.click(within(notice).getByRole("button", { name: "导入" }));
+
+    expect(await within(library()).findByRole("button", { name: "本机旧流程" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "本机旧工作流" })).not.toBeInTheDocument();
+    first.unmount();
+    await renderPage();
+    await within(library()).findByRole("button", { name: "本机旧流程" });
+    expect(screen.queryByRole("region", { name: "本机旧工作流" })).not.toBeInTheDocument();
   });
 
   it("resizes the library from its edge and folds it past the minimum, like the chat history", async () => {

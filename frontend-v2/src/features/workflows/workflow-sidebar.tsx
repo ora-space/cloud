@@ -5,7 +5,7 @@ import {
 } from "@/components/sidebar-resize-handle";
 import { Button } from "@/components/ui/button";
 import { WorkflowEditorList } from "./editor/workflow-editor-list";
-import { AddSamplesButton } from "./library-actions";
+import { AddSamplesButton, LegacyLibraryNotice } from "./library-actions";
 import { useUiStore } from "@/lib/workflows/host/ui-store";
 
 /**
@@ -43,6 +43,7 @@ export function WorkflowSidebar() {
             </Button>
             </div>
           </div>
+          <LegacyLibraryNotice />
           <WorkflowEditorList />
         </aside>
       )}

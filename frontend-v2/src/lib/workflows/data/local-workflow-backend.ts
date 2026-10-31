@@ -36,8 +36,9 @@ import { ContractError } from "../contracts";
 
 /**
  * Desktop's workflow definition backend (`crates/application/src/workflow`) kept in one browser
- * entry, as the workflow page used it before v2-server stored workflows. Tests use it as the fake
- * server. Each operation keeps the Rust handler's rules — trimmed unique names, one
+ * entry, as the workflow page used it before v2-server stored workflows. The page now only reads
+ * that entry to offer importing what a browser still holds (`legacy-library.ts`); tests also use it
+ * as the fake server. Each operation keeps the Rust handler's rules — trimmed unique names, one
  * mutable `draft` snapshot, immutable published snapshots, the published pointer, soft deletion and
  * its refusals. Timestamps are milliseconds as `bigint`, like the generated DTOs.
  */
