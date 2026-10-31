@@ -369,6 +369,15 @@ func (s *Store) DeleteWorkflowSnapshot(ctx context.Context, tenant, id, version 
 		if published != nil && *published == deleted.ID {
 			return ErrWorkflowActiveVersion
 		}
+		var referenced bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM v2_workflow_runs
+				WHERE snapshot_id = $1 AND deleted_at IS NULL)`, deleted.ID).Scan(&referenced); err != nil {
+			return workflowError("check run references", err)
+		}
+		if referenced {
+			return ErrWorkflowSnapshotInUse
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE v2_workflow_snapshots SET deleted_at = now()
 			WHERE tenant_id = $1 AND workflow_id = $2 AND id = $3`, tenant, id, deleted.ID); err != nil {
@@ -380,12 +389,21 @@ func (s *Store) DeleteWorkflowSnapshot(ctx context.Context, tenant, id, version 
 	return deleted, err
 }
 
-// DeleteWorkflow soft-deletes a definition with every snapshot it owns. Nothing is hard deleted, so
-// history a run or a snapshot identity refers to keeps resolving until runs start pinning it.
+// DeleteWorkflow soft-deletes a definition with every snapshot it owns. A live run still pins one of
+// those snapshots as its frozen graph, so it refuses instead of orphaning that history.
 func (s *Store) DeleteWorkflow(ctx context.Context, tenant, id string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := lockWorkflow(ctx, tx, tenant, id); err != nil {
 			return err
+		}
+		var referenced bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM v2_workflow_runs
+				WHERE tenant_id = $1 AND workflow_id = $2 AND deleted_at IS NULL)`, tenant, id).Scan(&referenced); err != nil {
+			return workflowError("check run references", err)
+		}
+		if referenced {
+			return ErrWorkflowActiveRuns
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE v2_workflow_snapshots SET deleted_at = now()
