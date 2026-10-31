@@ -311,6 +311,69 @@
           "503": {"$ref": "#/components/responses/WorkflowError"}
         }
       }
+    },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/start": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
+      "post": {
+        "operationId": "startWorkflowRun",
+        "tags": ["workflowRuns"],
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunActionResponse"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/cancel": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
+      "post": {
+        "operationId": "cancelWorkflowRun",
+        "tags": ["workflowRuns"],
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunActionResponse"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/input": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
+      "patch": {
+        "operationId": "updateWorkflowRunInput",
+        "tags": ["workflowRuns"],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunInputUpdate"}}}},
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunActionResponse"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "409": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/nodes/{nodeId}/complete": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}, {"$ref": "#/components/parameters/NodeId"}],
+      "post": {
+        "operationId": "completeWorkflowNode",
+        "tags": ["workflowRuns"],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowNodeComplete"}}}},
+        "responses": {
+          "200": {"description": "Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowRunActionResponse"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
     }
   },
   "components": {
@@ -320,7 +383,8 @@
       "Version": {"name": "version", "in": "path", "required": true, "schema": {"type": "string", "maxLength": 128}},
       "Snapshot": {"name": "sid", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
       "Run": {"name": "rid", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
-      "RunProjectQuery": {"name": "projectId", "in": "query", "required": false, "schema": {"type": "string"}}
+      "RunProjectQuery": {"name": "projectId", "in": "query", "required": false, "schema": {"type": "string"}},
+      "NodeId": {"name": "nodeId", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1}}
     },
     "responses": {
       "WorkflowError": {
@@ -576,6 +640,30 @@
         "required": ["runId"],
         "additionalProperties": false,
         "properties": {"runId": {"type": "string", "format": "uuid"}}
+      },
+      "WorkflowRunActionResponse": {
+        "type": "object",
+        "required": ["run"],
+        "additionalProperties": false,
+        "properties": {"run": {"$ref": "#/components/schemas/WorkflowRun"}}
+      },
+      "WorkflowRunInputUpdate": {
+        "type": "object",
+        "required": ["input"],
+        "additionalProperties": false,
+        "properties": {
+          "input": {"type": "string", "nullable": true},
+          "variables": {"type": "object", "additionalProperties": true}
+        }
+      },
+      "WorkflowNodeComplete": {
+        "type": "object",
+        "required": ["force"],
+        "additionalProperties": false,
+        "properties": {
+          "force": {"type": "boolean"},
+          "requester": {"type": "string", "enum": ["human"]}
+        }
       },
       "WorkflowNodeRun": {
         "type": "object",

@@ -38,11 +38,11 @@ var (
 // WorkflowRunStatuses are the states a run and its node rows share. Awaiting input is deliberately
 // absent: it is derived from a running run plus a pending node, never stored.
 const (
-	WorkflowStatusPending = "pending"
-	WorkflowStatusRunning = "running"
-	WorkflowRunSucceeded  = "succeeded"
-	WorkflowRunFailed     = "failed"
-	WorkflowRunCancelled  = "cancelled"
+	WorkflowStatusPending   = "pending"
+	WorkflowStatusRunning   = "running"
+	WorkflowStatusSucceeded = "succeeded"
+	WorkflowStatusFailed    = "failed"
+	WorkflowStatusCancelled = "cancelled"
 )
 
 // WorkflowRunInput is what a caller freezes when creating a run. The graph itself is never copied:

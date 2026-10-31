@@ -63,6 +63,9 @@ type Options struct {
 	ValidateWorkflow func(graph string) error
 	// Now reads the clock automatic publish versions use; nil uses the process clock.
 	Now func() time.Time
+	// WorkflowRuns is the execution bridge's run lifecycle. Nil keeps start, cancel, input and
+	// interactive completion unavailable; definition and history reads still work.
+	WorkflowRuns WorkflowRunHost
 }
 
 // New returns the handler for every route v2-server serves.
@@ -131,6 +134,10 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs", h.authed(h.listWorkflowRuns))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}", h.authed(h.getWorkflowRun))
 	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/workflow-runs/{rid}", h.authed(h.deleteWorkflowRun))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/start", h.authed(h.startWorkflowRun))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/cancel", h.authed(h.cancelWorkflowRun))
+	mux.HandleFunc("PATCH /api/v2/tenants/{tid}/workflow-runs/{rid}/input", h.authed(h.updateWorkflowRunInput))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes/{nodeId}/complete", h.authed(h.completeWorkflowNode))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes", h.authed(h.listWorkflowRunNodes))
 	h.chatRoutes(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fault(w, http.StatusNotFound, "not_found") })

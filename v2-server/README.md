@@ -236,12 +236,17 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 | `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
 | `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
 | `DELETE …/workflow-runs/{rid}` | 软删已结束的运行及其节点；running 或还有 pending/running 节点时拒绝 |
+| `POST …/workflow-runs/{rid}/start` | 交给执行桥启动运行 |
+| `POST …/workflow-runs/{rid}/cancel` | 取消运行；停止未确认时返回 `503 workflow_run_stop_unconfirmed` |
+| `PATCH …/workflow-runs/{rid}/input` | 更新启动输入与变量；执行桥判定不可编辑时返回 `409 workflow_run_not_editable`（desktop 允许未开始和已结束的运行修改，用于准备下一次执行） |
+| `POST …/workflow-runs/{rid}/nodes/{nodeId}/complete` | 交互节点完成（`force`、`requester: human`） |
 | `GET …/workflow-runs/{rid}/nodes` | 只要节点行 |
 
 - **冻结与身份**：`triggerKind`/`triggerRef` 记录手动或定时触发的稳定身份，定时侧只创建与跟踪，不复制图校验或引擎；运行与节点身份稳定，Loop 轮次是 `v2_workflow_scopes` 的一行（同一 Loop 同时最多一个活动轮），Iteration 轮次是节点行的 `iteration`（0 基）。
 - **attempt 就是软删行**：失败尝试把节点行软删，再插入下一次尝试；同一 `(scope, node, 迭代轮)` 只允许一行未删记录，数据库唯一索引兜住并发派发。
 - **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；把已结束的唯一运行删掉（`DELETE …/workflow-runs/{rid}`）后，版本和定义才重新可删。运行中或还有未完成节点的运行拒删（`400 workflow_run_active`），避免删掉执行桥仍在写的会话行。
-- **尚未包含**：`start`/`cancel`/节点完成等生命周期入口、失败尝试列表、变量与 condition 决策投影仍由执行桥的工作流运行 PR 提供；本批已经提供它们需要的行模型、行锁与 `awaitingInput` 派生。节点 payload 的键由工作流领域定义，这一层不解释，因此 `failedAttempts` 与变量投影不在本批伪造。
+- **执行桥接缝**：`server.Options.WorkflowRuns`（`server.WorkflowRunHost`）由执行桥实现、在 `main` 注入；未注入时 start/cancel/input/complete 返回 `503 workflow_run_host_unavailable`，定义与历史读取照常。HTTP 只做登录/成员校验、严格解码和错误码映射，派发、停止确认、会话与对话历史都留在执行桥；拒绝用 server 包的哨兵错误表达（`ErrWorkflowRunNotStartable`、`ErrWorkflowRunNotEditable`、`ErrWorkflowNodeNotAwaitingInput`、`ErrWorkflowNodeNotFound`、`ErrWorkflowRunStopUnconfirmed`、`WorkflowRunInputInvalid`）。
+- **尚未包含**：失败尝试列表、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。
 
 ### 对话
 
