@@ -1,4 +1,9 @@
 import { statusOf } from '@/lib/api-client'
+import {
+  type CreateProject,
+  getApiV2TenantsTidProjects,
+  postApiV2TenantsTidProjects,
+} from '@/lib/projects-api/generated'
 import { isAxiosError } from 'axios'
 import {
   type ChatConversation,
@@ -14,7 +19,6 @@ import {
   setChatProjectOrder,
   stopChatConversation,
 } from './api/generated'
-import { type CreateProject, getApiV2TenantsTidProjects, postApiV2TenantsTidProjects } from './projects-api/generated'
 
 /** A project the backend can run chats in; each conversation gets its own directory of it. */
 export interface RemoteProject {

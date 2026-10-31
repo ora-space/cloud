@@ -268,3 +268,26 @@ CREATE TABLE IF NOT EXISTS v2_chat_project_order (
 	project_ids text[] NOT NULL,
 	PRIMARY KEY (tenant_id, user_id)
 );
+
+-- Tasks are v2's minimal work item: a title, a description, one project, at most one typed
+-- assignee and a status the team moves by hand. Starting execution, comments and runs are a later
+-- step; nothing in this table starts one. The assignee is a typed id without a foreign key, because
+-- its target table depends on assignee_type; writes validate the target and reads resolve its name.
+CREATE TABLE IF NOT EXISTS v2_tasks (
+	id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id     uuid NOT NULL REFERENCES tenants (id),
+	title         text NOT NULL,
+	description   text NOT NULL DEFAULT '',
+	project_id    text NOT NULL,
+	assignee_type text,
+	assignee_id   uuid,
+	status        text NOT NULL DEFAULT 'pending',
+	created_by    uuid NOT NULL REFERENCES users (id),
+	version       bigint NOT NULL DEFAULT 1,
+	created_at    timestamptz NOT NULL DEFAULT now(),
+	updated_at    timestamptz NOT NULL DEFAULT now(),
+	CHECK (assignee_type IS NULL OR assignee_type IN ('human', 'agent', 'squad')),
+	CHECK ((assignee_type IS NULL) = (assignee_id IS NULL)),
+	CHECK (status IN ('pending', 'running', 'review', 'done', 'cancelled'))
+);
+CREATE INDEX IF NOT EXISTS v2_tasks_tenant ON v2_tasks (tenant_id, updated_at DESC, id);

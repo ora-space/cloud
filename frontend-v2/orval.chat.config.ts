@@ -17,7 +17,7 @@ export default defineConfig({
   projects: {
     input: { target: '../v2-server/internal/projectrepos/projects.openapi.json' },
     output: {
-      target: 'src/features/chat/projects-api/generated.ts',
+      target: 'src/lib/projects-api/generated.ts',
       client: 'react-query',
       httpClient: 'axios',
       clean: true,

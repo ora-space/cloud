@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { CreateProject } from '../projects-api/generated'
+import type { CreateProject } from '@/lib/projects-api/generated'
 import { NewProjectDialog } from './new-project-dialog'
 
 /** Renders the dialog open, as the project menu leaves it, with `onCreate` answering the submits. */

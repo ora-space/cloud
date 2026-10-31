@@ -23,8 +23,8 @@ import type {
   UseQueryResult
 } from '@tanstack/react-query';
 
-import { customInstance } from '../../../lib/api-client';
-import type { ErrorType , BodyType } from '../../../lib/api-client';
+import { customInstance } from '../api-client';
+import type { ErrorType , BodyType } from '../api-client';
 export interface Project {
   id: string;
   tenantId: string;
