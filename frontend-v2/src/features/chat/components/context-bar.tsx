@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { CreateProject } from '../projects-api/generated'
+import type { CreateProject } from '@/lib/projects-api/generated'
 import type { NewChat, Project } from '../store'
 import { NewProjectDialog } from './new-project-dialog'
 import { SandboxLabel } from './sandbox-label'

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { CreateProject } from '../projects-api/generated'
+import type { CreateProject } from '@/lib/projects-api/generated'
 
 /** The name a repository suggests for its project: the last part of its address, without `.git`. */
 function nameOf(repositoryUrl: string): string {

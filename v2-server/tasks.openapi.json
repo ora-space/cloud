@@ -1,0 +1,922 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Temporary v2 tasks",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v2/tenants/{tid}/tasks": {
+      "get": {
+        "operationId": "listTasks",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTask",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/tasks/{taskid}": {
+      "get": {
+        "operationId": "getTask",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateTask",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/tasks/{taskid}/status": {
+      "post": {
+        "operationId": "setTaskStatus",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskStatus"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/tasks/{taskid}/assignment": {
+      "put": {
+        "operationId": "setTaskAssignee",
+        "tags": [
+          "tasks"
+        ],
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskAssignment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TaskError": {
+        "type": "object",
+        "required": [
+          "code",
+          "params",
+          "requestId"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskAssigneeRef": {
+        "type": "object",
+        "required": [
+          "type",
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "human",
+              "agent",
+              "squad"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenantId",
+          "title",
+          "description",
+          "projectId",
+          "assignee",
+          "status",
+          "createdBy",
+          "createdByName",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "assignee": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "type",
+              "id",
+              "displayName"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent",
+                  "squad"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "identifier": {
+                "type": "string"
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "review",
+              "done",
+              "cancelled"
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdByName": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskList": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            }
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        }
+      },
+      "TaskCreate": {
+        "type": "object",
+        "required": [
+          "title",
+          "projectId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "assignee": {
+            "$ref": "#/components/schemas/TaskAssigneeRef"
+          }
+        }
+      },
+      "TaskUpdate": {
+        "type": "object",
+        "required": [
+          "title",
+          "projectId",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      },
+      "TaskStatus": {
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "review",
+              "done",
+              "cancelled"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      },
+      "TaskAssignment": {
+        "type": "object",
+        "required": [
+          "assignee",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "type",
+              "id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent",
+                  "squad"
+                ]
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

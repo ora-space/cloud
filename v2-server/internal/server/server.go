@@ -97,6 +97,12 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/squads/{sid}/members", h.authed(h.addSquadMember))
 	mux.HandleFunc("PUT /api/v2/tenants/{tid}/squads/{sid}/members/{mid}", h.authed(h.updateSquadMember))
 	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/squads/{sid}/members/{mid}", h.authed(h.removeSquadMember))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/tasks", h.authed(h.listTasks))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/tasks", h.authed(h.createTask))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/tasks/{taskid}", h.authed(h.getTask))
+	mux.HandleFunc("PUT /api/v2/tenants/{tid}/tasks/{taskid}", h.authed(h.updateTask))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/tasks/{taskid}/status", h.authed(h.setTaskStatus))
+	mux.HandleFunc("PUT /api/v2/tenants/{tid}/tasks/{taskid}/assignment", h.authed(h.setTaskAssignee))
 	h.chatRoutes(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fault(w, http.StatusNotFound, "not_found") })
 	return mux

@@ -5,7 +5,7 @@
   --accent: #f1f1f6; --accent-foreground: #27272d; --border: #e5e5eb; --input: #d6d6df; --ring: #8580cd;
   --mc-line: var(--border); --mc-muted: var(--muted-foreground); --mc-surface: #fafafb;
   --mc-human: #2f6fbb; --mc-human-bg: #eef4fc; --mc-agent: #7a5bd6; --mc-agent-bg: #f3f0fd;
-  --mc-maintainer: #2f8a5f; --mc-danger: #bd433d; --mc-scrim: #20202a30; --mc-shadow: #16162216;
+  --mc-maintainer: #2f8a5f; --mc-done-bg: #eaf6ef; --mc-danger: #bd433d; --mc-scrim: #20202a30; --mc-shadow: #16162216;
   color: var(--foreground); background: var(--background); font-size: 14px; line-height: 1.6;
 }
 .collaboration-feature button { cursor: pointer; touch-action: manipulation; }
@@ -32,6 +32,31 @@
 .mc-dot.maintainer { background: var(--mc-maintainer); }
 
 .mc-list-section { min-width: 0; }
+.mc-task-section { margin-bottom: 40px; }
+.mc-section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.mc-section-head h2 { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; letter-spacing: -.2px; }
+
+.mc-tasks { list-style: none; margin: 0; padding: 0; border: 1px solid var(--mc-line); border-radius: 12px; overflow: hidden; }
+.mc-tasks li + li { border-top: 1px solid var(--mc-line); }
+.mc-task-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; padding: 13px 16px; background: var(--background); border: 0; color: inherit; font: inherit; text-align: left; transition: background .12s; }
+.mc-task-row:hover { background: var(--mc-surface); }
+.mc-task-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mc-task-main strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-task-main small { color: var(--mc-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-task-hint { color: var(--mc-muted); font-size: 11px; white-space: nowrap; }
+.mc-status { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.mc-status.pending { color: var(--secondary-foreground); background: var(--secondary); }
+.mc-status.running { color: var(--mc-human); background: var(--mc-human-bg); }
+.mc-status.review { color: var(--mc-agent); background: var(--mc-agent-bg); }
+.mc-status.done { color: var(--mc-maintainer); background: var(--mc-done-bg); }
+.mc-status.cancelled { color: var(--mc-muted); background: var(--muted); }
+
+.mc-task-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mc-task-meta { color: var(--mc-muted); font-size: 12px; }
+.mc-facts em { font-style: normal; }
+.mc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mc-assignee { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mc-comment-placeholder { padding: 14px; border: 1px dashed var(--mc-line); border-radius: 10px; color: var(--mc-muted); font-size: 12px; background: var(--mc-surface); }
 .mc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; list-style: none; margin: 0; padding: 0; }
 .mc-card { display: flex; flex-direction: column; gap: 10px; width: 100%; height: 100%; padding: 18px; text-align: left; background: var(--background); border: 1px solid var(--mc-line); border-radius: 12px; color: inherit; font: inherit; transition: border-color .12s, box-shadow .12s, transform .12s; }
 .mc-card:hover { border-color: var(--ring); box-shadow: 0 6px 20px var(--mc-shadow); transform: translateY(-1px); }
@@ -108,6 +133,9 @@
   .mc-summary { flex-direction: column; align-items: flex-start; gap: 10px; }
   .mc-summary-counts { flex-wrap: wrap; gap: 12px 18px; }
   .mc-grid { grid-template-columns: 1fr; }
+  .mc-task-row { grid-template-columns: auto minmax(0, 1fr); }
+  .mc-task-hint { display: none; }
+  .mc-section-head { align-items: flex-start; }
   .mc-dialog { width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
   .mc-dialog-header, .mc-detail-scroll, .mc-form-scroll { padding-left: 16px; padding-right: 16px; }
   .mc-detail-footer, .mc-form-actions { padding-left: 16px; padding-right: 16px; flex-wrap: wrap; }
