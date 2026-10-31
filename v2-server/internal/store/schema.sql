@@ -234,3 +234,43 @@ CREATE TABLE IF NOT EXISTS v2_chat_project_order (
 	project_ids text[] NOT NULL,
 	PRIMARY KEY (tenant_id, user_id)
 );
+
+-- Workflow definitions follow desktop's authoring model instead of Cloud's: every definition owns
+-- exactly one mutable draft snapshot (version 'draft') plus immutable published snapshots addressed
+-- by a caller-chosen version, and the workflow row points at the version new runs freeze. The graph
+-- is stored verbatim as text so the editor receives exactly the document it saved; parsing and
+-- participation stay in the workflow domain, not in a JSON column. Published snapshots are frozen
+-- before they are stored, so the editor's unsaved draft can be an unfinished canvas.
+CREATE TABLE IF NOT EXISTS v2_workflows (
+	id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id             uuid NOT NULL REFERENCES tenants (id),
+	namespace             text NOT NULL DEFAULT 'local',
+	name                  text NOT NULL,
+	published_snapshot_id uuid,
+	created_at            timestamptz NOT NULL DEFAULT now(),
+	updated_at            timestamptz NOT NULL DEFAULT now(),
+	deleted_at            timestamptz
+);
+-- Desktop refuses duplicate live names case-insensitively within a namespace; v2 has one namespace
+-- per tenant, so the tenant is the namespace boundary.
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflows_live_name
+	ON v2_workflows (tenant_id, lower(name)) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS v2_workflow_snapshots (
+	id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id   uuid NOT NULL REFERENCES tenants (id),
+	workflow_id uuid NOT NULL REFERENCES v2_workflows (id),
+	version     text NOT NULL,
+	graph       text NOT NULL,
+	created_at  timestamptz NOT NULL DEFAULT now(),
+	updated_at  timestamptz,
+	deleted_at  timestamptz
+);
+-- A deleted version may be republished under the same spelling, as in desktop. The partial draft
+-- index keeps the single mutable snapshot unambiguous even under concurrent creation.
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_snapshots_live_version
+	ON v2_workflow_snapshots (workflow_id, version) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_snapshots_one_draft
+	ON v2_workflow_snapshots (workflow_id) WHERE version = 'draft' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS v2_workflow_snapshots_history
+	ON v2_workflow_snapshots (workflow_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;

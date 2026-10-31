@@ -51,6 +51,14 @@ type Options struct {
 	Catalog execution.Catalog
 	// Schedules is the same host used by the process's periodic scanner. Nil disables commands.
 	Schedules ScheduleActions
+	// AnalyzeWorkflow derives authoring participation for one graph document; nil keeps the
+	// analyze route unavailable. The rule belongs to the workflow domain, not this package.
+	AnalyzeWorkflow func(graph string) (WorkflowAnalysis, error)
+	// ValidateWorkflow reports whether a document can execute, so publish freezes only a runnable
+	// version. Nil keeps publish unavailable instead of accepting a document nothing can run.
+	ValidateWorkflow func(graph string) error
+	// Now reads the clock automatic publish versions use; nil uses the process clock.
+	Now func() time.Time
 }
 
 // New returns the handler for every route v2-server serves.
@@ -90,6 +98,21 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/squads/{sid}/members", h.authed(h.addSquadMember))
 	mux.HandleFunc("PUT /api/v2/tenants/{tid}/squads/{sid}/members/{mid}", h.authed(h.updateSquadMember))
 	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/squads/{sid}/members/{mid}", h.authed(h.removeSquadMember))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows", h.authed(h.listWorkflows))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows", h.authed(h.createWorkflow))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/analyze", h.authed(h.analyzeWorkflowGraph))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}", h.authed(h.getWorkflow))
+	mux.HandleFunc("PUT /api/v2/tenants/{tid}/workflows/{wid}", h.authed(h.updateWorkflow))
+	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/workflows/{wid}", h.authed(h.deleteWorkflow))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/draft", h.authed(h.getWorkflowDraft))
+	mux.HandleFunc("PUT /api/v2/tenants/{tid}/workflows/{wid}/draft", h.authed(h.updateWorkflowDraft))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/publish", h.authed(h.publishWorkflow))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/versions", h.authed(h.listWorkflowVersions))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/versions/{version}", h.authed(h.getWorkflowVersion))
+	mux.HandleFunc("DELETE /api/v2/tenants/{tid}/workflows/{wid}/versions/{version}", h.authed(h.deleteWorkflowVersion))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/activate", h.authed(h.activateWorkflow))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/rollback", h.authed(h.rollbackWorkflow))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/snapshots/{sid}", h.authed(h.getWorkflowSnapshot))
 	h.chatRoutes(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fault(w, http.StatusNotFound, "not_found") })
 	return mux
