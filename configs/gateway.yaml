@@ -90,6 +90,12 @@ github:
   # source: "github.example.com"
 
 idaas:
+  # Optional deployment-owned HTTPS endpoints. Omitted values use base_url and IDaaS 2.0 paths.
+  # No credentials, query or fragment; request parameters remain owned by the adapter.
+  # Environment: GATEWAY_IDAAS_AUTHORIZE_URL / TOKEN_URL / USERINFO_URL.
+  authorize_url: ""
+  token_url: ""
+  userinfo_url: ""
   # Read only when login.provider is huawei-idaas. Test environment: https://uniportal-beta.huawei.com.
   # Locally `task setup` supplies GATEWAY_IDAAS_BASE_URL / GATEWAY_IDAAS_CLIENT_ID and writes the
   # secret file from config.toml; production mounts it read-only, e.g. /run/ora-keys/idaas-client-secret.

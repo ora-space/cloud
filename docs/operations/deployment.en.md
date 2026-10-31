@@ -49,6 +49,19 @@ keep the same restrictions.
 Deployments mount their own configuration files, public keys, certificates and key files. With
 `GATEWAY_WEB_DIST_DIR=/app/web` the Gateway serves the frontend on the same origin as `/auth` and `/api`.
 
+## Huawei IDaaS site configuration
+
+Authentication URLs and the Client ID come from configuration outside the image. The Client Secret is supplied by a
+read-only mounted file named by `GATEWAY_IDAAS_CLIENT_SECRET_FILE`. See the
+[configuration reference](configuration.en.md#gateway) for settings and endpoint validation.
+
+1. In production, disable `GATEWAY_PUBLIC_DEVELOPMENT` and `GATEWAY_LOGIN_DEVELOPMENT_PROVIDER`, set an HTTPS public
+   origin, and register exactly `<public origin>/auth/callback/huawei-idaas` with IDaaS.
+2. After changing endpoints or the Client ID, recreate the Gateway containers with the updated configuration; no image
+   rebuild is required. All replicas use the same client configuration.
+3. After atomically replacing the Client Secret file, recreate every Gateway container to refresh the file mount and
+   read the new secret; replacing the file alone does not update a running process.
+
 ## Networks
 
 cluster's Compose places services on four networks, and production deployments should keep the same isolation:

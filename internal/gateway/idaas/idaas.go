@@ -35,6 +35,9 @@ const (
 // string in the userinfo response; uuid is used when that field is absent, empty, or not a string.
 type Options struct {
 	BaseURL          string
+	AuthorizeURL     string
+	TokenURL         string
+	UserInfoURL      string
 	ClientID         string
 	ClientSecret     string
 	DisplayNameField string
@@ -43,7 +46,9 @@ type Options struct {
 
 // Authenticator implements gateway.Authenticator for Huawei IDaaS.
 type Authenticator struct {
-	baseURL          *url.URL
+	authorizeURL     *url.URL
+	tokenURL         *url.URL
+	userInfoURL      *url.URL
 	clientID         string
 	clientSecret     string
 	displayNameField string
@@ -70,7 +75,21 @@ func New(o *Options) (*Authenticator, error) {
 	if o.DisplayNameField != "" && (strings.TrimSpace(o.DisplayNameField) != o.DisplayNameField || len(o.DisplayNameField) > 128) {
 		return nil, errors.New("IDaaS display name field must be a trimmed top-level field name of at most 128 bytes")
 	}
-	return &Authenticator{baseURL: u, clientID: o.ClientID, clientSecret: o.ClientSecret, displayNameField: o.DisplayNameField, http: o.HTTP}, nil
+	endpoints := make([]*url.URL, 3)
+	for i, endpoint := range []struct{ override, path string }{
+		{o.AuthorizeURL, authorizePath}, {o.TokenURL, tokenPath}, {o.UserInfoURL, userInfoPath},
+	} {
+		resolved := *u
+		resolved.Path = endpoint.path
+		endpoints[i] = &resolved
+		if endpoint.override != "" {
+			endpoints[i], e = gateway.IDaaSEndpoint(endpoint.override)
+			if e != nil {
+				return nil, e
+			}
+		}
+	}
+	return &Authenticator{authorizeURL: endpoints[0], tokenURL: endpoints[1], userInfoURL: endpoints[2], clientID: o.ClientID, clientSecret: o.ClientSecret, displayNameField: o.DisplayNameField, http: o.HTTP}, nil
 }
 
 // AuthorizationURL builds the IDaaS 2.0 authorize redirect. PKCE is omitted because that mode is
@@ -80,8 +99,7 @@ func (a *Authenticator) AuthorizationURL(request gateway.AuthorizationRequest) (
 	if request.State == "" || request.CallbackURL == "" {
 		return "", errors.New("state and callback URL are required")
 	}
-	u := *a.baseURL
-	u.Path = authorizePath
+	u := *a.authorizeURL
 	q := url.Values{}
 	q.Set("client_id", a.clientID)
 	q.Set("response_type", "code")
@@ -122,7 +140,7 @@ func (a *Authenticator) exchangeCode(ctx context.Context, code string) (string, 
 	form.Set("client_secret", a.clientSecret)
 	form.Set("code", code)
 	var out tokenResponse
-	status, e := a.postForm(ctx, tokenPath, form, &out)
+	status, e := a.postForm(ctx, a.tokenURL, form, &out)
 	if e != nil {
 		return "", e
 	}
@@ -139,7 +157,7 @@ func (a *Authenticator) readUser(ctx context.Context, token string) (gateway.Ver
 	form := url.Values{}
 	form.Set("access_token", token)
 	var out map[string]json.RawMessage
-	status, e := a.postForm(ctx, userInfoPath, form, &out)
+	status, e := a.postForm(ctx, a.userInfoURL, form, &out)
 	if e != nil {
 		return gateway.VerifiedIdentity{}, e
 	}
@@ -186,9 +204,7 @@ func rawString(raw json.RawMessage) string {
 	return value
 }
 
-func (a *Authenticator) postForm(ctx context.Context, path string, form url.Values, out any) (int, error) {
-	u := *a.baseURL
-	u.Path = path
+func (a *Authenticator) postForm(ctx context.Context, u *url.URL, form url.Values, out any) (int, error) {
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(form.Encode()))
 	if e != nil {
 		return 0, fmt.Errorf("build IDaaS request: %w", e)
