@@ -40,10 +40,27 @@ describe('demo workflow runs', () => {
   })
 
   it('refuses a run when the active version changed after the menu offered it', async () => {
-    await expect(createDemoRun(library, 'cloud', { ...sample(), version: 'v0' }, '')).rejects.toThrow(
-      '生效版本已从 v0 变为 v1，请重新打开菜单选择',
-    )
+    await library.updateDraft({ workflowId: review.id, graph: (await library.getDraft({ workflowId: review.id })).snapshot.graph })
+    await library.publish({ workflowId: review.id, version: 'v2' })
+
+    await expect(createDemoRun(library, 'cloud', sample(), '')).rejects.toThrow('生效版本已从 v1 变为 v2，请重新打开菜单选择')
     expect(useDemoRuns.getState().runs).toEqual({})
+  })
+
+  it('refuses a run when the offered version name now names another graph', async () => {
+    const { snapshot } = await library.getDraft({ workflowId: review.id })
+    await library.publish({ workflowId: review.id, version: 'v2' })
+    await library.deleteSnapshot({ workflowId: review.id, version: 'v1' })
+    const graph = JSON.parse(snapshot.graph) as { description?: string }
+    await library.updateDraft({ workflowId: review.id, graph: JSON.stringify({ ...graph, description: '另一张图' }) })
+    await library.publish({ workflowId: review.id, version: 'v1' })
+    const reoffered = (await listPublishedWorkflows(library)).find((w) => w.id === review.id)!
+    expect(reoffered.version).toBe('v1')
+    expect(reoffered.snapshotId).not.toBe(review.snapshotId)
+
+    await expect(createDemoRun(library, 'cloud', sample(), '')).rejects.toThrow('v1 已经换成了另一份发布内容，请重新打开菜单选择')
+    expect(useDemoRuns.getState().runs).toEqual({})
+    await expect(createDemoRun(library, 'cloud', reoffered, '')).resolves.toMatchObject({ status: 'pending' })
   })
 
   it('creates a pending run of the published graph under the given name', async () => {

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { ContractError } from '@/lib/workflows/contracts'
 import type { WorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import {
   computeInactiveNodes,
@@ -17,6 +18,11 @@ export interface PublishedWorkflow {
   id: string
   name: string
   version: string
+  /**
+   * The published snapshot itself. A version name can come back with another graph once the old
+   * version is deleted, so the run is checked against this, never against the name.
+   */
+  snapshotId: string
 }
 
 /** How long each node of a demo run takes; tests shorten it before creating runs. */
@@ -86,17 +92,35 @@ export function resetDemoRuns(): void {
   useDemoRuns.setState({ ...emptyRuns })
 }
 
-/** Workflows that have a published version, newest first, as desktop's menu lists them. */
+/**
+ * Workflows that have a published version, newest first, as desktop's menu lists them. The list
+ * names versions only, so each published workflow is read once more for its snapshot's identity;
+ * one deleted or unpublished in between is left out.
+ */
 export async function listPublishedWorkflows(library: WorkflowContracts, signal?: AbortSignal): Promise<PublishedWorkflow[]> {
   const { workflows } = await library.list({}, { signal })
-  return workflows.flatMap((w) => (w.publishedVersion === null ? [] : [{ id: w.id, name: w.name, version: w.publishedVersion }]))
+  const offered = await Promise.all(
+    workflows
+      .filter((w) => w.publishedVersion !== null)
+      .map(async (w): Promise<PublishedWorkflow | null> => {
+        try {
+          const { workflow, published } = await library.get({ workflowId: w.id }, { signal })
+          return published && { id: workflow.id, name: workflow.name, version: published.version, snapshotId: published.id }
+        } catch (error) {
+          if (error instanceof ContractError && error.code === 'workflow_not_found') return null
+          throw error
+        }
+      }),
+  )
+  return offered.filter((w) => w !== null)
 }
 
 /**
  * Creates a pending run of a workflow's published version in a project, as desktop's run
  * dialog does: the server's published graph is frozen into the run, and Start begins it. The
- * version must still be the one the menu offered; if someone activated another meanwhile, the
- * run is refused rather than freezing a version the dialog did not name. The run itself is still
+ * published snapshot must still be the one the menu offered; if someone activated another
+ * meanwhile, or reused the version name for another graph, the run is refused rather than
+ * freezing a graph the dialog did not name. The run itself is still
  * played by the in-browser engine until v2-server executes workflows.
  */
 export async function createDemoRun(
@@ -107,8 +131,12 @@ export async function createDemoRun(
 ): Promise<GraphWorkflowRun> {
   const { workflow, published } = await library.get({ workflowId: offered.id })
   if (!published) throw new Error('这个工作流已经没有发布版本，请重新选择')
-  if (published.version !== offered.version) {
-    throw new Error(`生效版本已从 ${offered.version} 变为 ${published.version}，请重新打开菜单选择`)
+  if (published.id !== offered.snapshotId) {
+    throw new Error(
+      published.version === offered.version
+        ? `${offered.version} 已经换成了另一份发布内容，请重新打开菜单选择`
+        : `生效版本已从 ${offered.version} 变为 ${published.version}，请重新打开菜单选择`,
+    )
   }
   const graph = parseWorkflowGraph(published.graph)
   const rt = demoRuntime()
