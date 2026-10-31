@@ -399,3 +399,37 @@ func TestWorkflowNodeDispatchAndRunDeletionSerialize(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkflowRunCreationAndVersionDeletionSerialize covers a run freezing a version while that
+// version is deleted: either the run wins and deletion is refused as in-use, or deletion wins and
+// the run cannot find the snapshot. A run never freezes a deleted version.
+func TestWorkflowRunCreationAndVersionDeletionSerialize(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "freeze-delete-owner")
+	project := workflowProject(t, s, user, tenant, "project-freeze-delete")
+	for i := range 6 {
+		ctx := context.Background()
+		w, v1 := publishedWorkflow(t, s, tenant, "冻结"+string(rune('a'+i)), "v1")
+		if _, err := s.PublishWorkflow(ctx, tenant, w.ID, "v2", nil); err != nil {
+			t.Fatal(err)
+		}
+		var createErr, deleteErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, createErr = s.CreateWorkflowRun(ctx, tenant, w.ID, v1.ID, store.WorkflowRunInput{ProjectID: project.ID})
+		}()
+		go func() {
+			defer wg.Done()
+			_, deleteErr = s.DeleteWorkflowSnapshot(ctx, tenant, w.ID, "v1")
+		}()
+		wg.Wait()
+		switch {
+		case createErr == nil && errors.Is(deleteErr, store.ErrWorkflowSnapshotInUse):
+		case errors.Is(createErr, store.ErrWorkflowSnapshotNotFound) && deleteErr == nil:
+		default:
+			t.Fatalf("round %d: create=%v delete=%v", i, createErr, deleteErr)
+		}
+	}
+}
