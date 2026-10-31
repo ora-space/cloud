@@ -112,6 +112,9 @@ func (s *Store) AdvanceWorkflowRunsOnce(ctx context.Context) error {
 	// The release half of the terminal lifecycle: runs the scheduler no longer scans still owe a
 	// Workspace release fact. The give-up pass runs first so a run whose Node is gone is abandoned in
 	// this tick instead of having one more delete declared for it.
+	if err := s.advanceWorkflowDeliveries(ctx); err != nil {
+		return err
+	}
 	if err := s.giveUpWorkflowRunWorkspaceReleases(ctx); err != nil {
 		return err
 	}

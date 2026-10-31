@@ -55,7 +55,8 @@ func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisi
 		}
 		validateDeliveryDeclaration(e, r.Body.O("result"))
 		// Validate eligibility before external I/O; classify again in the final write transaction.
-		_ = deliveryFactIsLate(t, e)
+		late := deliveryFactIsLate(t, e)
+		e["workflowReceiptOnly"] = late && len(e.O("input").O("workflow")) > 0
 		require(r.Body.N("sequence") == e.N("lastEventSequence")+1 && r.Body.S("event") != "", 409, "receipt_conflict")
 		w := t.one("SELECT tenant_id,project_id FROM workspaces WHERE id=$1", e.S("workspaceId"))
 		e["tenantId"], e["projectId"] = w.S("tenantId"), w.S("projectId")
@@ -69,6 +70,9 @@ func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisi
 	}
 	result := r.Body.O("result")
 	verified := &revisionVerification{input: jsonText(e.O("input")), valid: true}
+	if e.B("workflowReceiptOnly") {
+		return verified, nil
+	}
 	if s.GitServer == nil || s.GitServer.Refs == nil {
 		return nil, &Fault{Code: "git_server_unavailable", Status: 503, Params: Object{}}
 	}
@@ -89,6 +93,13 @@ func (s *Store) prepareRevision(ctx context.Context, r *ControlRequest) (*revisi
 		return nil, &Fault{Code: "object_store_unavailable", Status: 503, Params: Object{}}
 	}
 	verified.valid = verified.valid && valid
+	if len(e.O("input").O("workflow")) > 0 && verified.valid {
+		valid, err := s.verifyWorkflowHistory(ctx, e, history)
+		if err != nil {
+			return nil, err
+		}
+		verified.valid = valid
+	}
 	return verified, nil
 }
 
@@ -117,6 +128,10 @@ func validStoredObject(object Object) bool {
 // liveDelivery fences cancellation, deletion, replaced Nodes and closed runtime bindings again
 // after external verification. A stale result must not release a different Workspace generation.
 func liveDelivery(t *transaction, e Object) {
+	if len(e.O("input").O("workflow")) > 0 {
+		liveWorkflowDelivery(t, e)
+		return
+	}
 	if residualExecutionIdentity(t, e) != nil {
 		// This is evidence about the original execution, not permission to execute it again.
 		return
@@ -136,6 +151,10 @@ func liveDelivery(t *transaction, e Object) {
 func settleVerifiedRevision(t *transaction, r *ControlRequest, e Object, late bool) {
 	verification := r.verification
 	require(verification != nil && verification.input == jsonText(e.O("input")), 409, "invalid_delivery_verification")
+	if len(e.O("input").O("workflow")) > 0 {
+		settleVerifiedWorkflowRevision(t, r, e, late)
+		return
+	}
 	if late && !lateRevisionMayRegister(t, e) {
 		// The original declaration and receipt are still committed by nodeExecutionResult.
 		// A replay cannot turn this receipt-only decision into a new registration attempt.

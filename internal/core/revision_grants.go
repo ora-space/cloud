@@ -19,8 +19,22 @@ func revisionGrants(t *transaction, executionID string, checksums Object) Object
 	require(t.objectStore != nil, 409, "object_store_unconfigured")
 	key := e.O("input").S("historyKey")
 	require(key != "", 409, "dispatch_conflict")
+	allowed := map[string]bool{key: true}
+	for _, attempt := range objectRows(e.O("input").O("workflow")["sessions"]) {
+		allowed[attempt.S("historyKey")] = true
+	}
 	for name := range checksums {
-		require(name == key, 400, "invalid_upload_checksum")
+		require(allowed[name], 400, "invalid_upload_checksum")
+	}
+	if len(e.O("input").O("workflow")) > 0 {
+		require(len(checksums) > 0, 400, "invalid_upload_checksum")
+		grants := make([]Object, 0, len(checksums))
+		for name := range checksums {
+			signed, err := objectstore.PresignPUTChecksum(t.objectStore, name, checksums.S(name), time.Now())
+			require(err == nil, 400, "invalid_upload_checksum")
+			grants = append(grants, Object{"objectKey": name, "url": signed.URL, "method": signed.Method, "headers": signed.Headers, "expiresAt": signed.Expires})
+		}
+		return Object{"grants": grants}
 	}
 	var signed objectstore.Grant
 	var err error

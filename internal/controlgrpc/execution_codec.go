@@ -167,6 +167,9 @@ func sessionObject(spec *controlpb.AgentSessionSpec) (core.Object, error) {
 			if l.GetIssueRunId() != "" {
 				listing["issueId"], listing["issueTitle"], listing["issueRunId"], listing["runStatus"] = l.GetIssueId(), l.GetIssueTitle(), l.GetIssueRunId(), l.GetRunStatus()
 			}
+			if l.GetWorkflowRunId() != "" {
+				listing["workflowRunId"], listing["workflowName"], listing["runStatus"] = l.GetWorkflowRunId(), l.GetWorkflowName(), l.GetRunStatus()
+			}
 			directory = append(directory, listing)
 		}
 		out["workspaceDirectory"] = directory
@@ -213,7 +216,7 @@ func priorMessage(o core.Object) *controlpb.PriorRevision {
 func directoryMessages(rows []core.Object) []*controlpb.WorkspaceListing {
 	out := make([]*controlpb.WorkspaceListing, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &controlpb.WorkspaceListing{WorkspaceId: row.S("workspaceId"), Kind: row.S("kind"), IssueId: row.S("issueId"), IssueTitle: row.S("issueTitle"), IssueRunId: row.S("issueRunId"), RunStatus: row.S("runStatus")})
+		out = append(out, &controlpb.WorkspaceListing{WorkspaceId: row.S("workspaceId"), Kind: row.S("kind"), IssueId: row.S("issueId"), IssueTitle: row.S("issueTitle"), IssueRunId: row.S("issueRunId"), RunStatus: row.S("runStatus"), WorkflowRunId: row.S("workflowRunId"), WorkflowName: row.S("workflowName")})
 	}
 	return out
 }
@@ -261,7 +264,7 @@ func contentMessages(blocks []core.Object) []*controlpb.ContentBlock {
 func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
 	delivery, deliveryOK := core.ParseGitRef(spec.GetDeliveryRef())
 	workspace, workspaceOK := core.ParseGitRef(spec.GetWorkspaceRef())
-	if spec.GetSessionExecutionId() == "" || spec.GetHistoryKey() == "" || !gitRepositoryURL(spec.GetGitRepositoryUrl()) ||
+	if (spec.GetSessionExecutionId() == "" && spec.GetWorkflow() == nil) || spec.GetHistoryKey() == "" || !gitRepositoryURL(spec.GetGitRepositoryUrl()) ||
 		!deliveryOK || delivery.Namespace != core.GitDelivery || !workspaceOK || workspace.Namespace != core.GitWorkspaceBranch {
 		return nil, invalidInput("invalid_dispatch")
 	}
@@ -273,16 +276,41 @@ func deliveryObject(spec *controlpb.DeliverRevisionSpec) (core.Object, error) {
 	if prior := spec.GetPriorRevision(); prior != nil {
 		out["priorRevision"] = priorObject(prior)
 	}
+	if workflow := spec.GetWorkflow(); workflow != nil {
+		if spec.GetSessionExecutionId() != "" || spec.GetPriorRevision() != nil || workflow.GetWorkflowRunId() == "" || len(workflow.GetSessions()) == 0 {
+			return nil, invalidInput("invalid_dispatch")
+		}
+		sessions := make([]core.Object, 0, len(workflow.GetSessions()))
+		for _, attempt := range workflow.GetSessions() {
+			sessions = append(sessions, core.Object{"executionOrder": int64(attempt.GetExecutionOrder()), "nodeId": attempt.GetNodeId(), "attempt": int64(attempt.GetAttempt()), "executionId": attempt.GetExecutionId(), "historyKey": attempt.GetHistoryKey()})
+		}
+		out["workflow"] = core.Object{"workflowRunId": workflow.GetWorkflowRunId(), "sessions": sessions}
+	}
 	return out, nil
 }
 
 func deliveryMessage(o core.Object) *controlpb.DeliverRevisionSpec {
-	return &controlpb.DeliverRevisionSpec{
+	out := &controlpb.DeliverRevisionSpec{
 		SessionExecutionId: o.S("sessionExecutionId"), CheckoutExecutionId: o.S("checkoutExecutionId"), BaseCommit: o.S("baseCommit"),
 		RevisionRef: o.S("revisionRef"), HistoryKey: o.S("historyKey"),
 		GitRepositoryUrl: o.S("gitRepositoryUrl"), DeliveryRef: o.S("deliveryRef"), WorkspaceRef: o.S("workspaceRef"),
 		PriorRevision: priorMessage(o.O("priorRevision")),
 	}
+	if workflow := o.O("workflow"); len(workflow) > 0 {
+		out.Workflow = &controlpb.WorkflowHistoryInput{WorkflowRunId: workflow.S("workflowRunId")}
+		for _, attempt := range rows(workflow["sessions"]) {
+			out.Workflow.Sessions = append(out.Workflow.Sessions, &controlpb.WorkflowSessionAttempt{ExecutionOrder: workflowOrdinal(attempt.N("executionOrder")), NodeId: attempt.S("nodeId"), Attempt: workflowOrdinal(attempt.N("attempt")), ExecutionId: attempt.S("executionId"), HistoryKey: attempt.S("historyKey")})
+		}
+	}
+	return out
+}
+
+// workflowOrdinal refuses overflow instead of silently changing a frozen attempt identity.
+func workflowOrdinal(value int64) uint32 {
+	if value < 0 || value > math.MaxUint32 {
+		return 0
+	}
+	return uint32(value)
 }
 
 func resultObject(res *controlpb.ExecutionResult) (core.Object, error) {

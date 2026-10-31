@@ -90,10 +90,11 @@ type NodeRecord struct {
 	// Admission epoch of the latest accepted idle evidence.
 	IdleAdmissionEpoch *int64 `protobuf:"varint,8,opt,name=idle_admission_epoch,json=idleAdmissionEpoch,proto3,oneof" json:"idle_admission_epoch,omitempty"`
 	// Dedicated personal-model proxy access was advertised by this Node's handshake.
-	ModelProxy    bool                      `protobuf:"varint,9,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
-	ModelAdapter  *ModelAdapterCapabilities `protobuf:"bytes,10,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ModelProxy              bool                      `protobuf:"varint,9,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelAdapter            *ModelAdapterCapabilities `protobuf:"bytes,10,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
+	WorkflowHistoryDelivery bool                      `protobuf:"varint,11,opt,name=workflow_history_delivery,json=workflowHistoryDelivery,proto3" json:"workflow_history_delivery,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *NodeRecord) Reset() {
@@ -196,6 +197,13 @@ func (x *NodeRecord) GetModelAdapter() *ModelAdapterCapabilities {
 	return nil
 }
 
+func (x *NodeRecord) GetWorkflowHistoryDelivery() bool {
+	if x != nil {
+		return x.WorkflowHistoryDelivery
+	}
+	return false
+}
+
 type RegisterNodeRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	SubmissionId string                 `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
@@ -206,10 +214,12 @@ type RegisterNodeRequest struct {
 	Node              *NodeIdentity `protobuf:"bytes,5,opt,name=node,proto3" json:"node,omitempty"`
 	ProtocolVersion   uint32        `protobuf:"varint,6,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// False for older Nodes or Nodes without configured model-access mTLS credentials.
-	ModelProxy    bool                      `protobuf:"varint,7,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
-	ModelAdapter  *ModelAdapterCapabilities `protobuf:"bytes,8,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ModelProxy   bool                      `protobuf:"varint,7,opt,name=model_proxy,json=modelProxy,proto3" json:"model_proxy,omitempty"`
+	ModelAdapter *ModelAdapterCapabilities `protobuf:"bytes,8,opt,name=model_adapter,json=modelAdapter,proto3" json:"model_adapter,omitempty"`
+	// Advertised by the live Node handshake; older Nodes must not receive whole-run input.
+	WorkflowHistoryDelivery bool `protobuf:"varint,9,opt,name=workflow_history_delivery,json=workflowHistoryDelivery,proto3" json:"workflow_history_delivery,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RegisterNodeRequest) Reset() {
@@ -296,6 +306,13 @@ func (x *RegisterNodeRequest) GetModelAdapter() *ModelAdapterCapabilities {
 		return x.ModelAdapter
 	}
 	return nil
+}
+
+func (x *RegisterNodeRequest) GetWorkflowHistoryDelivery() bool {
+	if x != nil {
+		return x.WorkflowHistoryDelivery
+	}
+	return false
 }
 
 // Exact host capability advertised after startup validation, independent of plugin metadata.
@@ -794,7 +811,7 @@ var File_ora_cloud_internal_v1_nodes_proto protoreflect.FileDescriptor
 
 const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\n" +
-	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\xfa\x03\n" +
+	"!ora/cloud/internal/v1/nodes.proto\x12\x15ora.cloud.internal.v1\x1a&ora/cloud/internal/v1/executions.proto\"\xb6\x04\n" +
 	"\n" +
 	"NodeRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
@@ -810,8 +827,9 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\vmodel_proxy\x18\t \x01(\bR\n" +
 	"modelProxy\x12T\n" +
 	"\rmodel_adapter\x18\n" +
-	" \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapterB\x17\n" +
-	"\x15_idle_admission_epoch\"\xfb\x02\n" +
+	" \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapter\x12:\n" +
+	"\x19workflow_history_delivery\x18\v \x01(\bR\x17workflowHistoryDeliveryB\x17\n" +
+	"\x15_idle_admission_epoch\"\xb7\x03\n" +
 	"\x13RegisterNodeRequest\x12#\n" +
 	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12.\n" +
@@ -823,7 +841,8 @@ const file_ora_cloud_internal_v1_nodes_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x06 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
 	"\vmodel_proxy\x18\a \x01(\bR\n" +
 	"modelProxy\x12T\n" +
-	"\rmodel_adapter\x18\b \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapter\"{\n" +
+	"\rmodel_adapter\x18\b \x01(\v2/.ora.cloud.internal.v1.ModelAdapterCapabilitiesR\fmodelAdapter\x12:\n" +
+	"\x19workflow_history_delivery\x18\t \x01(\bR\x17workflowHistoryDelivery\"{\n" +
 	"\x18ModelAdapterCapabilities\x12)\n" +
 	"\x10contract_version\x18\x01 \x01(\rR\x0fcontractVersion\x12\x16\n" +
 	"\x06target\x18\x02 \x01(\tR\x06target\x12\x1c\n" +
