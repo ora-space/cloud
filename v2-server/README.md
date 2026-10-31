@@ -163,6 +163,57 @@ Agent 成员引用 `v2_space_agents` 里观测为已安装的插件，候选由�
 每个 Agent 只用自己协议的绑定：OpenCode 走 OpenAI chat completions，Claude Code 走 Anthropic Messages；
 Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不能选它。清单里 OpenCode 排在前面，默认选择不变。
 
+### 工作流定义
+
+工作流定义按 desktop 的编辑模型提供，使用独立候选契约 [`workflows.openapi.json`](workflows.openapi.json)，不修改正式 Cloud 的 workflow 路由（其 snapshot/publish 语义与 desktop 不同，等 #827 收口后再谈收敛）。每个定义恰好有一个可变的草稿快照（`version` 为保留字 `draft`），发布时把草稿冻结成不可变版本并把它设为活跃版本；回滚只把历史图灌回草稿，激活才移动活跃指针。时间戳按 desktop 契约用 Unix 毫秒，`graph` 按编辑器的原始字符串存取，不重新序列化。
+
+| 路由 | 行为 |
+|---|---|
+| `GET …/workflows` | 租户内未删除定义，最新创建在前；只带发布版本号，不带图 |
+| `POST …/workflows` | 创建定义与草稿，返回 201；名字 trim 后非空且同租户不重名（不区分 ASCII 大小写） |
+| `POST …/workflows/analyze` | 分析编辑器提交的图：未参与执行的节点与无法识别的节点类型，不保存 |
+| `GET …/workflows/{wid}` | 定义、草稿与当前活跃版本（未发布为 `null`） |
+| `PUT …/workflows/{wid}` | 改名，保留身份与快照 |
+| `DELETE …/workflows/{wid}` | 软删定义及其所有版本，之后名字可复用 |
+| `GET`/`PUT …/workflows/{wid}/draft` | 读取或整份替换草稿；保存不校验，未完成的画布也能留 |
+| `POST …/workflows/{wid}/publish` | `version` 为 `null` 时自动生成 `v{毫秒}`（冲突时 `v{毫秒}-{n}`）；用户版本不得是 `draft`、不超过 128 字节且可作为单个路径段 |
+| `GET …/workflows/{wid}/versions` | 已发布版本（不含草稿），最新在前 |
+| `GET`/`DELETE …/workflows/{wid}/versions/{version}` | 读取一个版本（`draft` 也可读）或软删；活跃版本与草稿拒绝删除，已删版本的版本名可重新发布 |
+| `POST …/workflows/{wid}/activate` | 把历史版本设为活跃版本，并同步其图到草稿；返回草稿 |
+| `POST …/workflows/{wid}/rollback` | 把历史版本的图灌回草稿，不动活跃指针；返回草稿 |
+| `GET …/workflows/{wid}/snapshots/{sid}` | 按快照身份读取，供运行历史引用 |
+
+写操作按定义行加锁串行：发布在同一事务里读草稿、校验并冻结，避免校验过的图和冻结的图不是同一份。请求体限制 6 MiB、拒绝未知字段；响应错误沿用 Cloud 的 `{code, params, requestId}`，领域错误码与 desktop 一致（如 `workflow_name_conflict`、`workflow_version_already_exists`、`workflow_cannot_delete_active_version`、`workflow_run_graph_parse`）。
+
+图规则不属于 HTTP 层：`server.Options.AnalyzeWorkflow` 提供草稿分析，`Options.ValidateWorkflow` 提供发布前的可执行性校验，两者由工作流领域注入；未注入时定义读写照常，分析和发布返回 `503 workflow_domain_unavailable`，不会把未校验的文档伪装成可运行版本。
+
+与 desktop 的明确差异：v2 以租户代替 desktop 的单一 `local` 命名空间，`namespace` 恒为 `local`；重名改为由数据库唯一索引拒绝并映射为 409（desktop 并发重名可能返回 500）；发布校验放在事务内（desktop 存在校验与冻结之间的 TOCTOU）；软删记录 `deleted_at`（desktop 丢弃快照删除时间）；版本列表在同一毫秒内用 id 兜底排序；名称唯一性用 PostgreSQL `lower()`，比 desktop 的 ASCII `NOCASE` 范围更宽。
+
+### 工作流运行历史
+
+运行记录同样在 [`workflows.openapi.json`](workflows.openapi.json) 里：创建时冻结一个已发布版本、项目、输入与触发身份，图不复制，历史读取始终回到冻结快照。状态存 `pending`/`running`/`succeeded`/`failed`/`cancelled`；`awaitingInput` 是「running 且有 pending 节点」的派生值，不落库。
+
+| 路由 | 行为 |
+|---|---|
+| `POST …/workflows/{wid}/runs` | 冻结并创建 `pending` 运行；`snapshotId` 缺省取当前活跃版本，草稿快照拒绝；`projectId` 必填且必须是本租户项目 |
+| `GET …/workflows/{wid}/runs` | 该定义的全部运行（最新创建在后，与 desktop 的列表顺序一致），带冻结版本号 |
+| `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
+| `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
+| `GET …/workflow-runs/{rid}/snapshot` | 运行冻结的快照图；定义发布新版本后历史仍按原图渲染 |
+| `DELETE …/workflow-runs/{rid}` | 软删已结束的运行及其节点；running 或还有 pending/running 节点时拒绝 |
+| `POST …/workflow-runs/{rid}/start` | 交给执行桥启动运行 |
+| `POST …/workflow-runs/{rid}/cancel` | 取消运行；停止未确认时返回 `503 workflow_run_stop_unconfirmed` |
+| `PATCH …/workflow-runs/{rid}/input` | 更新启动输入与变量；执行桥判定不可编辑时返回 `409 workflow_run_not_editable`（desktop 允许未开始和已结束的运行修改，用于准备下一次执行） |
+| `POST …/workflow-runs/{rid}/nodes/{nodeId}/complete` | 交互节点完成（`force`、`requester: human`） |
+| `GET …/workflow-runs/{rid}/nodes` | 只要节点行 |
+
+- **冻结与身份**：`triggerKind`/`triggerRef` 记录手动或定时触发的稳定身份，定时侧只创建与跟踪，不复制图校验或引擎；运行与节点身份稳定，Loop 轮次是 `v2_workflow_scopes` 的一行（同一 Loop 同时最多一个活动轮），Iteration 轮次是节点行的 `iteration`（0 基）。
+- **attempt 就是软删行**：失败尝试把节点行软删，再插入下一次尝试；同一 `(scope, node, 迭代轮)` 只允许一行未删记录，数据库唯一索引兜住并发派发。
+- **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；把已结束的唯一运行删掉（`DELETE …/workflow-runs/{rid}`）后，版本和定义才重新可删。运行中或还有未完成节点的运行拒删（`400 workflow_run_active`），避免删掉执行桥仍在写的会话行。
+- **执行桥接缝**：`server.Options.WorkflowRuns`（`server.WorkflowRunHost`）由执行桥实现、在 `main` 注入；未注入时 start/cancel/input/complete 返回 `503 workflow_run_host_unavailable`，定义与历史读取照常。HTTP 只做登录/成员校验、严格解码和错误码映射，派发、停止确认、会话与对话历史都留在执行桥；拒绝用 server 包的哨兵错误表达（`ErrWorkflowRunNotStartable`、`ErrWorkflowRunNotEditable`、`ErrWorkflowNodeNotAwaitingInput`、`ErrWorkflowNodeNotFound`、`ErrWorkflowRunStopUnconfirmed`、`WorkflowRunInputInvalid`）。
+- **进程内存储端口**：执行桥直接调用 store 上的状态转移，不经 HTTP——`StartWorkflowRun`、`CreateWorkflowNodeRun`、`BindWorkflowNodeSession`、`CompleteWorkflowNodeRun`、`FailWorkflowNodeRun`（失败 attempt 号在同一事务里分配，payload 由领域构造）、`RetryWorkflowNodeRun`（失败行软删 + 插入等待运行的下一 attempt，编号连续）、`WakeWorkflowNodeRun`（唤醒等待的重试，重复唤醒 no-op）、`FinishWorkflowRun`、`CancelWorkflowRun`、`StartWorkflowLoopRound`（同一 Loop 只允许一个活动轮）、`SettleWorkflowLoopRound`（重复结算同状态为 no-op）、`DeleteWorkflowRun`。节点完成对已终态尝试是 no-op，取消对已取消运行幂等。
+- **尚未包含**：`failedAttempts`、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。
+
 ### 对话
 
 对话页使用独立候选契约 [`chat.openapi.json`](chat.openapi.json)。正式契约里的对话挂在 issue 下，没有独立的对话列表。前端以独立 Orval 配置生成客户端。领域逻辑在 [`internal/chat`](internal/chat)，只经 [`internal/execution`](internal/execution/README.md) 的公共接口运行 Agent。
