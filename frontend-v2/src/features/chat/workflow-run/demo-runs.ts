@@ -87,24 +87,29 @@ export function resetDemoRuns(): void {
 }
 
 /** Workflows that have a published version, newest first, as desktop's menu lists them. */
-export async function listPublishedWorkflows(library: WorkflowContracts): Promise<PublishedWorkflow[]> {
-  const { workflows } = await library.list({})
+export async function listPublishedWorkflows(library: WorkflowContracts, signal?: AbortSignal): Promise<PublishedWorkflow[]> {
+  const { workflows } = await library.list({}, { signal })
   return workflows.flatMap((w) => (w.publishedVersion === null ? [] : [{ id: w.id, name: w.name, version: w.publishedVersion }]))
 }
 
 /**
  * Creates a pending run of a workflow's published version in a project, as desktop's run
- * dialog does: the server's published graph is frozen into the run, and Start begins it. The run
- * itself is still played by the in-browser engine until v2-server executes workflows.
+ * dialog does: the server's published graph is frozen into the run, and Start begins it. The
+ * version must still be the one the menu offered; if someone activated another meanwhile, the
+ * run is refused rather than freezing a version the dialog did not name. The run itself is still
+ * played by the in-browser engine until v2-server executes workflows.
  */
 export async function createDemoRun(
   library: WorkflowContracts,
   projectId: string,
-  workflowId: string,
+  offered: PublishedWorkflow,
   name: string,
 ): Promise<GraphWorkflowRun> {
-  const { workflow, published } = await library.get({ workflowId })
-  if (!published) throw new Error('这个工作流还没有发布版本')
+  const { workflow, published } = await library.get({ workflowId: offered.id })
+  if (!published) throw new Error('这个工作流已经没有发布版本，请重新选择')
+  if (published.version !== offered.version) {
+    throw new Error(`生效版本已从 ${offered.version} 变为 ${published.version}，请重新打开菜单选择`)
+  }
   const graph = parseWorkflowGraph(published.graph)
   const rt = demoRuntime()
   await rt.host.mount(

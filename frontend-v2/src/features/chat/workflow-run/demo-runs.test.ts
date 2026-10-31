@@ -11,12 +11,13 @@ import {
   startDemoRun,
   updateDemoRunInput,
   useDemoRuns,
+  type PublishedWorkflow,
 } from './demo-runs'
 import type { WorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import { localWorkflowContracts, sampleWorkflowBackend } from '@/lib/workflows/test/workflow-server'
 
 let library: WorkflowContracts
-let review: { id: string }
+let review: PublishedWorkflow
 
 const sample = () => review
 
@@ -38,15 +39,22 @@ describe('demo workflow runs', () => {
     expect((await listPublishedWorkflows(library)).map((w) => [w.name, w.version])).toContainEqual(['示例：代码审查', 'v1'])
   })
 
+  it('refuses a run when the active version changed after the menu offered it', async () => {
+    await expect(createDemoRun(library, 'cloud', { ...sample(), version: 'v0' }, '')).rejects.toThrow(
+      '生效版本已从 v0 变为 v1，请重新打开菜单选择',
+    )
+    expect(useDemoRuns.getState().runs).toEqual({})
+  })
+
   it('creates a pending run of the published graph under the given name', async () => {
-    const run = await createDemoRun(library, 'cloud', sample().id, '周五的审查')
+    const run = await createDemoRun(library, 'cloud', sample(), '周五的审查')
     expect(run).toMatchObject({ projectId: 'cloud', name: '周五的审查', status: 'pending' })
     expect(useDemoRuns.getState().runs[run.id]?.status).toBe('pending')
     expect(Object.values(run.nodeStates).every((s) => s.status === 'idle')).toBe(true)
   })
 
   it('plays a started run to the end, with the Agent conversation and the Output result', async () => {
-    const run = await createDemoRun(library, 'cloud', sample().id, '')
+    const run = await createDemoRun(library, 'cloud', sample(), '')
     await startDemoRun(run.id, '审查 PR 的改动', {})
     await waitFor(() => expect(useDemoRuns.getState().runs[run.id]?.status).toBe('succeeded'))
 
@@ -75,7 +83,7 @@ describe('demo workflow runs', () => {
   })
 
   it('saves the kickoff input edited before the run starts', async () => {
-    const run = await createDemoRun(library, 'cloud', sample().id, '')
+    const run = await createDemoRun(library, 'cloud', sample(), '')
     await updateDemoRunInput(run.id, '只看 v2 目录', { repository: 'ora-space/desktop' })
 
     const start = useDemoRuns.getState().runs[run.id]!.definitionSnapshot.nodes.find((n) => n.data.kind === 'start')!
@@ -86,7 +94,7 @@ describe('demo workflow runs', () => {
   it('stops a running run and starts a fresh pending one on rerun, keeping the old one', async () => {
     demoRunClock.nodeStepMs = 60_000
     resetDemoRuns()
-    const run = await createDemoRun(library, 'cloud', sample().id, '')
+    const run = await createDemoRun(library, 'cloud', sample(), '')
     await startDemoRun(run.id, '', {})
     await waitFor(() => expect(useDemoRuns.getState().runs[run.id]?.status).toBe('running'))
     await cancelDemoRun(run.id)
@@ -99,7 +107,7 @@ describe('demo workflow runs', () => {
   })
 
   it('deletes a run with its conversation', async () => {
-    const run = await createDemoRun(library, 'cloud', sample().id, '')
+    const run = await createDemoRun(library, 'cloud', sample(), '')
     await deleteDemoRun(run.id)
     expect(useDemoRuns.getState().runs[run.id]).toBeUndefined()
     expect(useDemoRuns.getState().conversations[run.id]).toBeUndefined()

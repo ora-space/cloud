@@ -7,7 +7,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from '../page'
 import { resetChatStore } from '../store'
 import { chatBackend, tenantId } from '../test-backend'
-import { sampleWorkflowBackend, serveWorkflows } from '@/lib/workflows/test/workflow-server'
+import { sampleWorkflowBackend, serveWorkflows, type WorkflowServer } from '@/lib/workflows/test/workflow-server'
 import { demoRunClock, resetDemoRuns } from './demo-runs'
 
 /** Renders the page and waits until it has loaded the backend's projects. */
@@ -38,11 +38,12 @@ async function createRun(user: ReturnType<typeof userEvent.setup>, name: string)
 }
 
 describe('workflow runs in chat', () => {
+  let workflows: WorkflowServer
   beforeEach(async () => {
     window.localStorage.clear()
     resetChatStore()
     chatBackend()
-    serveWorkflows(tenantId, await sampleWorkflowBackend())
+    workflows = serveWorkflows(tenantId, await sampleWorkflowBackend())
     resetDemoRuns()
     demoRunClock.nodeStepMs = 5
   })
@@ -87,12 +88,44 @@ describe('workflow runs in chat', () => {
     await user.click(within(project()).getByRole('button', { name: '在 ora-space/cloud 新建对话' }))
     await user.click(await screen.findByRole('menuitem', { name: '运行工作流' }))
     const list = await screen.findByRole('group', { name: '已发布的工作流' })
-    expect(within(list).getByRole('menuitem', { name: /示例：逐段翻译/ })).toBeInTheDocument()
+    expect(await within(list).findByRole('menuitem', { name: /示例：逐段翻译/ })).toBeInTheDocument()
 
     fireEvent.change(screen.getByRole('textbox', { name: '搜索工作流' }), { target: { value: '审查' } })
     expect(within(list).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['示例：代码审查v1'])
     fireEvent.change(screen.getByRole('textbox', { name: '搜索工作流' }), { target: { value: '没有这个' } })
     expect(within(list).getByText('没有匹配的工作流')).toBeInTheDocument()
+  })
+
+  it('reads the library on every opening, shows no list when that fails, and retries', async () => {
+    const user = userEvent.setup()
+    await renderPage()
+    const openMenu = async () => {
+      await user.click(within(project()).getByRole('button', { name: '在 ora-space/cloud 新建对话' }))
+      await user.click(await screen.findByRole('menuitem', { name: '运行工作流' }))
+      return screen.findByRole('group', { name: '已发布的工作流' })
+    }
+    const listed = () => workflows.seen.filter((r) => r.endsWith(`/tenants/${tenantId}/workflows`)).length
+
+    let list = await openMenu()
+    await within(list).findByRole('menuitem', { name: /示例：代码审查/ })
+    expect(listed()).toBe(1)
+    // Closing the + menu closes the submenu with it.
+    await user.keyboard('{Escape}')
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+
+    workflows.refuse = { match: /GET .*\/workflows$/, status: 503, data: { code: 'workflow_store_unavailable', params: {}, requestId: 'r' } }
+    list = await openMenu()
+    const failure = await within(list).findByRole('alert')
+    expect(failure).toHaveTextContent('读取工作流失败')
+    expect(within(list).queryByRole('menuitem')).not.toBeInTheDocument()
+    expect(listed()).toBe(2)
+
+    workflows.refuse = undefined
+    // A pointer leaving the submenu's trigger closes the submenu in jsdom, so the button is clicked in place.
+    fireEvent.click(within(failure).getByRole('button', { name: '重试' }))
+    expect(await within(list).findByRole('menuitem', { name: /示例：代码审查/ })).toBeInTheDocument()
+    expect(within(list).queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('goes back to the chat when a session is picked', async () => {
