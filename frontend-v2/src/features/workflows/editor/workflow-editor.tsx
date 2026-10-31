@@ -86,6 +86,7 @@ import {
 import type { EditorWorkflowVariable } from "./workflow-variable-display";
 import { usePlatform } from "@/lib/workflows/host/platform";
 import { useContractsClient } from "@/lib/workflows/data/contracts-client";
+import { graphFingerprint } from "@/lib/workflows/data/pending-drafts";
 import { useAgents } from "@/lib/workflows/data/catalog-hooks";
 import { availableSkills, useSkills } from "@/lib/workflows/data/catalog-hooks";
 import { useWorkflowAgentModels } from "@/lib/workflows/data/catalog-hooks";
@@ -492,6 +493,15 @@ function WorkflowEditorContent({
   /** Last name known to be persisted, so autosave skips no-op renames. */
   const persistedNameRef = useRef<string | null>(null);
   /**
+   * The server draft the local edits build on (its `updatedAt`), and the graphs sent since
+   * without an answer. A draft kept on leaving carries both, so the next visit can tell the
+   * page's own writes from someone else's.
+   */
+  const draftBaseRef = useRef<{ updatedAt: number | null; sent: string[] }>({
+    updatedAt: null,
+    sent: [],
+  });
+  /**
    * Nodes the last render-phase hydrate had to drop, held until that draft commits. The parse
    * runs during render, so the notice is raised from an effect rather than in the render pass.
    */
@@ -647,6 +657,11 @@ function WorkflowEditorContent({
     // Capture the server name in the same hydrate turn so autosave can skip no-op renames.
     // eslint-disable-next-line react-hooks/refs -- render-phase hydrate pairs this with setState
     persistedNameRef.current = draftQuery.data.workflow.name;
+    // eslint-disable-next-line react-hooks/refs -- render-phase hydrate pairs this with setState
+    draftBaseRef.current = {
+      updatedAt: timestampMs(draftQuery.data.draft.updatedAt),
+      sent: [],
+    };
     // Carry the drop report out of the render pass; the effect below raises the notice once
     // this hydrate has committed, so a discarded render cannot produce a toast.
     // eslint-disable-next-line react-hooks/refs -- render-phase hydrate pairs this with setState
@@ -1020,30 +1035,23 @@ function WorkflowEditorContent({
     }
     const startedGeneration = editGenerationRef.current;
     setManagerError(null);
+    const graph = serializeDraftGraph(snapshot);
+    const sent = graphFingerprint(graph);
+    draftBaseRef.current = {
+      ...draftBaseRef.current,
+      sent: [...draftBaseRef.current.sent, sent],
+    };
     try {
-      const definition = normalizeWorkflowDocument({
-        id: snapshot.id,
-        name: snapshot.name,
-        description: snapshot.description,
-        updatedAt: snapshot.updatedAt,
-        viewport: snapshot.viewport,
-        nodes: snapshot.nodes,
-        edges: snapshot.edges,
-        globalVariables: normalizeWorkflowGlobalVariables(
-          snapshot.globalVariables,
-        ),
-      });
-      await updateDraftMutation.mutateAsync({
+      const saved = await updateDraftMutation.mutateAsync({
         workflowId: snapshot.id,
-        graph: serializeWorkflowGraph({
-          nodes: definition.nodes,
-          edges: definition.edges,
-          viewport: definition.viewport,
-          annotations: snapshot.annotations ?? [],
-          globalVariables: definition.globalVariables,
-          description: definition.description,
-        }),
+        graph,
       });
+      if (workflowRef.current?.id === snapshot.id) {
+        draftBaseRef.current = {
+          updatedAt: timestampMs(saved.snapshot.updatedAt),
+          sent: draftBaseRef.current.sent.filter((value) => value !== sent),
+        };
+      }
       const nextName = snapshot.name.trim();
       // Skip rename when the title is unchanged so graph-only autosaves stay one request.
       if (nextName !== "" && nextName !== persistedNameRef.current) {
@@ -1053,6 +1061,8 @@ function WorkflowEditorContent({
         });
         persistedNameRef.current = nextName;
       }
+      // Graph and title are both on the server: a draft kept for exactly this graph is done.
+      client.drafts?.saved(snapshot.id, graph);
       if (editGenerationRef.current !== startedGeneration) {
         return "stale";
       }
@@ -1062,6 +1072,7 @@ function WorkflowEditorContent({
       return "failed";
     }
   }, [
+    client.drafts,
     renameWorkflowMutation,
     setManagerError,
     t,
@@ -1069,9 +1080,32 @@ function WorkflowEditorContent({
     updateDraftMutation,
   ]);
 
+  /**
+   * Hands the live draft to the client as the editor goes away, by reload, tab close or route
+   * change: none of them waits for an autosave request, so this must stay synchronous.
+   */
+  const drafts = client.drafts;
+  const leaveWithDraft = useMemo(() => {
+    if (drafts === undefined) return undefined;
+    return () => {
+      const current = workflowRef.current;
+      if (current === null || previewedVersionRef.current !== null) return;
+      const snapshot = workflowFromCanvasSnapshot(current, toObject());
+      const name = snapshot.name.trim();
+      drafts.keep({
+        workflowId: snapshot.id,
+        graph: serializeDraftGraph(snapshot),
+        name: name !== "" && name !== persistedNameRef.current ? name : null,
+        baseUpdatedAt: draftBaseRef.current.updatedAt,
+        sent: draftBaseRef.current.sent,
+      });
+    };
+  }, [drafts, toObject]);
+
   const autosave = useWorkflowDraftAutosave({
     enabled: workflow !== null && previewedVersion === null,
     save: persistDraft,
+    leave: leaveWithDraft,
   });
   const markWorkflowDirty = autosave.markDirty;
   const undoHistory = workflowHistory.undo;
@@ -3063,4 +3097,31 @@ function WorkflowLoadError({
       </div>
     </section>
   );
+}
+
+/** The stored form of a draft: desktop's normalized document, serialized as the backend keeps it. */
+function serializeDraftGraph(snapshot: DemoWorkflow): string {
+  const definition = normalizeWorkflowDocument({
+    id: snapshot.id,
+    name: snapshot.name,
+    description: snapshot.description,
+    updatedAt: snapshot.updatedAt,
+    viewport: snapshot.viewport,
+    nodes: snapshot.nodes,
+    edges: snapshot.edges,
+    globalVariables: normalizeWorkflowGlobalVariables(snapshot.globalVariables),
+  });
+  return serializeWorkflowGraph({
+    nodes: definition.nodes,
+    edges: definition.edges,
+    viewport: definition.viewport,
+    annotations: snapshot.annotations ?? [],
+    globalVariables: definition.globalVariables,
+    description: definition.description,
+  });
+}
+
+/** A wire instant as milliseconds, or null when the draft has none. */
+function timestampMs(value: bigint | null): number | null {
+  return value === null ? null : Number(value);
 }

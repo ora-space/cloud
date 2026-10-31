@@ -18,8 +18,33 @@ test('workflow runs: start a published workflow from chat and follow it to the r
       ? route.fulfill({ json: { items: [{ id: '00000000-0000-4000-8000-0000000000d1', projectId: '00000000-0000-4000-8000-0000000000c1', executorId: 'oc-fixture', title: '梳理 v2 接口缺口', createdAt: '2026-10-30T09:00:00Z', updatedAt: '2026-10-30T09:00:00Z', session: null }], nextCursor: '' } })
       : route.fallback(),
   )
-  await page.goto('/chat')
+  // The review sample comes from v2-server's library. Publishing it needs the workflow kernel that
+  // v2-server does not wire in yet, so its stored draft stands in for the published v1 below.
+  await page.goto('/workflows')
   await signIn(page)
+  await page.getByRole('complementary', { name: '工作流列表' }).getByRole('button', { name: '添加样例工作流' }).click()
+  const tenantId = ((await (await page.request.get('/api/v1/me/tenants')).json()) as { items: { id: string }[] }).items[0]!.id
+  const workflows = `/api/v2/tenants/${tenantId}/workflows`
+  let review: { id: string } | undefined
+  await expect(async () => {
+    const list = (await (await page.request.get(workflows)).json()) as { workflows: { id: string; name: string }[] }
+    review = list.workflows.find((w) => w.name === '示例：代码审查')
+    expect(review).toBeDefined()
+  }).toPass()
+  const detail = (await (await page.request.get(`${workflows}/${review!.id}`)).json()) as {
+    workflow: Record<string, unknown>
+    draft: Record<string, unknown>
+  }
+  const published = { ...detail.draft, id: '00000000-0000-4000-8000-0000000000e1', version: 'v1', updatedAt: null }
+  await page.route(new RegExp(`${workflows}$`), async (route) => {
+    const list = (await (await route.fetch()).json()) as { workflows: { id: string }[] }
+    await route.fulfill({ json: { workflows: list.workflows.map((w) => (w.id === review!.id ? { ...w, publishedVersion: 'v1' } : w)) } })
+  })
+  await page.route(`**${workflows}/${review!.id}`, (route) =>
+    route.fulfill({ json: { ...detail, workflow: { ...detail.workflow, publishedSnapshotId: published.id }, published } }),
+  )
+
+  await page.goto('/chat')
   const cloud = page.getByRole('complementary', { name: '聊天记录' }).getByRole('region').filter({ hasText: 'ora-space/cloud' })
 
   // A project's + offers the published workflows; the run opens pending in the main area.

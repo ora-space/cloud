@@ -62,6 +62,43 @@ describe("useWorkflowDraftAutosave", () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it("hands unsaved and in-flight edits to leave on pagehide instead of starting a write", async () => {
+    let finish: (value: "saved") => void = () => undefined;
+    const save = vi.fn(() => new Promise<"saved">((resolve) => (finish = resolve)));
+    const leave = vi.fn();
+    const { result } = renderHook(() =>
+      useWorkflowDraftAutosave({ enabled: true, save, leave }),
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(leave).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.markDirty();
+    });
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+
+    // A write already in flight may not land before the page unloads, so it is kept too.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKFLOW_DRAFT_AUTOSAVE_MS);
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(leave).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      finish("saved");
+    });
+    expect(result.current.status).toBe("clean");
+  });
+
   it("flush writes immediately and cancels the pending timer", async () => {
     const save = vi.fn().mockResolvedValue("saved" as const);
     const { result } = renderHook(() =>
@@ -185,6 +222,43 @@ describe("useWorkflowDraftAutosave", () => {
     unmount();
 
     expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands unsaved and in-flight edits to leave on unmount, as on a route change", async () => {
+    let finish: (value: "saved") => void = () => undefined;
+    const save = vi.fn(
+      () => new Promise<"saved">((resolve) => (finish = resolve)),
+    );
+    const leave = vi.fn();
+    const first = renderHook(() =>
+      useWorkflowDraftAutosave({ enabled: true, save, leave }),
+    );
+    act(() => {
+      first.result.current.markDirty();
+    });
+    first.unmount();
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+
+    const second = renderHook(() =>
+      useWorkflowDraftAutosave({ enabled: true, save, leave }),
+    );
+    act(() => {
+      second.result.current.markDirty();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKFLOW_DRAFT_AUTOSAVE_MS);
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    second.unmount();
+    expect(leave).toHaveBeenCalledTimes(2);
+    finish("saved");
+
+    const clean = renderHook(() =>
+      useWorkflowDraftAutosave({ enabled: true, save, leave }),
+    );
+    clean.unmount();
+    expect(leave).toHaveBeenCalledTimes(2);
   });
 
   it("flush drains stale attempts before reporting success", async () => {

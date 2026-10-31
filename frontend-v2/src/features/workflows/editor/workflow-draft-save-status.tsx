@@ -11,9 +11,9 @@ type WorkflowDraftSaveStatusProps = {
 
 /**
  * Surfaces autosave progress next to the workflow title without introducing a
- * manual Save control. Keeps the last live-saved timestamp visible while edits
- * are dirty or the quiet-period write is in flight so the header does not
- * flicker through "unsaved" / "saving" on every drag commit.
+ * manual Save control. The live-saved timestamp shows only once the draft is
+ * clean: the backend is remote, so while edits wait for the quiet period or the
+ * write is in flight the label says so instead of vouching for the last save.
  */
 export function WorkflowDraftSaveStatusLabel({
   status,
@@ -25,12 +25,12 @@ export function WorkflowDraftSaveStatusLabel({
   let label: string;
   if (status === "error") {
     label = t("settings.workflow.saveError");
-  } else if (draftUpdatedAt !== undefined) {
-    label = t("settings.workflow.liveSaved", { time: draftUpdatedAt });
   } else if (status === "saving") {
     label = t("settings.workflow.saving");
   } else if (status === "dirty") {
     label = t("settings.workflow.unsaved");
+  } else if (draftUpdatedAt !== undefined) {
+    label = t("settings.workflow.liveSaved", { time: draftUpdatedAt });
   } else {
     label = t("settings.workflow.saved");
   }

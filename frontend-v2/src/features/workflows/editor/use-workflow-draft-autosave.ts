@@ -16,6 +16,12 @@ type UseWorkflowDraftAutosaveOptions = {
    * generation that started the save so overlapping edits can reschedule.
    */
   save: () => Promise<"saved" | "stale" | "skipped" | "failed">;
+  /**
+   * Keeps the pending edits when the editor goes away (reload, tab close, route change),
+   * synchronously, since neither the browser nor an unmount waits for a request, and somewhere
+   * that outlives a failed write. Without it the hook starts `save` and hopes it lands.
+   */
+  leave?: () => void;
 };
 
 type UseWorkflowDraftAutosaveResult = {
@@ -35,17 +41,19 @@ type UseWorkflowDraftAutosaveResult = {
  * Coalesces draft edits into debounced backend writes while serializing overlapping saves.
  * The parent owns the actual persist call so it can read the latest React Flow snapshot.
  *
- * Dirty state survives temporary disable (version preview) and is flushed on unmount so a
- * route change does not drop the last quiet-period edits.
+ * Dirty state survives temporary disable (version preview) and is handed to `leave` on unmount,
+ * so a route change does not drop the last quiet-period edits.
  */
 export function useWorkflowDraftAutosave({
   enabled,
   debounceMs = WORKFLOW_DRAFT_AUTOSAVE_MS,
   save,
+  leave,
 }: UseWorkflowDraftAutosaveOptions): UseWorkflowDraftAutosaveResult {
   const [status, setStatus] = useState<WorkflowDraftSaveStatus>("clean");
   const enabledRef = useRef(enabled);
   const saveRef = useRef(save);
+  const leaveRef = useRef(leave);
   const statusRef = useRef<WorkflowDraftSaveStatus>("clean");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -176,6 +184,7 @@ export function useWorkflowDraftAutosave({
   useEffect(() => {
     enabledRef.current = enabled;
     saveRef.current = save;
+    leaveRef.current = leave;
     scheduleRef.current = schedule;
     runSaveRef.current = runSave;
   });
@@ -191,12 +200,17 @@ export function useWorkflowDraftAutosave({
     }
   }, [clearTimer, enabled, schedule]);
 
-  // A browser reload or tab close never unmounts the editor, so persist the edits still inside
-  // the debounce window when the page goes away. The local store writes synchronously, so the
-  // save lands before the page unloads.
+  // A browser reload or tab close never unmounts the editor, and the browser does not wait for a
+  // network write, so the edits still inside the debounce window (or in flight) are handed to
+  // `leave` synchronously. An in-flight write may land too; the kept draft is the same or newer.
   useEffect(() => {
     const persistOnPageHide = () => {
-      if (!dirtyRef.current) {
+      if (!dirtyRef.current && inFlightRef.current === null) {
+        return;
+      }
+      if (leaveRef.current !== undefined) {
+        // The debounce keeps running: a page restored from the back/forward cache still saves.
+        leaveRef.current();
         return;
       }
       clearTimer();
@@ -206,11 +220,19 @@ export function useWorkflowDraftAutosave({
     return () => window.removeEventListener("pagehide", persistOnPageHide);
   }, [clearTimer]);
 
-  // Best-effort persist on unmount so leaving the editor does not drop
-  // edits still inside the debounce window. Hard tab closes remain best-effort.
+  // A route change unmounts the editor without waiting for a write either, and the component is
+  // gone before a failure could be reported, so the edits go to `leave` as on pagehide: kept
+  // until the server has them. Without `leave` the last edits are written best-effort.
   useEffect(
     () => () => {
       clearTimer();
+      if (!dirtyRef.current && inFlightRef.current === null) {
+        return;
+      }
+      if (leaveRef.current !== undefined) {
+        leaveRef.current();
+        return;
+      }
       if (!dirtyRef.current) {
         return;
       }

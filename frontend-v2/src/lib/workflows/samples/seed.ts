@@ -5,7 +5,7 @@ import {
 import { normalizeWorkflowDocument, serializeWorkflowGraph } from "../runtime";
 import { parseWorkflowImportFile } from "../editor/workflow-transfer";
 import { ContractError } from "../contracts";
-import type { LocalWorkflowBackend } from "../data/local-workflow-backend";
+import type { WorkflowContracts } from "../data/contracts-client";
 import { reviewChainSample, translationBatchSample } from "./authored";
 import loopBranchExit from "./loop-branch-exit.json?raw";
 import loopBranchExitParallel from "./loop-branch-exit-parallel.json?raw";
@@ -22,14 +22,25 @@ const samples: { file: string; version: string; retarget: boolean }[] = [
   { file: loopMaxIterationsSwitch, version: "v1", retarget: true },
 ];
 
+/** What adding the samples did to each one, by name. */
+export interface SampleWorkflowsResult {
+  added: string[];
+  /** A workflow of the same name was already in the library. */
+  skipped: string[];
+  /** Added as a draft, but publishing `v1` was refused (for instance while publishing is unavailable). */
+  unpublished: string[];
+}
+
 /**
- * Adds the sample workflows to a browser's library once, each published as `v1`, through the same
- * parse, normalization and serialization the import dialog uses. Workflows already there are
- * kept; a sample whose name is taken is skipped. Desktop's Loop examples get the demo executor and
- * no Role, so their Agent nodes show as configured.
+ * Adds the sample workflows to the library when the user asks for them, each published as `v1`,
+ * through the same parse, normalization and serialization the import dialog uses. Workflows
+ * already there are kept; a sample whose name is taken is skipped. Desktop's Loop examples get
+ * the demo executor and no Role, so their Agent nodes show as configured.
  */
-export function seedSampleWorkflows(backend: LocalWorkflowBackend): void {
-  if (backend.samplesSeeded) return;
+export async function addSampleWorkflows(
+  contracts: WorkflowContracts,
+): Promise<SampleWorkflowsResult> {
+  const result: SampleWorkflowsResult = { added: [], skipped: [], unpublished: [] };
   // The list shows the newest first, so the first sample is created last.
   for (const sample of [...samples].reverse()) {
     const parsed = parseWorkflowImportFile(sample.file);
@@ -57,16 +68,22 @@ export function seedSampleWorkflows(backend: LocalWorkflowBackend): void {
     });
     let created;
     try {
-      created = backend.create({ name: workflow.name, graph });
+      created = await contracts.create({ name: workflow.name, graph });
     } catch (error) {
       if (error instanceof ContractError && error.code === "workflow_name_conflict") {
+        result.skipped.push(workflow.name);
         continue;
       }
       throw error;
     }
-    backend.publish({ workflowId: created.workflow.id, version: sample.version });
+    try {
+      await contracts.publish({ workflowId: created.workflow.id, version: sample.version });
+      result.added.push(workflow.name);
+    } catch {
+      result.unpublished.push(workflow.name);
+    }
   }
-  backend.markSamplesSeeded();
+  return result;
 }
 
 function withDemoExecutor(workflow: DemoWorkflow): DemoWorkflow {

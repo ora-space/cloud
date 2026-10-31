@@ -1,4 +1,5 @@
 import { MoreHorizontalIcon, SearchIcon, Trash2Icon, WorkflowIcon } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -15,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { subtleScrollbar } from '@/lib/scrollbar'
 import { cn } from '@/lib/utils'
+import { createHttpWorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import type { GraphWorkflowRun } from '@/lib/workflows/runtime'
 import { FadeText } from '../components/fade-text'
 import { useChatStore } from '../store'
@@ -26,40 +28,77 @@ import { isNodeWorking, runStatusLabel, runStatusTone } from './run-status-style
  * search box, in a list that scrolls once it is long. Picking one opens the run dialog.
  */
 export function RunWorkflowSubmenu({ onPick }: { onPick: (workflow: PublishedWorkflow) => void }) {
-  const [workflows, setWorkflows] = useState<PublishedWorkflow[]>([])
-  const [query, setQuery] = useState('')
-  const shown = workflows.filter((w) => w.name.toLowerCase().includes(query.trim().toLowerCase()))
+  const [open, setOpen] = useState(false)
   return (
-    // The library lives in this browser and changes on the workflow page, so it is read on open.
-    <DropdownMenuSub onOpenChange={(open) => open && (setWorkflows(listPublishedWorkflows()), setQuery(''))}>
+    <DropdownMenuSub onOpenChange={setOpen}>
       <DropdownMenuSubTrigger>
         <WorkflowIcon />
         运行工作流
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="flex w-72 flex-col p-0">
-        <div className="flex items-center gap-1.5 border-b px-2.5">
-          <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <input
-            aria-label="搜索工作流"
-            placeholder="搜索工作流"
-            className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            // Typing must not drive the menu's type-ahead or close it.
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-        </div>
-        <div role="group" aria-label="已发布的工作流" className={cn('max-h-72 overflow-y-auto p-1', subtleScrollbar)}>
-          {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{workflows.length ? '没有匹配的工作流' : '还没有已发布的工作流'}</p>}
-          {shown.map((w) => (
+      <DropdownMenuSubContent className="flex w-72 flex-col p-0">{open && <PublishedWorkflowPicker onPick={onPick} />}</DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+/**
+ * The library changes on the workflow page, so it is read each time the submenu opens and
+ * dropped when it closes: an earlier answer is never shown as the current one, and a failure
+ * shows no list at all.
+ */
+function PublishedWorkflowPicker({ onPick }: { onPick: (workflow: PublishedWorkflow) => void }) {
+  const [query, setQuery] = useState('')
+  const tenantId = useChatStore((s) => s.tenantId)
+  const published = useQuery({
+    queryKey: ['workflow-run-menu', tenantId],
+    queryFn: ({ signal }) => listPublishedWorkflows(createHttpWorkflowContracts(tenantId!), signal),
+    enabled: !!tenantId,
+    gcTime: 0,
+    retry: false,
+  })
+  const workflows = published.data ?? []
+  const shown = workflows.filter((w) => w.name.toLowerCase().includes(query.trim().toLowerCase()))
+  const note = published.isError
+    ? undefined
+    : published.isPending
+      ? '正在读取工作流…'
+      : shown.length === 0
+        ? workflows.length
+          ? '没有匹配的工作流'
+          : '还没有已发布的工作流'
+        : undefined
+  return (
+    <>
+      <div className="flex items-center gap-1.5 border-b px-2.5">
+        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          aria-label="搜索工作流"
+          placeholder="搜索工作流"
+          className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+          value={query}
+          onChange={(e) => setQuery(e.currentTarget.value)}
+          // Typing must not drive the menu's type-ahead or close it.
+          onKeyDown={(e) => e.stopPropagation()}
+        />
+      </div>
+      <div role="group" aria-label="已发布的工作流" className={cn('max-h-72 overflow-y-auto p-1', subtleScrollbar)}>
+        {published.isError && (
+          <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-destructive">
+            读取工作流失败
+            <Button size="xs" variant="outline" disabled={published.isFetching} onClick={() => void published.refetch()}>
+              重试
+            </Button>
+          </div>
+        )}
+        {note && <p className="px-2 py-1.5 text-xs text-muted-foreground">{note}</p>}
+        {published.isSuccess &&
+          shown.map((w) => (
             <DropdownMenuItem key={w.id} title={w.name} onClick={() => onPick(w)}>
               <FadeText text={w.name} className="flex-1" />
               <span className="text-xs text-muted-foreground">{w.version}</span>
             </DropdownMenuItem>
           ))}
-        </div>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+      </div>
+    </>
   )
 }
 
@@ -71,6 +110,7 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const selectRun = useChatStore((s) => s.selectRun)
+  const tenantId = useChatStore((s) => s.tenantId)
   return (
     <Dialog open={!!workflow} onOpenChange={(open) => !open && !busy && (setError(undefined), onClose())}>
       <DialogContent>
@@ -82,7 +122,8 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
               const name = new FormData(e.currentTarget).get('name') as string
               setBusy(true)
               try {
-                const run = await createDemoRun(projectId, workflow.id, name)
+                if (!tenantId) throw new Error('还没有读到团队，请稍后重试')
+                const run = await createDemoRun(createHttpWorkflowContracts(tenantId), projectId, workflow, name)
                 selectRun(run.id)
                 setError(undefined)
                 onClose()
