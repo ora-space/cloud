@@ -126,6 +126,11 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/activate", h.authed(h.activateWorkflow))
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/rollback", h.authed(h.rollbackWorkflow))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/snapshots/{sid}", h.authed(h.getWorkflowSnapshot))
+	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflows/{wid}/runs", h.authed(h.createWorkflowRun))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflows/{wid}/runs", h.authed(h.listWorkflowRuns))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs", h.authed(h.listWorkflowRuns))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}", h.authed(h.getWorkflowRun))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes", h.authed(h.listWorkflowRunNodes))
 	h.chatRoutes(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fault(w, http.StatusNotFound, "not_found") })
 	return mux

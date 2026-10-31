@@ -28,6 +28,11 @@ import (
 type workflowCall func(method, path string, input any) (int, map[string]any)
 
 func workflowServer(t *testing.T, mutate func(*server.Options)) workflowCall {
+	call, _ := workflowServerWithStore(t, mutate)
+	return call
+}
+
+func workflowServerWithStore(t *testing.T, mutate func(*server.Options)) (workflowCall, *store.Store) {
 	t.Helper()
 	s := openStore(t)
 	storetest.SignIn(t, s, "workflow-owner", "Owner", store.RoleOwner)
@@ -112,7 +117,7 @@ func workflowServer(t *testing.T, mutate func(*server.Options)) workflowCall {
 		return res.StatusCode, out
 	}
 	call("POST", "/auth/login", map[string]string{"provider": "email", "email": storetest.Email("workflow-owner")})
-	return call
+	return call, s
 }
 
 var errUnrunnable = &unrunnableGraphError{"document cannot execute"}

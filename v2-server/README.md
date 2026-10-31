@@ -221,9 +221,26 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 
 写操作按定义行加锁串行：发布在同一事务里读草稿、校验并冻结，避免校验过的图和冻结的图不是同一份。请求体限制 6 MiB、拒绝未知字段；响应错误沿用 Cloud 的 `{code, params, requestId}`，领域错误码与 desktop 一致（如 `workflow_name_conflict`、`workflow_version_already_exists`、`workflow_cannot_delete_active_version`、`workflow_run_graph_parse`）。
 
-图规则不属于 HTTP 层：`server.Options.AnalyzeWorkflow` 提供草稿分析，`Options.ValidateWorkflow` 提供发布前的可执行性校验，两者由工作流领域注入；未注入时定义读写照常，分析和发布返回 `503 workflow_domain_unavailable`，不会把未校验的文档伪装成可运行版本。存储在工作流定义的后续运行里补齐 run/node/轮次与定时任务接缝，届时删除保护再覆盖「被运行引用的版本」。
+图规则不属于 HTTP 层：`server.Options.AnalyzeWorkflow` 提供草稿分析，`Options.ValidateWorkflow` 提供发布前的可执行性校验，两者由工作流领域注入；未注入时定义读写照常，分析和发布返回 `503 workflow_domain_unavailable`，不会把未校验的文档伪装成可运行版本。
 
 与 desktop 的明确差异：v2 以租户代替 desktop 的单一 `local` 命名空间，`namespace` 恒为 `local`；重名改为由数据库唯一索引拒绝并映射为 409（desktop 并发重名可能返回 500）；发布校验放在事务内（desktop 存在校验与冻结之间的 TOCTOU）；软删记录 `deleted_at`（desktop 丢弃快照删除时间）；版本列表在同一毫秒内用 id 兜底排序；名称唯一性用 PostgreSQL `lower()`，比 desktop 的 ASCII `NOCASE` 范围更宽。
+
+### 工作流运行历史
+
+运行记录同样在 [`workflows.openapi.json`](workflows.openapi.json) 里：创建时冻结一个已发布版本、项目、输入与触发身份，图不复制，历史读取始终回到冻结快照。状态存 `pending`/`running`/`succeeded`/`failed`/`cancelled`；`awaitingInput` 是「running 且有 pending 节点」的派生值，不落库。
+
+| 路由 | 行为 |
+|---|---|
+| `POST …/workflows/{wid}/runs` | 冻结并创建 `pending` 运行；`snapshotId` 缺省取当前活跃版本，草稿快照拒绝；`projectId` 必填且必须是本租户项目 |
+| `GET …/workflows/{wid}/runs` | 该定义的全部运行（最新创建在后，与 desktop 的列表顺序一致），带冻结版本号 |
+| `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
+| `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
+| `GET …/workflow-runs/{rid}/nodes` | 只要节点行 |
+
+- **冻结与身份**：`triggerKind`/`triggerRef` 记录手动或定时触发的稳定身份，定时侧只创建与跟踪，不复制图校验或引擎；运行与节点身份稳定，Loop 轮次是 `v2_workflow_scopes` 的一行（同一 Loop 同时最多一个活动轮），Iteration 轮次是节点行的 `iteration`（0 基）。
+- **attempt 就是软删行**：失败尝试把节点行软删，再插入下一次尝试；同一 `(scope, node, 迭代轮)` 只允许一行未删记录，数据库唯一索引兜住并发派发。
+- **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；草稿和活跃版本的原有拒绝不变。
+- **尚未包含**：`start`/`cancel`/节点完成等生命周期入口、失败尝试列表、变量与 condition 决策投影仍由执行桥的工作流运行 PR 提供；本批已经提供它们需要的行模型、行锁与 `awaitingInput` 派生。节点 payload 的键由工作流领域定义，这一层不解释，因此 `failedAttempts` 与变量投影不在本批伪造。
 
 ### 对话
 
