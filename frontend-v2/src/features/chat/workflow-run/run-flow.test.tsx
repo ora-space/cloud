@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from '../page'
 import { resetChatStore } from '../store'
-import { chatBackend } from '../test-backend'
+import { chatBackend, tenantId } from '../test-backend'
+import { sampleWorkflowBackend, serveWorkflows } from '@/lib/workflows/test/workflow-server'
 import { demoRunClock, resetDemoRuns } from './demo-runs'
 
 /** Renders the page and waits until it has loaded the backend's projects. */
@@ -37,10 +38,11 @@ async function createRun(user: ReturnType<typeof userEvent.setup>, name: string)
 }
 
 describe('workflow runs in chat', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     window.localStorage.clear()
     resetChatStore()
     chatBackend()
+    serveWorkflows(tenantId, await sampleWorkflowBackend())
     resetDemoRuns()
     demoRunClock.nodeStepMs = 5
   })

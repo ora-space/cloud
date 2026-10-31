@@ -35,12 +35,11 @@ import type {
 import { ContractError } from "../contracts";
 
 /**
- * Browser stand-in for desktop's workflow definition backend (`crates/application/src/workflow`)
- * until v2-server stores workflows. Each operation keeps the Rust handler's rules — trimmed
- * unique names, one mutable `draft` snapshot, immutable published snapshots, the published
- * pointer, soft deletion and its refusals — so the copied editor sees the answers it was written
- * against. Everything lives in one localStorage entry; timestamps are milliseconds as `bigint`,
- * like the generated DTOs.
+ * Desktop's workflow definition backend (`crates/application/src/workflow`) kept in one browser
+ * entry, as the workflow page used it before v2-server stored workflows. Tests use it as the fake
+ * server. Each operation keeps the Rust handler's rules — trimmed unique names, one
+ * mutable `draft` snapshot, immutable published snapshots, the published pointer, soft deletion and
+ * its refusals. Timestamps are milliseconds as `bigint`, like the generated DTOs.
  */
 
 /** Desktop's initial graph for a workflow created without one. */
@@ -77,8 +76,6 @@ interface StoredSnapshot extends WorkflowSnapshot {
 interface StoredState {
   workflows: StoredWorkflow[];
   snapshots: StoredSnapshot[];
-  /** Set once the page has added its sample workflows, so deleted samples stay deleted. */
-  samplesSeeded?: boolean;
 }
 
 export interface WorkflowBackendStorage {
@@ -121,16 +118,6 @@ export class LocalWorkflowBackend {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? (() => crypto.randomUUID());
     this.state = decodeState(this.storage.load());
-  }
-
-  /** Whether the page has already added its sample workflows to this browser's library. */
-  get samplesSeeded(): boolean {
-    return this.state.samplesSeeded === true;
-  }
-
-  markSamplesSeeded(): void {
-    this.state.samplesSeeded = true;
-    this.persist();
   }
 
   /**
@@ -660,7 +647,6 @@ function decodeState(serialized: string | null): StoredState {
     return {
       workflows: Array.isArray(parsed.workflows) ? parsed.workflows : [],
       snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
-      samplesSeeded: parsed.samplesSeeded === true,
     };
   } catch {
     return { workflows: [], snapshots: [] };

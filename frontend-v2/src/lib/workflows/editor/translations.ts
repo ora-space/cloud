@@ -2,6 +2,9 @@
 export const workflowEditorTranslations = {
   "zh-CN": {
     "errors.workflow_name_conflict": "已存在同名工作流。",
+    "errors.workflow_domain_unavailable": "服务端暂时不能检查和发布工作流，草稿已保存。",
+    "errors.workflow_store_unavailable": "服务端暂时不能读写工作流，请稍后重试。",
+    "errors.workflow_run_graph_parse": "工作流图无法解析，请检查后再保存。",
     "errors.workflow_name_blank": "工作流名称不能为空。",
     "errors.workflow_not_found": "未找到该工作流。",
     "errors.workflow_snapshot_not_found": "未找到该工作流快照。",
@@ -539,6 +542,12 @@ export const workflowEditorTranslations = {
   "en-US": {
     "errors.workflow_name_conflict":
       "A workflow with this name already exists.",
+    "errors.workflow_domain_unavailable":
+      "The server cannot check or publish workflows yet; the draft is saved.",
+    "errors.workflow_store_unavailable":
+      "The server cannot read or write workflows right now. Try again later.",
+    "errors.workflow_run_graph_parse":
+      "The workflow graph cannot be parsed. Check it before saving.",
     "errors.workflow_name_blank": "Workflow name cannot be blank.",
     "errors.workflow_not_found": "Workflow not found.",
     "errors.workflow_snapshot_not_found": "Workflow snapshot not found.",

@@ -1,0 +1,74 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { http } from "@/lib/api-client";
+import { fakeBackend } from "@/test/backend";
+import { ContractError } from "../contracts";
+import { memoryWorkflowStorage, serveWorkflows } from "../test/workflow-server";
+import { createHttpWorkflowContracts } from "./contracts-client";
+import { LocalWorkflowBackend } from "./local-workflow-backend";
+
+const tenantId = "00000000-0000-4000-8000-0000000000aa";
+const originalAdapter = http.defaults.adapter;
+
+function server() {
+  fakeBackend(() => undefined);
+  return serveWorkflows(tenantId, new LocalWorkflowBackend({ storage: memoryWorkflowStorage() }));
+}
+
+describe("createHttpWorkflowContracts", () => {
+  afterEach(() => {
+    http.defaults.adapter = originalAdapter;
+  });
+
+  it("answers desktop's DTOs over the tenant's routes, with bigint instants", async () => {
+    const fake = server();
+    const contracts = createHttpWorkflowContracts(tenantId);
+
+    const created = await contracts.create({ name: "审查", graph: null });
+    const { workflow, draft } = created;
+    expect(typeof workflow.createdAt).toBe("bigint");
+    expect(draft.version).toBe("draft");
+
+    await contracts.updateDraft({ workflowId: workflow.id, graph: draft.graph });
+    const published = await contracts.publish({ workflowId: workflow.id, version: "v1" });
+    expect(published.snapshot).toMatchObject({ version: "v1", updatedAt: null });
+    expect(typeof published.snapshot.createdAt).toBe("bigint");
+
+    const detail = await contracts.get({ workflowId: workflow.id });
+    expect(detail.published?.id).toBe(published.snapshot.id);
+    expect((await contracts.list({})).workflows[0]).toMatchObject({
+      name: "审查",
+      publishedVersion: "v1",
+    });
+    expect((await contracts.listVersions({ workflowId: workflow.id })).versions.map((v) => v.version)).toEqual(
+      expect.arrayContaining(["v1"]),
+    );
+    expect(fake.seen).toEqual([
+      `POST /api/v2/tenants/${tenantId}/workflows`,
+      `PUT /api/v2/tenants/${tenantId}/workflows/${workflow.id}/draft`,
+      `POST /api/v2/tenants/${tenantId}/workflows/${workflow.id}/publish`,
+      `GET /api/v2/tenants/${tenantId}/workflows/${workflow.id}`,
+      `GET /api/v2/tenants/${tenantId}/workflows`,
+      `GET /api/v2/tenants/${tenantId}/workflows/${workflow.id}/versions`,
+    ]);
+  });
+
+  it("turns a refusal into the ContractError the editor localizes", async () => {
+    server();
+    const contracts = createHttpWorkflowContracts(tenantId);
+    await contracts.create({ name: "审查", graph: null });
+
+    const refused = await contracts.create({ name: "审查", graph: null }).catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(ContractError);
+    expect(refused).toMatchObject({ code: "workflow_name_conflict" });
+  });
+
+  it("keeps a failure without a fault body as it came", async () => {
+    const fake = server();
+    fake.refuse = { match: /GET .*\/workflows$/, status: 502, data: "bad gateway" };
+
+    const failed = await createHttpWorkflowContracts(tenantId).list({}).catch((error: unknown) => error);
+
+    expect(failed).not.toBeInstanceOf(ContractError);
+  });
+});

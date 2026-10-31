@@ -70,7 +70,7 @@ e2e/            Playwright 端到端测试
 
 ### 运行工作流
 
-工作流的运行照 desktop 放在对话页里（`workflow-run/`）：项目行 `+` 菜单里的"运行工作流"列出已发布的工作流（顶部有搜索框，列表过长时滚动），选一个后给这次运行起名，创建出一次未开始的运行。运行和会话一起列在项目下面，带状态点；选中后右侧换成运行页，选会话或新建对话就换回来。
+工作流的运行照 desktop 放在对话页里（`workflow-run/`）：项目行 `+` 菜单里的"运行工作流"列出服务端已发布的工作流（每次打开菜单时读取，顶部有搜索框，列表过长时滚动），选一个后给这次运行起名，创建出一次未开始的运行。运行和会话一起列在项目下面，带状态点；选中后右侧换成运行页，选会话或新建对话就换回来。
 
 运行页和 desktop 一样有两个视图，标题栏切换：
 
@@ -88,7 +88,7 @@ e2e/            Playwright 端到端测试
 | `demo-host.ts` | 新写：Theater 调用的 desktop hook（保存启动输入、回答人工介入、错误提示等），同名同参数，背后是演示引擎 |
 | `run-pane.tsx`、`run-sidebar.tsx`、`demo-runs.ts` | 新写：desktop 的运行页、侧栏行和运行对话框的精简版 |
 
-后端还不能执行工作流，现在由 desktop 的内存运行时（`src/lib/workflows/runtime/memory-workflow-runtime.ts`、`mock-run-engine.ts`）在浏览器里代替：它冻结发布版本的图，按连线每 1.5 秒推进一个节点，条件节点选一条分支，Agent 节点生成演示对话和成果。引擎不记录条件选了哪条分支，`demo-runs.ts` 按引擎同样的选路规则推出来，再像 desktop 读取后端运行时一样，把没走的分支上的节点标为未执行，所以舞台的执行路径不列它们，运行结束时进度是满的。所以运行页标着"演示运行"。运行只存在当前页面里，刷新后清空。人工介入的界面已经搬过来，但编辑器和 desktop 一样不提供人工确认节点，演示里不会出现；从失败处恢复、AI 诊断、会话索引和文件变更评审没有搬。接入真实执行后，把 `demo-runs.ts` 和 `demo-host.ts` 换成调接口的实现。
+后端还不能执行工作流，现在由 desktop 的内存运行时（`src/lib/workflows/runtime/memory-workflow-runtime.ts`、`mock-run-engine.ts`）在浏览器里代替：它冻结服务端发布版本的图，按连线每 1.5 秒推进一个节点，条件节点选一条分支，Agent 节点生成演示对话和成果。引擎不记录条件选了哪条分支，`demo-runs.ts` 按引擎同样的选路规则推出来，再像 desktop 读取后端运行时一样，把没走的分支上的节点标为未执行，所以舞台的执行路径不列它们，运行结束时进度是满的。所以运行页标着"演示运行"。运行只存在当前页面里，刷新后清空。人工介入的界面已经搬过来，但编辑器和 desktop 一样不提供人工确认节点，演示里不会出现；从失败处恢复、AI 诊断、会话索引和文件变更评审没有搬。接入真实执行后，把 `demo-runs.ts` 和 `demo-host.ts` 换成调接口的实现。
 
 ## 工作流
 
@@ -109,9 +109,13 @@ e2e/            Playwright 端到端测试
 
 左栏和对话页的聊天记录用同一个拖宽手柄（`src/components/sidebar-resize-handle.tsx`）和同一种细滚动条（`src/lib/scrollbar.ts`）：拖动右边缘调宽度，拖过最小宽度就收起，也可以聚焦边缘后用方向键调整、按回车切换；收起后从编辑器标题栏的按钮展开。宽度和是否收起保存在浏览器本地（`lib/workflows/host/ui-store.ts`）。提示条右上角有关闭按钮。
 
-`lib/workflows/samples/` 是样例工作流：`authored.ts` 写了两份，代码审查（开始 → Agent → 条件分支 → 两个 Agent → 变量聚合器 → 输出）和逐段翻译（迭代）；另外三份是 desktop 自带的 Loop 样例（`artifacts/workflow-loop-examples/`），原样复制，导入时把 Agent 改成演示执行器、去掉角色。每个浏览器打开工作流页（或对话页的"运行工作流"菜单）时，`samples/seed.ts` 按导入对话框的同一条路径把它们加进列表、发布为 `v1`，只加一次：已有的工作流保留，同名的样例跳过，删掉的样例不会再出现。五份合起来覆盖全部八种可执行节点。
+`lib/workflows/samples/` 是样例工作流：`authored.ts` 写了两份，代码审查（开始 → Agent → 条件分支 → 两个 Agent → 变量聚合器 → 输出）和逐段翻译（迭代）；另外三份是 desktop 自带的 Loop 样例（`artifacts/workflow-loop-examples/`），原样复制，导入时把 Agent 改成演示执行器、去掉角色。五份合起来覆盖全部八种可执行节点。工作流库是整个团队共用的，所以样例不再自动加入：左栏标题旁的"添加样例工作流"按钮按导入对话框的同一条路径把它们加进库、发布为 `v1`；同名的跳过，发布被拒绝的留作草稿并提示。
 
-v2-server 还没有工作流接口，现在由 `lib/workflows/data/local-workflow-backend.ts` 在浏览器 localStorage 里代替 desktop 的后端，规则照搬 desktop 的 Rust 实现：名称去空格后不能为空、不能重名；一个可编辑的 `draft` 加不可变的发布版本；版本名不能叫 `draft`，也不能含 `/`、`\`、控制字符；不能删除草稿和当前生效的版本；发布时检查图能否从开始节点投影成可执行图（多余节点不阻塞发布）；analyze 标出未参与运行的节点和不认识的节点类型。desktop 引擎对每个节点配置的检查没有搬过来。Agent、模型、角色、Skill 和 MCP 清单是 `data/demo-catalog.ts` 里的演示数据。工作流页本身不运行工作流，运行在对话页里（见"运行工作流"）。接入 v2-server 后，只需把 `data/contracts-client.ts` 换成调生成的客户端。
+工作流存在 v2-server 上（`v2-server/workflows.openapi.json`，客户端由 `npm run api:generate:workflows` 生成到 `lib/workflows/api/`，不手改）。`data/contracts-client.ts` 把 desktop 编辑器调用的 14 个定义操作接到生成的客户端上：服务端的毫秒数转成 DTO 的 `bigint`，拒绝转成编辑器按 `errors.<code>` 本地化的 `ContractError`，所以编辑器本身不用改。页面按当前用户的团队建客户端和查询缓存，换团队时整页重建。发布要服务端能检查图；服务端还不能检查时，发布返回的错误照常提示，不当作成功。
+
+`data/local-workflow-backend.ts` 照搬 desktop Rust 实现的规则（名称去空格后不能为空、不能重名；一个可编辑的 `draft` 加不可变的发布版本；不能删除草稿和当前生效的版本等），现在是单元测试的假服务端（`lib/workflows/test/workflow-server.ts`）。
+
+Agent、模型、角色、Skill 和 MCP 清单仍是 `data/demo-catalog.ts` 里的演示数据。工作流页本身不运行工作流，运行在对话页里（见"运行工作流"）。
 
 ## 设置
 

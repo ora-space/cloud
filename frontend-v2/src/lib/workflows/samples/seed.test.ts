@@ -1,26 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { LocalWorkflowBackend } from "../data/local-workflow-backend";
+import { ContractError } from "../contracts";
 import {
-  LocalWorkflowBackend,
-  type WorkflowBackendStorage,
-} from "../data/local-workflow-backend";
-import { seedSampleWorkflows } from "./seed";
+  localWorkflowContracts,
+  memoryWorkflowStorage,
+} from "../test/workflow-server";
+import { addSampleWorkflows } from "./seed";
 
-function memoryStorage(): WorkflowBackendStorage {
-  let value: string | null = null;
-  return {
-    load: () => value,
-    save: (serialized) => {
-      value = serialized;
-    },
-  };
-}
+const library = () => new LocalWorkflowBackend({ storage: memoryWorkflowStorage() });
 
-describe("seedSampleWorkflows", () => {
-  it("publishes every sample, the authored ones first", () => {
-    const backend = new LocalWorkflowBackend({ storage: memoryStorage() });
-    expect(backend.samplesSeeded).toBe(false);
+describe("addSampleWorkflows", () => {
+  it("publishes every sample, the authored ones first", async () => {
+    const backend = library();
 
-    seedSampleWorkflows(backend);
+    const result = await addSampleWorkflows(localWorkflowContracts(backend));
 
     const { workflows } = backend.list();
     expect(workflows.map((workflow) => [workflow.name, workflow.publishedVersion])).toEqual([
@@ -30,11 +23,16 @@ describe("seedSampleWorkflows", () => {
       ["循环综合测试：并行退出取消", "v1"],
       ["最大循环轮次开关测试（无需模型）", "v1"],
     ]);
+    expect(result).toEqual({
+      added: workflows.map((workflow) => workflow.name).reverse(),
+      skipped: [],
+      unpublished: [],
+    });
   });
 
-  it("covers all eight executable node kinds with no spare nodes", () => {
-    const backend = new LocalWorkflowBackend({ storage: memoryStorage() });
-    seedSampleWorkflows(backend);
+  it("covers all eight executable node kinds with no spare nodes", async () => {
+    const backend = library();
+    await addSampleWorkflows(localWorkflowContracts(backend));
 
     const kinds = new Set<string>();
     for (const { id } of backend.list().workflows) {
@@ -51,9 +49,9 @@ describe("seedSampleWorkflows", () => {
     );
   });
 
-  it("points desktop's Loop examples at the demo executor", () => {
-    const backend = new LocalWorkflowBackend({ storage: memoryStorage() });
-    seedSampleWorkflows(backend);
+  it("points desktop's Loop examples at the demo executor", async () => {
+    const backend = library();
+    await addSampleWorkflows(localWorkflowContracts(backend));
     const loop = backend.list().workflows.find((workflow) =>
       workflow.name.startsWith("循环综合测试：分支"),
     )!;
@@ -72,24 +70,34 @@ describe("seedSampleWorkflows", () => {
     }
   });
 
-  it("adds the samples beside existing workflows once, skipping a taken name", () => {
-    const storage = memoryStorage();
-    const backend = new LocalWorkflowBackend({ storage });
+  it("adds the samples beside existing workflows, skipping a taken name", async () => {
+    const backend = library();
     backend.create({ name: "我的工作流", graph: null });
     backend.create({ name: "示例：逐段翻译", graph: null });
 
-    seedSampleWorkflows(backend);
+    const result = await addSampleWorkflows(localWorkflowContracts(backend));
+
     const names = backend.list().workflows.map((workflow) => workflow.name);
     expect(names).toContain("我的工作流");
     expect(names).toContain("示例：代码审查");
     expect(names.filter((name) => name === "示例：逐段翻译")).toHaveLength(1);
     expect(names).toHaveLength(6);
+    expect(result.skipped).toEqual(["示例：逐段翻译"]);
+  });
 
-    // A reload does not bring back samples the user deleted.
-    const review = backend.list().workflows.find((w) => w.name === "示例：代码审查")!;
-    backend.delete({ workflowId: review.id });
-    const reloaded = new LocalWorkflowBackend({ storage });
-    seedSampleWorkflows(reloaded);
-    expect(reloaded.list().workflows.map((w) => w.name)).not.toContain("示例：代码审查");
+  it("keeps a sample as a draft when publishing is refused", async () => {
+    const backend = library();
+    const contracts = {
+      ...localWorkflowContracts(backend),
+      publish: async () => {
+        throw new ContractError("workflow_domain_unavailable");
+      },
+    };
+
+    const result = await addSampleWorkflows(contracts);
+
+    expect(result.added).toEqual([]);
+    expect(result.unpublished).toHaveLength(5);
+    expect(backend.list().workflows.every((w) => w.publishedVersion === null)).toBe(true);
   });
 });

@@ -5,19 +5,46 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { defaultWorkflowSidebar, useUiStore } from "@/lib/workflows/host/ui-store";
+import { LocalWorkflowBackend } from "@/lib/workflows/data/local-workflow-backend";
+import {
+  memoryWorkflowStorage,
+  sampleWorkflowBackend,
+  serveWorkflows,
+  type WorkflowServer,
+} from "@/lib/workflows/test/workflow-server";
+import { demoUser, fakeBackend } from "@/test/backend";
 import Page from "./page";
 
-function renderPage() {
+const tenantId = "00000000-0000-4000-8000-0000000000aa";
+
+/** The signed-in user's one tenant, whose workflows `server` holds. */
+function serve(backend: LocalWorkflowBackend): WorkflowServer {
+  fakeBackend((config) => {
+    if (config.url === "/api/v1/me") return { status: 200, data: demoUser };
+    if (config.url === "/api/v1/me/tenants")
+      return {
+        status: 200,
+        data: { items: [{ id: tenantId, name: "演示团队", status: "active", role: "owner" }], nextCursor: "" },
+      };
+    return undefined;
+  });
+  return serveWorkflows(tenantId, backend);
+}
+
+/** Renders the page and waits until it has read the tenant and shows the library. */
+async function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Page />
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  await screen.findByRole("complementary", { name: "工作流列表" });
+  return rendered;
 }
 
 const library = () => screen.getByRole("complementary", { name: "工作流列表" });
@@ -38,27 +65,66 @@ async function createWorkflow(user: ReturnType<typeof userEvent.setup>, name: st
 }
 
 describe("workflow page", () => {
-  beforeEach(() => {
+  let server: WorkflowServer;
+  beforeEach(async () => {
     window.localStorage.clear();
+    server = serve(await sampleWorkflowBackend());
     useUiStore.setState({
       sidebarCollapsed: defaultWorkflowSidebar.collapsed,
       sidebarWidth: defaultWorkflowSidebar.width,
     });
   });
 
-  it("opens on the published sample workflows", async () => {
-    renderPage();
+  it("opens on the tenant's workflows from the server", async () => {
+    await renderPage();
 
     for (const name of ["示例：代码审查", "示例：逐段翻译", "循环综合测试：分支与退出"]) {
       expect(await within(library()).findByRole("button", { name })).toBeInTheDocument();
     }
     expect(await screen.findByDisplayValue("示例：代码审查")).toBeInTheDocument();
     expect(await screen.findByText("生效中 · v1")).toBeInTheDocument();
+    expect(server.seen).toContain(`GET /api/v2/tenants/${tenantId}/workflows`);
+  });
+
+  it("adds the samples only when asked", async () => {
+    const user = userEvent.setup();
+    server = serve(new LocalWorkflowBackend({ storage: memoryWorkflowStorage() }));
+    await renderPage();
+    const add = await screen.findByRole("button", { name: "添加样例工作流" });
+    expect(within(library()).queryByRole("button", { name: "示例：代码审查" })).not.toBeInTheDocument();
+
+    await user.click(add);
+
+    expect(await within(library()).findByRole("button", { name: "示例：代码审查" })).toBeInTheDocument();
+    expect(await screen.findByText("添加了 5 个样例")).toBeInTheDocument();
+    expect(server.backend.list().workflows).toHaveLength(5);
+  });
+
+  it("says so when the server refuses to publish, and keeps the draft unpublished", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await createWorkflow(user, "待发布");
+    await screen.findByDisplayValue("待发布");
+    server.refuse = {
+      match: /POST .*\/publish$/,
+      status: 503,
+      data: { code: "workflow_domain_unavailable", params: {}, requestId: "r" },
+    };
+
+    await user.click(await screen.findByRole("button", { name: "发布" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "发布工作流" });
+    await user.type(within(dialog).getByRole("textbox"), "v1");
+    await user.click(within(dialog).getByRole("button", { name: "发布" }));
+
+    expect(
+      await screen.findByText("服务端暂时不能检查和发布工作流，草稿已保存。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("暂未发布")).toBeInTheDocument();
   });
 
   it("resizes the library from its edge and folds it past the minimum, like the chat history", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     const edge = screen.getByRole("separator", { name: "调整工作流列表宽度" });
 
     edge.focus();
@@ -78,18 +144,19 @@ describe("workflow page", () => {
 
   it("lets every toast be dismissed", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await screen.findByDisplayValue("示例：代码审查");
 
     await user.click(await screen.findByRole("button", { name: "整理节点" }));
     const toast = await screen.findByText("已整理工作流节点");
-    await user.click(screen.getByRole("button", { name: "Close toast" }));
+    const item = toast.closest("[data-sonner-toast]") as HTMLElement;
+    await user.click(within(item).getByRole("button", { name: "Close toast" }));
     await waitFor(() => expect(toast).not.toBeInTheDocument());
   });
 
   it("creates a workflow from the library and opens its canvas at the Start node", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await createWorkflow(user, "审查流程");
 
@@ -103,12 +170,12 @@ describe("workflow page", () => {
 
   it("keeps workflows across a reload of the page", async () => {
     const user = userEvent.setup();
-    const first = renderPage();
+    const first = await renderPage();
     await createWorkflow(user, "留存");
     await within(library()).findByRole("button", { name: "留存" });
     first.unmount();
 
-    renderPage();
+    await renderPage();
     expect(
       await within(library()).findByRole("button", { name: "留存" }),
     ).toBeInTheDocument();

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { LocalWorkflowBackend } from '@/lib/workflows/data/local-workflow-backend'
+import type { WorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import {
   computeInactiveNodes,
   normalizeWorkflowDefinition,
@@ -11,7 +11,6 @@ import {
 } from '@/lib/workflows/runtime'
 import { createMemoryWorkflowRuntime } from '@/lib/workflows/runtime/memory'
 import { planMockExecution } from '@/lib/workflows/runtime/mock-execution-plan'
-import { seedSampleWorkflows } from '@/lib/workflows/samples/seed'
 
 /** A workflow the "运行工作流" menu offers: one with a published version. */
 export interface PublishedWorkflow {
@@ -87,26 +86,24 @@ export function resetDemoRuns(): void {
   useDemoRuns.setState({ ...emptyRuns })
 }
 
-/** The workflow library this browser keeps, with the samples added on a first visit. */
-function library(): LocalWorkflowBackend {
-  const backend = new LocalWorkflowBackend()
-  seedSampleWorkflows(backend)
-  return backend
-}
-
 /** Workflows that have a published version, newest first, as desktop's menu lists them. */
-export function listPublishedWorkflows(): PublishedWorkflow[] {
-  return library()
-    .list()
-    .workflows.flatMap((w) => (w.publishedVersion === null ? [] : [{ id: w.id, name: w.name, version: w.publishedVersion }]))
+export async function listPublishedWorkflows(library: WorkflowContracts): Promise<PublishedWorkflow[]> {
+  const { workflows } = await library.list({})
+  return workflows.flatMap((w) => (w.publishedVersion === null ? [] : [{ id: w.id, name: w.name, version: w.publishedVersion }]))
 }
 
 /**
  * Creates a pending run of a workflow's published version in a project, as desktop's run
- * dialog does: the graph is frozen into the run, and Start begins it.
+ * dialog does: the server's published graph is frozen into the run, and Start begins it. The run
+ * itself is still played by the in-browser engine until v2-server executes workflows.
  */
-export async function createDemoRun(projectId: string, workflowId: string, name: string): Promise<GraphWorkflowRun> {
-  const { workflow, published } = library().get({ workflowId })
+export async function createDemoRun(
+  library: WorkflowContracts,
+  projectId: string,
+  workflowId: string,
+  name: string,
+): Promise<GraphWorkflowRun> {
+  const { workflow, published } = await library.get({ workflowId })
   if (!published) throw new Error('这个工作流还没有发布版本')
   const graph = parseWorkflowGraph(published.graph)
   const rt = demoRuntime()

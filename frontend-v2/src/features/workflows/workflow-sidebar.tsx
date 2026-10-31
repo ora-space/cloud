@@ -5,6 +5,7 @@ import {
 } from "@/components/sidebar-resize-handle";
 import { Button } from "@/components/ui/button";
 import { WorkflowEditorList } from "./editor/workflow-editor-list";
+import { AddSamplesButton } from "./library-actions";
 import { useUiStore } from "@/lib/workflows/host/ui-store";
 
 /**
@@ -30,6 +31,8 @@ export function WorkflowSidebar() {
         >
           <div className="flex h-12 shrink-0 items-center justify-between pr-2 pl-4">
             <h1 className="text-sm font-semibold">工作流</h1>
+            <div className="flex items-center gap-0.5">
+            <AddSamplesButton />
             <Button
               variant="ghost"
               size="icon-xs"
@@ -38,6 +41,7 @@ export function WorkflowSidebar() {
             >
               <PanelLeftCloseIcon />
             </Button>
+            </div>
           </div>
           <WorkflowEditorList />
         </aside>

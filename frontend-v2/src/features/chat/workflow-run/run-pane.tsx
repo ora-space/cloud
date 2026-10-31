@@ -6,9 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Toaster } from '@/components/ui/sonner'
 import { cn } from '@/lib/utils'
-import { createLocalContractsClient } from '@/lib/workflows/data/contracts-client'
+import { createContractsClient, createHttpWorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import { ContractsClientProvider } from '@/lib/workflows/data/contracts-client-provider'
-import { LocalWorkflowBackend } from '@/lib/workflows/data/local-workflow-backend'
 import { createWorkflowQueryClient } from '@/lib/workflows/data/query-client'
 import { createWorkflowI18n } from '@/lib/workflows/host/i18n'
 import { useDarkTheme } from '@/lib/workflows/host/theme'
@@ -39,11 +38,12 @@ const noArtifacts: WorkflowArtifact[] = []
 /**
  * A workflow run in the chat page's main area, as desktop's run workspace: Theater plays the run
  * one act at a time, Overview shows the frozen graph with each node's status. The run is played
- * by the in-browser engine, so the header says it is a demo. The page brings the workflow
- * library's client and query cache, which the Agent configuration in the inspector reads.
+ * by the in-browser engine, so the header says it is a demo. The page brings the tenant's workflow
+ * client and query cache, which the Agent configuration in the inspector reads.
  */
 export default function RunPane({ runId }: { runId: string }) {
-  const [client] = useState(() => createLocalContractsClient(new LocalWorkflowBackend()))
+  const tenantId = useChatStore((s) => s.tenantId) ?? ''
+  const client = useMemo(() => createContractsClient(createHttpWorkflowContracts(tenantId)), [tenantId])
   const [queryClient] = useState(createWorkflowQueryClient)
   const run = useDemoRuns((s) => s.runs[runId])
   return (

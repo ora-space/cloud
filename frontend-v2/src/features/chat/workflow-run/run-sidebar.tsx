@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { subtleScrollbar } from '@/lib/scrollbar'
 import { cn } from '@/lib/utils'
+import { createHttpWorkflowContracts } from '@/lib/workflows/data/contracts-client'
 import type { GraphWorkflowRun } from '@/lib/workflows/runtime'
 import { FadeText } from '../components/fade-text'
 import { useChatStore } from '../store'
@@ -27,11 +28,23 @@ import { isNodeWorking, runStatusLabel, runStatusTone } from './run-status-style
  */
 export function RunWorkflowSubmenu({ onPick }: { onPick: (workflow: PublishedWorkflow) => void }) {
   const [workflows, setWorkflows] = useState<PublishedWorkflow[]>([])
+  const [loadFailed, setLoadFailed] = useState(false)
   const [query, setQuery] = useState('')
+  const tenantId = useChatStore((s) => s.tenantId)
+  const load = async () => {
+    setQuery('')
+    setLoadFailed(false)
+    if (!tenantId) return
+    try {
+      setWorkflows(await listPublishedWorkflows(createHttpWorkflowContracts(tenantId)))
+    } catch {
+      setLoadFailed(true)
+    }
+  }
   const shown = workflows.filter((w) => w.name.toLowerCase().includes(query.trim().toLowerCase()))
   return (
-    // The library lives in this browser and changes on the workflow page, so it is read on open.
-    <DropdownMenuSub onOpenChange={(open) => open && (setWorkflows(listPublishedWorkflows()), setQuery(''))}>
+    // The library changes on the workflow page, so it is read each time the menu opens.
+    <DropdownMenuSub onOpenChange={(open) => open && void load()}>
       <DropdownMenuSubTrigger>
         <WorkflowIcon />
         运行工作流
@@ -50,7 +63,7 @@ export function RunWorkflowSubmenu({ onPick }: { onPick: (workflow: PublishedWor
           />
         </div>
         <div role="group" aria-label="已发布的工作流" className={cn('max-h-72 overflow-y-auto p-1', subtleScrollbar)}>
-          {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{workflows.length ? '没有匹配的工作流' : '还没有已发布的工作流'}</p>}
+          {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{loadFailed ? '读取工作流失败，请重新打开菜单' : workflows.length ? '没有匹配的工作流' : '还没有已发布的工作流'}</p>}
           {shown.map((w) => (
             <DropdownMenuItem key={w.id} title={w.name} onClick={() => onPick(w)}>
               <FadeText text={w.name} className="flex-1" />
@@ -71,6 +84,7 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const selectRun = useChatStore((s) => s.selectRun)
+  const tenantId = useChatStore((s) => s.tenantId)
   return (
     <Dialog open={!!workflow} onOpenChange={(open) => !open && !busy && (setError(undefined), onClose())}>
       <DialogContent>
@@ -82,7 +96,8 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
               const name = new FormData(e.currentTarget).get('name') as string
               setBusy(true)
               try {
-                const run = await createDemoRun(projectId, workflow.id, name)
+                if (!tenantId) throw new Error('还没有读到团队，请稍后重试')
+                const run = await createDemoRun(createHttpWorkflowContracts(tenantId), projectId, workflow.id, name)
                 selectRun(run.id)
                 setError(undefined)
                 onClose()
