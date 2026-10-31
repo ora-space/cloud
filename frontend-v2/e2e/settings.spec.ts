@@ -63,8 +63,11 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   browser,
 }) => {
   await login(page, '/settings/plugins')
-  const row = page.getByRole('article', { name: '写作工具箱' })
+  const row = page.getByRole('article', { name: 'Matt Pocock Skills' })
   await expect(row).toBeVisible()
+  for (const name of ['Tavily', 'Workflow Examples', 'SkillHub']) {
+    await expect(page.getByRole('article', { name })).toBeVisible()
+  }
   const install = row.getByRole('button', { name: /^(安装|重试安装)$/ })
   if (await install.count()) {
     await install.click()
@@ -77,15 +80,17 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
     .click()
   await expect(row.getByText('未安装', { exact: true })).toBeVisible()
   await page.goto('/settings/skills')
-  const skill = page.getByRole('article', { name: 'writing-guide' })
+  const skill = page.getByRole('article', { name: 'Matt Pocock Skills' })
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
   await page.reload()
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
-  await skill.getByRole('button', { name: '查看技能 writing-guide' }).click()
+  await skill
+    .getByRole('button', { name: '查看技能 Matt Pocock Skills' })
+    .click()
   await expect(
     page.getByRole('dialog').getByRole('button', { name: '编辑技能' }),
   ).toHaveCount(0)
-  await page.getByRole('link', { name: /demo\/writing-kit/ }).click()
+  await page.getByRole('link', { name: /official\/mattpocock\.skills/ }).click()
   await page
     .getByRole('dialog')
     .getByRole('button', { name: '安装' })
@@ -105,9 +110,11 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   const otherPage = await other.newPage()
   await login(otherPage, '/settings/skills')
   await expect(
-    otherPage.getByRole('article', { name: 'writing-guide' }).getByText('可用', {
-      exact: true,
-    }),
+    otherPage
+      .getByRole('article', { name: 'Matt Pocock Skills' })
+      .getByText('可用', {
+        exact: true,
+      }),
   ).toBeVisible()
   await other.close()
 
@@ -122,6 +129,22 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
   await skill.getByRole('button', { name: '安装技能' }).click()
   await expect(skill.getByText('可用', { exact: true })).toBeVisible()
+
+  // A non-skill package from the same synced marketplace follows the same server lifecycle.
+  await page.goto('/settings/plugins')
+  const tavily = page.getByRole('article', { name: 'Tavily' })
+  await expect(tavily).toBeVisible()
+  const installTavily = tavily.getByRole('button', { name: /^(安装|重试安装)$/ })
+  if (await installTavily.count()) {
+    await installTavily.click()
+    await expect(tavily.getByText('已安装', { exact: true })).toBeVisible()
+  }
+  await tavily.getByRole('button', { name: '移除' }).click()
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: '移除' })
+    .click()
+  await expect(tavily.getByText('未安装', { exact: true })).toBeVisible()
 })
 
 test('corrupt local data shows a recoverable error and requires reset confirmation', async ({
@@ -216,7 +239,9 @@ test('five desktop pages and keyboard-accessible details', async ({
     })
   }
   await page.goto('/settings/plugins')
-  const opener = page.getByRole('button', { name: '查看插件 写作工具箱' })
+  const opener = page.getByRole('button', {
+    name: '查看插件 Matt Pocock Skills',
+  })
   await opener.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('dialog')).toBeVisible()
