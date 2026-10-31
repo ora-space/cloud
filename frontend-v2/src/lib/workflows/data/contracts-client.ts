@@ -118,7 +118,7 @@ export function createHttpWorkflowContracts(tenantId: string): WorkflowContracts
       deleteWorkflow(tid, workflowId, undefined, signal),
     ),
     deleteSnapshot: send(({ workflowId, version }: DeleteSnapshotRequest, signal) =>
-      deleteWorkflowVersion(tid, workflowId, version, undefined, signal),
+      deleteWorkflowVersion(tid, workflowId, pathSegment(version), undefined, signal),
     ),
     get: send(async ({ workflowId }: GetWorkflowRequest, signal) => {
       const detail = await getWorkflow(tid, workflowId, undefined, signal);
@@ -133,7 +133,8 @@ export function createHttpWorkflowContracts(tenantId: string): WorkflowContracts
     })),
     getVersion: send(async ({ workflowId, version }: GetVersionRequest, signal) => ({
       snapshot: snapshot(
-        (await getWorkflowVersion(tid, workflowId, version, undefined, signal)).snapshot,
+        (await getWorkflowVersion(tid, workflowId, pathSegment(version), undefined, signal))
+          .snapshot,
       ),
     })),
     list: send(async (_request: Record<string, never>, signal) => ({
@@ -219,6 +220,12 @@ function contractError(error: unknown): unknown {
       : {};
   return new ContractError(body.code, params);
 }
+
+/**
+ * The generated client splices path parameters in as they are, and a version name is free text
+ * (`release?x`, `50%`, `v1 中文`), so it is encoded here; ids are UUIDs and need nothing.
+ */
+const pathSegment = (value: string): string => encodeURIComponent(value);
 
 const instant = (ms: number): bigint => BigInt(ms);
 

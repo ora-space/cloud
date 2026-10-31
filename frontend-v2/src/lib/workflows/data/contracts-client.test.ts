@@ -52,6 +52,29 @@ describe("createHttpWorkflowContracts", () => {
     ]);
   });
 
+  it("reads and deletes versions whose names are not URL-safe", async () => {
+    const fake = server();
+    const contracts = createHttpWorkflowContracts(tenantId);
+    const { workflow } = await contracts.create({ name: "版本名", graph: null });
+
+    for (const version of ["release?x", "a#b", "50%", "v1 中文"]) {
+      await contracts.publish({ workflowId: workflow.id, version });
+      expect((await contracts.getVersion({ workflowId: workflow.id, version })).snapshot.version).toBe(
+        version,
+      );
+      expect(fake.seen.at(-1)).toBe(
+        `GET /api/v2/tenants/${tenantId}/workflows/${workflow.id}/versions/${encodeURIComponent(version)}`,
+      );
+    }
+    // The newest is active; the others can be deleted by their names.
+    for (const version of ["release?x", "a#b", "50%"]) {
+      expect(await contracts.deleteSnapshot({ workflowId: workflow.id, version })).toMatchObject({ version });
+    }
+    expect((await contracts.listVersions({ workflowId: workflow.id })).versions.map((v) => v.version)).not.toContain(
+      "a#b",
+    );
+  });
+
   it("turns a refusal into the ContractError the editor localizes", async () => {
     server();
     const contracts = createHttpWorkflowContracts(tenantId);
