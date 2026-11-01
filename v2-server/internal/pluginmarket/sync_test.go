@@ -123,7 +123,7 @@ func TestSyncerTimesOutHungGit(t *testing.T) {
 	}
 	bin := t.TempDir()
 	git := filepath.Join(bin, "git")
-	if e := os.WriteFile(git, []byte("#!/bin/sh\nsleep 30\n"), 0o755); e != nil {
+	if e := os.WriteFile(git, []byte("#!/bin/sh\nsleep 8 &\nwait\n"), 0o755); e != nil {
 		t.Fatal(e)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -137,7 +137,11 @@ func TestSyncerTimesOutHungGit(t *testing.T) {
 		Timeout: 100 * time.Millisecond,
 	}
 	sink := &recordingSink{}
-	e := syncer.Sync(context.Background(), sink, time.Now())
+	start := time.Now()
+	e := syncer.Sync(context.Background(), sink, start)
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("git descendant held output pipe for %s", elapsed)
+	}
 	if !errors.Is(e, context.DeadlineExceeded) {
 		t.Fatalf("timeout = %v", e)
 	}
@@ -172,5 +176,12 @@ func runTestGit(t *testing.T, dir string, args ...string) {
 	command := exec.Command("git", commandArgs...)
 	if output, e := command.CombinedOutput(); e != nil {
 		t.Fatalf("git %v: %v\n%s", commandArgs, e, output)
+	}
+}
+
+func TestManualRefreshLimitedAcrossCallers(t *testing.T) {
+	s := &Syncer{lastManual: time.Now()}
+	if e := s.Refresh(t.Context(), &recordingSink{}, s.lastManual.Add(59*time.Second)); !errors.Is(e, ErrRefreshLimited) {
+		t.Fatal(e)
 	}
 }

@@ -27,9 +27,11 @@ type Source struct {
 
 // Syncer owns the marketplace checkout and synchronizes it into PostgreSQL.
 type Syncer struct {
-	mu      sync.Mutex
-	Source  Source
-	WorkDir string
+	mu         sync.Mutex
+	manualMu   sync.Mutex
+	lastManual time.Time
+	Source     Source
+	WorkDir    string
 	// Timeout bounds each complete checkout/scan/database sync. Zero uses two minutes.
 	Timeout time.Duration
 }
@@ -81,6 +83,20 @@ func (s *Syncer) Sync(ctx context.Context, sink CatalogSink, now time.Time) erro
 	}
 	slog.Info("plugin marketplace synced", "entries", len(entries), "branch", s.Source.Branch)
 	return nil
+}
+
+// ErrRefreshLimited means a manual refresh was already requested in the last minute.
+var ErrRefreshLimited = errors.New("manual marketplace refresh rate limited")
+
+func (s *Syncer) Refresh(ctx context.Context, sink CatalogSink, now time.Time) error {
+	s.manualMu.Lock()
+	if !s.lastManual.IsZero() && now.Sub(s.lastManual) < time.Minute {
+		s.manualMu.Unlock()
+		return ErrRefreshLimited
+	}
+	s.lastManual = now
+	s.manualMu.Unlock()
+	return s.Sync(ctx, sink, now)
 }
 
 // Loop refreshes the snapshot on each interval until ctx is cancelled.
@@ -136,6 +152,7 @@ func (s *Syncer) gitSync(ctx context.Context) error {
 
 func runGit(ctx context.Context, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
+	command.WaitDelay = time.Second
 	output, e := command.CombinedOutput()
 	if e != nil {
 		if ctx.Err() != nil {

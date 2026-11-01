@@ -40,6 +40,8 @@ func (h *handler) marketSources(w http.ResponseWriter, r *http.Request, u store.
 	switch {
 	case e == nil:
 		w.WriteHeader(204)
+	case errors.Is(e, pluginmarket.ErrRefreshLimited):
+		fault(w, 429, "market_refresh_limited")
 	case errors.Is(e, pluginmarket.ErrCredentials):
 		fault(w, 400, "market_credentials_unavailable")
 	case errors.Is(e, pluginmarket.ErrSource):

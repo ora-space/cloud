@@ -177,13 +177,13 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 		},
 		WorkDir: filepath.Join(base, "marketplace"),
 	}
-	if e := market.Sync(ctx, db, time.Now()); e != nil {
-		slog.Warn("initial plugin marketplace sync failed; retaining previous snapshot", "error", e)
-	}
 	marketCtx, cancelMarket := context.WithCancel(ctx)
 	marketDone := make(chan struct{})
 	go func() {
 		defer close(marketDone)
+		if e := market.Sync(marketCtx, db, time.Now()); e != nil {
+			slog.Warn("initial plugin marketplace sync failed; retaining previous snapshot", "error", e)
+		}
 		market.Loop(marketCtx, marketInterval, db)
 	}()
 	defer func() {
@@ -192,7 +192,7 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 	}()
 
 	options := withWorkflowDomain(server.Options{
-		RefreshOfficial: func(ctx context.Context) error { return market.Sync(ctx, db, time.Now()) },
+		RefreshOfficial: func(ctx context.Context) error { return market.Refresh(ctx, db, time.Now()) },
 		SessionTTL:      7 * 24 * time.Hour,
 		Projects:        projects,
 		Execution:       runtime,
