@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
 	"time"
 )
@@ -67,16 +68,14 @@ func (s *Store) ChangeMarket(ctx context.Context, tenant, space, user, id, actio
 		if in.Retrieval.Mode == "" {
 			in.Retrieval.Mode = "direct_https"
 		}
-		if action == "POST" {
-			id = pluginmarket.Namespace(u)
-		}
+		newID := pluginmarket.Namespace(u)
 		config, e := json.Marshal(in.Retrieval)
 		if e != nil {
 			return e
 		}
 		var sealed []byte
 		if in.Retrieval.Mode == "s3_sigv4" && in.Credentials != nil {
-			sealed, e = pluginmarket.SealCredentials(*in.Credentials, space+"/"+id+"/"+in.Retrieval.Endpoint+"/"+in.Retrieval.Bucket)
+			sealed, e = pluginmarket.SealCredentials(*in.Credentials, space+"/"+newID+"/"+in.Retrieval.Endpoint+"/"+in.Retrieval.Bucket)
 			if e != nil {
 				return e
 			}
@@ -84,17 +83,42 @@ func (s *Store) ChangeMarket(ctx context.Context, tenant, space, user, id, actio
 			return pluginmarket.ErrCredentials
 		}
 		if action == "POST" {
-			tag, e := s.pool.Exec(ctx, `insert into v2_market_sources(space_id,namespace,url,branch,enabled,retrieval,credentials) values($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, space, id, in.URL, in.Branch, in.Enabled, config, sealed)
+			tag, e := s.pool.Exec(ctx, `insert into v2_market_sources(space_id,namespace,url,branch,enabled,retrieval,credentials) values($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, space, newID, in.URL, in.Branch, in.Enabled, config, sealed)
 			if e == nil && tag.RowsAffected() == 0 {
 				return ErrConflict
 			}
 			return e
 		}
-		tag, e := s.pool.Exec(ctx, `update v2_market_sources set url=$3,branch=$4,enabled=$5,retrieval=$6, credentials=case when ($6::jsonb)->>'mode'<>'s3_sigv4' then null else coalesce($7,credentials) end,revision=revision+1 where space_id=$1 and namespace=$2 AND (($6::jsonb)->>'mode'<>'s3_sigv4' OR $7::bytea IS NOT NULL OR (credentials IS NOT NULL AND retrieval->>'endpoint'=($6::jsonb)->>'endpoint' AND retrieval->>'bucket'=($6::jsonb)->>'bucket'))`, space, id, in.URL, in.Branch, in.Enabled, config, sealed)
-		if e == nil && tag.RowsAffected() == 0 {
+		tx, e := s.pool.Begin(ctx)
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback(ctx)
+		var reusable bool
+		e = tx.QueryRow(ctx, `select coalesce(credentials is not null and namespace=$3 and retrieval->>'endpoint'=$4 and retrieval->>'bucket'=$5,false) from v2_market_sources where space_id=$1 and namespace=$2 for update`, space, id, newID, in.Retrieval.Endpoint, in.Retrieval.Bucket).Scan(&reusable)
+		if errors.Is(e, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		return e
+		if e != nil {
+			return e
+		}
+		if in.Retrieval.Mode == "s3_sigv4" && sealed == nil && !reusable {
+			return pluginmarket.ErrCredentials
+		}
+		_, e = tx.Exec(ctx, `update v2_market_sources set namespace=$8,url=$3,branch=$4,enabled=$5,retrieval=$6,
+			credentials=case when ($6::jsonb)->>'mode'='s3_sigv4' then coalesce($7,credentials) end,
+			snapshot=case when namespace=$8 then snapshot else '[]'::jsonb end,
+			synced_at=case when namespace=$8 then synced_at end,
+			failure=case when namespace=$8 then failure else '' end,
+			revision=revision+1 where space_id=$1 and namespace=$2`, space, id, in.URL, in.Branch, in.Enabled, config, sealed, newID)
+		var pgErr *pgconn.PgError
+		if errors.As(e, &pgErr) && pgErr.Code == "23505" {
+			return ErrConflict
+		}
+		if e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
 	case "DELETE":
 		tag, e := s.pool.Exec(ctx, `delete from v2_market_sources where space_id=$1 and namespace=$2`, space, id)
 		if e == nil && tag.RowsAffected() == 0 {

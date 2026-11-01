@@ -3,6 +3,7 @@ package store_test
 import (
 	"encoding/json"
 	"errors"
+	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 	"testing"
 	"time"
@@ -54,6 +55,28 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	if !errors.Is(change(b, owner, id, "DELETE"), store.ErrNotFound) {
 		t.Fatal("cross-space delete accepted")
 	}
+	in.Retrieval = pluginmarket.Retrieval{Mode: "s3_sigv4", Endpoint: "https://objects.example.org", Bucket: "market", Region: "test"}
+	if e := change(a, owner, id, "PATCH"); !errors.Is(e, pluginmarket.ErrCredentials) {
+		t.Fatal("missing credentials", e)
+	}
+	in.Retrieval = pluginmarket.Retrieval{}
+	original := in.URL
+	in.URL += ".git/"
+	if e := change(a, owner, id, "PATCH"); e != nil {
+		t.Fatal(e)
+	}
+	if list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, a, member); e != nil || len(list) != 1 || list[0].ID != item.ID {
+		t.Fatal("alias lost catalog", list, e)
+	}
+	in.URL = "https://example.org/other"
+	if e := change(a, owner, "", "POST"); e != nil {
+		t.Fatal(e)
+	}
+	in.URL += ".git"
+	if e := change(a, owner, id, "PATCH"); !errors.Is(e, store.ErrConflict) {
+		t.Fatal("duplicate", e)
+	}
+	in.URL = original
 	selected, e := f.store.InstallSpacePlugin(f.ctx, f.tenant, a, owner, "plugins", "choose", store.PluginInstallInput{Identifier: item.ID, PluginVersion: item.Version})
 	if e != nil {
 		t.Fatal(e)
@@ -64,6 +87,34 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	}
 	if list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, a, member); e != nil || len(list) != 0 {
 		t.Fatal(list, e)
+	}
+	in.Enabled = true
+	in.URL = "https://example.org/replacement"
+	if e := change(a, owner, id, "PATCH"); e != nil {
+		t.Fatal(e)
+	}
+	if list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, a, member); e != nil || len(list) != 0 {
+		t.Fatal("old snapshot visible", list, e)
+	}
+	sources, e := f.store.MarketSources(f.ctx, f.tenant, a, owner)
+	if e != nil || len(sources) != 2 {
+		t.Fatal(sources, e)
+	}
+	var replacement string
+	for _, source := range sources {
+		if source.URL == in.URL {
+			replacement = source.Namespace
+			if source.SyncedAt != nil {
+				t.Fatal(source)
+			}
+		}
+	}
+	if replacement == "" || replacement == id {
+		t.Fatal("identity did not change", sources)
+	}
+	in.URL = original
+	if e := change(a, owner, "", "POST"); e != nil {
+		t.Fatal(e)
 	}
 	if e := change(a, owner, id, "DELETE"); e != nil {
 		t.Fatal(e)

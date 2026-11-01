@@ -34,7 +34,7 @@ func ValidatePublicSource(raw, branch string) (*url.URL, error) {
 	return u, nil
 }
 
-// Namespace is the identity Desktop freezes at source creation, even if the URL is edited.
+// Namespace binds equivalent URL spellings to the same repository identity.
 func Namespace(u *url.URL) string {
 	canonical := "https://" + strings.ToLower(u.Hostname()) + strings.TrimSuffix(strings.TrimRight(strings.ToLower(u.EscapedPath()), "/"), ".git")
 	digest := sha256.Sum256([]byte(canonical))
