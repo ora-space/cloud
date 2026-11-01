@@ -1,0 +1,16 @@
+{
+  "viewport":{"x":100,"y":20,"zoom":0.75},
+  "extension":{"preserved":[false,0,null,""]},
+  "nodes":[
+    {"id":"start","type":"custom","position":{"x":0,"y":0},"data":{"kind":"start"}},
+    {"id":"out","data":{"kind":"output"}},
+    {"id":"spare","data":{"kind":"agent","agentConfig":"unfinished"}},
+    {"id":"other","data":{"kind":"condition","cases":"unfinished"}}
+  ],
+  "edges":[
+    {"source":"start","target":"out"},
+    {"source":"spare","target":"other"},
+    {"source":"other","target":"spare"},
+    {"source":"spare","target":"out"}
+  ]
+}
