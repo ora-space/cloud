@@ -28,6 +28,7 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/scheduler"
 	"github.com/wanglongan587/cloud/v2-server/internal/server"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
+	"github.com/wanglongan587/cloud/v2-server/internal/workflowhost"
 	"golang.org/x/sys/unix"
 )
 
@@ -195,13 +196,23 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 	skillDone := make(chan struct{})
 	go func() { defer close(skillDone); runSkillReconciler(skillCtx, db, driver) }()
 	defer func() { cancelSkills(); <-skillDone }()
+	// Workflow runs never outlive the process: fail what the previous one left executing before
+	// serving, and stop observing turns before the execution runtime closes (defers run LIFO).
+	workflowRuns, e := workflowhost.NewHost(workflowhost.Config{Store: db, Execution: runtime, Catalog: runtime})
+	if e != nil {
+		return e
+	}
+	defer workflowRuns.Close()
+	if e := workflowRuns.Interrupt(ctx); e != nil {
+		return e
+	}
 	options := withWorkflowDomain(server.Options{
 		RefreshOfficial: func(ctx context.Context) error { return market.Refresh(ctx, db, time.Now()) },
 		SessionTTL:      7 * 24 * time.Hour,
 		Projects:        projects,
 		Execution:       runtime,
 		Catalog:         runtime,
-	})
+	}, workflowRuns)
 	coordinator, e := server.NewScheduleCoordinator(db, options, time.Now)
 	if e != nil {
 		return e

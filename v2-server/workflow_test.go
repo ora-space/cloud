@@ -24,7 +24,7 @@ import (
 func TestWorkflowDomainServesAnalyzeAndPublish(t *testing.T) {
 	s := storetest.Open(t)
 	storetest.SignIn(t, s, "workflow-wiring", "Owner", store.RoleOwner)
-	srv := httptest.NewServer(server.New(s, withWorkflowDomain(server.Options{SessionTTL: time.Hour})))
+	srv := httptest.NewServer(server.New(s, withWorkflowDomain(server.Options{SessionTTL: time.Hour}, nil)))
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar}
