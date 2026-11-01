@@ -374,4 +374,4 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 设置 → 插件保留共享官方市场，允许 owner 添加空间私有的公共 HTTPS Git 仓库。来源管理接口见 `market-sources.openapi.json`；目录和安装选择继续使用原 Cloud 客户端。自定义来源使用独立的持久命名空间。每次同步只提交该来源的完整快照，失败保留上次成功内容。停用或移除来源不会删除空间选择。
 
-直接同步要求 Git 支持 `http.curloptResolve` 并能访问公共网络。拒绝私网、保留地址和 Git 重定向。可选 `V2_MARKET_SOCKS_PROXY` 为部署信任的 SOCKS5 代理（本地解析 DNS）；空间不能指定代理地址。S3 凭据以 AES-256-GCM 加密，S3 来源需要部署持久提供 `V2_MARKET_CREDENTIAL_KEY`（Base64 格式的 32 字节随机密钥），备份数据库时单独保管密钥。凭据绑定到空间、来源、端点和桶，不通过读取接口返回。
+自定义来源的 Git 连接只允许访问本次解析并固定的公网地址；禁止二次请求连接其他主机、私网、保留地址和 Git 重定向。可选 `V2_MARKET_SOCKS_PROXY` 为部署信任的 SOCKS5 代理（本地解析 DNS）；空间不能指定代理地址。S3 凭据以 AES-256-GCM 加密，S3 来源需要部署持久提供 `V2_MARKET_CREDENTIAL_KEY`（Base64 格式的 32 字节随机密钥），备份数据库时单独保管密钥。凭据绑定到空间、来源、端点和桶，不通过读取接口返回。

@@ -79,10 +79,7 @@ func ReadPublic(ctx context.Context, source Source, useProxy bool) ([]Entry, err
 			return nil, ErrSource
 		}
 	}
-	ip := ips[0].Unmap().String()
-	if strings.Contains(ip, ":") {
-		ip = "[" + ip + "]"
-	}
+	address := net.JoinHostPort(ips[0].Unmap().String(), "443")
 	tmp, e := os.MkdirTemp("", "ora-market-")
 	if e != nil {
 		return nil, e
@@ -96,7 +93,12 @@ func ReadPublic(ctx context.Context, source Source, useProxy bool) ([]Entry, err
 			return nil, e
 		}
 	}
-	cmd := exec.CommandContext(ctx, "git", "-c", "http.followRedirects=false", "-c", "http.proxy="+proxy, "-c", "http.curloptResolve="+u.Hostname()+":443:"+ip, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "clone", "--depth=1", "--single-branch", "--no-tags", "--branch", source.Branch, "--", source.URL, dst)
+	tunnel, closeTunnel, e := gitTunnel(ctx, u.Hostname(), address, proxy)
+	if e != nil {
+		return nil, e
+	}
+	defer closeTunnel()
+	cmd := exec.CommandContext(ctx, "git", "-c", "http.followRedirects=false", "-c", "http.proxy="+tunnel, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "clone", "--depth=1", "--single-branch", "--no-tags", "--branch", source.Branch, "--", source.URL, dst)
 	cmd.Dir = tmp
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0"}
 	if e := cmd.Run(); e != nil {
