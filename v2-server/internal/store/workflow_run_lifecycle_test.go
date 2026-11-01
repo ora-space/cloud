@@ -172,6 +172,39 @@ func TestWorkflowRunCancelClosesLoopRounds(t *testing.T) {
 	}
 }
 
+// Cancelling a run settles its waiting retry instead of leaving it looking due: the cancelled
+// attempt keeps the rest of its payload but loses the retry wait marker.
+func TestWorkflowRunCancelDropsRetryWait(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "cancel-retry-owner")
+	ctx := context.Background()
+	run, _ := startedRun(t, s, user, tenant, "取消重试")
+	node, err := s.CreateWorkflowNodeRun(ctx, tenant, run.ID, store.WorkflowNodeRunInput{NodeID: "agent-1", NodeType: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := s.RetryWorkflowNodeRun(ctx, tenant, run.ID, node.ID, store.WorkflowNodeRetry{
+		Failure:     store.WorkflowNodeFailure{Error: "第一次失败"},
+		NextPayload: []byte(`{"retry_wait":{"attempt":1},"stop_reason":"error"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelWorkflowRun(ctx, tenant, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := s.WorkflowRunNodes(ctx, tenant, run.ID)
+	if err != nil || len(nodes) != 1 || nodes[0].ID != waiting.ID {
+		t.Fatalf("attempts after cancel = %+v %v", nodes, err)
+	}
+	if nodes[0].Status != store.WorkflowStatusCancelled || nodes[0].FinishedAt == nil {
+		t.Fatalf("cancelled wait = %+v", nodes[0])
+	}
+	if nodes[0].Payload == nil || string(nodes[0].Payload) != `{"stop_reason": "error"}` {
+		t.Fatalf("cancelled wait payload = %s", nodes[0].Payload)
+	}
+}
+
 func TestWorkflowLoopRoundScopes(t *testing.T) {
 	s := storetest.Open(t)
 	user, tenant := storetest.Login(t, s, "loop-owner")

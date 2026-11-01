@@ -305,9 +305,9 @@ func (s *Store) FinishWorkflowRun(ctx context.Context, tenant, runID, status str
 }
 
 // CancelWorkflowRun closes a run and every non-terminal attempt as cancelled once the bridge has
-// confirmed the stop. An open Loop round is closed with them, so nothing reads as still active
-// under a cancelled run. Cancelling an already cancelled run is idempotent; a succeeded or failed
-// run is refused because its outcome is authoritative.
+// confirmed the stop. An open Loop round is closed with them and a waiting retry loses its wait
+// marker, so nothing reads as still active under a cancelled run. Cancelling an already cancelled
+// run is idempotent; a succeeded or failed run is refused because its outcome is authoritative.
 func (s *Store) CancelWorkflowRun(ctx context.Context, tenant, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -328,9 +328,13 @@ func (s *Store) CancelWorkflowRun(ctx context.Context, tenant, runID string) (Wo
 		default:
 			return ErrWorkflowRunState
 		}
+		// A waiting retry is a running attempt whose payload still carries the wait marker. Cancelling
+		// it drops that marker in the same statement, because a cancelled row that keeps `retry_wait`
+		// reads as if a retry were still due; other payload members stay for diagnosis.
 		if _, err := tx.Exec(ctx, `
 			UPDATE v2_workflow_node_runs
-			SET status = 'cancelled', finished_at = now(), updated_at = now()
+			SET status = 'cancelled', finished_at = now(), updated_at = now(),
+				payload = CASE WHEN payload ? 'retry_wait' THEN payload - 'retry_wait' ELSE payload END
 			WHERE tenant_id = $1 AND run_id = $2
 				AND status IN ('pending', 'running') AND deleted_at IS NULL`, tenant, runID); err != nil {
 			return fmt.Errorf("cancel node runs: %w", err)
