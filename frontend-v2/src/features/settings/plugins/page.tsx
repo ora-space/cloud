@@ -133,7 +133,7 @@ export default function PluginsPage() {
           !available.has(pluginKey(s)),
       )
       .map(missingEntry),
-  ]
+  ].filter((entry) => entry.kind !== 'agent')
   const selected = catalog.find(
     (entry) => pluginKey(entry) === params.get('plugin'),
   )
