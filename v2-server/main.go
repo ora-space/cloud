@@ -193,10 +193,10 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 
 	options := withWorkflowDomain(server.Options{
 		RefreshOfficial: func(ctx context.Context) error { return market.Sync(ctx, db, time.Now()) },
-		SessionTTL: 7 * 24 * time.Hour,
-		Projects:   projects,
-		Execution:  runtime,
-		Catalog:    runtime,
+		SessionTTL:      7 * 24 * time.Hour,
+		Projects:        projects,
+		Execution:       runtime,
+		Catalog:         runtime,
 	})
 	coordinator, e := server.NewScheduleCoordinator(db, options, time.Now)
 	if e != nil {
