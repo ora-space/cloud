@@ -24,7 +24,7 @@ func (d *Driver) OnlineSkillProjects() []string {
 				case <-p.dead:
 				default:
 					p.mu.Lock()
-					idle := len(p.agents) == 0
+					idle := len(p.owners) == 0
 					p.mu.Unlock()
 					if idle {
 						ids = append(ids, id)
@@ -62,7 +62,7 @@ func (d *Driver) ApplySkill(ctx context.Context, project, id, version, file, dig
 	p.skillsMu.Lock()
 	defer p.skillsMu.Unlock()
 	p.mu.Lock()
-	active := len(p.agents) > 0
+	active := len(p.owners) > 0
 	p.mu.Unlock()
 	if active {
 		return ErrOfflineSkillNode
