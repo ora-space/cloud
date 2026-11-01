@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
@@ -124,5 +126,64 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	}
 	if _, e := f.store.RemoveSpacePlugin(f.ctx, f.tenant, a, owner, "plugins", "remove", store.PluginRemoveInput{Identifier: item.ID, Version: selected.Version}); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestRemovingSourceClearsPlanCredentials(t *testing.T) {
+	f := newSquadFixture(t)
+	owner := f.login(t, "owner", "owner")
+	spaces, e := f.store.TenantSpaces(f.ctx, f.tenant, owner)
+	if e != nil {
+		t.Fatal(e)
+	}
+	space := spaces[0].ID
+	t.Setenv("V2_MARKET_CREDENTIAL_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
+	in := store.MarketSource{
+		URL:       "https://example.org/private-market",
+		Branch:    "main",
+		Enabled:   true,
+		Retrieval: pluginmarket.Retrieval{Mode: "s3_sigv4", Endpoint: "https://objects.example.org", Bucket: "market", Region: "us-east-1"},
+		Credentials: &pluginmarket.Credentials{
+			AccessKey: "fixture-access",
+			SecretKey: "fixture-secret",
+		},
+	}
+	if e := f.store.ChangeMarket(f.ctx, f.tenant, space, owner, "", "POST", in); e != nil {
+		t.Fatal(e)
+	}
+	sources, e := f.store.MarketSources(f.ctx, f.tenant, space, owner)
+	if e != nil || len(sources) != 1 {
+		t.Fatal(sources, e)
+	}
+	namespace := sources[0].Namespace
+	locator := "skills/private.orax"
+	digest := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	item := store.PluginCatalogEntry{ID: namespace + "/private", SourceNamespace: namespace, Identifier: "private", Version: "1.0.0", Kind: "skill", Title: "Private", MarketplaceVisible: true, IndexedAt: time.Now(), URL: &locator, SHA256: &digest}
+	raw, _ := json.Marshal([]store.PluginCatalogEntry{item})
+	if _, e := f.db.Exec(f.ctx, `update v2_market_sources set snapshot=$2,synced_at=now() where namespace=$1`, namespace, raw); e != nil {
+		t.Fatal(e)
+	}
+	selection, e := f.store.InstallSpacePlugin(f.ctx, f.tenant, space, owner, "plugins", "private-install", store.PluginInstallInput{Identifier: item.ID})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored bool
+	if e := f.db.QueryRow(f.ctx, `select credentials is not null from v2_skill_plans where selection_id=$1`, selection.ID).Scan(&stored); e != nil || !stored {
+		t.Fatalf("plan credentials stored=%t err=%v", stored, e)
+	}
+	if e := f.store.ChangeMarket(f.ctx, f.tenant, space, owner, namespace, "DELETE", store.MarketSource{}); e != nil {
+		t.Fatal(e)
+	}
+	var cleared bool
+	if e := f.db.QueryRow(f.ctx, `select credentials is null from v2_skill_plans where selection_id=$1`, selection.ID).Scan(&cleared); e != nil || !cleared {
+		t.Fatalf("plan credentials cleared=%t err=%v", cleared, e)
+	}
+	list, e := f.store.SpacePlugins(f.ctx, f.tenant, space, owner)
+	selected, found := findSpacePlugin(list, selection.ID)
+	if e != nil || !found {
+		t.Fatal("removing source deleted the selection", list, e)
+	}
+	if selected.Identifier != item.Identifier {
+		t.Fatal(selected)
 	}
 }
