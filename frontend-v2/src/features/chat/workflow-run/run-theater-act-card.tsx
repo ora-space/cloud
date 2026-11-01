@@ -436,7 +436,7 @@ export function RunTheaterActCard({
             onClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            {/* The demo engine keeps each node's conversation items, not a live session. */}
+            {/* A server run carries each node's task and answer, not a live session. */}
             {conversation.length > 0 ? (
               <RunNodeSessionChat
                 conversation={conversation}

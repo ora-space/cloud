@@ -9,7 +9,7 @@ const noAnswer = () => {}
 /**
  * An Agent node's conversation, drawn by the chat page's own thread: the same prompts, answers,
  * thinking and tool rows as a chat session. Desktop shows the node's live session here through its
- * chat view; the demo engine keeps only the conversation items, which are read as chat turns.
+ * chat view; v2-server returns only the conversation items, which are read as chat turns.
  */
 export function RunNodeSessionChat({
   conversation,

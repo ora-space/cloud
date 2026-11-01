@@ -36,7 +36,7 @@ import { emptyConversation } from '../model/types'
 import { type Project, type Session, useChatStore } from '../store'
 import { AgentActivityDots } from './agent-activity-dots'
 import { FadeText } from './fade-text'
-import type { PublishedWorkflow } from '../workflow-run/demo-runs'
+import type { PublishedWorkflow } from '../workflow-run/server-runs'
 import { ProjectRuns, RunWorkflowDialog, RunWorkflowSubmenu } from '../workflow-run/run-sidebar'
 import { subtleScrollbar } from '@/lib/scrollbar'
 

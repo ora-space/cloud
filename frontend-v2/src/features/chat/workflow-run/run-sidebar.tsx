@@ -1,5 +1,5 @@
 import { MoreHorizontalIcon, SearchIcon, Trash2Icon, WorkflowIcon } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -17,10 +17,13 @@ import { Label } from '@/components/ui/label'
 import { subtleScrollbar } from '@/lib/scrollbar'
 import { cn } from '@/lib/utils'
 import { createHttpWorkflowContracts } from '@/lib/workflows/data/contracts-client'
-import type { GraphWorkflowRun } from '@/lib/workflows/runtime'
+import { ContractError } from '@/lib/workflows/contracts'
+import { localizeContractError } from '@/lib/workflows/host/contract-error'
+import { workflowI18n } from '@/lib/workflows/host/i18n'
+import { isTerminalRunStatus } from '@/lib/workflows/runtime'
 import { FadeText } from '../components/fade-text'
 import { useChatStore } from '../store'
-import { createDemoRun, deleteDemoRun, listPublishedWorkflows, type PublishedWorkflow, useDemoRuns } from './demo-runs'
+import { cancelRun, createRun, deleteRun, listPublishedWorkflows, projectRunsQuery, runKeys, type PublishedWorkflow, type RunListItem } from './server-runs'
 import { isNodeWorking, runStatusLabel, runStatusTone } from './run-status-style'
 
 /**
@@ -111,6 +114,7 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
   const [error, setError] = useState<string>()
   const selectRun = useChatStore((s) => s.selectRun)
   const tenantId = useChatStore((s) => s.tenantId)
+  const queryClient = useQueryClient()
   return (
     <Dialog open={!!workflow} onOpenChange={(open) => !open && !busy && (setError(undefined), onClose())}>
       <DialogContent>
@@ -123,12 +127,13 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
               setBusy(true)
               try {
                 if (!tenantId) throw new Error('还没有读到团队，请稍后重试')
-                const run = await createDemoRun(createHttpWorkflowContracts(tenantId), projectId, workflow, name)
-                selectRun(run.id)
+                const runId = await createRun(createHttpWorkflowContracts(tenantId), tenantId, projectId, workflow, name)
+                void queryClient.invalidateQueries({ queryKey: runKeys.project(tenantId, projectId) })
+                selectRun(runId)
                 setError(undefined)
                 onClose()
               } catch (err) {
-                setError(err instanceof Error ? err.message : '创建运行失败')
+                setError(err instanceof ContractError ? localizeContractError(err, workflowI18n.t) : err instanceof Error ? err.message : '创建运行失败')
               } finally {
                 setBusy(false)
               }
@@ -160,17 +165,18 @@ export function RunWorkflowDialog({ projectId, workflow, onClose }: { projectId:
 
 /** A project's workflow runs, newest first, listed with its sessions as desktop does. */
 export function ProjectRuns({ projectId }: { projectId: string }) {
-  const runs = useDemoRuns((s) => s.runs)
-  const list = Object.values(runs)
-    .filter((r) => r.projectId === projectId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  return list.map((run) => <RunRow key={run.id} run={run} />)
+  const tenantId = useChatStore((s) => s.tenantId)
+  const runs = useQuery({ ...projectRunsQuery(tenantId ?? '', projectId), enabled: !!tenantId })
+  return (runs.data ?? []).map((run) => <RunRow key={run.id} tenantId={tenantId!} projectId={projectId} run={run} />)
 }
 
-function RunRow({ run }: { run: GraphWorkflowRun }) {
+function RunRow({ tenantId, projectId, run }: { tenantId: string; projectId: string; run: RunListItem }) {
   const selected = useChatStore((s) => s.selectedRunId === run.id)
   const selectRun = useChatStore((s) => s.selectRun)
+  const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string>()
   const tone = runStatusTone(run.status)
   const label = runStatusLabel(run.status)
   return (
@@ -199,20 +205,31 @@ function RunRow({ run }: { run: GraphWorkflowRun }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Dialog open={confirming} onOpenChange={setConfirming}>
+      <Dialog open={confirming} onOpenChange={(open) => !deleting && (setDeleteError(undefined), setConfirming(open))}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>删除运行"{run.name}"？</DialogTitle>
             <DialogDescription>正在进行的运行会先停止，运行记录会一起删除。</DialogDescription>
           </DialogHeader>
+          {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
             <Button
               variant="destructive"
-              onClick={() => {
-                if (selected) selectRun(undefined)
-                void deleteDemoRun(run.id)
-                setConfirming(false)
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true)
+                try {
+                  if (!isTerminalRunStatus(run.status)) await cancelRun(tenantId, run.id)
+                  await deleteRun(tenantId, run.id)
+                  if (selected) selectRun(undefined)
+                  setConfirming(false)
+                } catch (err) {
+                  setDeleteError(localizeContractError(err, workflowI18n.t))
+                } finally {
+                  setDeleting(false)
+                  void queryClient.invalidateQueries({ queryKey: runKeys.project(tenantId, projectId) })
+                }
               }}
             >
               删除

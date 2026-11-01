@@ -3,10 +3,11 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { localizeContractError } from '@/lib/workflows/host/contract-error'
 import { toast } from '@/lib/workflows/host/ui'
-import { submitDemoHitl, updateDemoRunInput } from './demo-runs'
+import { useChatStore } from '../store'
+import { updateRunInput } from './server-runs'
 
-// The desktop hooks the copied Theater components call, over the in-browser demo engine. Each
-// keeps desktop's name and call shape so the copied files change only their import path.
+// The desktop hooks the copied Theater components call, over v2-server's run API. Each keeps
+// desktop's name and call shape so the copied files change only their import path.
 
 export { agentLabel, type AgentEntry, useAgentCatalog } from '@/lib/workflows/data/use-agent-catalog'
 export { useAgents, useInstalledPlugins, useSkills } from '@/lib/workflows/data/catalog-hooks'
@@ -25,25 +26,30 @@ export function useContractErrorToast(): (error: unknown, title?: string) => voi
 
 /** Saves the Start node's prompt and values edited in Theater's inspector. */
 export function useUpdateWorkflowRunInput() {
+  const tenantId = useChatStore((s) => s.tenantId) ?? ''
   return useMutation({
     mutationFn: ({ runId, input, variables }: { runId: string; input: string; variables?: Record<string, unknown> }) =>
-      updateDemoRunInput(runId, input, variables),
+      updateRunInput(tenantId, runId, input, variables),
   })
 }
 
-/** Answers a human-in-the-loop gate. */
+/**
+ * Answers a human-in-the-loop gate. v2 executes no interactive node, so no gate ever opens; the
+ * hook refuses instead of pretending an answer reached a run.
+ */
 export function useSubmitGraphWorkflowHitl() {
   return useMutation({
-    mutationFn: ({ runId, requestId, payload }: { runId: string; requestId: string; payload: Record<string, unknown> }) =>
-      submitDemoHitl(runId, requestId, payload),
+    mutationFn: async (_input: { runId: string; requestId: string; payload: Record<string, unknown> }): Promise<never> => {
+      throw new Error('v2 不执行需要人工参与的节点')
+    },
   })
 }
 
-/** AI diagnosis needs a model; the demo has none, so the inspector never offers it. */
+/** v2 has no AI diagnosis; the inspector hides it (see `useWorkspaceSelectionStore`). */
 export function useDiagnoseWorkflowNodeFailure() {
   return useMutation({
     mutationFn: async (_input: { runId: string; nodeId: string }): Promise<void> => {
-      throw new Error('演示运行不支持 AI 诊断')
+      throw new Error('v2 不提供 AI 诊断')
     },
   })
 }
@@ -54,7 +60,7 @@ interface DemoSelection {
 
 /**
  * Desktop's inspector reads the selected run only to offer AI diagnosis. Reporting none keeps
- * that button hidden in the demo.
+ * that button hidden in v2.
  */
 export function useWorkspaceSelectionStore<T>(selector: (state: DemoSelection) => T): T {
   return selector({ selection: { workflowRunId: null } })

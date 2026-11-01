@@ -1,5 +1,5 @@
-import { QueryClientProvider } from '@tanstack/react-query'
-import { FlaskConicalIcon, MapIcon, PlayIcon, RotateCcwIcon, SquareIcon, TheaterIcon, WorkflowIcon } from 'lucide-react'
+import { QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MapIcon, PlayIcon, RotateCcwIcon, SquareIcon, TheaterIcon, WorkflowIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { I18nextProvider, useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
@@ -12,11 +12,13 @@ import { createWorkflowQueryClient } from '@/lib/workflows/data/query-client'
 import { createWorkflowI18n } from '@/lib/workflows/host/i18n'
 import { useDarkTheme } from '@/lib/workflows/host/theme'
 import { toast } from '@/lib/workflows/host/ui'
+import { ContractError } from '@/lib/workflows/contracts'
+import { localizeContractError } from '@/lib/workflows/host/contract-error'
 import { isTerminalRunStatus, type GraphWorkflowRun, type WorkflowArtifact, type WorkflowNodeConversationItem } from '@/lib/workflows/runtime'
 import { FadeText } from '../components/fade-text'
 import { ShowSidebarButton } from '../components/sidebar'
 import { useChatStore } from '../store'
-import { cancelDemoRun, rerunDemoRun, startDemoRun, useDemoRuns } from './demo-runs'
+import { cancelRun, rerun, runKeys, runQuery, runSnapshotQuery, startRun } from './server-runs'
 import { isLoopHistoryNode } from './loop-round-state'
 import { resolveStageFocusNodeId, resolveTheaterFocus, shouldReleaseLivePinToFollow, shouldStealFocusForArtifactReveal, type TheaterFocusStatusSample } from './run-focus'
 import { RunOverviewCanvas } from './run-overview-canvas'
@@ -37,26 +39,19 @@ const noArtifacts: WorkflowArtifact[] = []
 
 /**
  * A workflow run in the chat page's main area, as desktop's run workspace: Theater plays the run
- * one act at a time, Overview shows the frozen graph with each node's status. The run is played
- * by the in-browser engine, so the header says it is a demo. The page brings the tenant's workflow
- * client and query cache, which the Agent configuration in the inspector reads.
+ * one act at a time, Overview shows the frozen graph with each node's status. v2-server executes
+ * the run; the page reads it again every second until it ends. The page brings the tenant's
+ * workflow client and query cache, which the run and the inspector's Agent configuration read.
  */
 export default function RunPane({ runId }: { runId: string }) {
   const tenantId = useChatStore((s) => s.tenantId) ?? ''
   const client = useMemo(() => createContractsClient(createHttpWorkflowContracts(tenantId)), [tenantId])
   const [queryClient] = useState(createWorkflowQueryClient)
-  const run = useDemoRuns((s) => s.runs[runId])
   return (
     <I18nextProvider i18n={runI18n}>
       <QueryClientProvider client={queryClient}>
         <ContractsClientProvider client={client}>
-          {run ? (
-            <RunWorkspace key={runId} run={run} />
-          ) : (
-            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              <p>这次运行已经不在了。</p>
-            </div>
-          )}
+          <LoadedRun key={runId} tenantId={tenantId} runId={runId} />
           <RunToaster />
         </ContractsClientProvider>
       </QueryClientProvider>
@@ -69,11 +64,33 @@ function RunToaster() {
   return <Toaster position="bottom-right" theme={dark ? 'dark' : 'light'} closeButton />
 }
 
-function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
+/** Reads the run's frozen graph once, then the run itself until it ends. */
+function LoadedRun({ tenantId, runId }: { tenantId: string; runId: string }) {
   const { t } = useTranslation()
-  const conversations = useDemoRuns((s) => s.conversations[run.id])
-  const artifacts = useDemoRuns((s) => s.artifacts[run.id]) ?? noArtifacts
-  const revealedArtifactId = useDemoRuns((s) => s.revealedArtifactIds[run.id]) ?? null
+  const snapshot = useQuery({ ...runSnapshotQuery(tenantId, runId), enabled: tenantId !== '' })
+  const run = useQuery(runQuery(tenantId, runId, snapshot.data))
+  const error = snapshot.error ?? run.error
+  if (run.data) return <RunWorkspace tenantId={tenantId} run={run.data} />
+  return (
+    <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+      <p>{error === null ? '正在读取运行…' : isMissing(error) ? '这次运行已经不在了。' : localizeContractError(error, t)}</p>
+    </div>
+  )
+}
+
+const isMissing = (error: unknown) => error instanceof ContractError && error.code === 'workflow_run_not_found'
+
+/** Theater's per-node conversation, from the answers the run projection carries. */
+function runConversations(run: GraphWorkflowRun): WorkflowNodeConversationItem[] {
+  return Object.values(run.nodeStates).flatMap((state) => state.conversation ?? [])
+}
+
+function RunWorkspace({ tenantId, run }: { tenantId: string; run: GraphWorkflowRun }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const conversations = useMemo(() => runConversations(run), [run])
+  const artifacts = noArtifacts
+  const revealedArtifactId: string | null = null
   const selectRun = useChatStore((s) => s.selectRun)
   // A live run opens on its Theater; a pending or finished one on Overview, as desktop primes it.
   const [viewMode, setViewMode] = useState<ViewMode>(run.status === 'running' || run.status === 'awaiting_input' ? 'theater' : 'overview')
@@ -172,12 +189,18 @@ function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [viewMode])
 
-  const act = async (action: () => Promise<void>) => {
+  /** Runs one command; a refusal shows as a toast, and the run is read again either way. */
+  const act = async (action: () => Promise<void>): Promise<boolean> => {
     setBusy(true)
     try {
       await action()
+      return true
+    } catch (error) {
+      toast.error(localizeContractError(error, t))
+      return false
     } finally {
       setBusy(false)
+      void queryClient.invalidateQueries({ queryKey: runKeys.run(tenantId, run.id) })
     }
   }
 
@@ -219,10 +242,6 @@ function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
           <span className={cn('size-1.5 rounded-full', tone.dot)} />
           {runStatusLabel(run.status)}
         </Badge>
-        <Badge variant="outline" className="gap-1 text-muted-foreground" title="后端还不能执行工作流，节点由浏览器里的演示引擎按顺序推进">
-          <FlaskConicalIcon />
-          演示运行
-        </Badge>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <div role="group" aria-label={t('workflowRun.viewMode.label')} className="inline-flex rounded-lg border p-0.5">
             <Button size="sm" variant={viewMode === 'theater' ? 'secondary' : 'ghost'} className="h-7 gap-1.5 px-2.5 text-xs" aria-pressed={viewMode === 'theater'} onClick={enterTheaterFromHeader}>
@@ -251,7 +270,7 @@ function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
             </Button>
           )}
           {(run.status === 'running' || run.status === 'awaiting_input') && (
-            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => act(() => cancelDemoRun(run.id))} disabled={busy}>
+            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => act(() => cancelRun(tenantId, run.id))} disabled={busy}>
               <SquareIcon />
               停止
             </Button>
@@ -264,8 +283,7 @@ function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
               disabled={busy}
               onClick={() =>
                 act(async () => {
-                  const next = await rerunDemoRun(run.id)
-                  selectRun(next.id)
+                  selectRun(await rerun(tenantId, run))
                 })
               }
             >
@@ -317,7 +335,7 @@ function RunWorkspace({ run }: { run: GraphWorkflowRun }) {
         busy={busy}
         onOpenChange={setStartOpen}
         onStart={async (prompt, variables) => {
-          await act(() => startDemoRun(run.id, prompt, variables))
+          if (!(await act(() => startRun(tenantId, run.id, prompt, variables)))) return
           setStartOpen(false)
           setViewMode('theater')
         }}
