@@ -6,14 +6,19 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/server"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 	"github.com/wanglongan587/cloud/v2-server/internal/workflow"
+	"github.com/wanglongan587/cloud/v2-server/internal/workflowhost"
 )
 
 // withWorkflowDomain injects the desktop-equivalent workflow rules into the HTTP layer, which
-// must not import the domain package itself.
-func withWorkflowDomain(o server.Options) server.Options {
+// must not import the domain package itself, and the run host that executes runs. A nil host
+// keeps run start, cancel and input unavailable.
+func withWorkflowDomain(o server.Options, runs *workflowhost.Host) server.Options {
 	o.AnalyzeWorkflow = analyzeWorkflow
 	// Publish already reports a refusal as store.ErrWorkflowDocumentInvalid.
 	o.ValidateWorkflow = workflow.ValidateWorkflow
+	if runs != nil {
+		o.WorkflowRuns = runs
+	}
 	return o
 }
 

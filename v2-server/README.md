@@ -243,7 +243,7 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 | `POST …/workflow-runs/{rid}/start` | 交给执行桥启动运行 |
 | `POST …/workflow-runs/{rid}/cancel` | 取消运行；停止未确认时返回 `503 workflow_run_stop_unconfirmed` |
 | `PATCH …/workflow-runs/{rid}/input` | 更新启动输入与变量；执行桥判定不可编辑时返回 `409 workflow_run_not_editable`（desktop 允许未开始和已结束的运行修改，用于准备下一次执行） |
-| `POST …/workflow-runs/{rid}/nodes/{nodeId}/complete` | 交互节点完成（`force`、`requester: human`） |
+| `POST …/workflow-runs/{rid}/nodes/{nodeId}/complete` | 交互节点完成（`force`、`requester: human`）；v2 不执行交互式节点，执行桥校验归属后固定返回 `400 workflow_node_not_awaiting_input` |
 | `GET …/workflow-runs/{rid}/nodes` | 只要节点行 |
 
 - **冻结与身份**：`triggerKind`/`triggerRef` 记录手动或定时触发的稳定身份，定时侧只创建与跟踪，不复制图校验或引擎；运行与节点身份稳定，Loop 轮次是 `v2_workflow_scopes` 的一行（同一 Loop 同时最多一个活动轮），Iteration 轮次是节点行的 `iteration`（0 基）。
@@ -251,7 +251,7 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 - **引用保护**：运行冻结的版本不能被删除（`400 workflow_snapshot_in_use`），还有未删运行的定义也不能删（`400 workflow_active_runs`）；把已结束的唯一运行删掉（`DELETE …/workflow-runs/{rid}`）后，版本和定义才重新可删。运行中或还有未完成节点的运行拒删（`400 workflow_run_active`），避免删掉执行桥仍在写的会话行。
 - **执行桥接缝**：`server.Options.WorkflowRuns`（`server.WorkflowRunHost`）由执行桥实现、在 `main` 注入；未注入时 start/cancel/input/complete 返回 `503 workflow_run_host_unavailable`，定义与历史读取照常。HTTP 只做登录/成员校验、严格解码和错误码映射，派发、停止确认、会话与对话历史都留在执行桥；拒绝用 server 包的哨兵错误表达（`ErrWorkflowRunNotStartable`、`ErrWorkflowRunNotEditable`、`ErrWorkflowNodeNotAwaitingInput`、`ErrWorkflowNodeNotFound`、`ErrWorkflowRunStopUnconfirmed`、`WorkflowRunInputInvalid`）。
 - **进程内存储端口**：执行桥直接调用 store 上的状态转移，不经 HTTP——`StartWorkflowRun`、`CreateWorkflowNodeRun`、`BindWorkflowNodeSession`、`CompleteWorkflowNodeRun`、`FailWorkflowNodeRun`（失败 attempt 号在同一事务里分配，payload 由领域构造）、`RetryWorkflowNodeRun`（失败行软删 + 插入等待运行的下一 attempt，编号连续）、`WakeWorkflowNodeRun`（唤醒等待的重试，重复唤醒 no-op）、`FinishWorkflowRun`、`CancelWorkflowRun`（同一事务里收尾活动 Loop 轮次并去掉等待中重试的 `retry_wait`）、`StartWorkflowLoopRound`（同一 Loop 只允许一个活动轮）、`SettleWorkflowLoopRound`（重复结算同状态为 no-op）、`DeleteWorkflowRun`。节点完成对已终态尝试是 no-op，取消对已取消运行幂等。取消也接受 `pending` 运行（desktop 只接受 `running`，其余返回 `NotActive`）：v2 的取消是用户可重试的操作，执行桥确认停止前重复调用必须返回同一个已取消运行，排队中的运行也要能直接从页面撤掉。
-- **尚未包含**：`failedAttempts`、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。删除运行时对节点 session 的检查与清理等执行桥绑定 chat session，重启中断（desktop 的 `INTERRUPTED_BY_RESTART`）等 A 的运行生命周期提供端口，两者都不在本 PR 假装已覆盖。
+- **尚未包含**：`failedAttempts`、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。删除运行时对节点 session 的检查与清理等执行桥绑定 chat session。重启中断由执行桥提供，见下文“工作流执行”。
 
 ### 对话
 
@@ -336,6 +336,28 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 协调器本身不创建 goroutine；main 的 Host 接入周期扫描和上述 HTTP 操作，前端页面已接入运行与取消等操作。main 注入公共 `executionruntime.Service` 驱动实际派发；普通测试通过公共 Stub 和实际 PostgreSQL 验证编排、HTTP 和生命周期，opt-in 测试另组合真实公共 Service。
 
 `server.NewScheduleCoordinator(records, options, now)` 使用页面统一的 `Options.Execution`，不另建执行服务；宿主在公共启动恢复完成后调用 Recover，再驱动 Tick/Manual。Start 与同记录的核对/取消不会并行。启动错误或本地引用未保存时只按原 Caller 读取；无引用且确定没有进行中的 Start，查询未命中可记 skipped/execution_not_started。读取错误或已有引用但缺失记录时保留占位，不重放 prompt。Agent Cancel 结束会话，model-only Cancel 只停当前轮；定时对话两路都随后确认 End，保留历史与目录。详细状态、原因及 released 含义见 [状态说明](internal/store/occurrence-states.md)。
+
+### 工作流执行
+
+[`internal/workflowhost`](internal/workflowhost) 实现 `server.WorkflowRunHost`，在本进程里执行运行；调度由 [`internal/workflow`](internal/workflow) 的无状态引擎完成，每一波都从数据库重新计算。行为、图模型和执行语义以 desktop（`crates/application/src/workflow_run/engine/`、`crates/backend/src/workflow/run/`）为准，存储沿用运行/scope/节点行模型，引擎的状态转移是 store 的 `*WorkflowEngine*` 事务（每个一次事务，完成节点时同时折叠运行 payload、维护 `state.current_nodes`）。
+
+演示范围（#827 的结论）：
+
+- **只做核心执行**：启动、取消、历史和刷新；节点失败即运行失败。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
+- **节点**：目前执行 Start、Agent、Output；Condition、Aggregator（含 Agent 结构化输出）和 Loop、LoopExit、Iteration 随后补上。图里有尚未执行的节点类型时，启动返回 `400 workflow_run_start_failed`。
+- **角色、per-node Skill、MCP 不应用**：节点照常运行，节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`skill`、`mcp`、`retry`、`interactive`），不静默忽略。
+- **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）和 `model`（`id`、`name`、`requested`、`fallback`）。
+- **重启**：启动时先把上个进程留下的所有非终态节点以 `interrupted_by_restart` 失败，运行随之失败，然后才开始服务；不重放 Agent。
+
+与 desktop 的差异：
+
+- **同一运行的 Agent 串行执行**：公共执行服务让一个运行的所有会话共用一个目录，并以 `ErrWorkspaceBusy` 拒绝并发 turn，所以执行桥按派发顺序逐个执行同一运行的 Agent；上一个 turn 收尾期间短暂的 busy 会在有限时间内重试。
+- **prompt**：按 desktop 的 `assemble_workflow_prompt` 组装 `workspace_root`、`current_workflow_step`、`workflow_context`，按运行冻结的 locale 选文案；不带角色、Skill 和上次失败注入。节点 prompt 的 `{{#…#}}` 先按变量池渲染，渲染失败的节点以 `prompt_template` 失败，不启动 Agent。公共执行服务在接受 prompt 之后才在 Node 里克隆运行目录，也不暴露它的路径，所以 `workspace_root` 写 `.`（Agent 进程的工作目录就是运行目录），不写 desktop 的绝对路径。
+- **会话绑定时机**：`Start` 返回 turn 引用即视为 prompt 已被接受，随后把 session 绑定到节点尝试（desktop 同样在 prompt 被接受后才发布绑定）；绑定被拒（尝试已不在运行）时结束该会话。turn 结束后执行桥结束会话，对话历史保留。
+- **结果映射**：只有 `completed` 且答案完整（`AnswerComplete`）才可能成功，再按 desktop 的停止原因映射：`end_turn`、`max_tokens`、`max_turn_requests` 成功；`refusal` 为 `agent_refusal`；缺少停止原因为 `session_ended_without_stop_reason`；其他为 `unknown_stop_reason`。turn 失败、取消、中断或答案不完整一律以 `session` 失败，失败节点保留已有的回答。
+- **取消**：先用发起运行的用户身份取消活动 turn 并等待确认，再关闭运行；Start 正在进行时先等它返回。停止未确认时返回 `503 workflow_run_stop_unconfirmed`，运行保持打开但不再推进，turn 结束后由执行桥自行关闭为已取消。
+- **运行发起者只在内存里**：执行会话按用户隔离，执行桥记住每个运行由谁启动，进程重启后靠上面的中断收尾，不需要持久化。
+- **失效事件**：`workflowhost.Hub` 在每次提交的状态转移、会话绑定和取消后按运行发布一个不带数据的失效通知，供运行事件流使用；读者收到后重新读取运行，未消费的通知会合并。
 
 ### 定时触发记录基础
 
