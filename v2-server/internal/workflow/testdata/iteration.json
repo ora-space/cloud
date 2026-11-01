@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {"id":"start","data":{"kind":"start","inputVariables":[{"name":"items","valueType":"array[string]"}]}},
+    {"id":"iter","data":{"kind":"iteration","iterationConfig":{"iteratorSelector":["start","items"],"collectSelector":["fix","output"]}}},
+    {"id":"fix","parentId":"iter","data":{"kind":"agent"}},
+    {"id":"spare","parentId":"iter","data":{"kind":"agent","agentConfig":false}},
+    {"id":"out","data":{"kind":"output"}}
+  ],
+  "edges": [
+    {"source":"start","target":"iter"},
+    {"source":"iter","target":"fix"},
+    {"source":"iter","target":"out"},
+    {"source":"spare","target":"fix"}
+  ]
+}

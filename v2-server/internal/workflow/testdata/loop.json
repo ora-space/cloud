@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {"id":"start","data":{"kind":"start"}},
+    {"id":"loop","data":{"kind":"loop","loopConfig":{
+      "maxIterations":5,
+      "variables":[{"name":"draft","valueType":"string","initial":{"kind":"constant","value":""},"feedback":["writer","output"]}],
+      "until":{"logic":"and","conditions":[{"variableSelector":["writer","output"],"operator":"equals","value":"done"}]},
+      "outputs":[{"name":"result","variableSelector":["writer","output"]}]
+    }}},
+    {"id":"entry","parentId":"loop","data":{"kind":"start","containerId":"loop"}},
+    {"id":"writer","data":{"kind":"agent","containerId":"loop","agentConfig":{"executor":{"agentCli":"claude","modelId":"model"},"prompt":"Write"}}}
+  ],
+  "edges":[{"source":"start","target":"loop"},{"source":"entry","target":"writer"}]
+}
