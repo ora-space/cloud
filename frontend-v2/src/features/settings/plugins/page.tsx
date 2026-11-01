@@ -34,6 +34,7 @@ const kindLabels: Record<string, string> = {
   hook: '钩子',
   workbench: '工作台',
   pack: '合集',
+  agent: 'Agent',
 }
 
 const stateLabels: Record<string, string> = {
@@ -48,9 +49,11 @@ const stateLabels: Record<string, string> = {
 function StateBadge({ selection }: { selection?: SpacePlugin }) {
   const state = selection?.observedState ?? 'removed'
   const label =
-    selection?.kind !== 'skill' && selection?.desiredState === 'installed'
-      ? '仅空间选择'
-      : (stateLabels[state] ?? state)
+    selection?.kind === 'agent'
+      ? '运行时管理'
+      : selection?.kind !== 'skill' && selection?.desiredState === 'installed'
+        ? '仅空间选择'
+        : (stateLabels[state] ?? state)
   return (
     <Badge
       variant={
@@ -131,13 +134,17 @@ export default function PluginsPage() {
     ...market.catalog,
     ...market.installations
       .filter(
-        (s) => (s.desiredState === 'installed' || s.observedState==='removing' || s.observedState==='failed') && !available.has(pluginKey(s)),
+        (s) =>
+          s.kind !== 'agent' &&
+          (s.desiredState === 'installed' ||
+            s.observedState === 'removing' ||
+            s.observedState === 'failed') &&
+          !available.has(pluginKey(s)),
       )
       .map(missingEntry),
-  ].filter((entry) => entry.kind !== 'agent')
+  ]
   const selected = catalog.find(
-    (entry) =>
-      pluginKey(entry) === params.get('plugin') && entry.kind !== 'agent',
+    (entry) => pluginKey(entry) === params.get('plugin'),
   )
   const filtered = catalog
     .filter((entry) => {
@@ -191,7 +198,24 @@ export default function PluginsPage() {
   }
   function actions(entry: PluginCatalogEntry) {
     const selection = market.selection(entry)
-    if(selection?.desiredState==='removed' && selection.observedState==='failed') return <Button size="sm" variant="outline" disabled={!market.canManage || market.mutating} onClick={()=>requestRemove(entry)}>重试移除</Button>
+    if (entry.kind === 'agent')
+      return (
+        <span className="text-xs text-muted-foreground">由项目运行时管理</span>
+      )
+    if (
+      selection?.desiredState === 'removed' &&
+      selection.observedState === 'failed'
+    )
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!market.canManage || market.mutating}
+          onClick={() => requestRemove(entry)}
+        >
+          重试移除
+        </Button>
+      )
     if (
       (!available.has(pluginKey(entry)) || entry.kind !== 'skill') &&
       selection?.desiredState === 'installed'
