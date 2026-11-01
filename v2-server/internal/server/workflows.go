@@ -199,6 +199,10 @@ func workflowFault(w http.ResponseWriter, err error, op, draftSource string) {
 		fault(w, http.StatusBadRequest, "workflow_cannot_delete_draft")
 	case errors.Is(err, store.ErrWorkflowActiveVersion):
 		fault(w, http.StatusBadRequest, "workflow_cannot_delete_active_version")
+	case errors.Is(err, store.ErrWorkflowSnapshotInUse):
+		fault(w, http.StatusBadRequest, "workflow_snapshot_in_use")
+	case errors.Is(err, store.ErrWorkflowActiveRuns):
+		fault(w, http.StatusBadRequest, "workflow_active_runs")
 	case errors.Is(err, store.ErrWorkflowDocumentInvalid):
 		fault(w, http.StatusBadRequest, "workflow_run_graph_parse")
 	case errors.Is(err, errWorkflowDomainUnavailable):

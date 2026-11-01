@@ -331,3 +331,96 @@ CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_snapshots_one_draft
 	ON v2_workflow_snapshots (workflow_id) WHERE version = 'draft' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS v2_workflow_snapshots_history
 	ON v2_workflow_snapshots (workflow_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
+
+-- A workflow run freezes one published snapshot for its whole readable life; the graph stays in the
+-- snapshot and the run only points at it. Status is stored without the derived `awaitingInput`:
+-- a running run with a pending node is awaiting input, and that framing changes as nodes move, so it
+-- is computed on read instead of persisted. A failed attempt is a soft-deleted node row (as in
+-- desktop), which is why the identity indexes below are partial on `deleted_at IS NULL`.
+CREATE TABLE IF NOT EXISTS v2_workflow_runs (
+	id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id    uuid NOT NULL REFERENCES tenants (id),
+	workflow_id  uuid NOT NULL REFERENCES v2_workflows (id),
+	snapshot_id  uuid NOT NULL REFERENCES v2_workflow_snapshots (id),
+	project_id   text NOT NULL,
+	name         text NOT NULL,
+	status       text NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')),
+	state        jsonb,
+	input        text,
+	output       text,
+	error        text,
+	payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
+	trigger_kind text NOT NULL DEFAULT 'manual' CHECK (trigger_kind IN ('manual', 'schedule')),
+	trigger_ref  text NOT NULL DEFAULT '',
+	started_at   timestamptz,
+	finished_at  timestamptz,
+	created_at   timestamptz NOT NULL DEFAULT now(),
+	updated_at   timestamptz NOT NULL DEFAULT now(),
+	deleted_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS v2_workflow_runs_history
+	ON v2_workflow_runs (workflow_id, created_at, id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS v2_workflow_runs_project
+	ON v2_workflow_runs (tenant_id, project_id, created_at, id) WHERE deleted_at IS NULL;
+
+-- Execution scopes are the run's root and one row per started Loop round. Root rows carry no
+-- status, state or parent; only Loop rounds do. The cross references to node runs are enforced in
+-- SQL below without foreign keys, because the two tables need each other: a node belongs to a
+-- scope, and a round scope names the Loop node run that opened it.
+CREATE TABLE IF NOT EXISTS v2_workflow_scopes (
+	id                      text PRIMARY KEY,
+	tenant_id               uuid NOT NULL REFERENCES tenants (id),
+	run_id                  uuid NOT NULL REFERENCES v2_workflow_runs (id),
+	parent_loop_node_run_id uuid,
+	round_index             integer CHECK (round_index IS NULL OR (round_index BETWEEN 1 AND 100)),
+	status                  text CHECK (status IS NULL OR status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')),
+	state                   jsonb,
+	created_at              timestamptz NOT NULL DEFAULT now(),
+	updated_at              timestamptz NOT NULL DEFAULT now(),
+	CHECK (
+		(parent_loop_node_run_id IS NULL AND round_index IS NULL AND status IS NULL AND state IS NULL)
+		OR (parent_loop_node_run_id IS NOT NULL AND round_index IS NOT NULL AND status IS NOT NULL AND state IS NOT NULL)
+	),
+	UNIQUE (parent_loop_node_run_id, round_index)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_scopes_one_active_round
+	ON v2_workflow_scopes (parent_loop_node_run_id)
+	WHERE parent_loop_node_run_id IS NOT NULL AND status IN ('pending', 'running');
+
+CREATE TABLE IF NOT EXISTS v2_workflow_run_roots (
+	run_id   uuid PRIMARY KEY REFERENCES v2_workflow_runs (id),
+	scope_id text NOT NULL UNIQUE REFERENCES v2_workflow_scopes (id)
+);
+
+-- One row per node attempt. `iteration` is the composite-region round (0-based) and stays NULL for
+-- outer and Loop body rows; Loop rounds are scopes, not iterations. `payload` keeps the domain's
+-- JSON (stop reason, failure detail, file changes) without this layer interpreting it.
+CREATE TABLE IF NOT EXISTS v2_workflow_node_runs (
+	id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id   uuid NOT NULL REFERENCES tenants (id),
+	run_id      uuid NOT NULL REFERENCES v2_workflow_runs (id),
+	scope_id    text NOT NULL,
+	node_id     text NOT NULL,
+	node_type   text NOT NULL,
+	session_id  text,
+	status      text NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')),
+	input       text,
+	output      text,
+	error       text,
+	payload     jsonb,
+	iteration   integer CHECK (iteration IS NULL OR iteration >= 0),
+	started_at  timestamptz,
+	finished_at timestamptz,
+	created_at  timestamptz NOT NULL DEFAULT now(),
+	updated_at  timestamptz NOT NULL DEFAULT now(),
+	deleted_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS v2_workflow_node_runs_history
+	ON v2_workflow_node_runs (run_id, created_at, id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS v2_workflow_node_runs_iteration
+	ON v2_workflow_node_runs (run_id, iteration, created_at, id) WHERE deleted_at IS NULL;
+-- Retry replaces a failed attempt by soft-deleting it and inserting the next row, so one live row
+-- per (scope, node, iteration) is the invariant, and the database keeps concurrent dispatches from
+-- both creating one.
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_node_runs_live_identity
+	ON v2_workflow_node_runs (scope_id, node_id, COALESCE(iteration, -1)) WHERE deleted_at IS NULL;
