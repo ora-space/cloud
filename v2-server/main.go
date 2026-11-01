@@ -156,12 +156,12 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 		return checkFixture(ctx, runtime, scope, demo.ID, filepath.Join(base, "nodes"))
 	}
 
-	options := server.Options{
+	options := withWorkflowDomain(server.Options{
 		SessionTTL: 7 * 24 * time.Hour,
 		Projects:   projects,
 		Execution:  runtime,
 		Catalog:    runtime,
-	}
+	})
 	coordinator, e := server.NewScheduleCoordinator(db, options, time.Now)
 	if e != nil {
 		return e
