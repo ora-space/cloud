@@ -421,7 +421,7 @@ export default function PluginsPage() {
                             </span>
                           </button>
                           <Badge
-                            variant="outline"
+                            variant="secondary"
                             className="settings-plugin-kind"
                           >
                             <KindIcon data-icon="inline-start" />
