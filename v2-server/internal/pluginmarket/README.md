@@ -8,6 +8,7 @@ v2-server 的临时 marketplace 同步包。启动时从配置的 Git 仓库浅�
 - `manifest.go`：清单字段、kind、semver、release、目标三元组和文本边界校验。
 - `catalog.go`：扫描 registry、解析 logo 变体/README，返回排序后的目录条目。
 - `sync.go`：Git 同步、原子更换 checkout、单次同步与定时刷新；每次同步有 2 分钟上限，失败时调用方保留上一版数据库快照。
+- `download.go`：只连接解析并校验后的公网 IP，可按来源配置经 SOCKS5 代理下载；临时网络错误和 5xx/限流明确返回可重试错误，摘要或归档校验失败保持终态错误。
 
 默认源和间隔由 `V2_PLUGIN_MARKETPLACE_URL`、`V2_PLUGIN_MARKETPLACE_BRANCH` 和
 `V2_PLUGIN_MARKETPLACE_INTERVAL` 提供。配置入口只接受无凭据、无 query/fragment 的 HTTPS；
