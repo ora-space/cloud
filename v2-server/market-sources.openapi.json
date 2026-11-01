@@ -202,6 +202,68 @@
           }
         }
       }
+    },
+    "/api/v1/tenants/{tid}/spaces/{sid}/plugins/results/{namespace}/{identifier}": {
+      "get": {
+        "operationId": "getSkillProgress",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-project confirmations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SkillProgress"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -299,6 +361,33 @@
             "type": "string"
           },
           "region": {
+            "type": "string"
+          }
+        }
+      },
+      "SkillProgress": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "name",
+          "state",
+          "installedVersion",
+          "failure"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "installedVersion": {
+            "type": "string"
+          },
+          "failure": {
             "type": "string"
           }
         }

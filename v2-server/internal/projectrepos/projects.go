@@ -45,6 +45,7 @@ type Options struct {
 
 // Input is the supported synchronous project creation request.
 type Input struct {
+	SpaceID       string `json:"spaceId,omitempty"`
 	Name          string `json:"name"`
 	RepositoryURL string `json:"repositoryUrl"`
 	DefaultBranch string `json:"defaultBranch"`
@@ -147,7 +148,7 @@ func (s *Service) recordMirror(ctx context.Context, scope execution.Scope, in In
 	if err := os.Rename(mirror, final); err != nil {
 		return store.Project{}, err
 	}
-	project := store.Project{ID: id, Name: in.Name, RepositoryURL: in.RepositoryURL, Branch: in.DefaultBranch,
+	project := store.Project{SpaceID: in.SpaceID, ID: id, Name: in.Name, RepositoryURL: in.RepositoryURL, Branch: in.DefaultBranch,
 		Commit: commit, SnapshotRef: snapshot, MirrorPath: final}
 	// Keep the mirror if the database returns an error: a failed connection does not prove
 	// the INSERT rolled back. Retain unreferenced mirrors for explicit administrative inspection.

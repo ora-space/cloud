@@ -371,6 +371,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 255
+          },
+          "spaceId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Defaults to the tenant's demo space."
           }
         }
       },

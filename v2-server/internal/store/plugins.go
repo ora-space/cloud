@@ -197,6 +197,10 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		if !ok {
 			return ErrInvalidPluginID
 		}
+		// Serialize the first selection as well as later updates (#835).
+		if _, e := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,1))`, space+"/"+in.Identifier); e != nil {
+			return e
+		}
 		var kind, version string
 		var raw []byte
 		e = tx.QueryRow(ctx, `
@@ -208,7 +212,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		if e != nil {
 			return fmt.Errorf("read catalog entry: %w", e)
 		}
-		if kind == "pack" || kind == "agent" {
+		if kind != "skill" {
 			return ErrPluginKindNotInstallable
 		}
 		desired := in.PluginVersion
@@ -235,7 +239,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 			if _, e := tx.Exec(ctx, `
 				UPDATE v2_space_agents
 				SET name = $4, kind = $5, desired_state = 'installed', desired_version = $6,
-					observed_state = 'installed', observed_version = $6, install_error = NULL,
+					observed_state = 'pending', install_error = NULL,
 					requested_by_user_id = $7, status = 'active', version = version + 1, updated_at = now()
 				WHERE space_id = $1 AND tenant_id = $2 AND source_namespace = $3 AND identifier = $8`,
 				space, tenant, namespace, entry.Title, kind, desired, caller, identifier); e != nil {
@@ -249,7 +253,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 				INSERT INTO v2_space_agents
 					(tenant_id, space_id, name, status, source_namespace, identifier, kind,
 					 desired_state, desired_version, observed_state, observed_version, requested_by_user_id)
-				VALUES ($1, $2, $3, 'active', $4, $5, $6, 'installed', $7, 'installed', $7, $8)`,
+				VALUES ($1, $2, $3, 'active', $4, $5, $6, 'installed', $7, 'pending', NULL, $8)`,
 				tenant, space, entry.Title, namespace, identifier, kind, desired, caller); e != nil {
 				return fmt.Errorf("insert plugin selection: %w", e)
 			}
@@ -258,6 +262,9 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		}
 		out, e = querySpacePlugin(ctx, tx, space, namespace, identifier, false)
 		if e != nil {
+			return e
+		}
+		if e := freezeSkill(ctx, tx, out, entry); e != nil {
 			return e
 		}
 		return recordPluginMutation(ctx, tx, tenant, caller, "POST", path, key, pluginInstallHash(in), out)
@@ -299,7 +306,7 @@ func (s *Store) RemoveSpacePlugin(ctx context.Context, tenant, space, caller, pa
 		}
 		if _, e := tx.Exec(ctx, `
 			UPDATE v2_space_agents
-			SET desired_state = 'removed', observed_state = 'removed', observed_version = NULL,
+			SET desired_state = 'removed', observed_state = CASE WHEN EXISTS(SELECT 1 FROM v2_skill_results r WHERE r.selection_id=v2_space_agents.id AND (r.installed_version IS NOT NULL OR r.state IN ('applying','failed'))) THEN 'removing' ELSE 'removed' END,
 				install_error = NULL, requested_by_user_id = $4, version = version + 1, updated_at = now()
 			WHERE space_id = $1 AND tenant_id = $2 AND source_namespace = $3 AND identifier = $5`,
 			space, tenant, namespace, caller, identifier); e != nil {

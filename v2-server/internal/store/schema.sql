@@ -450,3 +450,26 @@ WHERE space_agent_id IN (SELECT id FROM v2_space_agents WHERE source_namespace =
 DELETE FROM v2_space_agents WHERE source_namespace = 'demo';
 DELETE FROM v2_plugin_mutations
 WHERE response->'resource'->>'sourceNamespace' = 'demo';
+
+-- Bind project runtime work to a space, independently of tenant-wide repository visibility.
+ALTER TABLE v2_projects ADD COLUMN IF NOT EXISTS plugin_space_id uuid REFERENCES v2_spaces(id);
+UPDATE v2_projects p SET plugin_space_id=s.id FROM v2_spaces s
+WHERE p.plugin_space_id IS NULL AND s.tenant_id=p.tenant_id AND s.archived_at IS NULL
+AND s.slug='demo';
+
+CREATE TABLE IF NOT EXISTS v2_skill_plans (
+ selection_id uuid PRIMARY KEY REFERENCES v2_space_agents(id) ON DELETE CASCADE,
+ locator text NOT NULL, digest text NOT NULL, target text NOT NULL, retrieval jsonb NOT NULL, credentials bytea
+);
+CREATE TABLE IF NOT EXISTS v2_skill_results (
+ selection_id uuid NOT NULL REFERENCES v2_space_agents(id) ON DELETE CASCADE,
+ project_id text NOT NULL REFERENCES v2_projects(id) ON DELETE CASCADE,
+ revision bigint NOT NULL, state text NOT NULL, installed_version text, failure text,
+ PRIMARY KEY(selection_id,project_id)
+);
+-- An old selection never proved that Node had installed a Skill.
+UPDATE v2_space_agents a SET observed_state='pending', observed_version=NULL
+WHERE kind='skill' AND desired_state='installed' AND NOT EXISTS(SELECT 1 FROM v2_skill_plans p WHERE p.selection_id=a.id);
+
+UPDATE v2_space_agents SET observed_state='pending',observed_version=NULL
+WHERE kind NOT IN ('agent','skill') AND desired_state='installed' AND observed_state='installed';

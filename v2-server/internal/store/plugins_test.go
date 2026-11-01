@@ -46,7 +46,7 @@ func TestPluginMarketLifecycle(t *testing.T) {
 	space := spaces[0].ID
 	path := "/api/v1/tenants/" + f.tenant + "/spaces/" + space + "/plugins"
 	if e := f.store.ReplacePluginCatalog(ctx, []pluginmarket.Entry{
-		{Namespace: "official", Identifier: "mattpocock.skills", Title: "Matt Pocock Skills", Kind: "skill", Version: "1.3.1", Description: "Engineering skills", Readme: "# Matt Pocock Skills\n\nReal skills.", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "mattpocock.skills", Title: "Matt Pocock Skills", URL: "https://example.org/skill.orax", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "skill", Version: "1.3.1", Description: "Engineering skills", Readme: "# Matt Pocock Skills\n\nReal skills.", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.tavily-search", Title: "Tavily", Kind: "mcp", Version: "0.1.0", Description: "Web search", Readme: "# Tavily", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.workflow-examples", Title: "Workflow Examples", Kind: "workflow", Version: "0.1.0", Description: "Examples", Readme: "# Workflow Examples", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.opencode", Title: "OpenCode", Kind: "agent", Version: "0.6.8", Description: "Agent", Readme: "# OpenCode", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
@@ -89,8 +89,7 @@ func TestPluginMarketLifecycle(t *testing.T) {
 		t.Fatal(e)
 	}
 	if installed.Kind != "skill" || installed.DesiredState != "installed" ||
-		installed.ObservedState != "installed" || installed.ObservedVersion == nil ||
-		*installed.ObservedVersion != "1.3.1" || installed.RequestedByUserID == nil ||
+		installed.ObservedState != "pending" || installed.ObservedVersion != nil || installed.RequestedByUserID == nil ||
 		*installed.RequestedByUserID != owner {
 		t.Fatalf("installed = %+v", installed)
 	}
@@ -148,27 +147,15 @@ func TestPluginMarketLifecycle(t *testing.T) {
 		t.Fatalf("member removal = %v", e)
 	}
 
-	mcp, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "install-mcp", store.PluginInstallInput{
-		Identifier: "official/ora-space.tavily-search", Version: 0,
-	})
-	if e != nil {
+	_, e = f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "install-mcp", store.PluginInstallInput{Identifier: "official/ora-space.tavily-search"})
+	if !errors.Is(e, store.ErrPluginKindNotInstallable) {
 		t.Fatal(e)
 	}
-	if mcp.Kind != "mcp" || mcp.ObservedState != "installed" || mcp.ObservedVersion == nil ||
-		*mcp.ObservedVersion != "0.1.0" {
-		t.Fatalf("mcp = %+v", mcp)
-	}
-	if _, e := f.store.RemoveSpacePlugin(ctx, f.tenant, space, owner, path, "remove-mcp", store.PluginRemoveInput{
-		Identifier: "official/ora-space.tavily-search", Version: mcp.Version,
-	}); e != nil {
-		t.Fatal(e)
-	}
-
 	selections, e := f.store.SpacePlugins(ctx, f.tenant, space, member)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(selections) != 4 {
+	if len(selections) != 3 {
 		t.Fatalf("selections after removal = %+v", selections)
 	}
 	agents, e := f.store.SpaceAgentPlugins(ctx, f.tenant, space, member)
