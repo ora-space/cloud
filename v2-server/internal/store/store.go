@@ -44,12 +44,7 @@ func OpenConfig(ctx context.Context, config *pgxpool.Config) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("apply schema: %w", e)
 	}
-	s := &Store{pool: pool}
-	if e := SeedPluginCatalog(ctx, s); e != nil {
-		pool.Close()
-		return nil, e
-	}
-	return s, nil
+	return &Store{pool: pool}, nil
 }
 
 // ensureDatabase creates the target database through the server's default database, so a fresh

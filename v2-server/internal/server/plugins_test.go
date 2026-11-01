@@ -1,6 +1,26 @@
 package server_test
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
+	"github.com/wanglongan587/cloud/v2-server/internal/store"
+)
+
+func seedTestPluginCatalog(t *testing.T, s *store.Store) {
+	t.Helper()
+	if e := s.ReplacePluginCatalog(context.Background(), []pluginmarket.Entry{
+		{Namespace: "official", Identifier: "mattpocock.skills", Title: "Matt Pocock Skills", Kind: "skill", Version: "1.3.1", Description: "Engineering skills", Readme: "# Matt Pocock Skills\n\nReal skills.", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "ora-space.tavily-search", Title: "Tavily", Kind: "mcp", Version: "0.1.0", Description: "Web search", Readme: "# Tavily", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "ora-space.workflow-examples", Title: "Workflow Examples", Kind: "workflow", Version: "0.1.0", Description: "Examples", Readme: "# Workflow Examples", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "ora-space.opencode", Title: "OpenCode", Kind: "agent", Version: "0.6.8", Description: "Agent", Readme: "# OpenCode", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "test-pack", Title: "Test Pack", Kind: "pack", Version: "1.0.0", Description: "Pack", PackMembers: []string{"official/mattpocock.skills"}, MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+	}, time.Now()); e != nil {
+		t.Fatal(e)
+	}
+}
 
 func TestPluginMarketHTTP(t *testing.T) {
 	f := newSquadServer(t)
@@ -23,8 +43,13 @@ func TestPluginMarketHTTP(t *testing.T) {
 		t.Fatalf("catalog = %d %v", status, body)
 	}
 	catalog, _ := body["items"].([]any)
-	if len(catalog) < 8 || body["syncedAt"] == nil {
+	if len(catalog) != 4 || body["syncedAt"] == nil {
 		t.Fatalf("catalog = %v", body)
+	}
+	for _, raw := range catalog {
+		if raw.(map[string]any)["kind"] == "agent" {
+			t.Fatalf("catalog exposed runtime-owned Agent: %v", raw)
+		}
 	}
 
 	status, body = c.do("GET", base, nil)
@@ -36,26 +61,25 @@ func TestPluginMarketHTTP(t *testing.T) {
 	}
 
 	input := map[string]any{
-		"identifier":    "demo/writing-kit",
-		"pluginVersion": "1.2.0",
+		"identifier":    "official/mattpocock.skills",
+		"pluginVersion": "1.3.1",
 		"version":       0,
 	}
 	status, body = c.doHeaders("POST", base, input, map[string]string{
-		"Idempotency-Key": "install-writing-kit",
+		"Idempotency-Key": "install-skill",
 	})
 	if status != 200 {
 		t.Fatalf("install = %d %v", status, body)
 	}
 	resource := body["resource"].(map[string]any)
 	if resource["kind"] != "skill" || resource["observedState"] != "installed" ||
-		resource["observedVersion"] != "1.2.0" {
+		resource["observedVersion"] != "1.3.1" {
 		t.Fatalf("installed = %v", resource)
 	}
 	version := resource["version"].(float64)
 
-	// Replaying the same key and body returns the original resource without another version bump.
 	status, replay := c.doHeaders("POST", base, input, map[string]string{
-		"Idempotency-Key": "install-writing-kit",
+		"Idempotency-Key": "install-skill",
 	})
 	if status != 200 {
 		t.Fatalf("replay = %d %v", status, replay)
@@ -64,9 +88,9 @@ func TestPluginMarketHTTP(t *testing.T) {
 		t.Fatalf("replayed = %v, want version %v", replayed, version)
 	}
 	status, body = c.doHeaders("POST", base, map[string]any{
-		"identifier": "demo/review-kit",
+		"identifier": "official/ora-space.tavily-search",
 		"version":    0,
-	}, map[string]string{"Idempotency-Key": "install-writing-kit"})
+	}, map[string]string{"Idempotency-Key": "install-skill"})
 	if status != 409 || body["code"] != "idempotency_conflict" {
 		t.Fatalf("key reuse = %d %v", status, body)
 	}
@@ -79,16 +103,15 @@ func TestPluginMarketHTTP(t *testing.T) {
 		t.Fatalf("invalid id = %d %v", status, body)
 	}
 	status, body = c.doHeaders("POST", base, map[string]any{
-		"identifier":    "demo/writing-kit",
+		"identifier":    "official/mattpocock.skills",
 		"pluginVersion": "9.9.9",
 		"version":       0,
 	}, map[string]string{"Idempotency-Key": "missing-plugin-version"})
 	if status != 400 || body["code"] != "plugin_version_unavailable" {
 		t.Fatalf("unavailable version = %d %v", status, body)
 	}
-
 	status, body = c.doHeaders("POST", base, map[string]any{
-		"identifier": "demo/starter-pack",
+		"identifier": "official/test-pack",
 		"version":    0,
 	}, map[string]string{"Idempotency-Key": "install-pack"})
 	if status != 400 || body["code"] != "plugin_kind_not_installable" {
@@ -96,15 +119,15 @@ func TestPluginMarketHTTP(t *testing.T) {
 	}
 
 	status, body = c.doHeaders("DELETE", base, map[string]any{
-		"identifier": "demo/writing-kit",
+		"identifier": "official/mattpocock.skills",
 	}, map[string]string{"Idempotency-Key": "remove-without-version"})
 	if status != 428 || body["code"] != "version_required" {
 		t.Fatalf("missing version = %d %v", status, body)
 	}
 	status, body = c.doHeaders("DELETE", base, map[string]any{
-		"identifier": "demo/writing-kit",
+		"identifier": "official/mattpocock.skills",
 		"version":    int64(version),
-	}, map[string]string{"Idempotency-Key": "remove-writing-kit"})
+	}, map[string]string{"Idempotency-Key": "remove-skill"})
 	if status != 200 {
 		t.Fatalf("remove = %d %v", status, body)
 	}

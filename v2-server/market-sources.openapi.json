@@ -1,0 +1,308 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Space marketplace sources",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/tenants/{tid}/spaces/{sid}/plugins/sources": {
+      "get": {
+        "operationId": "listMarketSources",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketSource"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMarketSource",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketSourceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Complete"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}": {
+      "patch": {
+        "operationId": "editMarketSource",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketSourceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Complete"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteMarketSource",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Complete"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}/sync": {
+      "post": {
+        "operationId": "syncMarketSource",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Complete"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "MarketSourceInput": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "retrieval": {
+            "$ref": "#/components/schemas/Retrieval"
+          },
+          "credentials": {
+            "type": "object",
+            "writeOnly": true,
+            "required": [
+              "accessKey",
+              "secretKey"
+            ],
+            "properties": {
+              "accessKey": {
+                "type": "string"
+              },
+              "secretKey": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "url",
+          "branch",
+          "enabled"
+        ]
+      },
+      "MarketSource": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "syncedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "failure": {
+            "type": "string"
+          },
+          "retrieval": {
+            "$ref": "#/components/schemas/Retrieval"
+          }
+        },
+        "required": [
+          "url",
+          "branch",
+          "enabled",
+          "namespace",
+          "syncedAt",
+          "failure"
+        ]
+      },
+      "Retrieval": {
+        "type": "object",
+        "properties": {
+          "useProxy": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "direct_https",
+              "s3_sigv4"
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

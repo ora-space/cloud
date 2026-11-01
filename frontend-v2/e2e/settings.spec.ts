@@ -63,8 +63,11 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   browser,
 }) => {
   await login(page, '/settings/plugins')
-  const row = page.getByRole('article', { name: '写作工具箱' })
+  const row = page.getByRole('article', { name: 'Matt Pocock Skills' })
   await expect(row).toBeVisible()
+  for (const name of ['Tavily', 'Workflow Examples', 'SkillHub']) {
+    await expect(page.getByRole('article', { name })).toBeVisible()
+  }
   const install = row.getByRole('button', { name: /^(安装|重试安装)$/ })
   if (await install.count()) {
     await install.click()
@@ -77,15 +80,17 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
     .click()
   await expect(row.getByText('未安装', { exact: true })).toBeVisible()
   await page.goto('/settings/skills')
-  const skill = page.getByRole('article', { name: 'writing-guide' })
+  const skill = page.getByRole('article', { name: 'Matt Pocock Skills' })
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
   await page.reload()
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
-  await skill.getByRole('button', { name: '查看技能 writing-guide' }).click()
+  await skill
+    .getByRole('button', { name: '查看技能 Matt Pocock Skills' })
+    .click()
   await expect(
     page.getByRole('dialog').getByRole('button', { name: '编辑技能' }),
   ).toHaveCount(0)
-  await page.getByRole('link', { name: /demo\/writing-kit/ }).click()
+  await page.getByRole('link', { name: /official\/mattpocock\.skills/ }).click()
   await page
     .getByRole('dialog')
     .getByRole('button', { name: '安装' })
@@ -105,9 +110,11 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   const otherPage = await other.newPage()
   await login(otherPage, '/settings/skills')
   await expect(
-    otherPage.getByRole('article', { name: 'writing-guide' }).getByText('可用', {
-      exact: true,
-    }),
+    otherPage
+      .getByRole('article', { name: 'Matt Pocock Skills' })
+      .getByText('可用', {
+        exact: true,
+      }),
   ).toBeVisible()
   await other.close()
 
@@ -122,6 +129,105 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
   await skill.getByRole('button', { name: '安装技能' }).click()
   await expect(skill.getByText('可用', { exact: true })).toBeVisible()
+
+  // A non-skill package from the same synced marketplace follows the same server lifecycle.
+  await page.goto('/settings/plugins')
+  const tavily = page.getByRole('article', { name: 'Tavily' })
+  await expect(tavily).toBeVisible()
+  const installTavily = tavily.getByRole('button', { name: /^(安装|重试安装)$/ })
+  if (await installTavily.count()) {
+    await installTavily.click()
+    await expect(tavily.getByText('已安装', { exact: true })).toBeVisible()
+  }
+  await tavily.getByRole('button', { name: '移除' }).click()
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: '移除' })
+    .click()
+  await expect(tavily.getByText('未安装', { exact: true })).toBeVisible()
+})
+
+test('owner manages a space market while the official catalog stays shared', async ({
+  page,
+}) => {
+  test.setTimeout(180_000)
+  await login(page, '/settings/plugins')
+  for (const agent of ['OpenCode', 'Claude Code', 'Codex']) {
+    await expect(page.getByRole('article', { name: agent })).toHaveCount(0)
+  }
+  await page.getByRole('button', { name: '管理市场' }).click()
+  const dialog = page.getByRole('dialog')
+  const official = dialog.getByRole('article', { name: '官方市场' })
+  await expect(official).toContainText(
+    'https://github.com/ora-space/marketplace',
+  )
+  await expect(official.getByRole('button', { name: '同步' })).toBeEnabled()
+
+  const customURL = 'https://github.com/ora-space/marketplace.git'
+  let custom = dialog.getByRole('article').filter({ hasText: customURL })
+  if (await custom.count()) {
+    await custom.getByRole('button', { name: '移除来源' }).click()
+    await custom.getByRole('button', { name: '确认移除来源' }).click()
+    await expect(custom).toHaveCount(0)
+  }
+  await dialog
+    .getByLabel('HTTPS 仓库地址', { exact: true })
+    .fill(customURL)
+  await dialog.getByRole('button', { name: '添加市场', exact: true }).click()
+  custom = dialog.getByRole('article').filter({ hasText: customURL })
+  await expect(custom).toBeVisible()
+  const synced = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      /\/plugins\/sources\/[^/]+\/sync$/.test(response.url()),
+  )
+  await custom.getByRole('button', { name: '同步', exact: true }).click()
+  expect((await synced).status()).toBe(204)
+  await page.getByRole('button', { name: '关闭详情' }).click()
+  await expect(
+    page.getByRole('article', { name: 'Matt Pocock Skills' }),
+  ).toHaveCount(2)
+
+  await page.getByRole('button', { name: '管理市场' }).click()
+  custom = page
+    .getByRole('dialog')
+    .getByRole('article')
+    .filter({ hasText: customURL })
+  await custom.getByRole('button', { name: '停用', exact: true }).click()
+  await expect(custom).toContainText('已停用')
+  await page.getByRole('button', { name: '关闭详情' }).click()
+  await expect(
+    page.getByRole('article', { name: 'Matt Pocock Skills' }),
+  ).toHaveCount(1)
+
+  await page.getByRole('button', { name: '管理市场' }).click()
+  custom = page
+    .getByRole('dialog')
+    .getByRole('article')
+    .filter({ hasText: customURL })
+  await custom.getByRole('button', { name: '移除来源' }).click()
+  await custom.getByRole('button', { name: '确认移除来源' }).click()
+  await expect(custom).toHaveCount(0)
+})
+
+test('member can inspect market sources but cannot manage them', async ({
+  page,
+}) => {
+  await login(page, '/settings/plugins', memberEmail)
+  await page.getByRole('button', { name: '管理市场' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(
+    dialog.getByRole('article', { name: '官方市场' }),
+  ).toBeVisible()
+  await expect(
+    dialog.getByLabel('HTTPS 仓库地址', { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    dialog.getByRole('button', { name: '添加市场', exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    dialog.getByRole('button', { name: '同步', exact: true }),
+  ).toHaveCount(0)
 })
 
 test('corrupt local data shows a recoverable error and requires reset confirmation', async ({
@@ -216,7 +322,9 @@ test('five desktop pages and keyboard-accessible details', async ({
     })
   }
   await page.goto('/settings/plugins')
-  const opener = page.getByRole('button', { name: '查看插件 写作工具箱' })
+  const opener = page.getByRole('button', {
+    name: '查看插件 Matt Pocock Skills',
+  })
   await opener.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('dialog')).toBeVisible()

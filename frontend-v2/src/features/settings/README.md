@@ -20,7 +20,9 @@ ID。`members/` 与 `data/marketplace.ts` 不使用它。初次读取创建示�
 - 插件复用生成的 `PluginCatalogEntry` 与 `SpacePlugin`；目录、安装和卸载全部走
   `frontend-v2/src/api` 的生成客户端。以 `sourceNamespace/identifier` 对应，写入带
   `Idempotency-Key` 和当前选择 version。只管理工作区市场包；Agent 插件继续由 Node
-  运行时链路管理，合集暂不可安装。owner 可写，member 只读。
+  运行时链路管理，合集暂不可安装。目录来自 v2-server 对
+  `ora-space/marketplace` 的真实 Git 同步，而不是前端内置数据。Agent 版本由已安装的 Node
+  运行时管理，不进入插件市场目录。owner 可管理空间来源，member 只读。
 - 技能是独立的说明文档，保留 namespace、source、availability、content。自建技能可增改删，
   仍只保存在本浏览器；市场技能从 `kind=skill` 的目录 README 生成，只读，安装或移除来源插件
   会改变可用性，移除后仍能预览文档。预览不执行 HTML 或加载远程图片。

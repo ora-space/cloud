@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
 )
 
 // Plugin marketplace errors. The HTTP layer maps these stable outcomes to Cloud error codes.
@@ -61,93 +62,66 @@ type PluginRemoveInput struct {
 	Version    int64
 }
 
-var demoCatalogIndexedAt = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
-
-// demoPluginCatalog is deterministic demo data with the same shape as a synced marketplace
-// snapshot. Keeping it in PostgreSQL makes install state and catalog reads survive restarts.
-var demoPluginCatalog = []PluginCatalogEntry{
-	{
-		ID: "official/ora-space.opencode", SourceNamespace: "official", Identifier: "ora-space.opencode",
-		Title: "OpenCode", Kind: "agent", Version: "0.6.11",
-		Description: "OpenCode Agent 插件，由 v2 Node 运行时加载。",
-		License:     ptr("Apache-2.0"), Readme: ptr("# OpenCode\n\n由 v2 执行器安装和运行。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/opencode-agent", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "official/ora-space.claude", SourceNamespace: "official", Identifier: "ora-space.claude",
-		Title: "Claude Code", Kind: "agent", Version: "0.4.5",
-		Description: "Claude Code Agent 插件，由 v2 Node 运行时加载。",
-		License:     ptr("Apache-2.0"), Readme: ptr("# Claude Code\n\n由 v2 执行器安装和运行。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/claude-code-agent", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/writing-kit", SourceNamespace: "demo", Identifier: "writing-kit",
-		Title: "写作工具箱", Kind: "skill", Version: "1.2.0",
-		Description: "从提纲到成稿，让团队文档保持清晰与一致。",
-		License:     ptr("MIT"), Readme: ptr("# writing-guide\n\n先明确读者和目的，再组织内容。\n\n## 工作步骤\n\n1. 用一句话说明结论。\n2. 每段只讨论一个主题。\n3. 给出可执行的下一步。\n"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/review-kit", SourceNamespace: "demo", Identifier: "review-kit",
-		Title: "代码审查指南", Kind: "skill", Version: "1.0.0",
-		Description: "一份可复用的检查清单，关注正确性与回归风险。",
-		License:     ptr("MIT"), Readme: ptr("# review-checklist\n\n- 对照需求确认行为。\n- 检查空值、错误和并发边界。\n- 说明证据，区分缺陷和建议。\n"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/github-tools", SourceNamespace: "demo", Identifier: "github-tools",
-		Title: "GitHub 工具", Kind: "mcp", Version: "2.1.0",
-		Description: "查阅仓库、拉取请求与代码上下文。",
-		License:     ptr("MIT"), Readme: ptr("# GitHub 工具\n\n在 Agent 会话中读取仓库和拉取请求上下文。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/browser-tools", SourceNamespace: "demo", Identifier: "browser-tools",
-		Title: "浏览器工具", Kind: "mcp", Version: "0.9.0",
-		Description: "在浏览器中查看页面结构、检查界面和整理信息。",
-		License:     ptr("MIT"), Readme: ptr("# 浏览器工具\n\n为 Agent 提供浏览器操作能力。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/web-preview", SourceNamespace: "demo", Identifier: "web-preview",
-		Title: "网页预览", Kind: "webview", Version: "1.0.0",
-		Description: "在独立视图中阅读网页与预览内容。",
-		License:     ptr("MIT"), Readme: ptr("# 网页预览\n\n在 v2 工作空间内打开网页预览。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-	{
-		ID: "demo/starter-pack", SourceNamespace: "demo", Identifier: "starter-pack",
-		Title: "团队入门合集", Kind: "pack", Version: "1.0.0",
-		Description: "适合新团队的插件组合；合集安装尚未支持。",
-		License:     ptr("MIT"), PackMembers: []string{"demo/writing-kit", "demo/github-tools"},
-		Readme:             ptr("# 团队入门合集\n\n包含写作工具箱和 GitHub 工具。"),
-		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace", IndexedAt: demoCatalogIndexedAt,
-	},
-}
-
-func ptr[T any](v T) *T { return &v }
-
-// SeedPluginCatalog replaces the temporary demo snapshot on every startup. The data is static, so
-// this behaves like a successful marketplace sync without adding a network dependency to v2.
-func SeedPluginCatalog(ctx context.Context, s *Store) error {
+// ReplacePluginCatalog atomically replaces the marketplace snapshot after a successful scan.
+// Readers never observe a partially synced catalog because the delete and inserts share one
+// transaction; a failure keeps the previous snapshot intact.
+func (s *Store) ReplacePluginCatalog(ctx context.Context, entries []pluginmarket.Entry, indexedAt time.Time) error {
+	if len(entries) == 0 {
+		return errors.New("refusing to replace plugin catalog with an empty snapshot")
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		for _, entry := range demoPluginCatalog {
+		if _, e := tx.Exec(ctx, `DELETE FROM v2_plugin_catalog`); e != nil {
+			return fmt.Errorf("clear plugin catalog: %w", e)
+		}
+		for _, source := range entries {
+			entry := catalogEntry(source, indexedAt)
 			raw, e := json.Marshal(entry)
 			if e != nil {
-				return fmt.Errorf("marshal demo catalog entry %s: %w", entry.ID, e)
+				return fmt.Errorf("encode catalog entry %s: %w", entry.ID, e)
 			}
 			if _, e := tx.Exec(ctx, `
 				INSERT INTO v2_plugin_catalog (source_namespace, identifier, kind, version, data, synced_at)
-				VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (source_namespace, identifier) DO UPDATE
-				SET kind = excluded.kind, version = excluded.version,
-					data = excluded.data, synced_at = excluded.synced_at`,
-				entry.SourceNamespace, entry.Identifier, entry.Kind, entry.Version, raw, entry.IndexedAt); e != nil {
-				return fmt.Errorf("seed demo catalog entry %s: %w", entry.ID, e)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+				entry.SourceNamespace, entry.Identifier, entry.Kind, entry.Version, raw, indexedAt); e != nil {
+				return fmt.Errorf("insert catalog entry %s: %w", entry.ID, e)
 			}
 		}
 		return nil
 	})
+}
+
+func catalogEntry(source pluginmarket.Entry, indexedAt time.Time) PluginCatalogEntry {
+	return PluginCatalogEntry{
+		ID: source.Namespace + "/" + source.Identifier, SourceNamespace: source.Namespace,
+		Identifier: source.Identifier, Title: source.Title, Kind: source.Kind,
+		Version: source.Version, Description: source.Description,
+		Homepage: optional(source.Homepage), License: optional(source.License),
+		Logo: source.Logo, URL: optional(source.URL), SHA256: optional(source.SHA256),
+		Targets: targets(source.Targets), PackMembers: optionalStrings(source.PackMembers),
+		Readme: optional(source.Readme), MarketplaceVisible: source.MarketplaceVisible,
+		SourceURL: source.SourceURL, IndexedAt: indexedAt,
+	}
+}
+
+func optional(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func targets(values []pluginmarket.ReleaseTarget) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+func optionalStrings(values []string) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 // PluginCatalog returns the visible marketplace snapshot for a member of the caller's space.
@@ -158,8 +132,14 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space, caller string)
 	rows, e := s.pool.Query(ctx, `
 		SELECT data, synced_at
 		FROM v2_plugin_catalog
-		WHERE (data->>'marketplaceVisible')::boolean
-		ORDER BY source_namespace, identifier`)
+		WHERE (data->>'marketplaceVisible')::boolean AND data->>'kind' <> 'agent'
+		UNION ALL
+		SELECT item, synced_at
+		FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item
+		WHERE space_id = $1 AND enabled
+			AND COALESCE((item->>'marketplaceVisible')::boolean, false)
+			AND item->>'kind' <> 'agent'
+		ORDER BY 2 DESC`, space)
 	if e != nil {
 		return nil, time.Time{}, fmt.Errorf("list plugin catalog: %w", e)
 	}
@@ -221,7 +201,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		var raw []byte
 		e = tx.QueryRow(ctx, `
 			SELECT kind, version, data FROM v2_plugin_catalog
-			WHERE source_namespace = $1 AND identifier = $2`, namespace, identifier).Scan(&kind, &version, &raw)
+			WHERE source_namespace = $1 AND identifier = $2 UNION ALL SELECT item->>'kind',item->>'version',item FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item WHERE space_id=$3 AND enabled AND namespace=$1 AND item->>'identifier'=$2`, namespace, identifier, space).Scan(&kind, &version, &raw)
 		if errors.Is(e, pgx.ErrNoRows) {
 			return ErrPluginNotFound
 		}

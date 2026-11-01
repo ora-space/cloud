@@ -1,3 +1,5 @@
+import { listMarketSources, syncMarketSource } from '../market-api/generated'
+import { MarketSources } from './market-sources'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -59,8 +61,57 @@ function StateBadge({ selection }: { selection?: SpacePlugin }) {
   )
 }
 
+function missingEntry(selection: SpacePlugin): PluginCatalogEntry {
+  return {
+    id: pluginKey(selection),
+    identifier: selection.identifier,
+    title: selection.identifier,
+    kind: selection.kind ?? 'skill',
+    sourceNamespace: selection.sourceNamespace,
+    description: '来源不可用。可以移除已有选择。',
+    version: selection.desiredVersion,
+    indexedAt: selection.updatedAt,
+    sourceUrl: '',
+    marketplaceVisible: false,
+    homepage: null,
+    license: null,
+    logo: null,
+    packMembers: null,
+    readme: null,
+    sha256: null,
+    targets: null,
+    url: null,
+  }
+}
+
 export default function PluginsPage() {
   const market = usePluginMarketplace()
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const synchronize = async () => {
+    setSyncing(true)
+    try {
+      const { items } = await listMarketSources(market.tenantId, market.spaceId)
+      const failures: string[] = []
+      for (const source of [
+        'official',
+        ...items.filter((s) => s.enabled).map((s) => s.namespace),
+      ]) {
+        try {
+          await syncMarketSource(market.tenantId, market.spaceId, source)
+        } catch {
+          failures.push(source)
+        }
+      }
+      await market.refetch()
+      if (failures.length) toast.error('部分来源同步失败，已保留上次目录。')
+      else toast.success('市场目录已同步')
+    } catch {
+      toast.error('未能同步市场，请重试。')
+    } finally {
+      setSyncing(false)
+    }
+  }
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('all')
   const [status, setStatus] = useState('all')
@@ -70,7 +121,15 @@ export default function PluginsPage() {
     selection: SpacePlugin
   }>()
   const [params, setParams] = useSearchParams()
-  const catalog = market.catalog.filter((entry) => entry.kind !== 'agent')
+  const available = new Set(market.catalog.map(pluginKey))
+  const catalog = [
+    ...market.catalog,
+    ...market.installations
+      .filter(
+        (s) => s.desiredState === 'installed' && !available.has(pluginKey(s)),
+      )
+      .map(missingEntry),
+  ].filter((entry) => entry.kind !== 'agent')
   const selected = catalog.find(
     (entry) =>
       pluginKey(entry) === params.get('plugin') && entry.kind !== 'agent',
@@ -93,8 +152,7 @@ export default function PluginsPage() {
     })
     .sort(
       (a, b) =>
-        (order === 'asc' ? 1 : -1) *
-        a.title.localeCompare(b.title, 'zh-CN'),
+        (order === 'asc' ? 1 : -1) * a.title.localeCompare(b.title, 'zh-CN'),
     )
   const clear = () => {
     setSearch('')
@@ -128,11 +186,20 @@ export default function PluginsPage() {
   }
   function actions(entry: PluginCatalogEntry) {
     const selection = market.selection(entry)
+    if (!available.has(pluginKey(entry)))
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!market.canManage || market.mutating}
+          onClick={() => requestRemove(entry)}
+        >
+          移除
+        </Button>
+      )
     if (entry.kind === 'pack')
       return (
-        <span className="text-xs text-muted-foreground">
-          合集安装尚未支持
-        </span>
+        <span className="text-xs text-muted-foreground">合集安装尚未支持</span>
       )
     const busy =
       market.mutating ||
@@ -150,7 +217,9 @@ export default function PluginsPage() {
     ) : (
       <Button
         size="sm"
-        variant={selection?.observedState === 'failed' ? 'outline' : 'secondary'}
+        variant={
+          selection?.observedState === 'failed' ? 'outline' : 'secondary'
+        }
         disabled={!market.canManage || busy}
         onClick={() => install(entry)}
       >
@@ -165,6 +234,22 @@ export default function PluginsPage() {
         title="Plugins"
         description="浏览并管理空间插件；安装状态保存在服务端，刷新、换浏览器和服务重启后仍保留。"
         count={catalog.length}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setSourcesOpen(true)}>
+              管理市场
+            </Button>
+            {market.canManage && (
+              <Button
+                variant="secondary"
+                disabled={syncing || !market.spaceId}
+                onClick={() => void synchronize()}
+              >
+                {syncing ? '同步中…' : '同步'}
+              </Button>
+            )}
+          </>
+        }
       />
       <DataState
         pending={market.pending}
@@ -185,8 +270,7 @@ export default function PluginsPage() {
             options={[
               ['all', '全部类型'],
               ...[...new Set(catalog.map((entry) => entry.kind))].map(
-                (value) =>
-                  [value, kindLabels[value] ?? value] as const,
+                (value) => [value, kindLabels[value] ?? value] as const,
               ),
             ]}
           />
@@ -280,6 +364,21 @@ export default function PluginsPage() {
           </Button>
         </p>
       )}
+      {sourcesOpen && (
+        <MarketSources
+          tenant={market.tenantId}
+          space={market.spaceId}
+          owner={market.canManage}
+          officialUrl={
+            market.catalog.find(
+              (entry) => entry.sourceNamespace === 'official',
+            )?.sourceUrl
+          }
+          officialSyncedAt={market.syncedAt}
+          onClose={() => setSourcesOpen(false)}
+          refresh={market.refetch}
+        />
+      )}
       {selected && (
         <DetailPanel
           title={selected.title}
@@ -297,7 +396,11 @@ export default function PluginsPage() {
             <dt>类型</dt>
             <dd>{kindLabels[selected.kind]}</dd>
             <dt>目录版本</dt>
-            <dd>{selected.version}</dd>
+            <dd>
+              {available.has(pluginKey(selected))
+                ? selected.version
+                : '来源不可用'}
+            </dd>
             <dt>安装选择</dt>
             <dd>
               {market.selection(selected)?.desiredState === 'installed'
@@ -305,9 +408,7 @@ export default function PluginsPage() {
                 : '未选择'}
             </dd>
             <dt>安装结果</dt>
-            <dd>
-              {market.selection(selected)?.observedVersion ?? '尚未安装'}
-            </dd>
+            <dd>{market.selection(selected)?.observedVersion ?? '尚未安装'}</dd>
             <dt>来源</dt>
             <dd>
               {selected.sourceNamespace} · {selected.sourceUrl}
@@ -325,7 +426,13 @@ export default function PluginsPage() {
             临时后端没有通用插件执行器，因此不会下载或运行包内代码。
           </p>
           <Separator />
-          <MarkdownPreview content={selected.readme ?? ''} />
+          {selected.readme ? (
+            <MarkdownPreview content={selected.readme} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              该插件未提供 README。
+            </p>
+          )}
           {selected.homepage?.startsWith('https://') && (
             <a
               href={selected.homepage}

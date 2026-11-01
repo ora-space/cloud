@@ -22,6 +22,11 @@ const pack = marketplaceEntry('starter-pack', {
   kind: 'pack',
   title: '团队入门合集',
 })
+const official = marketplaceEntry('mattpocock.skills', {
+  kind: 'skill',
+  title: 'Matt Pocock Skills',
+  sourceNamespace: 'official',
+})
 
 beforeEach(() => localStorage.clear())
 
@@ -107,4 +112,107 @@ it('lets a member browse the catalog but not change it', async () => {
   expect(
     screen.getByText(/安装与移除需要工作区 owner 权限/),
   ).toBeInTheDocument()
+})
+
+it('keeps runtime-owned Agents out of the plugin marketplace', async () => {
+  installMarketplaceBackend({
+    catalog: [
+      writing,
+      marketplaceEntry('ora-space.opencode', {
+        kind: 'agent',
+        title: 'OpenCode',
+        sourceNamespace: 'official',
+      }),
+    ],
+  })
+  renderSettingsPage(<PluginsPage />)
+  expect(
+    await screen.findByRole('article', { name: '写作工具箱' }),
+  ).toBeVisible()
+  expect(
+    screen.queryByRole('article', { name: 'OpenCode' }),
+  ).not.toBeInTheDocument()
+})
+
+it('shows the shared official market and manages space sources', async () => {
+  installMarketplaceBackend({ catalog: [official] })
+  const user = userEvent.setup()
+  renderSettingsPage(<PluginsPage />)
+  await user.click(screen.getByRole('button', { name: '管理市场' }))
+  const dialog = await screen.findByRole('dialog')
+  const officialRow = within(dialog).getByRole('article', {
+    name: '官方市场',
+  })
+  expect(officialRow).toHaveTextContent('https://github.com/ora-space/marketplace')
+  expect(
+    within(officialRow).getByRole('button', { name: '同步' }),
+  ).toBeEnabled()
+
+  const sourceURL = 'https://github.com/ora-space/marketplace.git'
+  await user.type(
+    within(dialog).getByLabelText('HTTPS 仓库地址'),
+    sourceURL,
+  )
+  await user.click(within(dialog).getByRole('button', { name: '添加市场' }))
+  const sourceRow = (
+    await within(dialog).findByText(sourceURL, { selector: 'strong' })
+  ).closest('article')
+  expect(sourceRow).not.toBeNull()
+  await user.click(within(sourceRow!).getByRole('button', { name: '停用' }))
+  await waitFor(() =>
+    expect(
+      within(dialog)
+        .getByText(sourceURL, { selector: 'strong' })
+        .closest('article'),
+    ).toHaveTextContent('已停用'),
+  )
+  const disabledRow = within(dialog)
+    .getByText(sourceURL, { selector: 'strong' })
+    .closest('article')!
+  await user.click(within(disabledRow).getByRole('button', { name: '移除来源' }))
+  await user.click(
+    within(disabledRow).getByRole('button', { name: '确认移除来源' }),
+  )
+  await waitFor(() =>
+    expect(within(dialog).queryByText(sourceURL)).not.toBeInTheDocument(),
+  )
+})
+
+it('keeps the market source list read-only for members', async () => {
+  installMarketplaceBackend({
+    role: 'member',
+    catalog: [official],
+    marketSources: [
+      {
+        namespace: 'custom-market',
+        url: 'https://github.com/ora-space/marketplace.git',
+        branch: 'main',
+        enabled: true,
+        syncedAt: null,
+        failure: '',
+        retrieval: { mode: 'direct_https', useProxy: false },
+      },
+    ],
+  })
+  const user = userEvent.setup()
+  renderSettingsPage(<PluginsPage />)
+  await user.click(screen.getByRole('button', { name: '管理市场' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(
+    await within(dialog).findByRole('article', { name: '官方市场' }),
+  ).toBeVisible()
+  expect(
+    within(dialog).getByText(
+      'https://github.com/ora-space/marketplace.git',
+    ),
+  ).toBeVisible()
+  expect(
+    dialog.querySelector('form[aria-label="添加市场"]'),
+  ).not.toBeInTheDocument()
+  expect(
+    within(dialog).queryByRole('button', { name: '添加市场' }),
+  ).not.toBeInTheDocument()
+  expect(
+    within(dialog).queryByRole('button', { name: '同步' }),
+  ).not.toBeInTheDocument()
 })
