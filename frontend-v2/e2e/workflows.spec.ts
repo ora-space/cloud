@@ -32,16 +32,14 @@ test('workflows: build a chain on the server, keep it across a reload, add the s
   await expect(page.getByRole('textbox', { name: '工作流名称' })).toHaveValue(name)
   await expect(canvas).toHaveAttribute('data-workflow-node-count', '3')
 
-  // v2-server checks a graph before publishing it; until the workflow kernel is wired into it,
-  // publishing is refused, and the page says so instead of pretending a version exists.
+  // v2-server checks the graph with the workflow kernel before freezing it as a version.
   await expect(page.getByText('暂未发布')).toBeVisible()
   await page.getByRole('button', { name: '发布', exact: true }).click()
   const publish = page.getByRole('alertdialog', { name: '发布工作流' })
   await publish.getByRole('textbox').fill('v1')
   await publish.getByRole('button', { name: '发布' }).click()
-  // The library shows the refusal as desktop's editor does, and the workflow stays unpublished.
-  await expect(page.getByRole('alert').filter({ hasText: '服务端暂时不能检查和发布工作流，草稿已保存。' })).toBeVisible()
-  await expect(page.getByText('暂未发布')).toBeVisible()
+  await expect(publish).toBeHidden()
+  await expect(page.getByText('暂未发布')).toBeHidden()
 
   // The samples join the tenant's library only when asked for.
   await library.getByRole('button', { name: '添加样例工作流' }).click()
