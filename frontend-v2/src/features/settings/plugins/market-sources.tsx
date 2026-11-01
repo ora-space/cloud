@@ -18,12 +18,16 @@ export function MarketSources({
   tenant,
   space,
   owner,
+  officialUrl,
+  officialSyncedAt,
   onClose,
   refresh,
 }: {
   tenant: string
   space: string
   owner: boolean
+  officialUrl?: string
+  officialSyncedAt?: string
   onClose: () => void
   refresh: () => Promise<void>
 }) {
@@ -83,6 +87,29 @@ export function MarketSources({
             重试
           </Button>
         </p>
+      )}
+      {officialUrl && (
+        <article
+          aria-label="官方市场"
+          className="space-y-2 rounded-lg border p-3"
+        >
+          <strong className="break-all">{officialUrl}</strong>
+          <p className="text-sm text-muted-foreground">
+            系统内置 · 所有空间共享 ·{' '}
+            {officialSyncedAt
+              ? new Date(officialSyncedAt).toLocaleString()
+              : '目录尚未同步'}
+          </p>
+          {owner && (
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => change.mutate({ action: 'sync', id: 'official' })}
+            >
+              同步
+            </Button>
+          )}
+        </article>
       )}
       {list.data?.items.map((source) => (
         <article

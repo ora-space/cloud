@@ -8,6 +8,10 @@ import type {
   PluginCatalogEntry,
   SpacePlugin,
 } from '@/api/generated.schemas'
+import type {
+  MarketSource,
+  MarketSourceInput,
+} from './market-api/generated'
 import { demoUser, fakeBackend } from '@/test/backend'
 
 export const MARKET_TENANT = '00000000-0000-4000-8000-0000000000aa'
@@ -78,12 +82,18 @@ export function installMarketplaceBackend({
   role = 'owner',
   catalog = [],
   selections = [],
+  marketSources = [],
 }: {
   role?: 'owner' | 'member'
   catalog?: PluginCatalogEntry[]
   selections?: SpacePlugin[]
+  marketSources?: MarketSource[]
 } = {}) {
-  const state = { catalog: [...catalog], selections: [...selections] }
+  const state = {
+    catalog: [...catalog],
+    selections: [...selections],
+    marketSources: [...marketSources],
+  }
   const seen: string[] = []
   const bodies: unknown[] = []
   fakeBackend((config) => {
@@ -121,6 +131,57 @@ export function installMarketplaceBackend({
         },
       }
     const base = `/api/v1/tenants/${MARKET_TENANT}/spaces/${MARKET_SPACE}/plugins`
+    const sourceBase = `${base}/sources`
+    if (url === sourceBase && method === 'GET')
+      return { status: 200, data: { items: state.marketSources } }
+    if (url === sourceBase && method === 'POST') {
+      if (role !== 'owner')
+        return { status: 403, data: { code: 'forbidden', params: {} } }
+      const body = (
+        typeof config.data === 'string'
+          ? JSON.parse(config.data)
+          : config.data
+      ) as MarketSourceInput
+      const source: MarketSource = {
+        ...body,
+        namespace: 'custom-market',
+        syncedAt: null,
+        failure: '',
+      }
+      state.marketSources.push(source)
+      return { status: 204 }
+    }
+    if (url.startsWith(sourceBase + '/')) {
+      if (role !== 'owner')
+        return { status: 403, data: { code: 'forbidden', params: {} } }
+      const [namespace, action] = url
+        .slice(sourceBase.length + 1)
+        .split('/')
+        .map(decodeURIComponent)
+      const index = state.marketSources.findIndex(
+        (source) => source.namespace === namespace,
+      )
+      if (index < 0)
+        return { status: 404, data: { code: 'not_found', params: {} } }
+      if (action === 'sync') return { status: 204 }
+      if (method === 'DELETE') {
+        state.marketSources.splice(index, 1)
+        return { status: 204 }
+      }
+      if (method === 'PATCH') {
+        const body = (
+          typeof config.data === 'string'
+            ? JSON.parse(config.data)
+            : config.data
+        ) as MarketSourceInput
+        state.marketSources[index] = {
+          ...state.marketSources[index],
+          ...body,
+        }
+        return { status: 204 }
+      }
+      return undefined
+    }
     if (url === `${base}/catalog`)
       return {
         status: 200,

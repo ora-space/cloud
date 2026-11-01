@@ -147,6 +147,89 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await expect(tavily.getByText('未安装', { exact: true })).toBeVisible()
 })
 
+test('owner manages a space market while the official catalog stays shared', async ({
+  page,
+}) => {
+  test.setTimeout(180_000)
+  await login(page, '/settings/plugins')
+  for (const agent of ['OpenCode', 'Claude Code', 'Codex']) {
+    await expect(page.getByRole('article', { name: agent })).toHaveCount(0)
+  }
+  await page.getByRole('button', { name: '管理市场' }).click()
+  const dialog = page.getByRole('dialog')
+  const official = dialog.getByRole('article', { name: '官方市场' })
+  await expect(official).toContainText(
+    'https://github.com/ora-space/marketplace',
+  )
+  await expect(official.getByRole('button', { name: '同步' })).toBeEnabled()
+
+  const customURL = 'https://github.com/ora-space/marketplace.git'
+  let custom = dialog.getByRole('article').filter({ hasText: customURL })
+  if (await custom.count()) {
+    await custom.getByRole('button', { name: '移除来源' }).click()
+    await custom.getByRole('button', { name: '确认移除来源' }).click()
+    await expect(custom).toHaveCount(0)
+  }
+  await dialog
+    .getByLabel('HTTPS 仓库地址', { exact: true })
+    .fill(customURL)
+  await dialog.getByRole('button', { name: '添加市场', exact: true }).click()
+  custom = dialog.getByRole('article').filter({ hasText: customURL })
+  await expect(custom).toBeVisible()
+  const synced = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      /\/plugins\/sources\/[^/]+\/sync$/.test(response.url()),
+  )
+  await custom.getByRole('button', { name: '同步', exact: true }).click()
+  expect((await synced).status()).toBe(204)
+  await page.getByRole('button', { name: '关闭详情' }).click()
+  await expect(
+    page.getByRole('article', { name: 'Matt Pocock Skills' }),
+  ).toHaveCount(2)
+
+  await page.getByRole('button', { name: '管理市场' }).click()
+  custom = page
+    .getByRole('dialog')
+    .getByRole('article')
+    .filter({ hasText: customURL })
+  await custom.getByRole('button', { name: '停用', exact: true }).click()
+  await expect(custom).toContainText('已停用')
+  await page.getByRole('button', { name: '关闭详情' }).click()
+  await expect(
+    page.getByRole('article', { name: 'Matt Pocock Skills' }),
+  ).toHaveCount(1)
+
+  await page.getByRole('button', { name: '管理市场' }).click()
+  custom = page
+    .getByRole('dialog')
+    .getByRole('article')
+    .filter({ hasText: customURL })
+  await custom.getByRole('button', { name: '移除来源' }).click()
+  await custom.getByRole('button', { name: '确认移除来源' }).click()
+  await expect(custom).toHaveCount(0)
+})
+
+test('member can inspect market sources but cannot manage them', async ({
+  page,
+}) => {
+  await login(page, '/settings/plugins', memberEmail)
+  await page.getByRole('button', { name: '管理市场' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(
+    dialog.getByRole('article', { name: '官方市场' }),
+  ).toBeVisible()
+  await expect(
+    dialog.getByLabel('HTTPS 仓库地址', { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    dialog.getByRole('button', { name: '添加市场', exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    dialog.getByRole('button', { name: '同步', exact: true }),
+  ).toHaveCount(0)
+})
+
 test('corrupt local data shows a recoverable error and requires reset confirmation', async ({
   page,
 }) => {

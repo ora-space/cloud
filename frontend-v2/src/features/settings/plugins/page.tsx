@@ -369,6 +369,12 @@ export default function PluginsPage() {
           tenant={market.tenantId}
           space={market.spaceId}
           owner={market.canManage}
+          officialUrl={
+            market.catalog.find(
+              (entry) => entry.sourceNamespace === 'official',
+            )?.sourceUrl
+          }
+          officialSyncedAt={market.syncedAt}
           onClose={() => setSourcesOpen(false)}
           refresh={market.refetch}
         />

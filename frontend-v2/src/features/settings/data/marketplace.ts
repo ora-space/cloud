@@ -99,6 +99,7 @@ export function usePluginMarketplace() {
     tenantId,
     spaceId,
     catalog: catalogItems,
+    syncedAt: catalog.data?.syncedAt ?? undefined,
     installations,
     selection: (entry: { sourceNamespace: string; identifier: string }) =>
       byKey.get(pluginKey(entry)),
