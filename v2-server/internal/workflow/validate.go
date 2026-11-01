@@ -12,6 +12,13 @@ type scope struct {
 }
 
 func validateDocument(d *document) error {
+	_, err := buildScopes(d)
+	return err
+}
+
+// buildScopes validates the reachable projection and returns each scope's checked topology:
+// "" is the root graph, other keys are Loop bodies. Iteration region members stay in the root.
+func buildScopes(d *document) (map[string]*scope, error) {
 	scopes := map[string]*scope{"": {byID: map[string]*node{}}}
 	loops := []*node{}
 	for _, n := range d.nodes {
@@ -19,10 +26,10 @@ func validateDocument(d *document) error {
 			continue
 		}
 		if !knownKind(n.kind) {
-			return invalid("unknown_node_type", n.id, "data.kind", "unrecognized node type")
+			return nil, invalid("unknown_node_type", n.id, "data.kind", "unrecognized node type")
 		}
 		if err := validateNode(n); err != nil {
-			return err
+			return nil, err
 		}
 		owner := ""
 		if n.container {
@@ -35,17 +42,17 @@ func validateDocument(d *document) error {
 		scopes[owner].byID[n.id] = n
 		if n.kind == "loop" {
 			if _, hasParent := n.raw["parentId"]; hasParent {
-				return invalid("invalid_region", n.id, "parentId", "nested Loops are not supported")
+				return nil, invalid("invalid_region", n.id, "parentId", "nested Loops are not supported")
 			}
 			loops = append(loops, n)
 		}
 		if n.kind == "loopExit" && !n.container {
-			return invalid("invalid_region", n.id, "data.containerId", "loopExit must belong to a Loop")
+			return nil, invalid("invalid_region", n.id, "data.containerId", "loopExit must belong to a Loop")
 		}
 	}
 	globals, err := validateGlobals(d.raw, len(loops) != 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, e := range d.edges {
 		if !d.active[e.source] || !d.active[e.target] {
@@ -55,10 +62,10 @@ func validateDocument(d *document) error {
 		r := newReader(e.raw, "invalid_node", from.id, "edge")
 		r.str("sourceHandle")
 		if *r.err != nil {
-			return *r.err
+			return nil, *r.err
 		}
 		if from.kind == "loopExit" {
-			return invalid("invalid_region", from.id, "edges", "loopExit must have no outgoing edges")
+			return nil, invalid("invalid_region", from.id, "edges", "loopExit must have no outgoing edges")
 		}
 		owner := ""
 		if from.container {
@@ -69,30 +76,30 @@ func validateDocument(d *document) error {
 	for _, id := range sortedKeys(scopes) {
 		s := scopes[id]
 		if err := s.topology(); err != nil {
-			return err
+			return nil, err
 		}
 		if len(loops) != 0 {
 			if err := s.requireEntry(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if err := s.validateRegions(); err != nil {
-			return err
+			return nil, err
 		}
 		if id != "" {
 			for _, n := range s.nodes {
 				if n.kind == "output" {
-					return invalid("invalid_region", n.id, "data.kind", "Loop bodies export through loopConfig.outputs")
+					return nil, invalid("invalid_region", n.id, "data.kind", "Loop bodies export through loopConfig.outputs")
 				}
 			}
 		}
 		if err := s.validateDeclarations(globals); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if len(loops) != 0 {
 		if err := validateLoopBindings(scopes, loops, globals); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, n := range d.nodes {
@@ -101,7 +108,7 @@ func validateDocument(d *document) error {
 		}
 		for _, parts := range n.selectors {
 			if d.unused[parts[0]] {
-				return invalid("unused_reference", n.id, "selector", "variable references unused node "+parts[0])
+				return nil, invalid("unused_reference", n.id, "selector", "variable references unused node "+parts[0])
 			}
 		}
 		for _, text := range n.templates {
@@ -116,13 +123,13 @@ func validateDocument(d *document) error {
 				} // Malformed templates are diagnosed at execution, as on desktop.
 				producer, _, qualified := strings.Cut(selected, ".")
 				if qualified && d.unused[producer] {
-					return invalid("unused_reference", n.id, "template", "template references unused node "+producer)
+					return nil, invalid("unused_reference", n.id, "template", "template references unused node "+producer)
 				}
 				text = rest
 			}
 		}
 	}
-	return nil
+	return scopes, nil
 }
 
 // topology is iterative: author-sized graphs must not consume one Go stack frame
