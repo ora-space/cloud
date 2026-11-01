@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -21,6 +22,17 @@ func TestPackageStatusErrorClassifiesRetries(t *testing.T) {
 		if err := packageStatusError(status); !errors.Is(err, ErrPackage) {
 			t.Fatalf("status %d = %v, want ErrPackage", status, err)
 		}
+	}
+}
+
+func TestDownloadPreservesTerminalRequestErrors(t *testing.T) {
+	for _, terminal := range []error{ErrSource, ErrPackage} {
+		if got := downloadRequestError(fmt.Errorf("request: %w", terminal)); !errors.Is(got, terminal) {
+			t.Fatalf("downloadRequestError(%v) = %v, want %v", terminal, got, terminal)
+		}
+	}
+	if got := downloadRequestError(errors.New("network")); !errors.Is(got, ErrTransient) {
+		t.Fatalf("network error = %v, want ErrTransient", got)
 	}
 }
 

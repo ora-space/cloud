@@ -138,10 +138,7 @@ func Download(ctx context.Context, locator, digest string, r Retrieval, credenti
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if errors.Is(e, ErrSource) {
-			return "", ErrSource
-		}
-		return "", ErrTransient
+		return "", downloadRequestError(e)
 	}
 	defer resp.Body.Close()
 	const limit = 256 << 20
@@ -170,6 +167,17 @@ func Download(ctx context.Context, locator, digest string, r Retrieval, credenti
 		return "", ErrPackage
 	}
 	return f.Name(), nil
+}
+
+func downloadRequestError(e error) error {
+	switch {
+	case errors.Is(e, ErrSource):
+		return ErrSource
+	case errors.Is(e, ErrPackage):
+		return ErrPackage
+	default:
+		return ErrTransient
+	}
 }
 
 func packageStatusError(status int) error {
