@@ -43,8 +43,13 @@ func TestPluginMarketHTTP(t *testing.T) {
 		t.Fatalf("catalog = %d %v", status, body)
 	}
 	catalog, _ := body["items"].([]any)
-	if len(catalog) != 5 || body["syncedAt"] == nil {
+	if len(catalog) != 4 || body["syncedAt"] == nil {
 		t.Fatalf("catalog = %v", body)
+	}
+	for _, raw := range catalog {
+		if raw.(map[string]any)["kind"] == "agent" {
+			t.Fatalf("catalog exposed runtime-owned Agent: %v", raw)
+		}
 	}
 
 	status, body = c.do("GET", base, nil)

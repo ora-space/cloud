@@ -30,7 +30,11 @@ type Syncer struct {
 	mu      sync.Mutex
 	Source  Source
 	WorkDir string
+	// Timeout bounds each complete checkout/scan/database sync. Zero uses two minutes.
+	Timeout time.Duration
 }
+
+const defaultSyncTimeout = 2 * time.Minute
 
 // ValidBranch accepts the Git branch grammar used by the marketplace configuration while
 // rejecting option-like values, traversal and characters Git would reinterpret.
@@ -53,6 +57,12 @@ func ValidBranch(value string) bool {
 func (s *Syncer) Sync(ctx context.Context, sink CatalogSink, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	timeout := s.Timeout
+	if timeout <= 0 {
+		timeout = defaultSyncTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	if e := s.gitSync(ctx); e != nil {
 		return fmt.Errorf("sync marketplace checkout: %w", e)
 	}
@@ -62,6 +72,9 @@ func (s *Syncer) Sync(ctx context.Context, sink CatalogSink, now time.Time) erro
 	}
 	for _, listing := range skipped {
 		slog.Warn("skipped marketplace listing", "listing", listing)
+	}
+	if len(entries) == 0 {
+		return errors.New("marketplace scan produced no visible entries; retaining previous snapshot")
 	}
 	if e := sink.ReplacePluginCatalog(ctx, entries, now.UTC()); e != nil {
 		return fmt.Errorf("replace marketplace catalog: %w", e)
@@ -88,6 +101,12 @@ func (s *Syncer) Loop(ctx context.Context, interval time.Duration, sink CatalogS
 
 func (s *Syncer) gitSync(ctx context.Context) error {
 	if _, e := os.Stat(filepath.Join(s.WorkDir, ".git")); e == nil {
+		if _, e := runGit(ctx, "git", "-C", s.WorkDir, "remote", "set-url", "origin", s.Source.URL); e != nil {
+			return e
+		}
+		if _, e := runGit(ctx, "git", "-C", s.WorkDir, "config", "core.autocrlf", "false"); e != nil {
+			return e
+		}
 		if _, e := runGit(ctx, "git", "-C", s.WorkDir, "fetch", "--depth=1", "origin", s.Source.Branch); e != nil {
 			return e
 		}
@@ -100,7 +119,7 @@ func (s *Syncer) gitSync(ctx context.Context) error {
 	if e := os.RemoveAll(tmp); e != nil {
 		return fmt.Errorf("clear marketplace temp checkout: %w", e)
 	}
-	if _, e := runGit(ctx, "git", "clone", "--depth=1", "--branch", s.Source.Branch, "--single-branch", s.Source.URL, tmp); e != nil {
+	if _, e := runGit(ctx, "git", "-c", "core.autocrlf=false", "clone", "--depth=1", "--branch", s.Source.Branch, "--single-branch", s.Source.URL, tmp); e != nil {
 		_ = os.RemoveAll(tmp)
 		return e
 	}
@@ -119,6 +138,9 @@ func runGit(ctx context.Context, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	output, e := command.CombinedOutput()
 	if e != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), ctx.Err())
+		}
 		message := strings.TrimSpace(string(output))
 		if len(message) > 8<<10 {
 			message = message[:8<<10]

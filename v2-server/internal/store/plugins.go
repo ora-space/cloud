@@ -66,6 +66,9 @@ type PluginRemoveInput struct {
 // Readers never observe a partially synced catalog because the delete and inserts share one
 // transaction; a failure keeps the previous snapshot intact.
 func (s *Store) ReplacePluginCatalog(ctx context.Context, entries []pluginmarket.Entry, indexedAt time.Time) error {
+	if len(entries) == 0 {
+		return errors.New("refusing to replace plugin catalog with an empty snapshot")
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, e := tx.Exec(ctx, `DELETE FROM v2_plugin_catalog`); e != nil {
 			return fmt.Errorf("clear plugin catalog: %w", e)
@@ -129,8 +132,14 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space, caller string)
 	rows, e := s.pool.Query(ctx, `
 		SELECT data, synced_at
 		FROM v2_plugin_catalog
-		WHERE (data->>'marketplaceVisible')::boolean
-		UNION ALL SELECT item, synced_at FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item WHERE space_id=$1 AND enabled ORDER BY 2 DESC`, space)
+		WHERE (data->>'marketplaceVisible')::boolean AND data->>'kind' <> 'agent'
+		UNION ALL
+		SELECT item, synced_at
+		FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item
+		WHERE space_id = $1 AND enabled
+			AND COALESCE((item->>'marketplaceVisible')::boolean, false)
+			AND item->>'kind' <> 'agent'
+		ORDER BY 2 DESC`, space)
 	if e != nil {
 		return nil, time.Time{}, fmt.Errorf("list plugin catalog: %w", e)
 	}

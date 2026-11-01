@@ -108,5 +108,8 @@ func ReadPublic(ctx context.Context, source Source, useProxy bool) ([]Entry, err
 	if e != nil || len(skipped) > 0 {
 		return nil, errors.New("invalid marketplace snapshot")
 	}
+	if len(entries) == 0 {
+		return nil, errors.New("marketplace has no visible non-Agent entries")
+	}
 	return entries, nil
 }

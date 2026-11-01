@@ -103,8 +103,8 @@ CREATE TABLE IF NOT EXISTS v2_spaces (
 	UNIQUE (tenant_id, slug)
 );
 
--- The temporary marketplace snapshot. v2 does not run the marketplace Git sync loop; these rows
--- are seeded with the same PluginCatalogEntry shape Cloud serves from its PostgreSQL snapshot.
+-- The latest validated marketplace snapshot. The official Git source replaces this table in one
+-- transaction; Agent entries are excluded because their versions belong to the installed runtime.
 CREATE TABLE IF NOT EXISTS v2_plugin_catalog (
 	source_namespace text NOT NULL,
 	identifier       text NOT NULL,
@@ -435,3 +435,18 @@ CREATE TABLE IF NOT EXISTS v2_market_sources (
 
 ALTER TABLE v2_market_sources ADD COLUMN IF NOT EXISTS retrieval jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE v2_market_sources ADD COLUMN IF NOT EXISTS credentials bytea;
+
+-- Earlier v2 databases seeded demo/* plugin selections and idempotency responses. Those rows no
+-- longer have a catalog entry. Clear references before removing them so upgrades stay valid.
+UPDATE v2_tasks
+SET assignee_type = NULL, assignee_id = NULL
+WHERE assignee_type = 'agent'
+	AND assignee_id IN (SELECT id FROM v2_space_agents WHERE source_namespace = 'demo');
+UPDATE v2_squads
+SET leader_agent_id = NULL
+WHERE leader_agent_id IN (SELECT id FROM v2_space_agents WHERE source_namespace = 'demo');
+DELETE FROM v2_squad_members
+WHERE space_agent_id IN (SELECT id FROM v2_space_agents WHERE source_namespace = 'demo');
+DELETE FROM v2_space_agents WHERE source_namespace = 'demo';
+DELETE FROM v2_plugin_mutations
+WHERE response->'resource'->>'sourceNamespace' = 'demo';

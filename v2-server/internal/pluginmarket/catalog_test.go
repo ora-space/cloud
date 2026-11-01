@@ -27,6 +27,16 @@ sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	writeTestFile(t, filepath.Join(entryDir, "README.md"), "# Acme Skill\n\nUse it safely.\n")
 	writeTestFile(t, filepath.Join(entryDir, "logo.light.svg"), "<svg/>")
 	writeTestFile(t, filepath.Join(entryDir, "logo.dark.png"), "png")
+	writeTestFile(t, filepath.Join(root, "registry", "a", "agent", "orax.toml"), `resolver = 1
+title = "Runtime Agent"
+identifier = "runtime.agent"
+kind = "agent"
+version = "0.3.18"
+description = "Managed by the installed runtime"
+license = "Apache-2.0"
+url = "https://example.com/runtime-agent.orax"
+sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+`)
 	writeTestFile(t, filepath.Join(root, "registry", "x", "broken", "orax.toml"), "resolver = 9\n")
 
 	entries, skipped, e := Scan(filepath.Join(root, "registry"), "official", "https://github.com/ora-space/marketplace")
@@ -54,9 +64,11 @@ func TestNormalizeSourceURL(t *testing.T) {
 		t.Fatalf("url = %q %v", got, e)
 	}
 	for _, value := range []string{
+		"file:///tmp/marketplace",
 		"http://github.com/ora-space/marketplace",
 		"https://user@github.com/ora-space/marketplace",
 		"https://github.com/ora-space/marketplace?ref=main",
+		"https://github.com/ora-space/marketplace#main",
 	} {
 		if _, e := NormalizeSourceURL(value); e == nil {
 			t.Fatalf("accepted %q", value)

@@ -9,6 +9,31 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 )
 
+func TestEmptyPluginCatalogKeepsThePreviousSnapshot(t *testing.T) {
+	f := newSquadFixture(t)
+	owner := f.login(t, "owner", "owner")
+	spaces, e := f.store.TenantSpaces(f.ctx, f.tenant, owner)
+	if e != nil || len(spaces) != 1 {
+		t.Fatalf("spaces = %v %v", spaces, e)
+	}
+	space := spaces[0].ID
+	entry := pluginmarket.Entry{
+		Namespace: "official", Identifier: "stable.skill", Title: "Stable",
+		Kind: "skill", Version: "1.0.0", Description: "Stable snapshot",
+		MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace",
+	}
+	if e := f.store.ReplacePluginCatalog(f.ctx, []pluginmarket.Entry{entry}, time.Now()); e != nil {
+		t.Fatal(e)
+	}
+	if e := f.store.ReplacePluginCatalog(f.ctx, nil, time.Now()); e == nil {
+		t.Fatal("empty snapshot replaced the catalog")
+	}
+	catalog, _, e := f.store.PluginCatalog(f.ctx, f.tenant, space, owner)
+	if e != nil || len(catalog) != 1 || catalog[0].ID != "official/stable.skill" {
+		t.Fatalf("catalog after empty sync = %+v %v", catalog, e)
+	}
+}
+
 func TestPluginMarketLifecycle(t *testing.T) {
 	f := newSquadFixture(t)
 	ctx := f.ctx
@@ -34,17 +59,20 @@ func TestPluginMarketLifecycle(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if syncedAt.IsZero() || len(catalog) != 5 {
+	if syncedAt.IsZero() || len(catalog) != 4 {
 		t.Fatalf("catalog = %d entries at %v", len(catalog), syncedAt)
 	}
 	kinds := map[string]bool{}
 	for _, entry := range catalog {
+		if entry.Kind == "agent" {
+			t.Fatalf("catalog exposed runtime-owned Agent: %+v", entry)
+		}
 		kinds[entry.Kind] = true
 		if entry.ID == "official/mattpocock.skills" && entry.Readme == nil {
 			t.Fatalf("skill package has no document: %+v", entry)
 		}
 	}
-	for _, kind := range []string{"agent", "skill", "mcp", "workflow", "pack"} {
+	for _, kind := range []string{"skill", "mcp", "workflow", "pack"} {
 		if !kinds[kind] {
 			t.Fatalf("catalog is missing kind %q: %+v", kind, kinds)
 		}

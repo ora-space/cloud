@@ -78,7 +78,9 @@ func Scan(root, namespace, sourceURL string) ([]Entry, []string, error) {
 			skipped = append(skipped, path+": "+e.Error())
 			continue
 		}
-		if !manifest.MarketplaceVisible {
+		// Agent versions are owned by the installed runtime, not by the marketplace catalog.
+		// Keeping them out here prevents stale registry versions from becoming install candidates.
+		if !manifest.MarketplaceVisible || manifest.Kind == "agent" {
 			continue
 		}
 		id := namespace + "/" + manifest.Identifier
@@ -155,18 +157,12 @@ func readReadme(dir string) string {
 	return string(content)
 }
 
-// NormalizeSourceURL rejects credentials and non-HTTPS production marketplace URLs. file URLs are
-// accepted only by the test-facing syncer so offline tests can use a local Git repository.
+// NormalizeSourceURL accepts only credential-free HTTPS marketplace URLs without query or fragment.
+// Tests construct Syncer directly when they need a local file URL.
 func NormalizeSourceURL(value string) (string, error) {
 	parsed, e := url.Parse(value)
 	if e != nil {
 		return "", fmt.Errorf("marketplace url: %w", e)
-	}
-	if parsed.Scheme == "file" {
-		if parsed.Path == "" {
-			return "", fmt.Errorf("marketplace url: file path is empty")
-		}
-		return parsed.String(), nil
 	}
 	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" {

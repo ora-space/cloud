@@ -37,7 +37,8 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	}
 	id := list[0].Namespace
 	item := store.PluginCatalogEntry{ID: id + "/test", SourceNamespace: id, Identifier: "test", Version: "1.0.0", Kind: "skill", Title: "Test", MarketplaceVisible: true, IndexedAt: time.Now()}
-	raw, _ := json.Marshal([]store.PluginCatalogEntry{item})
+	agent := store.PluginCatalogEntry{ID: id + "/agent", SourceNamespace: id, Identifier: "agent", Version: "0.3.18", Kind: "agent", Title: "Agent", MarketplaceVisible: true, IndexedAt: time.Now()}
+	raw, _ := json.Marshal([]store.PluginCatalogEntry{item, agent})
 	if _, e := f.db.Exec(f.ctx, `update v2_market_sources set snapshot=$2,synced_at=now() where namespace=$1`, id, raw); e != nil {
 		t.Fatal(e)
 	}
