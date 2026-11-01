@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/wanglongan587/cloud/v2-server/internal/agentruntime"
+	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 	"log/slog"
@@ -41,13 +42,25 @@ func reconcileSkills(ctx context.Context, db *store.Store, driver *agentruntime.
 			if errors.Is(e, agentruntime.ErrOfflineSkillNode) {
 				continue
 			}
-			if err := db.FinishSkillJob(ctx, j, e != nil); err != nil {
+			if err := db.FinishSkillJob(ctx, j, skillJobOutcome(e)); err != nil {
 				return err
 			}
 		}
 	}
 	return db.RefreshSkillStates(ctx)
 }
+
+func skillJobOutcome(e error) store.SkillJobOutcome {
+	switch {
+	case e == nil:
+		return store.SkillJobSucceeded
+	case errors.Is(e, pluginmarket.ErrTransient), errors.Is(e, execution.ErrUnavailable):
+		return store.SkillJobRetry
+	default:
+		return store.SkillJobFailed
+	}
+}
+
 func applySkill(ctx context.Context, d *agentruntime.Driver, j store.SkillJob) error {
 	remove := j.Desired == "removed"
 	version := j.Version
