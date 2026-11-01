@@ -528,6 +528,10 @@
     flex-direction: row;
     overflow-x: auto;
     padding: 3px;
+    scrollbar-width: none;
+  }
+  .settings-navigation::-webkit-scrollbar {
+    display: none;
   }
   .settings-nav-link {
     padding: 10px;

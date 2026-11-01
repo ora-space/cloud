@@ -173,6 +173,10 @@ export default function PluginsPage() {
       items: filtered.filter((entry) => entry.kind === kindValue),
     }))
     .filter((group) => group.items.length > 0)
+  const installedSelections = market.installations.filter(pluginInstalled)
+  const installedMarketPackages = installedSelections.filter(
+    (selection) => selection.kind !== 'agent',
+  )
   const clear = () => {
     setSearch('')
     setKind('all')
@@ -354,7 +358,7 @@ export default function PluginsPage() {
             onChange={setStatus}
             options={[
               ['all', '全部状态'],
-              ['installed', '已安装'],
+              ['installed', '已安装 / 运行中'],
               ['available', '未安装'],
               ['failed', '安装失败'],
             ]}
@@ -454,13 +458,8 @@ export default function PluginsPage() {
         <div className="settings-list-footer">
           <span>
             显示 {filtered.length} / {catalog.length} 个插件 · 共{' '}
-            {
-              market.installations.filter(
-                (selection) =>
-                  selection.kind !== 'agent' && pluginInstalled(selection),
-              ).length
-            }{' '}
-            个已安装
+            {installedSelections.length} 个已安装或运行中 · 其中{' '}
+            {installedMarketPackages.length} 个市场包
           </span>
           <span>技能包由项目节点确认安装结果</span>
         </div>
