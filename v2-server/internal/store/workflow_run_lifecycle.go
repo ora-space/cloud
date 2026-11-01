@@ -305,8 +305,9 @@ func (s *Store) FinishWorkflowRun(ctx context.Context, tenant, runID, status str
 }
 
 // CancelWorkflowRun closes a run and every non-terminal attempt as cancelled once the bridge has
-// confirmed the stop. Cancelling an already cancelled run is idempotent; a succeeded or failed run
-// is refused because its outcome is authoritative.
+// confirmed the stop. An open Loop round is closed with them, so nothing reads as still active
+// under a cancelled run. Cancelling an already cancelled run is idempotent; a succeeded or failed
+// run is refused because its outcome is authoritative.
 func (s *Store) CancelWorkflowRun(ctx context.Context, tenant, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -333,6 +334,15 @@ func (s *Store) CancelWorkflowRun(ctx context.Context, tenant, runID string) (Wo
 			WHERE tenant_id = $1 AND run_id = $2
 				AND status IN ('pending', 'running') AND deleted_at IS NULL`, tenant, runID); err != nil {
 			return fmt.Errorf("cancel node runs: %w", err)
+		}
+		// Close the active Loop rounds too: their node rows are cancelled above, and leaving a round
+		// running would keep it reserved by v2_workflow_scopes_one_active_round for a run that is over.
+		if _, err := tx.Exec(ctx, `
+			UPDATE v2_workflow_scopes
+			SET status = 'cancelled', updated_at = now()
+			WHERE tenant_id = $1 AND run_id = $2 AND parent_loop_node_run_id IS NOT NULL
+				AND status IN ('pending', 'running')`, tenant, runID); err != nil {
+			return fmt.Errorf("cancel loop rounds: %w", err)
 		}
 		run, err = scanWorkflowRun(tx.QueryRow(ctx, `
 			UPDATE v2_workflow_runs

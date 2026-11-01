@@ -141,6 +141,37 @@ func TestWorkflowRunTerminalTransitions(t *testing.T) {
 	}
 }
 
+// Cancelling a run closes its open Loop round: the round belongs to the run, and a round left
+// running would keep holding the one-active-round reservation of a run that is already over.
+func TestWorkflowRunCancelClosesLoopRounds(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "cancel-round-owner")
+	ctx := context.Background()
+	run, _ := startedRun(t, s, user, tenant, "取消轮次")
+	loop, err := s.CreateWorkflowNodeRun(ctx, tenant, run.ID, store.WorkflowNodeRunInput{NodeID: "loop-1", NodeType: "loop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := s.StartWorkflowLoopRound(ctx, tenant, run.ID, loop.ID, 1, []byte(`{"conditionDecisions":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelWorkflowRun(ctx, tenant, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	scopes, err := s.WorkflowRunScopes(ctx, tenant, run.ID)
+	if err != nil || len(scopes) != 1 || scopes[0].ID != round.ID {
+		t.Fatalf("rounds after cancel = %+v %v", scopes, err)
+	}
+	if scopes[0].Status == nil || *scopes[0].Status != store.WorkflowStatusCancelled {
+		t.Fatalf("cancelled round status = %v", scopes[0].Status)
+	}
+	// The round keeps the ledger it accumulated; cancellation only closes it.
+	if scopes[0].State == nil || string(scopes[0].State) != `{"conditionDecisions": {}}` {
+		t.Fatalf("cancelled round state = %s", scopes[0].State)
+	}
+}
+
 func TestWorkflowLoopRoundScopes(t *testing.T) {
 	s := storetest.Open(t)
 	user, tenant := storetest.Login(t, s, "loop-owner")
