@@ -191,9 +191,9 @@ export function useWorkflowDraftAutosave({
     }
   }, [clearTimer, enabled, schedule]);
 
-  // A browser reload or tab close never unmounts the editor, so persist the edits still inside
-  // the debounce window when the page goes away. The local store writes synchronously, so the
-  // save lands before the page unloads.
+  // A browser reload or tab close never unmounts the editor, so start writing the edits still
+  // inside the debounce window when the page goes away. The write is asynchronous and may not
+  // land; WorkflowLeaveGuard asks the user to confirm leaving while edits are unsaved.
   useEffect(() => {
     const persistOnPageHide = () => {
       if (!dirtyRef.current) {

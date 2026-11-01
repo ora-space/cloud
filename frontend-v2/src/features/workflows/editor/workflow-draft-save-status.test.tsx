@@ -33,19 +33,17 @@ describe("WorkflowDraftSaveStatusLabel", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the last live-saved timestamp while a quiet-period write is in flight", () => {
+  // The server draft is the only copy, so the label never claims a save the server has not acked.
+  it("reports saving instead of the last saved time while a write is in flight", () => {
     renderLabel({ status: "saving", draftUpdatedAt: "8月7日 15:42:15" });
-    expect(
-      screen.getByText("已实时保存 最近修改时间：8月7日 15:42:15"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("保存中…")).not.toBeInTheDocument();
+    expect(screen.getByText("保存中…")).toBeInTheDocument();
+    expect(screen.queryByText(/已实时保存/)).not.toBeInTheDocument();
   });
 
-  it("keeps the last live-saved timestamp while edits are still dirty", () => {
+  it("reports unsaved instead of the last saved time while edits are dirty", () => {
     renderLabel({ status: "dirty", draftUpdatedAt: "8月7日 15:42:15" });
-    expect(
-      screen.getByText("已实时保存 最近修改时间：8月7日 15:42:15"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("未保存")).toBeInTheDocument();
+    expect(screen.queryByText(/已实时保存/)).not.toBeInTheDocument();
   });
 
   it("surfaces save failures distinctly from the live-saved label", () => {
