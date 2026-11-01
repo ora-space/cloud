@@ -11,6 +11,7 @@ type FailureKind string
 // Failure kinds v2 can produce. Desktop kinds tied to unapplied capabilities (Skill
 // materialization, baselines) are not listed because v2 never raises them.
 const (
+	FailureMissingAgentRef           FailureKind = "missing_agent_ref"
 	FailureMissingAgentConfig        FailureKind = "missing_agent_config"
 	FailureInvalidRunPayload         FailureKind = "invalid_run_payload"
 	FailurePromptTemplate            FailureKind = "prompt_template"
