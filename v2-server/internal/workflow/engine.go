@@ -50,7 +50,7 @@ type Repository interface {
 	CompleteNode(ctx context.Context, runID, nodeRunID string, output *string, keys map[string]any, fold func(payload []byte, node NodeRun) ([]byte, error)) (bool, error)
 	// FailNode marks a running attempt failed with the detail built for its attempt number and
 	// fails the run when it is still running. false means the attempt was no longer running.
-	FailNode(ctx context.Context, runID, nodeRunID string, output *string, detail func(attempt int, payload []byte) map[string]any) (bool, error)
+	FailNode(ctx context.Context, runID, nodeRunID, message string, output *string, detail func(attempt int, payload []byte) map[string]any) (bool, error)
 	// FinishRun marks a running run succeeded with its final output.
 	FinishRun(ctx context.Context, runID string, output *string) error
 	// UpdateRunInput replaces the kickoff input of an editable run and applies fold to its payload.
@@ -289,7 +289,7 @@ func (e *Engine) FailNode(ctx context.Context, runID, nodeRunID string, f Failur
 }
 
 func (e *Engine) fail(ctx context.Context, runID, nodeRunID string, f Failure) error {
-	advanced, err := e.repo.FailNode(ctx, runID, nodeRunID, f.Output, func(attempt int, payload []byte) map[string]any {
+	advanced, err := e.repo.FailNode(ctx, runID, nodeRunID, f.Message, f.Output, func(attempt int, payload []byte) map[string]any {
 		inject := true
 		if p, ok, _ := DecodeRunPayload(payload); ok {
 			inject = p.InjectLastFailure

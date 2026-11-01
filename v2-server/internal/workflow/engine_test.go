@@ -82,7 +82,7 @@ func (m *memoryRepo) CompleteNode(_ context.Context, _, id string, output *strin
 	return true, nil
 }
 
-func (m *memoryRepo) FailNode(_ context.Context, _, id string, output *string, detail func(int, []byte) map[string]any) (bool, error) {
+func (m *memoryRepo) FailNode(_ context.Context, _, id, _ string, output *string, detail func(int, []byte) map[string]any) (bool, error) {
 	r := m.find(id)
 	if r == nil || r.Status != StatusRunning {
 		return false, nil
