@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,7 @@ type Source struct {
 
 // Syncer owns the marketplace checkout and synchronizes it into PostgreSQL.
 type Syncer struct {
+	mu      sync.Mutex
 	Source  Source
 	WorkDir string
 }
@@ -49,6 +51,8 @@ func ValidBranch(value string) bool {
 // Sync fast-forwards the marketplace checkout, validates every listing and atomically replaces
 // the catalog snapshot. A Git, scan or database failure keeps the previous successful snapshot.
 func (s *Syncer) Sync(ctx context.Context, sink CatalogSink, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if e := s.gitSync(ctx); e != nil {
 		return fmt.Errorf("sync marketplace checkout: %w", e)
 	}

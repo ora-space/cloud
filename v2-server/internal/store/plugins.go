@@ -71,16 +71,7 @@ func (s *Store) ReplacePluginCatalog(ctx context.Context, entries []pluginmarket
 			return fmt.Errorf("clear plugin catalog: %w", e)
 		}
 		for _, source := range entries {
-			entry := PluginCatalogEntry{
-				ID: source.Namespace + "/" + source.Identifier, SourceNamespace: source.Namespace,
-				Identifier: source.Identifier, Title: source.Title, Kind: source.Kind,
-				Version: source.Version, Description: source.Description,
-				Homepage: optional(source.Homepage), License: optional(source.License),
-				Logo: source.Logo, URL: optional(source.URL), SHA256: optional(source.SHA256),
-				Targets: targets(source.Targets), PackMembers: optionalStrings(source.PackMembers),
-				Readme: optional(source.Readme), MarketplaceVisible: source.MarketplaceVisible,
-				SourceURL: source.SourceURL, IndexedAt: indexedAt,
-			}
+			entry := catalogEntry(source, indexedAt)
 			raw, e := json.Marshal(entry)
 			if e != nil {
 				return fmt.Errorf("encode catalog entry %s: %w", entry.ID, e)
@@ -94,6 +85,19 @@ func (s *Store) ReplacePluginCatalog(ctx context.Context, entries []pluginmarket
 		}
 		return nil
 	})
+}
+
+func catalogEntry(source pluginmarket.Entry, indexedAt time.Time) PluginCatalogEntry {
+	return PluginCatalogEntry{
+		ID: source.Namespace + "/" + source.Identifier, SourceNamespace: source.Namespace,
+		Identifier: source.Identifier, Title: source.Title, Kind: source.Kind,
+		Version: source.Version, Description: source.Description,
+		Homepage: optional(source.Homepage), License: optional(source.License),
+		Logo: source.Logo, URL: optional(source.URL), SHA256: optional(source.SHA256),
+		Targets: targets(source.Targets), PackMembers: optionalStrings(source.PackMembers),
+		Readme: optional(source.Readme), MarketplaceVisible: source.MarketplaceVisible,
+		SourceURL: source.SourceURL, IndexedAt: indexedAt,
+	}
 }
 
 func optional(value string) *string {
@@ -126,7 +130,7 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space, caller string)
 		SELECT data, synced_at
 		FROM v2_plugin_catalog
 		WHERE (data->>'marketplaceVisible')::boolean
-		ORDER BY source_namespace, identifier`)
+		UNION ALL SELECT item, synced_at FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item WHERE space_id=$1 AND enabled ORDER BY 2 DESC`, space)
 	if e != nil {
 		return nil, time.Time{}, fmt.Errorf("list plugin catalog: %w", e)
 	}
@@ -188,7 +192,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		var raw []byte
 		e = tx.QueryRow(ctx, `
 			SELECT kind, version, data FROM v2_plugin_catalog
-			WHERE source_namespace = $1 AND identifier = $2`, namespace, identifier).Scan(&kind, &version, &raw)
+			WHERE source_namespace = $1 AND identifier = $2 UNION ALL SELECT item->>'kind',item->>'version',item FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item WHERE space_id=$3 AND enabled AND namespace=$1 AND item->>'identifier'=$2`, namespace, identifier, space).Scan(&kind, &version, &raw)
 		if errors.Is(e, pgx.ErrNoRows) {
 			return ErrPluginNotFound
 		}

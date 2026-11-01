@@ -3,6 +3,7 @@ module github.com/wanglongan587/cloud/v2-server
 go 1.27.1
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/pelletier/go-toml/v2 v2.4.3
@@ -10,6 +11,7 @@ require (
 )
 
 require (
+	github.com/aws/smithy-go v1.28.7 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

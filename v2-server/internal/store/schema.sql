@@ -291,7 +291,6 @@ CREATE TABLE IF NOT EXISTS v2_tasks (
 	CHECK (status IN ('pending', 'running', 'review', 'done', 'cancelled'))
 );
 CREATE INDEX IF NOT EXISTS v2_tasks_tenant ON v2_tasks (tenant_id, updated_at DESC, id);
-
 -- Workflow definitions follow desktop's authoring model instead of Cloud's: every definition owns
 -- exactly one mutable draft snapshot (version 'draft') plus immutable published snapshots addressed
 -- by a caller-chosen version, and the workflow row points at the version new runs freeze. The graph
@@ -424,3 +423,15 @@ CREATE INDEX IF NOT EXISTS v2_workflow_node_runs_iteration
 -- both creating one.
 CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_node_runs_live_identity
 	ON v2_workflow_node_runs (scope_id, node_id, COALESCE(iteration, -1)) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS v2_market_sources (
+ space_id uuid NOT NULL REFERENCES v2_spaces(id) ON DELETE CASCADE,
+ namespace text NOT NULL,
+ url text NOT NULL, branch text NOT NULL, enabled boolean NOT NULL DEFAULT true,
+ revision bigint NOT NULL DEFAULT 1, synced_at timestamptz, failure text NOT NULL DEFAULT '',
+ retrieval jsonb NOT NULL DEFAULT '{}', credentials bytea,
+ snapshot jsonb NOT NULL DEFAULT '[]', PRIMARY KEY(space_id,namespace)
+);
+
+ALTER TABLE v2_market_sources ADD COLUMN IF NOT EXISTS retrieval jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE v2_market_sources ADD COLUMN IF NOT EXISTS credentials bytea;

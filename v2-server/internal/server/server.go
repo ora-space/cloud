@@ -25,6 +25,8 @@ const SessionCookie = "ora_session"
 
 // Store is what the handlers need from the database.
 type Store interface {
+	MarketSources(context.Context, string, string, string) ([]store.MarketSource, error)
+	ChangeMarket(context.Context, string, string, string, string, string, store.MarketSource) error
 	Ping(ctx context.Context) error
 	UserByEmail(ctx context.Context, email string) (store.User, error)
 	StartSession(ctx context.Context, userID string, ttl time.Duration) (string, error)
@@ -43,6 +45,7 @@ type Store interface {
 
 // Options tune the server.
 type Options struct {
+	RefreshOfficial func(context.Context) error
 	// SessionTTL is how long a login lasts.
 	SessionTTL time.Duration
 	// Projects prepares fixed repository mirrors; nil leaves project operations unavailable.
@@ -81,6 +84,11 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/members", h.authed(h.members))
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/members", h.authed(h.invite))
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces", h.authed(h.spaces))
+	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources", h.authed(h.marketSources))
+	mux.HandleFunc("POST /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources", h.authed(h.marketSources))
+	mux.HandleFunc("PATCH /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}", h.authed(h.marketSources))
+	mux.HandleFunc("DELETE /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}", h.authed(h.marketSources))
+	mux.HandleFunc("POST /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}/sync", h.authed(h.marketSources))
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/catalog", h.authed(h.pluginCatalog))
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins", h.authed(h.spacePlugins))
 	mux.HandleFunc("POST /api/v1/tenants/{tid}/spaces/{sid}/plugins", h.authed(h.installSpacePlugin))

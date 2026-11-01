@@ -1,0 +1,138 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/jackc/pgx/v5"
+	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
+	"time"
+)
+
+type MarketSource struct {
+	Retrieval pluginmarket.Retrieval `json:"retrieval"`
+	// Only input structs ever carry credentials. MarketSources never selects the encrypted column.
+	Credentials *pluginmarket.Credentials `json:"credentials,omitempty"`
+
+	Namespace string     `json:"namespace"`
+	URL       string     `json:"url"`
+	Branch    string     `json:"branch"`
+	Enabled   bool       `json:"enabled"`
+	SyncedAt  *time.Time `json:"syncedAt"`
+	Failure   string     `json:"failure"`
+}
+
+func (s *Store) MarketSources(ctx context.Context, tenant, space, user string) ([]MarketSource, error) {
+	if _, e := requireSpaceAccess(ctx, s.pool, tenant, space, user); e != nil {
+		return nil, e
+	}
+	rows, e := s.pool.Query(ctx, `select namespace,url,branch,enabled,synced_at,failure,retrieval from v2_market_sources where space_id=$1 order by namespace`, space)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []MarketSource{}
+	for rows.Next() {
+		var m MarketSource
+		if e := rows.Scan(&m.Namespace, &m.URL, &m.Branch, &m.Enabled, &m.SyncedAt, &m.Failure, &m.Retrieval); e != nil {
+			return nil, e
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+func (s *Store) ChangeMarket(ctx context.Context, tenant, space, user, id, action string, in MarketSource) error {
+	role, e := requireSpaceAccess(ctx, s.pool, tenant, space, user)
+	if e != nil {
+		return e
+	}
+	if !isAdministrator(role) {
+		return ErrForbidden
+	}
+	if id == "official" {
+		if action == "sync" {
+			return nil
+		}
+		return ErrForbidden
+	}
+	switch action {
+	case "POST", "PATCH":
+		u, e := pluginmarket.ValidatePublicSource(in.URL, in.Branch)
+		if e != nil {
+			return e
+		}
+		if e := in.Retrieval.Validate(); e != nil {
+			return e
+		}
+		if in.Retrieval.Mode == "" {
+			in.Retrieval.Mode = "direct_https"
+		}
+		if action == "POST" {
+			id = pluginmarket.Namespace(u)
+		}
+		config, e := json.Marshal(in.Retrieval)
+		if e != nil {
+			return e
+		}
+		var sealed []byte
+		if in.Retrieval.Mode == "s3_sigv4" && in.Credentials != nil {
+			sealed, e = pluginmarket.SealCredentials(*in.Credentials, space+"/"+id+"/"+in.Retrieval.Endpoint+"/"+in.Retrieval.Bucket)
+			if e != nil {
+				return e
+			}
+		} else if in.Retrieval.Mode == "s3_sigv4" && action == "POST" {
+			return pluginmarket.ErrCredentials
+		}
+		if action == "POST" {
+			tag, e := s.pool.Exec(ctx, `insert into v2_market_sources(space_id,namespace,url,branch,enabled,retrieval,credentials) values($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, space, id, in.URL, in.Branch, in.Enabled, config, sealed)
+			if e == nil && tag.RowsAffected() == 0 {
+				return ErrConflict
+			}
+			return e
+		}
+		tag, e := s.pool.Exec(ctx, `update v2_market_sources set url=$3,branch=$4,enabled=$5,retrieval=$6, credentials=case when ($6::jsonb)->>'mode'<>'s3_sigv4' then null else coalesce($7,credentials) end,revision=revision+1 where space_id=$1 and namespace=$2 AND (($6::jsonb)->>'mode'<>'s3_sigv4' OR $7::bytea IS NOT NULL OR (credentials IS NOT NULL AND retrieval->>'endpoint'=($6::jsonb)->>'endpoint' AND retrieval->>'bucket'=($6::jsonb)->>'bucket'))`, space, id, in.URL, in.Branch, in.Enabled, config, sealed)
+		if e == nil && tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return e
+	case "DELETE":
+		tag, e := s.pool.Exec(ctx, `delete from v2_market_sources where space_id=$1 and namespace=$2`, space, id)
+		if e == nil && tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return e
+	case "sync":
+		var m MarketSource
+		var revision int64
+		e = s.pool.QueryRow(ctx, `update v2_market_sources set revision=revision+1 where space_id=$1 and namespace=$2 and enabled returning url,branch,revision,retrieval`, space, id).Scan(&m.URL, &m.Branch, &revision, &m.Retrieval)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if e != nil {
+			return e
+		}
+		entries, fetchErr := pluginmarket.ReadPublic(ctx, pluginmarket.Source{Namespace: id, URL: m.URL, Branch: m.Branch}, m.Retrieval.UseProxy)
+		if fetchErr != nil {
+			_, e = s.pool.Exec(ctx, `update v2_market_sources set failure='同步失败，请检查仓库地址和分支。' where space_id=$1 and namespace=$2 and revision=$3`, space, id, revision)
+			if e != nil {
+				return e
+			}
+			return fetchErr
+		}
+		now := time.Now().UTC()
+		list := []PluginCatalogEntry{}
+		for _, source := range entries {
+			list = append(list, catalogEntry(source, now))
+		}
+		raw, e := json.Marshal(list)
+		if e != nil {
+			return e
+		}
+		tag, e := s.pool.Exec(ctx, `update v2_market_sources set snapshot=$4,synced_at=$5,failure='' where space_id=$1 and namespace=$2 and revision=$3`, space, id, revision, raw, now)
+		if e == nil && tag.RowsAffected() == 0 {
+			return ErrConflict
+		}
+		return e
+	}
+	return ErrNotFound
+}
