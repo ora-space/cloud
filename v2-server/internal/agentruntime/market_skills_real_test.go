@@ -3,9 +3,12 @@
 package agentruntime
 
 import (
+	"bytes"
 	"context"
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/nodeservices"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +16,21 @@ import (
 	"testing"
 	"time"
 )
+
+// The model is a fixture, while the Agent, shell, checkout and skill bytes are real.
+type marketSkillFixture struct{}
+
+func (marketSkillFixture) Complete(w http.ResponseWriter, r *http.Request, m nodeservices.Model) {
+	buffer := httptest.NewRecorder()
+	nodeservices.FixtureProvider{}.Complete(buffer, r, m)
+	for k, vs := range buffer.Header() {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(buffer.Code)
+	_, _ = w.Write(bytes.ReplaceAll(buffer.Body.Bytes(), []byte("(cat README.md"), []byte("(cp .opencode/skills/ask-matt/SKILL.md used-market-skill.md; cat README.md")))
+}
 
 // Uses the official mattpocock.skills 1.3.1 release and the same real Node assets as chat.
 func TestRealMarketSkillNode(t *testing.T) {
@@ -39,8 +57,26 @@ func TestRealMarketSkillNode(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	project := Project{MirrorPath: repo}
-	d, e := New(Options{Root: filepath.Join(tmp, "n"), AssetsDirectory: assets, GitBackend: filepath.Join(strings.TrimSpace(string(gitDir)), "git-http-backend"), ResolveProject: func(context.Context, execution.Scope, string) (Project, error) { return project, nil }, Bindings: map[string]nodeservices.Binding{"fixture": {Provider: nodeservices.FixtureProvider{}, Protocol: nodeservices.OpenAICompletions, Model: nodeservices.Model{ID: "fixture", Name: "Fixture", ContextWindow: 4096, MaxTokens: 256}}}})
+	git := func(args ...string) string {
+		t.Helper()
+		out, e := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+		if e != nil {
+			t.Fatal(string(out), e)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	work := filepath.Join(tmp, "seed")
+	git("init", work)
+	if e := os.WriteFile(filepath.Join(work, "README.md"), []byte("Fixture project"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	git("-C", work, "add", "README.md")
+	git("-C", work, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Fixture")
+	commit := git("-C", work, "rev-parse", "HEAD")
+	ref := "refs/ora/upstreams/4da35252-6789-4760-9041-49b68ce3874f/snapshots/" + commit
+	git("-C", work, "push", repo, "HEAD:"+ref)
+	project := Project{MirrorPath: repo, Commit: commit, SnapshotRef: ref}
+	d, e := New(Options{Root: filepath.Join(tmp, "n"), AssetsDirectory: assets, GitBackend: filepath.Join(strings.TrimSpace(string(gitDir)), "git-http-backend"), ResolveProject: func(context.Context, execution.Scope, string) (Project, error) { return project, nil }, Bindings: map[string]nodeservices.Binding{"fixture": {Provider: marketSkillFixture{}, Protocol: nodeservices.OpenAICompletions, Model: nodeservices.Model{ID: "fixture", Name: "Fixture", ContextWindow: 4096, MaxTokens: 256}}}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -113,6 +149,22 @@ func TestRealMarketSkillNode(t *testing.T) {
 			t.Fatal("updated skill not discoverable", target, e)
 		}
 		removeVersion = next
+	}
+	session := execution.Session{ID: "3418fbc1-2775-4d45-b16d-bc96ccbe8863", WorkspaceID: "world", Target: &execution.Target{ProjectID: "test"}, Executor: &execution.Executor{ID: "opencode:fixture", AgentID: pluginID, PluginVersion: pluginVersion, Model: execution.Model{ID: "fixture"}}}
+	turn := execution.Turn{Ref: execution.Ref{SessionID: session.ID, TurnID: "5542e8ae-f3bc-4a88-9a82-43b584abd2d6"}, Prompt: execution.TextPrompt("Read the installed project skill and save the instructions as used-market-skill.md.")}
+	result, e := d.Run(ctx, execution.Scope{TenantID: "tenant", UserID: "user"}, session, turn, func(context.Context, execution.Event) error { return nil })
+	if e != nil || result.Status != execution.StatusCompleted {
+		t.Fatal("skill Agent turn", result, e)
+	}
+	p.mu.Lock()
+	used := p.checkouts[session.WorkspaceID].path
+	p.mu.Unlock()
+	data, e := os.ReadFile(filepath.Join(used, "used-market-skill.md"))
+	if e != nil || !strings.Contains(string(data), "ask-matt") {
+		t.Fatal("real Agent did not read project skill", e)
+	}
+	if e := d.End(ctx, session.ID); e != nil {
+		t.Fatal(e)
 	}
 	if e := d.ApplySkill(ctx, "test", id, removeVersion, "", digest, true); e != nil {
 		t.Fatal(e)

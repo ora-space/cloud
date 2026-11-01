@@ -32,6 +32,15 @@ type SkillRow = Skill & {
   entry?: PluginCatalogEntry
   selection?: SpacePlugin
 }
+function skillStatus(skill: SkillRow, detail = false) {
+  if (skill.availability === 'available') return '可用'
+  if (skill.selection?.observedState === 'removing') return '移除中'
+  if (skill.selection?.observedState === 'failed')
+    return skill.selection.desiredState === 'removed' ? '移除失败' : '安装失败'
+  if (skill.selection?.desiredState === 'installed') return '等待节点'
+  return detail ? '不可用，来源插件未安装' : '来源插件未安装'
+}
+
 type Removing =
   | { kind: 'local'; skill: Skill }
   | { kind: 'plugin'; skill: SkillRow }
@@ -128,6 +137,26 @@ export default function SkillsPage() {
   }
   function pluginActions(skill: SkillRow) {
     if (!skill.entry || !market.canManage) return null
+    if (skill.selection?.observedState === 'removing')
+      return (
+        <span className="text-xs text-muted-foreground">
+          正在等待项目节点确认
+        </span>
+      )
+    if (
+      skill.selection?.desiredState === 'removed' &&
+      skill.selection.observedState === 'failed'
+    )
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={market.mutating}
+          onClick={() => requestPluginRemove(skill)}
+        >
+          重试移除
+        </Button>
+      )
     return skill.selection?.desiredState === 'installed' ? (
       <Button
         variant="outline"
@@ -260,13 +289,7 @@ export default function SkillsPage() {
                     skill.availability === 'available' ? 'secondary' : 'outline'
                   }
                 >
-                  {skill.availability === 'available'
-                    ? '可用'
-                    : skill.selection?.observedState === 'failed'
-                      ? '安装失败'
-                      : skill.selection?.desiredState === 'installed'
-                        ? '等待节点'
-                        : '来源插件未安装'}
+                  {skillStatus(skill)}
                 </Badge>
                 {pluginActions(skill)}
                 <Button
@@ -374,15 +397,7 @@ export default function SkillsPage() {
             <dt>命名空间</dt>
             <dd>{selected.namespace}</dd>
             <dt>可用状态</dt>
-            <dd>
-              {selected.availability === 'available'
-                ? '可用'
-                : selected.selection?.observedState === 'failed'
-                  ? '安装失败'
-                  : selected.selection?.desiredState === 'installed'
-                    ? '等待节点'
-                    : '不可用，来源插件未安装'}
-            </dd>
+            <dd>{skillStatus(selected, true)}</dd>
             <dt>来源</dt>
             <dd>
               {selected.source.kind === 'local' ? (

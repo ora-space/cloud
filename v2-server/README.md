@@ -356,7 +356,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - 会话存在同一个库里，只存 token 的 SHA-256；没有 Gateway 现签的内部 JWT。
 - 对话与插件市场写请求检查 `Idempotency-Key`；插件市场同时保存成功响应以重放同一选择。其余写请求不检查该头，也没有执行代次隔离。定时任务配置与小队更新使用乐观版本检查，对话的创建和发消息把 `Idempotency-Key` 用作执行的 attempt ID。
 - 小队权限把 workspace `owner` 角色当作工作区管理员；成员撤销不会自动关闭其小队编组（由后续接入撤销事务的运行承接）。
-- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。目录不收录 Agent，避免市场清单中的版本与已安装运行时冲突；Agent 由既有 Node 运行时和 Space Agent 链路管理，因此也不在 Settings 安装或移除。其他非合集包由 Settings 写入同一空间选择表并立即结算为 `installed` / `removed`。这是 v1「没有在线运行时目标时直接完成」的简化语义，不表示普通插件包已下载或执行。安装计数保持零，请求者与版本实际持久化；安装写入口要求 owner、`Idempotency-Key` 和当前 version。
+- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。Agent 由既有 Node 运行时链路管理，设置页仅供查看；Skill 按空间选择，由项目 Node 确认安装或移除。其他未接入宿主的类型仅可浏览。安装写入口要求 owner、`Idempotency-Key` 和当前 version。
 - 成员列表：`memberships` 没有成员 id、版本和加入来源，所以 `id` 直接用 user id、`version` 恒为 1、`status` 取用户状态，`joinMethod` / `joinedAt` / `actorDisplayName` 恒为空；分页参数被忽略，一页返回全部。切到正式 Cloud 的成员接口时替换。
 - 启动时直接建表，没有迁移。
 - 本地 Node 的传输、监督和配套服务位于 [`internal/node`](internal/node/README.md) 与
