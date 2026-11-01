@@ -4,7 +4,7 @@ import { MarketSources } from './market-sources'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { Blocks, BookOpen, Download, ExternalLink, Puzzle } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,17 +25,8 @@ import {
 import { DetailPanel } from '../components/detail-panel'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { MarkdownPreview } from '../components/markdown-preview'
-
-const kindLabels: Record<string, string> = {
-  mcp: 'MCP',
-  skill: '技能包',
-  webview: 'WebView',
-  workflow: '工作流',
-  hook: '钩子',
-  workbench: '工作台',
-  pack: '合集',
-  agent: 'Agent',
-}
+import { pluginKind, pluginKindOrder } from './plugin-kind'
+import { PluginMark } from './plugin-mark'
 
 const stateLabels: Record<string, string> = {
   installed: '已安装',
@@ -166,6 +157,22 @@ export default function PluginsPage() {
       (a, b) =>
         (order === 'asc' ? 1 : -1) * a.title.localeCompare(b.title, 'zh-CN'),
     )
+  const knownKinds = new Set(pluginKindOrder)
+  const orderedKinds = [
+    ...pluginKindOrder,
+    ...new Set(
+      filtered
+        .map((entry) => entry.kind)
+        .filter((kindValue) => !knownKinds.has(kindValue)),
+    ),
+  ]
+  const groups = orderedKinds
+    .map((kindValue) => ({
+      kind: kindValue,
+      meta: pluginKind({ kind: kindValue as PluginCatalogEntry['kind'] }),
+      items: filtered.filter((entry) => entry.kind === kindValue),
+    }))
+    .filter((group) => group.items.length > 0)
   const clear = () => {
     setSearch('')
     setKind('all')
@@ -337,7 +344,7 @@ export default function PluginsPage() {
             options={[
               ['all', '全部类型'],
               ...[...new Set(catalog.map((entry) => entry.kind))].map(
-                (value) => [value, kindLabels[value] ?? value] as const,
+                (value) => [value, pluginKind({ kind: value }).label] as const,
               ),
             ]}
           />
@@ -363,48 +370,83 @@ export default function PluginsPage() {
           />
         </div>
         <ActionError error={market.mutationError} />
-        <div className="settings-resource-list">
-          {filtered.map((entry) => (
-            <article
-              key={pluginKey(entry)}
-              aria-label={entry.title}
-              className="settings-resource-row"
-            >
-              <button
-                type="button"
-                className="settings-resource-main"
-                onClick={() => open(entry)}
-                aria-label={`查看插件 ${entry.title}`}
+        <div className="settings-plugin-groups">
+          {groups.map((group) => {
+            const GroupIcon = group.meta.icon
+            return (
+              <section
+                key={group.kind}
+                className="settings-plugin-group"
+                aria-labelledby={`plugin-group-${group.kind}`}
               >
-                <span className="settings-resource-icon">
-                  {entry.kind === 'skill' ? (
-                    <BookOpen className="size-5" />
-                  ) : entry.kind === 'pack' ? (
-                    <Blocks className="size-5" />
-                  ) : (
-                    <Puzzle className="size-5" />
-                  )}
-                </span>
-                <span className="min-w-0">
-                  <span className="settings-resource-title">{entry.title}</span>
-                  <span className="settings-resource-description block">
-                    {entry.description}
+                <header className="settings-plugin-group-header">
+                  <span className="settings-plugin-group-icon">
+                    <GroupIcon aria-hidden="true" />
                   </span>
-                  <span className="settings-resource-meta">
-                    <span>{kindLabels[entry.kind]}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{entry.sourceNamespace}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>v{entry.version}</span>
+                  <span>
+                    <span className="flex items-center gap-2">
+                      <h2 id={`plugin-group-${group.kind}`}>
+                        {group.meta.label}
+                      </h2>
+                      <Badge variant="secondary">{group.items.length}</Badge>
+                    </span>
+                    <span>{group.meta.groupDescription}</span>
                   </span>
-                </span>
-              </button>
-              <div className="settings-resource-actions">
-                <StateBadge selection={market.selection(entry)} />
-                {actions(entry)}
-              </div>
-            </article>
-          ))}
+                </header>
+                <div className="settings-plugin-grid">
+                  {group.items.map((entry) => {
+                    const meta = pluginKind(entry)
+                    const KindIcon = meta.icon
+                    return (
+                      <article
+                        key={pluginKey(entry)}
+                        aria-label={entry.title}
+                        className="settings-plugin-card"
+                      >
+                        <div className="settings-plugin-card-header">
+                          <button
+                            type="button"
+                            className="settings-plugin-identity"
+                            onClick={() => open(entry)}
+                            aria-label={`查看插件 ${entry.title}`}
+                          >
+                            <PluginMark entry={entry} />
+                            <span className="min-w-0">
+                              <span className="settings-plugin-title">
+                                {entry.title}
+                              </span>
+                              <span className="settings-plugin-id">
+                                {pluginKey(entry)}
+                              </span>
+                            </span>
+                          </button>
+                          <Badge
+                            variant="outline"
+                            className="settings-plugin-kind"
+                          >
+                            <KindIcon data-icon="inline-start" />
+                            {meta.label}
+                          </Badge>
+                        </div>
+                        <p className="settings-plugin-description">
+                          {entry.description}
+                        </p>
+                        <div className="settings-plugin-card-footer">
+                          <span className="settings-plugin-version">
+                            {entry.sourceNamespace} · v{entry.version}
+                          </span>
+                          <div className="settings-resource-actions">
+                            <StateBadge selection={market.selection(entry)} />
+                            {actions(entry)}
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              </section>
+            )
+          })}
         </div>
         {!filtered.length && (
           <NoResults filtered={catalog.length > 0} onClear={clear} />
@@ -453,7 +495,14 @@ export default function PluginsPage() {
           onClose={() => setParams({}, { replace: true })}
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <StateBadge selection={market.selection(selected)} />
+            <div className="settings-plugin-detail-identity">
+              <PluginMark entry={selected} large />
+              <span>
+                <Badge variant="outline">{pluginKind(selected).label}</Badge>
+                <span>{pluginKey(selected)}</span>
+              </span>
+              <StateBadge selection={market.selection(selected)} />
+            </div>
             {actions(selected)}
           </div>
           <ActionError error={market.mutationError} />
@@ -469,7 +518,7 @@ export default function PluginsPage() {
             <dt>插件标识</dt>
             <dd>{pluginKey(selected)}</dd>
             <dt>类型</dt>
-            <dd>{kindLabels[selected.kind]}</dd>
+            <dd>{pluginKind(selected).label}</dd>
             <dt>目录版本</dt>
             <dd>
               {available.has(pluginKey(selected))

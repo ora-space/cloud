@@ -1,6 +1,7 @@
 import { beforeEach, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { PluginCatalogEntry } from '@/api/generated.schemas'
 import {
   installMarketplaceBackend,
   marketplaceEntry,
@@ -13,6 +14,13 @@ const writing = marketplaceEntry('writing-kit', {
   kind: 'skill',
   title: '写作工具箱',
   description: '让团队文档保持清晰与一致。',
+  logo: {
+    universal: {
+      role: 'universal',
+      extension: 'svg',
+      data: 'data:image/svg+xml;base64,PHN2Zy8+',
+    },
+  } as PluginCatalogEntry['logo'],
 })
 const github = marketplaceEntry('github-tools', {
   title: 'GitHub 工具',
@@ -38,6 +46,16 @@ it('searches and filters the server catalog, then confirms a server-backed remov
   const user = userEvent.setup()
   renderSettingsPage(<PluginsPage />, '/settings/plugins')
   const row = await screen.findByRole('article', { name: '写作工具箱' })
+  expect(screen.getByRole('heading', { name: '技能' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '合集' })).toBeInTheDocument()
+  expect(
+    within(row).getByText('技能', { selector: '.settings-plugin-kind' }),
+  ).toBeInTheDocument()
+  expect(row.querySelector('img')).toHaveAttribute(
+    'src',
+    'data:image/svg+xml;base64,PHN2Zy8+',
+  )
   await user.type(screen.getByRole('textbox', { name: '搜索插件' }), '写作')
   expect(
     screen.queryByRole('article', { name: 'GitHub 工具' }),
