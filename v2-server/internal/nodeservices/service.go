@@ -88,6 +88,7 @@ type Service struct {
 	TLS          TLSFiles
 	opts         Options
 	directory    string
+	marketMu     sync.RWMutex
 	packages     map[string]servedPackage
 	https, files *http.Server
 	workers      sync.WaitGroup
@@ -154,6 +155,8 @@ func Start(opts Options) (_ *Service, resultErr error) {
 	s.https = &http.Server{Handler: s.track(s.serve), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024, ErrorLog: log.New(io.Discard, "", 0)}
 	s.files = &http.Server{Handler: s.track(func(w http.ResponseWriter, r *http.Request) {
 		name, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".orax")
+		s.marketMu.RLock()
+		defer s.marketMu.RUnlock()
 		p, found := s.packages[name]
 		if !ok || !found || (r.Method != "GET" && r.Method != "HEAD") {
 			http.NotFound(w, r)
@@ -198,6 +201,33 @@ func (s *Service) copyPackage(p Package) error {
 		return errors.New("package SHA-256 mismatch")
 	}
 	return nil
+}
+
+// StageMarketPackage exposes one digest-verified archive only while Node processes its command.
+func (s *Service) StageMarketPackage(pkg Package) (string, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", nil, errors.New("local services closed")
+	}
+	s.marketMu.Lock()
+	defer s.marketMu.Unlock()
+	if _, exists := s.packages[pkg.Name]; exists {
+		return "", nil, errors.New("package already staged")
+	}
+	cleanup := func() {
+		if staged, ok := s.packages[pkg.Name]; ok {
+			_ = staged.file.Close()
+			delete(s.packages, pkg.Name)
+			_ = os.Remove(filepath.Join(s.directory, pkg.Name+".orax"))
+		}
+	}
+	if e := s.copyPackage(pkg); e != nil {
+		cleanup()
+		return "", nil, e
+	}
+	addr := strings.TrimSuffix(s.PackageURLs["opencode"], "/opencode.orax")
+	return addr + "/" + pkg.Name + ".orax", func() { s.marketMu.Lock(); defer s.marketMu.Unlock(); cleanup() }, nil
 }
 
 // Permit authorizes an admitted execution before its Node command is sent. The same execution
@@ -260,6 +290,8 @@ func (s *Service) Close() error {
 	}
 	s.workers.Wait()
 	s.handlers.Wait()
+	s.marketMu.Lock()
+	defer s.marketMu.Unlock()
 	for _, p := range s.packages {
 		err = errors.Join(err, p.file.Close())
 	}

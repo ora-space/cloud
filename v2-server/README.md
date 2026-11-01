@@ -356,7 +356,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - 会话存在同一个库里，只存 token 的 SHA-256；没有 Gateway 现签的内部 JWT。
 - 对话与插件市场写请求检查 `Idempotency-Key`；插件市场同时保存成功响应以重放同一选择。其余写请求不检查该头，也没有执行代次隔离。定时任务配置与小队更新使用乐观版本检查，对话的创建和发消息把 `Idempotency-Key` 用作执行的 attempt ID。
 - 小队权限把 workspace `owner` 角色当作工作区管理员；成员撤销不会自动关闭其小队编组（由后续接入撤销事务的运行承接）。
-- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。目录不收录 Agent，避免市场清单中的版本与已安装运行时冲突；Agent 由既有 Node 运行时和 Space Agent 链路管理，因此也不在 Settings 安装或移除。其他非合集包由 Settings 写入同一空间选择表并立即结算为 `installed` / `removed`。这是 v1「没有在线运行时目标时直接完成」的简化语义，不表示普通插件包已下载或执行。安装计数保持零，请求者与版本实际持久化；安装写入口要求 owner、`Idempotency-Key` 和当前 version。
+- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。Agent 由既有 Node 运行时链路管理，设置页仅供查看；Skill 按空间选择，由项目 Node 确认安装或移除。其他未接入宿主的类型仅可浏览。安装写入口要求 owner、`Idempotency-Key` 和当前 version。
 - 成员列表：`memberships` 没有成员 id、版本和加入来源，所以 `id` 直接用 user id、`version` 恒为 1、`status` 取用户状态，`joinMethod` / `joinedAt` / `actorDisplayName` 恒为空；分页参数被忽略，一页返回全部。切到正式 Cloud 的成员接口时替换。
 - 启动时直接建表，没有迁移。
 - 本地 Node 的传输、监督和配套服务位于 [`internal/node`](internal/node/README.md) 与
@@ -375,3 +375,11 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 设置 → 插件保留共享官方市场，允许 owner 添加空间私有的公共 HTTPS Git 仓库。来源管理接口见 `market-sources.openapi.json`；目录和安装选择继续使用原 Cloud 客户端。自定义来源按仓库分配命名空间。同仓库的不同 URL 写法共享身份；改到另一仓库会更换命名空间并清空旧目录，改到已配置的仓库返回冲突。官方市场在后台启动首次同步，手动同步每分钟最多触发一次（超出返回 429）。每次同步只提交该来源的完整快照，失败保留上次成功内容。停用或移除来源不会删除空间选择。
 
 自定义来源的 Git 连接只允许访问本次解析并固定的公网地址；禁止二次请求连接其他主机、私网、保留地址和 Git 重定向。可选 `V2_MARKET_SOCKS_PROXY` 为部署信任的 SOCKS5 代理（本地解析 DNS）；空间不能指定代理地址。S3 凭据以 AES-256-GCM 加密，S3 来源需要部署持久提供 `V2_MARKET_CREDENTIAL_KEY`（Base64 格式的 32 字节随机密钥），备份数据库时单独保管密钥。凭据绑定到空间、来源、端点和桶，不通过读取接口返回。
+
+### 项目 Skill 安装
+
+空间选择冻结 Skill 的来源、版本、目标平台和 SHA-256，项目 Node 负责确认安装或移除。历史项目绑定到同一租户的默认演示空间；创建项目可传 `spaceId`，省略则沿用默认演示空间。离线时保留选择；已上线的项目通过 Node 的 `install_plugins` / `remove_plugins` 处理。目录升级不会改变现有选择。成员可读项目回执；只有全部关联项目确认后空间才显示已安装。
+
+下载限制为公网 HTTPS、归属来源的 S3 SigV4 或直接 HTTPS。校验摘要和归档中的 Skill 标识、版本后，才通过节点已有的包服务交付。技能在项目工作副本的 `.opencode/skills`、`.claude/skills` 中发现；已有项目文件不被覆盖，同名冲突返回失败。Agent 的固定版本保持独立。MCP 和其他未验证类型仅供浏览。
+
+测试真实 Node 时设置 `V2_NODE_ASSETS_DIR`、`V2_TEST_SKILL_ARCHIVE`（官方 Matt Pocock Skills 1.3.1）和可选的 `V2_TEST_SKILL_UPDATE_ARCHIVE`（1.3.2），在 Linux 原生、路径足够短的用户目录下运行 `go test -run TestRealMarketSkillNode ./internal/agentruntime`。

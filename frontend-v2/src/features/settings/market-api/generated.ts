@@ -65,8 +65,20 @@ export interface MarketSource {
   retrieval?: Retrieval;
 }
 
+export interface SkillProgress {
+  projectId: string;
+  name: string;
+  state: string;
+  installedVersion: string;
+  failure: string;
+}
+
 export type ListMarketSources200 = {
   items: MarketSource[];
+};
+
+export type GetSkillProgress200 = {
+  items: SkillProgress[];
 };
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
@@ -434,3 +446,105 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       > => {
       return useMutation(getSyncMarketSourceMutationOptions(options), queryClient);
     }
+
+export const getSkillProgress = (
+    tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GetSkillProgress200>(
+      {url: `/api/v1/tenants/${tid}/spaces/${sid}/plugins/results/${namespace}/${identifier}`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetSkillProgressQueryKey = (tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string,) => {
+    return [
+    `/api/v1/tenants/${tid}/spaces/${sid}/plugins/results/${namespace}/${identifier}`
+    ] as const;
+    }
+
+
+export const getGetSkillProgressQueryOptions = <TData = Awaited<ReturnType<typeof getSkillProgress>>, TError = ErrorType<unknown>>(tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSkillProgressQueryKey(tid,sid,namespace,identifier);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSkillProgress>>> = ({ signal }) => getSkillProgress(tid,sid,namespace,identifier, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && sid !== null && sid !== undefined && namespace !== null && namespace !== undefined && identifier !== null && identifier !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetSkillProgressQueryResult = NonNullable<Awaited<ReturnType<typeof getSkillProgress>>>
+export type GetSkillProgressQueryError = ErrorType<unknown>
+
+
+export function useGetSkillProgress<TData = Awaited<ReturnType<typeof getSkillProgress>>, TError = ErrorType<unknown>>(
+ tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillProgress>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillProgress>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSkillProgress<TData = Awaited<ReturnType<typeof getSkillProgress>>, TError = ErrorType<unknown>>(
+ tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSkillProgress>>,
+          TError,
+          Awaited<ReturnType<typeof getSkillProgress>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSkillProgress<TData = Awaited<ReturnType<typeof getSkillProgress>>, TError = ErrorType<unknown>>(
+ tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+
+export function useGetSkillProgress<TData = Awaited<ReturnType<typeof getSkillProgress>>, TError = ErrorType<unknown>>(
+ tid: string,
+    sid: string,
+    namespace: string,
+    identifier: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSkillProgress>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetSkillProgressQueryOptions(tid,sid,namespace,identifier,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}

@@ -55,6 +55,12 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if !ok || logo["light"] == nil || logo["dark"] == nil {
 		t.Fatalf("logo = %#v", entry.Logo)
 	}
+	light := logo["light"].(map[string]any)
+	dark := logo["dark"].(map[string]any)
+	if light["data"] != "data:image/svg+xml;base64,PHN2Zy8+" ||
+		dark["data"] != "data:image/png;base64,cG5n" {
+		t.Fatalf("embedded logos = %#v", logo)
+	}
 }
 
 func TestNormalizeSourceURL(t *testing.T) {

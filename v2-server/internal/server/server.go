@@ -25,6 +25,7 @@ const SessionCookie = "ora_session"
 
 // Store is what the handlers need from the database.
 type Store interface {
+	SkillProgress(context.Context, string, string, string, string, string) ([]store.SkillProgress, error)
 	MarketSources(context.Context, string, string, string) ([]store.MarketSource, error)
 	ChangeMarket(context.Context, string, string, string, string, string, store.MarketSource) error
 	Ping(ctx context.Context) error
@@ -89,6 +90,7 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("PATCH /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}", h.authed(h.marketSources))
 	mux.HandleFunc("DELETE /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}", h.authed(h.marketSources))
 	mux.HandleFunc("POST /api/v1/tenants/{tid}/spaces/{sid}/plugins/sources/{source}/sync", h.authed(h.marketSources))
+	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/results/{namespace}/{identifier}", h.authed(h.skillProgress))
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/catalog", h.authed(h.pluginCatalog))
 	mux.HandleFunc("GET /api/v1/tenants/{tid}/spaces/{sid}/plugins", h.authed(h.spacePlugins))
 	mux.HandleFunc("POST /api/v1/tenants/{tid}/spaces/{sid}/plugins", h.authed(h.installSpacePlugin))

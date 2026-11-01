@@ -158,6 +158,226 @@
   background: var(--muted);
   color: var(--muted-foreground);
 }
+.settings-plugin-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+.settings-plugin-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-plugin-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+.settings-plugin-group-header > span:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+.settings-plugin-group-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.settings-plugin-group-header > span:last-child > span:last-child {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.settings-plugin-group-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--foreground);
+}
+.settings-plugin-group-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.settings-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.settings-plugin-card {
+  display: flex;
+  min-width: 0;
+  min-height: 190px;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+.settings-plugin-card:hover {
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--border));
+  box-shadow: 0 6px 20px color-mix(in oklab, var(--foreground) 6%, transparent);
+  transform: translateY(-1px);
+}
+.settings-plugin-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.settings-plugin-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  border-radius: var(--radius-md);
+}
+.settings-plugin-identity:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.settings-plugin-identity:hover .settings-plugin-title {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.settings-plugin-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    radial-gradient(
+      circle at 30% 20%,
+      color-mix(in oklab, var(--foreground) 5%, transparent),
+      transparent 70%
+    ),
+    var(--muted);
+  color: var(--muted-foreground);
+}
+.settings-plugin-mark img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+.settings-plugin-mark > svg {
+  width: 23px;
+  height: 23px;
+}
+.settings-plugin-mark-large {
+  width: 58px;
+  height: 58px;
+  flex-basis: 58px;
+  border-radius: 16px;
+}
+.settings-plugin-mark-large img {
+  width: 34px;
+  height: 34px;
+}
+.settings-plugin-mark-large > svg {
+  width: 27px;
+  height: 27px;
+}
+.settings-plugin-title,
+.settings-plugin-id {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-plugin-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.settings-plugin-id {
+  margin-top: 3px;
+  color: var(--muted-foreground);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    monospace;
+  font-size: 11px;
+}
+.settings-plugin-kind {
+  min-height: 28px;
+  flex-shrink: 0;
+  padding-inline: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--foreground) 7%, var(--background));
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-plugin-kind [data-icon='inline-start'] {
+  width: 14px;
+  height: 14px;
+}
+.settings-plugin-description {
+  display: -webkit-box;
+  min-height: 42px;
+  margin: 16px 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.settings-plugin-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.settings-plugin-version {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.settings-plugin-detail-identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.settings-plugin-detail-identity > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.settings-plugin-detail-identity > span > span:last-child {
+  max-width: min(310px, 55vw);
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-list-footer {
   display: flex;
   flex-wrap: wrap;
@@ -283,6 +503,11 @@
     padding: 24px;
   }
 }
+@media (max-width: 850px) {
+  .settings-plugin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 767px) {
   .settings-layout {
     flex-direction: column;
@@ -303,6 +528,10 @@
     flex-direction: row;
     overflow-x: auto;
     padding: 3px;
+    scrollbar-width: none;
+  }
+  .settings-navigation::-webkit-scrollbar {
+    display: none;
   }
   .settings-nav-link {
     padding: 10px;
@@ -336,6 +565,44 @@
     width: 100%;
     padding-left: 54px;
     justify-content: flex-start;
+  }
+  .settings-plugin-group-header {
+    align-items: flex-start;
+  }
+  .settings-plugin-group-header > span:last-child {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .settings-plugin-card {
+    min-height: 0;
+    padding: 15px;
+  }
+  .settings-plugin-card-header {
+    gap: 8px;
+  }
+  .settings-plugin-mark {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+  .settings-plugin-kind {
+    min-height: 26px;
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+  .settings-plugin-kind svg {
+    display: none;
+  }
+  .settings-plugin-card-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .settings-plugin-card-footer .settings-resource-actions {
+    width: 100%;
+    padding-left: 0;
+  }
+  .settings-plugin-detail-identity {
+    align-items: flex-start;
   }
   .settings-detail-body {
     padding: 20px;

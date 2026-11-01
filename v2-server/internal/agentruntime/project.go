@@ -51,6 +51,7 @@ type nodeClient interface {
 // One reader owns all projections. Control replies and sessions are dispatched by execution ID;
 // no per-turn goroutine may call Client.Receive or close the project's shared transport.
 type projectRuntime struct {
+	skillsMu       sync.Mutex
 	driver         *Driver
 	id, root       string
 	configuration  Project
@@ -373,6 +374,10 @@ func (p *projectRuntime) prepareCheckout(ctx context.Context, workspace string, 
 			rel, err := filepath.Rel(filepath.Join(p.root, "w", "r"), cloned.Result.Path)
 			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 				entry.err = execution.ErrUnavailable
+				return
+			}
+			if err := p.attachSkills(cloned.Result.Path); err != nil {
+				entry.err = err
 				return
 			}
 			entry.path = cloned.Result.Path

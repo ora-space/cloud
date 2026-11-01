@@ -54,3 +54,17 @@ func (h *handler) marketSources(w http.ResponseWriter, r *http.Request, u store.
 		pluginError(w, "market source", e)
 	}
 }
+
+func (h *handler) skillProgress(w http.ResponseWriter, r *http.Request, u store.User) {
+	t, s := r.PathValue("tid"), r.PathValue("sid")
+	if !squadUUID.MatchString(t) || !squadUUID.MatchString(s) {
+		fault(w, 404, "not_found")
+		return
+	}
+	items, e := h.store.SkillProgress(r.Context(), t, s, u.ID, r.PathValue("namespace"), r.PathValue("identifier"))
+	if e != nil {
+		pluginError(w, "skill project results", e)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}

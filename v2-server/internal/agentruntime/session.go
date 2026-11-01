@@ -115,6 +115,8 @@ func (d *Driver) session(ctx context.Context, scope execution.Scope, session exe
 				return
 			}
 			a.projection = nodehistory.NewProjection(p.reader, a.execution)
+			p.skillsMu.Lock()
+			defer p.skillsMu.Unlock()
 			p.mu.Lock()
 			if p.fatal {
 				p.mu.Unlock()

@@ -12,7 +12,7 @@ import (
 func seedTestPluginCatalog(t *testing.T, s *store.Store) {
 	t.Helper()
 	if e := s.ReplacePluginCatalog(context.Background(), []pluginmarket.Entry{
-		{Namespace: "official", Identifier: "mattpocock.skills", Title: "Matt Pocock Skills", Kind: "skill", Version: "1.3.1", Description: "Engineering skills", Readme: "# Matt Pocock Skills\n\nReal skills.", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "mattpocock.skills", Title: "Matt Pocock Skills", URL: "https://example.org/skill.orax", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Kind: "skill", Version: "1.3.1", Description: "Engineering skills", Readme: "# Matt Pocock Skills\n\nReal skills.", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.tavily-search", Title: "Tavily", Kind: "mcp", Version: "0.1.0", Description: "Web search", Readme: "# Tavily", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.workflow-examples", Title: "Workflow Examples", Kind: "workflow", Version: "0.1.0", Description: "Examples", Readme: "# Workflow Examples", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.opencode", Title: "OpenCode", Kind: "agent", Version: "0.6.8", Description: "Agent", Readme: "# OpenCode", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
@@ -72,8 +72,8 @@ func TestPluginMarketHTTP(t *testing.T) {
 		t.Fatalf("install = %d %v", status, body)
 	}
 	resource := body["resource"].(map[string]any)
-	if resource["kind"] != "skill" || resource["observedState"] != "installed" ||
-		resource["observedVersion"] != "1.3.1" {
+	if resource["kind"] != "skill" || resource["observedState"] != "pending" ||
+		resource["observedVersion"] != nil {
 		t.Fatalf("installed = %v", resource)
 	}
 	version := resource["version"].(float64)

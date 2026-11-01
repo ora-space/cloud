@@ -1,9 +1,10 @@
+import { ProjectResults } from './project-results'
 import { listMarketSources, syncMarketSource } from '../market-api/generated'
 import { MarketSources } from './market-sources'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { Blocks, BookOpen, Download, ExternalLink, Puzzle } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,21 +25,13 @@ import {
 import { DetailPanel } from '../components/detail-panel'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { MarkdownPreview } from '../components/markdown-preview'
-
-const kindLabels: Record<string, string> = {
-  mcp: 'MCP',
-  skill: '技能包',
-  webview: 'WebView',
-  workflow: '工作流',
-  hook: '钩子',
-  workbench: '工作台',
-  pack: '合集',
-}
+import { pluginKind, pluginKindOrder } from './plugin-kind'
+import { PluginMark } from './plugin-mark'
 
 const stateLabels: Record<string, string> = {
   installed: '已安装',
   failed: '安装失败',
-  pending: '等待安装',
+  pending: '等待节点',
   installing: '安装中',
   removing: '移除中',
   removed: '未安装',
@@ -46,6 +39,12 @@ const stateLabels: Record<string, string> = {
 
 function StateBadge({ selection }: { selection?: SpacePlugin }) {
   const state = selection?.observedState ?? 'removed'
+  const label =
+    selection?.kind === 'agent'
+      ? '运行时管理'
+      : selection?.kind !== 'skill' && selection?.desiredState === 'installed'
+        ? '仅空间选择'
+        : (stateLabels[state] ?? state)
   return (
     <Badge
       variant={
@@ -56,7 +55,7 @@ function StateBadge({ selection }: { selection?: SpacePlugin }) {
             : 'outline'
       }
     >
-      {stateLabels[state] ?? state}
+      {label}
     </Badge>
   )
 }
@@ -126,13 +125,17 @@ export default function PluginsPage() {
     ...market.catalog,
     ...market.installations
       .filter(
-        (s) => s.desiredState === 'installed' && !available.has(pluginKey(s)),
+        (s) =>
+          s.kind !== 'agent' &&
+          (s.desiredState === 'installed' ||
+            s.observedState === 'removing' ||
+            s.observedState === 'failed') &&
+          !available.has(pluginKey(s)),
       )
       .map(missingEntry),
   ].filter((entry) => entry.kind !== 'agent')
   const selected = catalog.find(
-    (entry) =>
-      pluginKey(entry) === params.get('plugin') && entry.kind !== 'agent',
+    (entry) => pluginKey(entry) === params.get('plugin'),
   )
   const filtered = catalog
     .filter((entry) => {
@@ -154,6 +157,26 @@ export default function PluginsPage() {
       (a, b) =>
         (order === 'asc' ? 1 : -1) * a.title.localeCompare(b.title, 'zh-CN'),
     )
+  const knownKinds = new Set(pluginKindOrder)
+  const orderedKinds = [
+    ...pluginKindOrder,
+    ...new Set(
+      filtered
+        .map((entry) => entry.kind)
+        .filter((kindValue) => !knownKinds.has(kindValue)),
+    ),
+  ]
+  const groups = orderedKinds
+    .map((kindValue) => ({
+      kind: kindValue,
+      meta: pluginKind({ kind: kindValue as PluginCatalogEntry['kind'] }),
+      items: filtered.filter((entry) => entry.kind === kindValue),
+    }))
+    .filter((group) => group.items.length > 0)
+  const installedSelections = market.installations.filter(pluginInstalled)
+  const installedMarketPackages = installedSelections.filter(
+    (selection) => selection.kind !== 'agent',
+  )
   const clear = () => {
     setSearch('')
     setKind('all')
@@ -166,7 +189,7 @@ export default function PluginsPage() {
     market.resetErrors()
     void market
       .install(entry)
-      .then(() => toast.success(`已安装 ${entry.title}`))
+      .then(() => toast.success(`已选择 ${entry.title}`))
       .catch(() => undefined)
   }
   const requestRemove = (entry: PluginCatalogEntry) => {
@@ -179,14 +202,35 @@ export default function PluginsPage() {
     void market
       .remove(removing.selection)
       .then(() => {
-        toast.success(`已移除 ${removing.entry.title}`)
+        toast.success(`已提交移除 ${removing.entry.title}`)
         setRemoving(undefined)
       })
       .catch(() => undefined)
   }
   function actions(entry: PluginCatalogEntry) {
     const selection = market.selection(entry)
-    if (!available.has(pluginKey(entry)))
+    if (entry.kind === 'agent')
+      return (
+        <span className="text-xs text-muted-foreground">由项目运行时管理</span>
+      )
+    if (
+      selection?.desiredState === 'removed' &&
+      selection.observedState === 'failed'
+    )
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!market.canManage || market.mutating}
+          onClick={() => requestRemove(entry)}
+        >
+          重试移除
+        </Button>
+      )
+    if (
+      (!available.has(pluginKey(entry)) || entry.kind !== 'skill') &&
+      selection?.desiredState === 'installed'
+    )
       return (
         <Button
           size="sm"
@@ -205,15 +249,36 @@ export default function PluginsPage() {
       market.mutating ||
       selection?.observedState === 'installing' ||
       selection?.observedState === 'removing'
-    return pluginInstalled(selection) ? (
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={!market.canManage || busy}
-        onClick={() => requestRemove(entry)}
-      >
-        移除
-      </Button>
+    if (entry.kind !== 'skill' && selection?.desiredState !== 'installed')
+      return (
+        <span className="text-xs text-muted-foreground">
+          当前节点不支持此类型
+        </span>
+      )
+    return selection?.desiredState === 'installed' ? (
+      <>
+        {entry.kind === 'skill' &&
+          (entry.version !== selection.desiredVersion ||
+            selection.observedState === 'failed' ||
+            selection.observedState === 'pending') && (
+            <Button
+              disabled={!market.canManage || busy}
+              onClick={() => install(entry)}
+              size="sm"
+              variant="secondary"
+            >
+              {entry.version !== selection.desiredVersion ? '更新' : '重新应用'}
+            </Button>
+          )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!market.canManage || busy}
+          onClick={() => requestRemove(entry)}
+        >
+          移除
+        </Button>
+      </>
     ) : (
       <Button
         size="sm"
@@ -262,6 +327,19 @@ export default function PluginsPage() {
           </p>
         )}
         <div className="settings-toolbar">
+          {market.spaces.length > 1 && (
+            <Filter
+              label="空间"
+              value={market.spaceId}
+              onChange={(id) => {
+                market.chooseSpace(id)
+                setSourcesOpen(false)
+                setRemoving(undefined)
+                setParams({})
+              }}
+              options={market.spaces.map((s) => [s.id, s.name] as const)}
+            />
+          )}
           <SearchInput label="搜索插件" value={search} onChange={setSearch} />
           <Filter
             label="插件类型"
@@ -270,7 +348,7 @@ export default function PluginsPage() {
             options={[
               ['all', '全部类型'],
               ...[...new Set(catalog.map((entry) => entry.kind))].map(
-                (value) => [value, kindLabels[value] ?? value] as const,
+                (value) => [value, pluginKind({ kind: value }).label] as const,
               ),
             ]}
           />
@@ -280,7 +358,7 @@ export default function PluginsPage() {
             onChange={setStatus}
             options={[
               ['all', '全部状态'],
-              ['installed', '已安装'],
+              ['installed', '已安装 / 运行中'],
               ['available', '未安装'],
               ['failed', '安装失败'],
             ]}
@@ -296,48 +374,83 @@ export default function PluginsPage() {
           />
         </div>
         <ActionError error={market.mutationError} />
-        <div className="settings-resource-list">
-          {filtered.map((entry) => (
-            <article
-              key={pluginKey(entry)}
-              aria-label={entry.title}
-              className="settings-resource-row"
-            >
-              <button
-                type="button"
-                className="settings-resource-main"
-                onClick={() => open(entry)}
-                aria-label={`查看插件 ${entry.title}`}
+        <div className="settings-plugin-groups">
+          {groups.map((group) => {
+            const GroupIcon = group.meta.icon
+            return (
+              <section
+                key={group.kind}
+                className="settings-plugin-group"
+                aria-labelledby={`plugin-group-${group.kind}`}
               >
-                <span className="settings-resource-icon">
-                  {entry.kind === 'skill' ? (
-                    <BookOpen className="size-5" />
-                  ) : entry.kind === 'pack' ? (
-                    <Blocks className="size-5" />
-                  ) : (
-                    <Puzzle className="size-5" />
-                  )}
-                </span>
-                <span className="min-w-0">
-                  <span className="settings-resource-title">{entry.title}</span>
-                  <span className="settings-resource-description block">
-                    {entry.description}
+                <header className="settings-plugin-group-header">
+                  <span className="settings-plugin-group-icon">
+                    <GroupIcon aria-hidden="true" />
                   </span>
-                  <span className="settings-resource-meta">
-                    <span>{kindLabels[entry.kind]}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{entry.sourceNamespace}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>v{entry.version}</span>
+                  <span>
+                    <span className="flex items-center gap-2">
+                      <h2 id={`plugin-group-${group.kind}`}>
+                        {group.meta.label}
+                      </h2>
+                      <Badge variant="secondary">{group.items.length}</Badge>
+                    </span>
+                    <span>{group.meta.groupDescription}</span>
                   </span>
-                </span>
-              </button>
-              <div className="settings-resource-actions">
-                <StateBadge selection={market.selection(entry)} />
-                {actions(entry)}
-              </div>
-            </article>
-          ))}
+                </header>
+                <div className="settings-plugin-grid">
+                  {group.items.map((entry) => {
+                    const meta = pluginKind(entry)
+                    const KindIcon = meta.icon
+                    return (
+                      <article
+                        key={pluginKey(entry)}
+                        aria-label={entry.title}
+                        className="settings-plugin-card"
+                      >
+                        <div className="settings-plugin-card-header">
+                          <button
+                            type="button"
+                            className="settings-plugin-identity"
+                            onClick={() => open(entry)}
+                            aria-label={`查看插件 ${entry.title}`}
+                          >
+                            <PluginMark entry={entry} />
+                            <span className="min-w-0">
+                              <span className="settings-plugin-title">
+                                {entry.title}
+                              </span>
+                              <span className="settings-plugin-id">
+                                {pluginKey(entry)}
+                              </span>
+                            </span>
+                          </button>
+                          <Badge
+                            variant="secondary"
+                            className="settings-plugin-kind"
+                          >
+                            <KindIcon data-icon="inline-start" />
+                            {meta.label}
+                          </Badge>
+                        </div>
+                        <p className="settings-plugin-description">
+                          {entry.description}
+                        </p>
+                        <div className="settings-plugin-card-footer">
+                          <span className="settings-plugin-version">
+                            {entry.sourceNamespace} · v{entry.version}
+                          </span>
+                          <div className="settings-resource-actions">
+                            <StateBadge selection={market.selection(entry)} />
+                            {actions(entry)}
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              </section>
+            )
+          })}
         </div>
         {!filtered.length && (
           <NoResults filtered={catalog.length > 0} onClear={clear} />
@@ -345,15 +458,10 @@ export default function PluginsPage() {
         <div className="settings-list-footer">
           <span>
             显示 {filtered.length} / {catalog.length} 个插件 · 共{' '}
-            {
-              market.installations.filter(
-                (selection) =>
-                  selection.kind !== 'agent' && pluginInstalled(selection),
-              ).length
-            }{' '}
-            个已安装
+            {installedSelections.length} 个已安装或运行中 · 其中{' '}
+            {installedMarketPackages.length} 个市场包
           </span>
-          <span>保存空间选择，不下载或执行插件包</span>
+          <span>技能包由项目节点确认安装结果</span>
         </div>
       </DataState>
       {params.has('plugin') && !market.pending && !selected && (
@@ -386,15 +494,30 @@ export default function PluginsPage() {
           onClose={() => setParams({}, { replace: true })}
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <StateBadge selection={market.selection(selected)} />
+            <div className="settings-plugin-detail-identity">
+              <PluginMark entry={selected} large />
+              <span>
+                <Badge variant="outline">{pluginKind(selected).label}</Badge>
+                <span>{pluginKey(selected)}</span>
+              </span>
+              <StateBadge selection={market.selection(selected)} />
+            </div>
             {actions(selected)}
           </div>
           <ActionError error={market.mutationError} />
+          {selected.kind === 'skill' && market.selection(selected) && (
+            <ProjectResults
+              tenant={market.tenantId}
+              space={market.spaceId}
+              namespace={selected.sourceNamespace}
+              identifier={selected.identifier}
+            />
+          )}
           <dl className="settings-facts">
             <dt>插件标识</dt>
             <dd>{pluginKey(selected)}</dd>
             <dt>类型</dt>
-            <dd>{kindLabels[selected.kind]}</dd>
+            <dd>{pluginKind(selected).label}</dd>
             <dt>目录版本</dt>
             <dd>
               {available.has(pluginKey(selected))
@@ -422,8 +545,7 @@ export default function PluginsPage() {
             </p>
           )}
           <p className="rounded-lg bg-muted p-3 text-xs leading-relaxed text-muted-foreground">
-            这里保存 v1 契约中的空间插件选择与最终状态。v2
-            临时后端没有通用插件执行器，因此不会下载或运行包内代码。
+            空间选择适用于该空间的项目。 只有项目节点确认后才显示已安装。
           </p>
           <Separator />
           {selected.readme ? (
@@ -451,7 +573,7 @@ export default function PluginsPage() {
           title={`移除 ${removing.entry.title}？`}
           description={
             removing.entry.kind === 'skill'
-              ? '将从空间卸载该技能包，其提供的技能立即变为不可用；重新安装可恢复。'
+              ? '将请求项目节点卸载该技能包，完成后不再提供其中的技能。'
               : '将从空间移除该插件选择。此操作不会卸载其他工作空间或 Agent 运行时中的包。'
           }
           confirmLabel="移除"

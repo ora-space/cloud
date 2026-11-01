@@ -191,6 +191,10 @@ func run(addr, dbURL string, cleanup, fixture bool) (resultErr error) {
 		<-marketDone
 	}()
 
+	skillCtx, cancelSkills := context.WithCancel(ctx)
+	skillDone := make(chan struct{})
+	go func() { defer close(skillDone); runSkillReconciler(skillCtx, db, driver) }()
+	defer func() { cancelSkills(); <-skillDone }()
 	options := withWorkflowDomain(server.Options{
 		RefreshOfficial: func(ctx context.Context) error { return market.Refresh(ctx, db, time.Now()) },
 		SessionTTL:      7 * 24 * time.Hour,

@@ -11,6 +11,7 @@ import (
 // Project is a tenant-shared, prepared repository snapshot. MirrorPath is backend-only and
 // must not be copied into public HTTP responses. Preparing the mirror belongs to the runtime.
 type Project struct {
+	SpaceID       string
 	ID            string
 	OwnerUserID   string
 	Name          string
@@ -39,11 +40,18 @@ func (s *Store) CreateProject(ctx context.Context, scope execution.Scope, projec
 	project.CreatedAt = project.CreatedAt.UTC()
 	// The authenticated creator is authoritative even when a caller supplied another owner.
 	project.OwnerUserID = scope.UserID
+	if project.SpaceID != "" {
+		if _, e := requireSpaceAccess(ctx, s.pool, scope.TenantID, project.SpaceID, scope.UserID); e != nil {
+			return Project{}, execution.ErrInvalidRequest
+		}
+	} else if e := s.pool.QueryRow(ctx, `select id from v2_spaces where tenant_id=$1 and slug=$2 and archived_at is null`, scope.TenantID, DemoSpaceSlug).Scan(&project.SpaceID); e != nil {
+		return Project{}, executionError(e)
+	}
 	raw, err := json.Marshal(project)
 	if err != nil {
 		return Project{}, err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO v2_projects(id,tenant_id,data) VALUES($1,$2,$3)`, project.ID, scope.TenantID, raw)
+	_, err = s.pool.Exec(ctx, `INSERT INTO v2_projects(id,tenant_id,data,plugin_space_id) VALUES($1,$2,$3,$4)`, project.ID, scope.TenantID, raw, project.SpaceID)
 	return project, executionError(err)
 }
 

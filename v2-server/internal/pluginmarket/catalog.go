@@ -1,6 +1,7 @@
 package pluginmarket
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/fs"
@@ -35,9 +36,12 @@ type Entry struct {
 type logoCandidate struct {
 	Role      string `json:"role"`
 	Extension string `json:"extension"`
+	DataURL   string `json:"data,omitempty"`
 }
 
 var logoExtensions = []string{"svg", "png", "webp", "jpg", "jpeg"}
+
+const maxLogoBytes = 256 << 10
 
 // Scan reads every registry entry below root. Broken listings are skipped and reported while a
 // directory walk failure aborts the sync so the caller keeps the previous complete snapshot.
@@ -108,9 +112,22 @@ func Scan(root, namespace, sourceURL string) ([]Entry, []string, error) {
 func resolveLogo(dir string) any {
 	best := func(prefix, role string) *logoCandidate {
 		for _, extension := range logoExtensions {
-			info, e := os.Lstat(filepath.Join(dir, prefix+extension))
-			if e == nil && info.Mode().IsRegular() {
-				return &logoCandidate{Role: role, Extension: extension}
+			path := filepath.Join(dir, prefix+extension)
+			info, e := os.Lstat(path)
+			if e != nil || !info.Mode().IsRegular() || info.Size() > maxLogoBytes {
+				continue
+			}
+			content, e := os.ReadFile(path)
+			if e != nil || len(content) == 0 || len(content) > maxLogoBytes {
+				continue
+			}
+			if extension == "svg" && !utf8.Valid(content) {
+				continue
+			}
+			return &logoCandidate{
+				Role: role, Extension: extension,
+				DataURL: "data:image/" + logoMediaType(extension) + ";base64," +
+					base64.StdEncoding.EncodeToString(content),
 			}
 		}
 		return nil
@@ -119,7 +136,13 @@ func resolveLogo(dir string) any {
 	dark := best("logo.dark.", "dark")
 	universal := best("logo.", "universal")
 	candidate := func(value *logoCandidate) map[string]any {
-		return map[string]any{"role": value.Role, "extension": value.Extension}
+		result := map[string]any{
+			"role": value.Role, "extension": value.Extension,
+		}
+		if value.DataURL != "" {
+			result["data"] = value.DataURL
+		}
+		return result
 	}
 	switch {
 	case light != nil && dark != nil:
@@ -136,6 +159,17 @@ func resolveLogo(dir string) any {
 		return map[string]any{"universal": candidate(universal)}
 	default:
 		return nil
+	}
+}
+
+func logoMediaType(extension string) string {
+	switch extension {
+	case "svg":
+		return "svg+xml"
+	case "jpg", "jpeg":
+		return "jpeg"
+	default:
+		return extension
 	}
 }
 

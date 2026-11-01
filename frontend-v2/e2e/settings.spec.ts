@@ -71,7 +71,7 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   const install = row.getByRole('button', { name: /^(安装|重试安装)$/ })
   if (await install.count()) {
     await install.click()
-    await expect(row.getByText('已安装', { exact: true })).toBeVisible()
+    await expect(row.getByText('等待节点', { exact: true })).toBeVisible()
   }
   await row.getByRole('button', { name: '移除' }).click()
   await page
@@ -96,14 +96,14 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
     .getByRole('button', { name: '安装' })
     .click()
   await expect(
-    page.getByRole('dialog').getByText('已安装', { exact: true }),
+    page.getByRole('dialog').getByText('等待节点', { exact: true }),
   ).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.goto('/settings/skills')
-  await expect(skill.getByText('可用', { exact: true })).toBeVisible()
+  await expect(skill.getByText('等待节点', { exact: true })).toBeVisible()
   await page.reload()
-  await expect(skill.getByText('可用', { exact: true })).toBeVisible()
+  await expect(skill.getByText('等待节点', { exact: true })).toBeVisible()
 
   // A separate browser context has no local settings data and still reads the same server state.
   const other = await browser.newContext({ baseURL: new URL(page.url()).origin })
@@ -112,7 +112,7 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await expect(
     otherPage
       .getByRole('article', { name: 'Matt Pocock Skills' })
-      .getByText('可用', {
+      .getByText('等待节点', {
         exact: true,
       }),
   ).toBeVisible()
@@ -128,23 +128,12 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await page.reload()
   await expect(skill.getByText('来源插件未安装')).toBeVisible()
   await skill.getByRole('button', { name: '安装技能' }).click()
-  await expect(skill.getByText('可用', { exact: true })).toBeVisible()
+  await expect(skill.getByText('等待节点', { exact: true })).toBeVisible()
 
-  // A non-skill package from the same synced marketplace follows the same server lifecycle.
   await page.goto('/settings/plugins')
   const tavily = page.getByRole('article', { name: 'Tavily' })
-  await expect(tavily).toBeVisible()
-  const installTavily = tavily.getByRole('button', { name: /^(安装|重试安装)$/ })
-  if (await installTavily.count()) {
-    await installTavily.click()
-    await expect(tavily.getByText('已安装', { exact: true })).toBeVisible()
-  }
-  await tavily.getByRole('button', { name: '移除' }).click()
-  await page
-    .getByRole('alertdialog')
-    .getByRole('button', { name: '移除' })
-    .click()
-  await expect(tavily.getByText('未安装', { exact: true })).toBeVisible()
+  await expect(tavily.getByText('当前节点不支持此类型')).toBeVisible()
+  await expect(tavily.getByRole('button', { name: '安装' })).toHaveCount(0)
 })
 
 test('owner manages a space market while the official catalog stays shared', async ({
