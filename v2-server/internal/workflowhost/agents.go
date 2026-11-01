@@ -164,7 +164,7 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch) {
 		h.fail(d, workflow.Failure{Kind: workflow.FailureSession, Message: "lost the Agent turn: " + publicReason(err)})
 		return
 	}
-	h.settle(d, result, executor, cfg)
+	h.settle(d, result, executor, cfg, task)
 }
 
 // beginStart reserves the start slot, or reports false once cancellation was requested.
@@ -262,7 +262,7 @@ func (h *Host) end(scope execution.Scope, sessionID string) {
 
 // settle maps the turn's result onto the engine like desktop's report_outcome. Only an
 // authoritative complete answer can succeed; the stop reason then decides as desktop does.
-func (h *Host) settle(d workflow.AgentDispatch, r execution.Result, ex resolvedExecutor, cfg workflow.AgentConfig) {
+func (h *Host) settle(d workflow.AgentDispatch, r execution.Result, ex resolvedExecutor, cfg workflow.AgentConfig, task string) {
 	var output *string
 	if r.Answer != "" {
 		output = &r.Answer
@@ -280,7 +280,7 @@ func (h *Host) settle(d workflow.AgentDispatch, r execution.Result, ex resolvedE
 	switch r.StopReason {
 	case "end_turn", "max_tokens", "max_turn_requests":
 		answer := r.Answer
-		h.complete(d, workflow.Completion{Output: &answer, Keys: completionKeys(r, ex, cfg)})
+		h.complete(d, workflow.Completion{Output: &answer, Keys: completionKeys(r, ex, cfg, task)})
 	case "refusal":
 		h.fail(d, workflow.Failure{Kind: workflow.FailureAgentRefusal, Message: "agent refused the request", Output: output})
 	case "":
@@ -291,9 +291,10 @@ func (h *Host) settle(d workflow.AgentDispatch, r execution.Result, ex resolvedE
 }
 
 // completionKeys are the attempt payload keys a successful Agent writes: desktop's stop_reason,
-// plus what v2 adds so the run detail can show the executor actually used and the configured
+// plus what v2 adds so the run detail can show the executor actually used, the task instruction
+// as rendered from the variable pool (the attempt input keeps the template) and the configured
 // capabilities v2 ran without.
-func completionKeys(r execution.Result, ex resolvedExecutor, cfg workflow.AgentConfig) map[string]any {
+func completionKeys(r execution.Result, ex resolvedExecutor, cfg workflow.AgentConfig, task string) map[string]any {
 	unapplied := cfg.Unapplied
 	if unapplied == nil {
 		unapplied = []string{}
@@ -309,6 +310,7 @@ func completionKeys(r execution.Result, ex resolvedExecutor, cfg workflow.AgentC
 			"requested": cfg.ModelID, "fallback": ex.fallback,
 		},
 		"unapplied": unapplied,
+		"task":      task,
 	}
 }
 

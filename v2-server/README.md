@@ -346,7 +346,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - **只做核心执行**：启动、取消、历史和刷新；节点失败即运行失败。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
 - **节点**：目前执行 Start、Agent、Output；Condition、Aggregator（含 Agent 结构化输出）和 Loop、LoopExit、Iteration 随后补上。图里有尚未执行的节点类型时，启动返回 `400 workflow_run_start_failed`。
 - **角色、per-node Skill、MCP 不应用**：节点照常运行，节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`skill`、`mcp`、`retry`、`interactive`），不静默忽略。
-- **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）和 `model`（`id`、`name`、`requested`、`fallback`）。
+- **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）、`model`（`id`、`name`、`requested`、`fallback`），以及按变量池渲染后的任务要求 `task`（节点尝试的 `input` 保留模板原文）。
 - **重启**：启动时先把上个进程留下的所有非终态节点以 `interrupted_by_restart` 失败，运行随之失败，然后才开始服务；不重放 Agent。
 
 与 desktop 的差异：

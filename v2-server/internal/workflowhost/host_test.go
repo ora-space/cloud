@@ -93,6 +93,9 @@ func TestTwoAgentChainHandsTheAnswerDownstream(t *testing.T) {
 		payloadA["model"].(map[string]any)["fallback"] != false || len(payloadA["unapplied"].([]any)) != 1 || payloadA["unapplied"].([]any)[0] != "role" {
 		t.Fatalf("A payload = %v", payloadA)
 	}
+	if payloadB["task"] != "审阅这段初稿：初稿：先拆网关" {
+		t.Fatalf("B task = %v, want the rendered template", payloadB["task"])
+	}
 	if m := payloadB["model"].(map[string]any); m["fallback"] != true || m["requested"] != "missing-model" || m["id"] != "fixture" {
 		t.Fatalf("B model = %v", m)
 	}
