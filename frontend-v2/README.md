@@ -23,7 +23,7 @@ npm run e2e           # 端到端测试，自己拉起 v2-server（:8091）和�
 
 端到端测试默认连接 `task v2:db` 的 PostgreSQL（库 `ora_v2_e2e`，可用 `E2E_DATABASE_URL` 指定）。第一次运行前执行 `npx playwright install chromium`；本机已有 Chromium 时，也可以用 `PW_CHROMIUM_PATH` 指定可执行文件。
 
-默认不运行真实 Agent，和 CI 一样。设了 `V2_NODE_ASSETS_DIR`（先 `task v2:node:prepare`）后，对话的端到端测试改为在真实 Node 和 Agent 上跑 fixture 模型：新建对话等到真实回复，停止另一个对话后只读，刷新后历史一致。项目第一次启动 Node 要装插件，整条用例约一两分钟。`V2_DATA_DIR` 要用短路径（如 `mktemp -d /tmp/v2e2e.XXXX`），否则 Node 的 Unix socket 路径会超长；也别和正在运行的 `task v2:dev` 共用同一个数据目录。
+默认不运行真实 Agent，和 CI 一样。设了 `V2_NODE_ASSETS_DIR`（先 `task v2:node:prepare`）后，对话的端到端测试改为在真实 Node 和 Agent 上跑 fixture 模型：新建对话等到真实回复，停止另一个对话后只读，刷新后历史一致；工作流运行的用例改为断言两个 Agent 串起来的运行成功，并截三张图（结果、全图、节点会话）到测试输出目录。没有 Node 资源时，工作流运行的用例断言第一个 Agent 节点因没有 Agent 可用而失败。项目第一次启动 Node 要装插件，整条用例约一两分钟。`V2_DATA_DIR` 要用短路径（如 `mktemp -d /tmp/v2e2e.XXXX`），否则 Node 的 Unix socket 路径会超长；也别和正在运行的 `task v2:dev` 共用同一个数据目录。
 
 ## 结构
 
@@ -70,25 +70,30 @@ e2e/            Playwright 端到端测试
 
 ### 运行工作流
 
-工作流的运行照 desktop 放在对话页里（`workflow-run/`）：项目行 `+` 菜单里的"运行工作流"列出服务端已发布的工作流（每次打开菜单时重新读取，读取失败时不显示旧列表，可以重试；顶部有搜索框，列表过长时滚动）。列表只给版本名，所以菜单会再逐个读出发布快照的 id；创建运行时按这个 id 核对：菜单打开后生效版本被换掉，或者同名版本删掉后重新发布成了另一张图，都拒绝创建，提示重新选择。选一个后给这次运行起名，创建出一次未开始的运行。运行和会话一起列在项目下面，带状态点；选中后右侧换成运行页，选会话或新建对话就换回来。
+工作流的运行照 desktop 放在对话页里（`workflow-run/`）：项目行 `+` 菜单里的"运行工作流"列出服务端已发布的工作流（每次打开菜单时重新读取，读取失败时不显示旧列表，可以重试；顶部有搜索框，列表过长时滚动）。列表只给版本名，所以菜单会再逐个读出发布快照的 id；创建运行时按这个 id 核对：菜单打开后生效版本被换掉，或者同名版本删掉后重新发布成了另一张图，都拒绝创建，提示重新选择。选一个后给这次运行起名，在服务端创建出一次未开始的运行。运行和会话一起列在项目下面，带状态点；选中后右侧换成运行页，选会话或新建对话就换回来。
 
 运行页和 desktop 一样有两个视图，标题栏切换：
 
 - **舞台**：上方是执行路径，下方一次演一个节点的卡片，跟着正在执行的节点走；并行、条件、循环和迭代各有自己的展示。卡片右上角打开节点详情（Agent 配置、执行时间、成果、失败重试），右下角打开节点会话。运行结束后显示结果卡片。运行中进入运行页、或点"启动"后都先到舞台，Esc 回到全图。
 - **全图**：冻结的整张图，每个节点显示状态；点节点回到舞台并聚焦它。
 
-标题栏还有"启动"（先填开始节点的变量和初始提示词）、"停止"、"再跑一次"（新建一次运行，旧的留在列表里）。Agent 节点的对话只在运行页里看，不进聊天记录，desktop 也是这样。
+标题栏还有"启动"（先填开始节点的变量和初始提示词）、"停止"、"再跑一次"（新建一次运行，旧的留在列表里）。侧栏行的菜单可以删除运行，执行中的运行先取消再删除。Agent 节点的对话只在运行页里看，不进聊天记录，desktop 也是这样。
 
 | 文件 | 来自 desktop `packages/app-shell/src/features/workflow-run` |
 |---|---|
 | `run-theater*`、`run-act-*`、`run-overview-*`、`run-status-*`、`run-loop-*`、`run-condition-stage.tsx`、`run-result-act.tsx`、`run-brief-popover.tsx`、`run-hitl-composer.tsx`、`use-theater-hitl.tsx`、`run-path-structure.ts`、`run-focus.ts`、`run-node-completion.ts` 和其余同名小文件 | 同名文件，只改了 import 路径 |
 | `workflow-run-start-dialog.tsx`、`translations.ts` | 同名文件 |
-| `run-node-session-chat.tsx`、`conversation-turns.ts` | 新写：desktop 在这里嵌入完整的聊天视图读取节点的真实会话；演示引擎只有节点的对话记录，`conversation-turns.ts` 把它们转成对话页的轮次（发给 Agent 的消息开启一轮，之后的回复、思考和工具调用归入这一轮），再交给对话页的 `Thread` 渲染，所以节点会话和对话页的样式一致；不能在里面接着发消息 |
+| `run-node-session-chat.tsx`、`conversation-turns.ts` | 新写：desktop 在这里嵌入完整的聊天视图读取节点的真实会话；这里只有服务端运行带回的对话记录（见下文），`conversation-turns.ts` 把它们转成对话页的轮次（发给 Agent 的消息开启一轮，之后的回复、思考和工具调用归入这一轮），再交给对话页的 `Thread` 渲染，所以节点会话和对话页的样式一致；不能在里面接着发消息 |
 | `hitl-text-editor.tsx` | 新写：人工介入回答框，用纯文本输入框代替 desktop 的 TipTap 编辑器 |
-| `demo-host.ts` | 新写：Theater 调用的 desktop hook（保存启动输入、回答人工介入、错误提示等），同名同参数，背后是演示引擎 |
-| `run-pane.tsx`、`run-sidebar.tsx`、`demo-runs.ts` | 新写：desktop 的运行页、侧栏行和运行对话框的精简版 |
+| `demo-host.ts` | 新写：Theater 调用的 desktop hook（保存启动输入、回答人工介入、错误提示等），同名同参数；保存启动输入走服务端，其余见下文 |
+| `run-pane.tsx`、`run-sidebar.tsx` | 新写：desktop 的运行页、侧栏行和运行对话框的精简版 |
+| `server-runs.ts`、`server-run-adapter.ts` | 新写：调用服务端的运行接口，把服务端的运行投影成 Theater 读取的 `GraphWorkflowRun`；`test-run-server.ts` 是单元测试的假服务端 |
 
-后端还不能执行工作流，现在由 desktop 的内存运行时（`src/lib/workflows/runtime/memory-workflow-runtime.ts`、`mock-run-engine.ts`）在浏览器里代替：它冻结服务端发布版本的图，按连线每 1.5 秒推进一个节点，条件节点选一条分支，Agent 节点生成演示对话和成果。引擎不记录条件选了哪条分支，`demo-runs.ts` 按引擎同样的选路规则推出来，再像 desktop 读取后端运行时一样，把没走的分支上的节点标为未执行，所以舞台的执行路径不列它们，运行结束时进度是满的。所以运行页标着"演示运行"。运行只存在当前页面里，刷新后清空。人工介入的界面已经搬过来，但编辑器和 desktop 一样不提供人工确认节点，演示里不会出现；从失败处恢复、AI 诊断、会话索引和文件变更评审没有搬。接入真实执行后，把 `demo-runs.ts` 和 `demo-host.ts` 换成调接口的实现。
+运行由 v2-server 执行（见 `v2-server/README.md` 的"工作流执行"一节），客户端和工作流定义一样由 `v2-server/workflows.openapi.json` 生成。`server-runs.ts` 把创建、启动、修改启动输入、取消、删除和再跑一次接到生成的客户端上，拒绝同样转成 `ContractError`；运行详情、冻结的图和项目下的运行列表由 TanStack Query 读取，运行没结束时每 1 秒重新读一次（`runRefreshMs`），服务端的事件流还没接。刷新页面后运行还在，执行也不依赖页面开着。
+
+`server-run-adapter.ts` 把服务端的节点运行按 desktop 读取后端运行时的规则投影成节点状态：节点状态、开始结束时间、输入输出、失败原因和失败详情（`payload.error_detail`）照搬。Agent 节点有了回答后，节点会话是两条消息：发给 Agent 的任务（服务端记下的渲染后任务 `payload.task`，没有时用节点的输入）和 Agent 的回答；服务端不保存 Agent 的完整会话，所以看不到思考和工具调用。
+
+v2 只做核心执行，有几项界面在、但不会出现或不可用：服务端不执行需要人工参与的节点，回答人工介入的 hook 直接拒绝；节点失败即运行失败，没有重试和从失败处恢复；AI 诊断、会话索引和文件变更评审没有搬。条件分支没走的节点还不标为未执行，等服务端支持条件节点后补上。
 
 ## 工作流
 

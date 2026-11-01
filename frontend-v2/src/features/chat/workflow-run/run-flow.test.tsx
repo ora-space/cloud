@@ -8,7 +8,8 @@ import Page from '../page'
 import { resetChatStore } from '../store'
 import { chatBackend, tenantId } from '../test-backend'
 import { sampleWorkflowBackend, serveWorkflows, type WorkflowServer } from '@/lib/workflows/test/workflow-server'
-import { demoRunClock, resetDemoRuns } from './demo-runs'
+import { runRefreshMs } from './server-runs'
+import { serveRuns, type RunServer } from './test-run-server'
 
 /** Renders the page and waits until it has loaded the backend's projects. */
 const renderPage = async () => {
@@ -39,20 +40,20 @@ async function createRun(user: ReturnType<typeof userEvent.setup>, name: string)
 
 describe('workflow runs in chat', () => {
   let workflows: WorkflowServer
+  let runs: RunServer
   beforeEach(async () => {
     window.localStorage.clear()
     resetChatStore()
     chatBackend()
     workflows = serveWorkflows(tenantId, await sampleWorkflowBackend())
-    resetDemoRuns()
-    demoRunClock.nodeStepMs = 5
+    runs = serveRuns(tenantId, workflows.backend)
+    runRefreshMs.interval = 20
   })
   afterEach(() => {
-    resetDemoRuns()
-    demoRunClock.nodeStepMs = 1500
+    runRefreshMs.interval = 1_000
   })
 
-  it('runs a published workflow from a project and plays it on the Theater', async () => {
+  it('runs a published workflow on v2-server and follows it on the Theater', async () => {
     const user = userEvent.setup()
     await renderPage()
     await createRun(user, '审查 cloud#210')
@@ -61,7 +62,7 @@ describe('workflow runs in chat', () => {
     const pane = await screen.findByRole('region', { name: '工作流运行' })
     // The run view is loaded on first use, which takes a while the first time in jsdom.
     expect(await within(pane).findByRole('heading', { level: 2, name: '审查 cloud#210' }, { timeout: 10_000 })).toBeInTheDocument()
-    expect(within(pane).getByText('演示运行')).toBeInTheDocument()
+    expect(within(pane).queryByText('演示运行')).not.toBeInTheDocument()
     expect(within(pane).getByRole('button', { name: '全图' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(project()).getByRole('button', { name: '工作流运行 审查 cloud#210（未运行）' })).toHaveAttribute('aria-current', 'page')
 
@@ -74,12 +75,34 @@ describe('workflow runs in chat', () => {
     expect(await within(pane).findByText('运行完成')).toBeInTheDocument()
     expect(within(pane).getByRole('button', { name: '再跑一次' })).toBeInTheDocument()
 
-    // An Agent's act keeps what it was sent and what it answered, drawn as a chat thread.
+    // The kickoff and the run are what v2-server was sent.
+    const [created] = [...runs.runs.values()]
+    expect(created!.detail.run.input).not.toBeNull()
+    expect(runs.seen.filter((r) => /\/(input|start)$/.test(r))).toEqual([
+      `PATCH /api/v2/tenants/${tenantId}/workflow-runs/${created!.detail.run.id}/input`,
+      `POST /api/v2/tenants/${tenantId}/workflow-runs/${created!.detail.run.id}/start`,
+    ])
+
+    // An Agent's act shows the answer v2-server recorded, drawn as a chat thread.
     await user.click(within(pane).getByRole('button', { name: /Agent：审查改动/ }))
     await user.click(await within(pane).findByRole('button', { name: '查看节点会话' }))
-    expect(within(pane).getByText(/分支相对 main 的改动。/, { selector: '[data-slot="bubble-content"]' })).toBeInTheDocument()
-    expect(within(pane).getByRole('heading', { name: 'Mock 结论' })).toBeInTheDocument()
-    // jsdom re-renders the canvas on every node step, so the whole run takes seconds here.
+    expect(within(pane).getByText('请完成：Agent：审查改动', { selector: '[data-slot="bubble-content"]' })).toBeInTheDocument()
+    expect(within(pane).getAllByText('回答：Agent：审查改动').length).toBeGreaterThan(0)
+  }, 30_000)
+
+  it('stops a run that is still executing', async () => {
+    runs.hold = true
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '要停的运行')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await within(pane).findByRole('heading', { level: 2, name: '要停的运行' }, { timeout: 10_000 })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '启动' }))
+    await user.click(await within(pane).findByRole('button', { name: '停止' }))
+    await waitFor(() => expect(within(project()).getByRole('button', { name: /工作流运行 要停的运行（已取消|已停止）/ })).toBeInTheDocument())
+    const [run] = [...runs.runs.values()]
+    expect(run!.detail.nodes.find((n) => n.nodeType === 'agent')!.status).toBe('cancelled')
   }, 30_000)
 
   it('searches the published workflows in the + menu', async () => {

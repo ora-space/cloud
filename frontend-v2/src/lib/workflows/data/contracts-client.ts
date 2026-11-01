@@ -209,8 +209,11 @@ export function useContractsClient(): ContractsClient {
   return client;
 }
 
-/** The fault body's code and parameters, or the error unchanged when the server sent none. */
-function contractError(error: unknown): unknown {
+/**
+ * Turns a refused generated-client call into desktop's `ContractError` carrying the fault body's code
+ * and parameters; an error without a fault body passes through unchanged.
+ */
+export function contractError(error: unknown): unknown {
   if (!isAxiosError(error)) return error;
   const body = error.response?.data as { code?: unknown; params?: unknown } | undefined;
   if (typeof body?.code !== "string") return error;
