@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+import { create } from 'zustand'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
 import { useGetApiV1MeTenants } from '@/api/me/me'
@@ -10,6 +12,15 @@ import {
   postApiV1TenantsTidSpacesSpaceIdPlugins,
 } from '@/api/spaces/spaces'
 import { useRole } from '@/app/auth/user'
+
+const useMarketScope = create<{
+  byTenant: Record<string, string>
+  choose: (tenant: string, space: string) => void
+}>((set) => ({
+  byTenant: {},
+  choose: (tenant, space) =>
+    set((s) => ({ byTenant: { ...s.byTenant, [tenant]: space } })),
+}))
 
 /** The canonical marketplace identity shared by catalog entries and space selections. */
 export const pluginKey = (plugin: {
@@ -33,7 +44,19 @@ export function usePluginMarketplace() {
   const spaces = useGetApiV1TenantsTidSpaces(tenantId, undefined, {
     query: { enabled: tenantId !== '' },
   })
-  const spaceId = spaces.data?.items?.[0]?.id ?? ''
+  const scope = useMarketScope()
+  const options = spaces.data?.items ?? []
+  const spaceId =
+    options.find((s) => s.id === scope.byTenant[tenantId])?.id ??
+    options[0]?.id ??
+    ''
+  const keys = useRef(new Map<string, string>())
+  const keyFor = (intent: string) => {
+    const key = keys.current.get(intent) ?? crypto.randomUUID()
+    keys.current.set(intent, key)
+    return key
+  }
+
   const catalog = useGetApiV1TenantsTidSpacesSpaceIdPluginsCatalog(
     tenantId,
     spaceId,
@@ -42,7 +65,12 @@ export function usePluginMarketplace() {
   const selections = useGetApiV1TenantsTidSpacesSpaceIdPlugins(
     tenantId,
     spaceId,
-    { query: { enabled: tenantId !== '' && spaceId !== '' } },
+    {
+      query: {
+        enabled: tenantId !== '' && spaceId !== '',
+        refetchInterval: 3000,
+      },
+    },
   )
   const client = useQueryClient()
   const canManage = useRole() === 'owner'
@@ -58,12 +86,20 @@ export function usePluginMarketplace() {
   const install = useMutation({
     mutationFn: async (entry: PluginCatalogEntry) => {
       if (!tenantId || !spaceId) throw new Error('cloud space not resolved')
-      if (entry.kind === 'agent' || entry.kind === 'pack')
+      if (entry.kind !== 'skill')
         throw new Error('此插件类型不支持在此处安装。')
       const current = (selections.data?.items ?? []).find(
         (item) => pluginKey(item) === pluginKey(entry),
       )
-      return postApiV1TenantsTidSpacesSpaceIdPlugins(
+      const intent = JSON.stringify([
+        'install',
+        tenantId,
+        spaceId,
+        pluginKey(entry),
+        entry.version,
+        current?.version ?? 0,
+      ])
+      const result = await postApiV1TenantsTidSpacesSpaceIdPlugins(
         tenantId,
         spaceId,
         {
@@ -71,8 +107,10 @@ export function usePluginMarketplace() {
           pluginVersion: entry.version,
           version: current?.version ?? 0,
         },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+        { headers: { 'Idempotency-Key': keyFor(intent) } },
       )
+      keys.current.delete(intent)
+      return result
     },
     onSuccess: invalidate,
     onError: () => void invalidate(),
@@ -80,12 +118,21 @@ export function usePluginMarketplace() {
   const remove = useMutation({
     mutationFn: async (selection: SpacePlugin) => {
       if (!tenantId || !spaceId) throw new Error('cloud space not resolved')
-      return deleteApiV1TenantsTidSpacesSpaceIdPlugins(
+      const intent = JSON.stringify([
+        'remove',
+        tenantId,
+        spaceId,
+        pluginKey(selection),
+        selection.version,
+      ])
+      const result = await deleteApiV1TenantsTidSpacesSpaceIdPlugins(
         tenantId,
         spaceId,
         { identifier: pluginKey(selection), version: selection.version },
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+        { headers: { 'Idempotency-Key': keyFor(intent) } },
       )
+      keys.current.delete(intent)
+      return result
     },
     onSuccess: invalidate,
     onError: () => void invalidate(),
@@ -98,6 +145,8 @@ export function usePluginMarketplace() {
   return {
     tenantId,
     spaceId,
+    spaces: options,
+    chooseSpace: (id: string) => scope.choose(tenantId, id),
     catalog: catalogItems,
     syncedAt: catalog.data?.syncedAt ?? undefined,
     installations,
@@ -109,11 +158,7 @@ export function usePluginMarketplace() {
       spaces.isLoading ||
       catalog.isLoading ||
       selections.isLoading,
-    error:
-      tenants.error ??
-      spaces.error ??
-      catalog.error ??
-      selections.error,
+    error: tenants.error ?? spaces.error ?? catalog.error ?? selections.error,
     mutationError: install.error ?? remove.error,
     mutating: install.isPending || remove.isPending,
     resetErrors: () => {

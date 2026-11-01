@@ -61,27 +61,23 @@ it('searches and filters the server catalog, then confirms a server-backed remov
   })
 })
 
-it('installs an MCP plugin through the contract route with a fresh version', async () => {
+it('shows MCP details but does not offer installation without a runtime', async () => {
   const backend = installMarketplaceBackend({
     catalog: [writing, github, pack],
   })
   const user = userEvent.setup()
   renderSettingsPage(<PluginsPage />)
   const row = await screen.findByRole('article', { name: 'GitHub 工具' })
-  await user.click(within(row).getByRole('button', { name: '安装' }))
-  await waitFor(() =>
-    expect(within(row).getByText('已安装')).toBeInTheDocument(),
-  )
-  expect(backend.bodies.at(-1)).toEqual({
-    identifier: 'demo/github-tools',
-    pluginVersion: '2.1.0',
-    version: 0,
-  })
   expect(
-    backend.seen.some((request) =>
-      request.startsWith('POST /api/v1/tenants/'),
-    ),
-  ).toBe(true)
+    within(row).queryByRole('button', { name: '安装' }),
+  ).not.toBeInTheDocument()
+  await user.click(
+    within(row).getByRole('button', { name: '查看插件 GitHub 工具' }),
+  )
+  expect(await screen.findByRole('dialog')).toHaveTextContent(
+    'demo/github-tools',
+  )
+  expect(backend.bodies).toHaveLength(0)
 })
 
 it('keeps unsupported packs disabled and clears no-result filters', async () => {
@@ -106,9 +102,7 @@ it('lets a member browse the catalog but not change it', async () => {
   })
   renderSettingsPage(<PluginsPage />)
   const row = await screen.findByRole('article', { name: '写作工具箱' })
-  expect(
-    within(row).getByRole('button', { name: '安装' }),
-  ).toBeDisabled()
+  expect(within(row).getByRole('button', { name: '安装' })).toBeDisabled()
   expect(
     screen.getByText(/安装与移除需要工作区 owner 权限/),
   ).toBeInTheDocument()

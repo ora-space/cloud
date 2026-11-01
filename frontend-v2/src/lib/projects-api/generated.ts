@@ -53,6 +53,8 @@ export interface CreateProject {
      * @maxLength 255
      */
   defaultBranch: string;
+  /** Defaults to the tenant's demo space. */
+  spaceId?: string;
 }
 
 export interface ProjectList {

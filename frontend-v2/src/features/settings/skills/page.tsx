@@ -1,13 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import {
-  ArrowUpRight,
-  Download,
-  FileText,
-  Plus,
-  Sparkles,
-} from 'lucide-react'
+import { ArrowUpRight, Download, FileText, Plus, Sparkles } from 'lucide-react'
 import type { PluginCatalogEntry, SpacePlugin } from '@/api/generated.schemas'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -83,7 +77,9 @@ export default function SkillsPage() {
     ...pluginSkillRows(market.catalog, market.selection),
   ]
   const selected =
-    panel && 'id' in panel ? skills.find((skill) => skill.id === panel.id) : undefined
+    panel && 'id' in panel
+      ? skills.find((skill) => skill.id === panel.id)
+      : undefined
   const filtered = skills
     .filter(
       (skill) =>
@@ -95,8 +91,7 @@ export default function SkillsPage() {
     )
     .sort(
       (a, b) =>
-        (order === 'asc' ? 1 : -1) *
-        a.name.localeCompare(b.name, 'zh-CN'),
+        (order === 'asc' ? 1 : -1) * a.name.localeCompare(b.name, 'zh-CN'),
     )
   const localSkills = skills.filter((skill) => skill.source.kind === 'local')
   const clear = () => {
@@ -114,7 +109,7 @@ export default function SkillsPage() {
     market.resetErrors()
     void market
       .install(skill.entry)
-      .then(() => toast.success(`已安装技能 ${skill.name}`))
+      .then(() => toast.success(`已选择技能 ${skill.name}`))
       .catch(() => undefined)
   }
   const requestPluginRemove = (skill: SkillRow) => {
@@ -126,14 +121,14 @@ export default function SkillsPage() {
     void market
       .remove(removing.skill.selection)
       .then(() => {
-        toast.success(`已移除技能 ${removing.skill.name}`)
+        toast.success(`已提交移除技能 ${removing.skill.name}`)
         setRemoving(undefined)
       })
       .catch(() => undefined)
   }
   function pluginActions(skill: SkillRow) {
     if (!skill.entry || !market.canManage) return null
-    return pluginInstalled(skill.selection) ? (
+    return skill.selection?.desiredState === 'installed' ? (
       <Button
         variant="outline"
         size="sm"
@@ -179,6 +174,18 @@ export default function SkillsPage() {
         }}
       >
         <div className="settings-toolbar">
+          {market.spaces.length > 1 && (
+            <Filter
+              label="空间"
+              value={market.spaceId}
+              onChange={(id) => {
+                market.chooseSpace(id)
+                setPanel(null)
+                setRemoving(undefined)
+              }}
+              options={market.spaces.map((s) => [s.id, s.name] as const)}
+            />
+          )}
           <SearchInput label="搜索技能" value={search} onChange={setSearch} />
           <Filter
             label="技能来源"
@@ -250,14 +257,16 @@ export default function SkillsPage() {
               <div className="settings-resource-actions">
                 <Badge
                   variant={
-                    skill.availability === 'available'
-                      ? 'secondary'
-                      : 'outline'
+                    skill.availability === 'available' ? 'secondary' : 'outline'
                   }
                 >
                   {skill.availability === 'available'
                     ? '可用'
-                    : '来源插件未安装'}
+                    : skill.selection?.observedState === 'failed'
+                      ? '安装失败'
+                      : skill.selection?.desiredState === 'installed'
+                        ? '等待节点'
+                        : '来源插件未安装'}
                 </Badge>
                 {pluginActions(skill)}
                 <Button
@@ -368,7 +377,11 @@ export default function SkillsPage() {
             <dd>
               {selected.availability === 'available'
                 ? '可用'
-                : '不可用，来源插件未安装'}
+                : selected.selection?.observedState === 'failed'
+                  ? '安装失败'
+                  : selected.selection?.desiredState === 'installed'
+                    ? '等待节点'
+                    : '不可用，来源插件未安装'}
             </dd>
             <dt>来源</dt>
             <dd>
