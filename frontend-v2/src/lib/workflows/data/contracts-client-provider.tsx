@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import {
   ContractsClientContext,
-  type LocalContractsClient,
+  type ContractsClient,
 } from "./contracts-client";
 
 /** Supplies the client every copied workflow query and mutation hook calls. */
@@ -9,7 +9,7 @@ export function ContractsClientProvider({
   client,
   children,
 }: {
-  client: LocalContractsClient;
+  client: ContractsClient;
   children: ReactNode;
 }) {
   return (

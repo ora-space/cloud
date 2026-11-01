@@ -132,6 +132,7 @@ import {
   useWorkflowVersions,
 } from "@/lib/workflows/data/workflows";
 import { WorkflowDraftSaveStatusLabel } from "./workflow-draft-save-status";
+import { WorkflowLeaveGuard } from "./workflow-leave-guard";
 import { WorkflowHeaderDescription } from "./workflow-header-description";
 import {
   WorkflowImportDialog,
@@ -2612,6 +2613,7 @@ function WorkflowEditorContent({
               draftUpdatedAt={draftUpdatedAt}
             />
           )}
+          <WorkflowLeaveGuard status={autosave.status} flush={autosave.flush} />
           <Button
             variant="outline"
             size="sm"
