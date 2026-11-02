@@ -1412,6 +1412,11 @@ func description(r router.Route) string {
 		// this route answers and, more importantly, what reading it does not decide.
 		base += "The `@` form projected from the named frozen version instead of from the live document, for a caller that chooses a version before rendering it. The response names the snapshot it was projected from, and the same optional issueId tailors it exactly as the live form read does. This is a projection and not a run admission: publish state, archiving, input dependencies and per-slot resolution stay the answers of POST …/runs, so a readable form can still be refused there. An unknown workflow, a snapshot belonging to another workflow or another tenant, and a malformed snapshot id are all 404 not_found, the same answer the direct-run entry gives for the same situation. "
 	}
+	if strings.Contains(r.Path, "/scheduled-tasks") && (r.Method == "PATCH" || r.Method == "POST" && strings.HasSuffix(r.Path, "/scheduled-tasks")) {
+		// The definition name's own fault, stated here rather than in the shared per-status
+		// descriptions that unrelated routes also carry.
+		base += "A task name is unique among the caller's scheduled tasks on the same issue, deleted tasks included: a create or rename that repeats one answers 409 name_conflict. "
+	}
 	if strings.Contains(r.Path, "/workflows") {
 		base += "Workflows are tenant-owned graph documents. `graph` is the authored document (nodes, edges, viewport, editor annotations, global variables), stored and returned whole — the editor is its only reader, so no field inside it is validated or indexed here. A live workflow name is unique per tenant; archiving one frees its name. "
 	}

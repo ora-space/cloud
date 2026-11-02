@@ -148,13 +148,17 @@ func scheduledTaskCreate(t *transaction, r *PublicRequest, uid string) Object {
 	if enabled {
 		enabledAt = consentedAt
 	}
-	t.exec(`INSERT INTO scheduled_tasks
+	// The name is unique per (tenant, issue, creator), soft-deleted tombstones included. Letting the
+	// constraint arbitrate keeps a concurrent create with the same name a 409 rather than a 500.
+	inserted := t.execRows(`INSERT INTO scheduled_tasks
 		(id, tenant_id, issue_id, creator_user_id, agent_id, name, prompt, model, schedule, timezone,
 		 revision, version, enabled, enabled_at, disabled_reason,
 		 unattended_policy, unattended_consented_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,1,$11,$12,NULL,$13,$14)`,
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,1,$11,$12,NULL,$13,$14)
+		ON CONFLICT (tenant_id, issue_id, creator_user_id, name) DO NOTHING`,
 		id, r.TenantID, issueID, uid, agentID, name, prompt, nilIfEmpty(model), jsonText(scheduleDoc), timezone,
 		enabled, enabledAt, policy, consentedAt)
+	require(inserted == 1, 409, "name_conflict")
 	task := t.one("SELECT * FROM scheduled_tasks WHERE id=$1", id)
 	return scheduledTaskOut(task, dbNow(t))
 }
@@ -221,6 +225,13 @@ func scheduledTaskUpdate(t *transaction, r *PublicRequest, uid string) Object {
 	}
 	require(creatorModelReady(t, uid, agent.S("pluginId")), 409, "model_unavailable")
 	require(scheduledTaskModelReady(t, uid, model), 409, "model_unavailable")
+	// A rename must not take a name the creator already holds on this issue; tombstones keep theirs
+	// because the uniqueness constraint covers soft-deleted rows.
+	if name != task.S("name") {
+		require(t.one(`SELECT id FROM scheduled_tasks
+			WHERE tenant_id=$1 AND issue_id=$2 AND creator_user_id=$3 AND name=$4`,
+			r.TenantID, task.S("issueId"), uid, name) == nil, 409, "name_conflict")
+	}
 
 	updated := t.execRows(`UPDATE scheduled_tasks
 		SET name=$1, prompt=$2, model=$3, agent_id=$4, schedule=$5, timezone=$6,
