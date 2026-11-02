@@ -1,5 +1,6 @@
 import type { WorkflowNodeRun, WorkflowRunDetail } from '@/lib/workflows/api/generated'
 import {
+  computeInactiveNodes,
   projectNodeStatus,
   projectRunStatus,
   type GraphWorkflowNodeState,
@@ -80,8 +81,10 @@ function currentNodes(state: string | null): string[] {
 
 /**
  * Projects a v2-server run onto the run model Theater and Overview render, as desktop's backend
- * run adapter does. The detail lists each node's latest attempt; graph nodes without one stay idle.
- * Loop and Iteration rounds are not executed by v2-server yet, so only root-scope rows are mapped.
+ * run adapter does. The detail lists each node's latest attempt; graph nodes without one stay idle,
+ * except those behind a Condition branch not taken, which never get a row and are shown inactive,
+ * projected from the run's Condition decisions as desktop does. Loop and Iteration rounds are not
+ * executed by v2-server yet, so only root-scope rows are mapped.
  */
 export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: WorkflowDefinition): GraphWorkflowRun {
   const { run } = detail
@@ -90,6 +93,10 @@ export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: Workfl
   for (const node of detail.nodes) {
     if (node.iteration !== null) continue
     nodeStates[node.nodeId] = nodeState(run.id, node)
+  }
+  const statuses = Object.fromEntries(Object.entries(nodeStates).map(([id, state]) => [id, state.status]))
+  for (const id of computeInactiveNodes(definition, statuses, detail.conditionDecisions)) {
+    nodeStates[id] = { ...nodeStates[id], status: 'inactive' }
   }
   const result: GraphWorkflowRun = {
     id: run.id,
