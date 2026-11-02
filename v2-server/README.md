@@ -256,7 +256,9 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 - **执行桥接缝**：`server.Options.WorkflowRuns`（`server.WorkflowRunHost`）由执行桥实现、在 `main` 注入；未注入时 start/cancel/input/complete 返回 `503 workflow_run_host_unavailable`，定义与历史读取照常。HTTP 只做登录/成员校验、严格解码和错误码映射，派发、停止确认、会话与对话历史都留在执行桥；拒绝用 server 包的哨兵错误表达（`ErrWorkflowRunNotStartable`、`ErrWorkflowRunNotEditable`、`ErrWorkflowNodeNotAwaitingInput`、`ErrWorkflowNodeNotFound`、`ErrWorkflowRunStopUnconfirmed`、`WorkflowRunInputInvalid`）。
 - **进程内存储端口**：执行桥直接调用 store 上的状态转移，不经 HTTP——`StartWorkflowRun`、`CreateWorkflowNodeRun`、`BindWorkflowNodeSession`、`CompleteWorkflowNodeRun`、`FailWorkflowNodeRun`（失败 attempt 号在同一事务里分配，payload 由领域构造）、`RetryWorkflowNodeRun`（失败行软删 + 插入等待运行的下一 attempt，编号连续）、`WakeWorkflowNodeRun`（唤醒等待的重试，重复唤醒 no-op）、`FinishWorkflowRun`、`CancelWorkflowRun`（同一事务里收尾活动 Loop 轮次并去掉等待中重试的 `retry_wait`）、`StartWorkflowLoopRound`（同一 Loop 只允许一个活动轮）、`SettleWorkflowLoopRound`（重复结算同状态为 no-op）、`DeleteWorkflowRun`。节点完成对已终态尝试是 no-op，取消对已取消运行幂等。取消也接受 `pending` 运行（desktop 只接受 `running`，其余返回 `NotActive`）：v2 的取消是用户可重试的操作，执行桥确认停止前重复调用必须返回同一个已取消运行，排队中的运行也要能直接从页面撤掉。
 - **事件流**：运行事件流订阅 `server.Options.WorkflowRunEvents`，`main` 注入执行桥的 `workflowhost.Hub`。节点会话事件流以节点尝试为键（重试是新的尝试和新的会话），按当前用户的 scope 读公共执行服务：会话属于启动运行的人（定时触发时是任务的创建者），同租户其他成员读到 `404 workflow_node_session_not_found`，页面退回尝试记下的任务和回答。不跨用户读会话，所以也不需要持久化发起者。
-- **尚未包含**：`failedAttempts`、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。删除运行时对节点 session 的检查与清理等执行桥绑定 chat session。重启中断由执行桥提供，见下文“工作流执行”。
+- **读取投影**：根 Condition 决策在 `conditionDecisions`，Iteration 决策在 `iterationConditionDecisions`（`nodeId#round`），Loop 决策留在每轮 `scope.state`。`failedAttempts`、根变量投影和整次运行 restart/resume 尚未在此提供。重启中断由执行桥提供，见下文“工作流执行”。
+
+运行页按选中的 Loop scope 或 Iteration 下标投影节点状态，并以该次尝试的 `nodeRunId` 订阅会话事件。该轮未执行的成员没有尝试身份，不继承前一轮的会话或执行元数据。
 
 ### 对话
 
@@ -348,14 +350,54 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 演示范围（#827 的结论）：
 
-- **只做核心执行**：启动、取消、历史和刷新；节点失败即运行失败。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
-- **节点**：目前执行 Start、Agent、Output、Condition、Aggregator；Loop、LoopExit、Iteration 随后补上。图里有尚未执行的节点类型时，启动返回 `400 workflow_run_start_failed`。
+- **只做核心执行**：启动、取消、历史和刷新；普通节点失败使运行失败，Iteration 内失败由其 `errorStrategy` 决定停止或继续。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
+- **节点**：执行 Start、Agent、Output、Condition、Aggregator、Loop、LoopExit、Iteration。历史 `prompt` / `tool` 节点仍可解析，但启动返回 `400 workflow_run_start_failed`。
+- **Loop**：轮次从 1 开始、最多 100 轮，每轮重新建独立变量池，只导入上游、全局与显式携带值。反馈值从同一完成快照读取，随后检查 `until`；最后一轮满足条件仍成功，未满足时按 `maxIterationsBehavior` 失败或导出。父节点行保存 JSON 结果，变量池只发布配置过的命名输出，不隐式赋值 `{loop}.output`；`stop_reason` 区分 `loop_succeeded`、`loop_max_iterations`。轮次关闭与下一轮入口同事务提交。
+- **LoopExit**：同一 ready wave 优先退出，先冻结导出结果、将同轮未完成子节点取消，再由 host 停止活动 turn 并确认 session End。确认前父 Loop 保持运行；停止未确认时失败，不启动下游。成功原因为 `loop_exit`，不读取下一轮反馈。取消后的回调不能改写变量池或冻结输出；进程重启直接中断，不重放。
+- **Iteration**：串行遍历数组，节点 `iteration` 为 0 基，默认 `maxIterations=50`，可显式设置更大值。空数组直接成功，超限在首轮前失败。每轮必须有 collect 节点成功记录，未执行 collect 不能借用上一轮的值。`fail` 停在失败轮；`continue` 保留失败并继续。父节点输出 `output`（成功值）、`entries`（每项成功或失败）和 `failed_count`；ledger 与下一轮或父节点终态原子提交。成员始终留在原 scope，不复用 Loop scope 作为数组下标。
 - **Condition**：按 desktop 的 `condition.rs` 依次判断各个 case，第一个成立的 case 胜出，都不成立走 `else`（没有 `sourceHandle` 的出边就是 `else`）；还没写规则的 case 直接跳过。16 个比较运算符同 desktop；只有 `exists`/`not_exists`/`empty`/`not_empty` 容忍未赋值，其余读到未赋值、未声明或类型不符的变量时节点以 `condition_evaluation` 失败，不猜分支。比较值只写一个 `{{#…#}}` 时保留变量的原类型，混排时按字符串渲染。选中的分支写进运行 payload 的 `conditionDecisions`，不写节点输出，也不进变量池；启动时拒绝重复的 case id（`workflow_run_duplicate_condition_case`）和指向不存在分支的出边（`workflow_run_unknown_condition_branch`）。没走的分支上的节点不建节点行（desktop 同样不落库分支激活），运行详情返回 `conditionDecisions`，由客户端投影为“未激活分支”。
 - **Aggregator**：按 desktop 的 V1 契约，按声明顺序取第一个**已赋值**的候选原样传出（键存在即算，`null`、`false`、`0`、`""`、`[]`、`{}` 都命中），写入 `{node}.output`；全部未赋值时以 `aggregator_no_match` 失败，读到未声明的候选直接失败。它不读分支决策，只看变量池。
 - **Agent 结构化输出**：`outputContract.type` 为 `structured` 的 Agent，prompt 末尾追加 desktop 的输出约定（示例和 Schema）；回答按 desktop 的顺序提取 JSON 对象（整段 → 代码块 → 文中第一个完整对象），再按 Schema 子集（`type`、`properties`、`required`、`additionalProperties`、`items`）校验。通过时原回答仍是 `{node}.output`，对象写入 `{node}.structured_output`；不通过时节点以 `structured_output` 失败并保留原回答。
 - **角色、per-node Skill、MCP 不应用**：节点照常运行，节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`skill`、`mcp`、`retry`、`interactive`），不静默忽略。
 - **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）、`model`（`id`、`name`、`requested`、`fallback`），以及按变量池渲染后的任务要求 `task`（节点尝试的 `input` 保留模板原文）。
 - **重启**：启动时先把上个进程留下的所有非终态节点以 `interrupted_by_restart` 失败，运行随之失败，然后才开始服务；不重放 Agent。
+
+容器的普通业务失败（Loop 上限、反馈/结束判断、LoopExit 结算失败、Iteration 的 `fail` 策略）只写错误消息，沿用 desktop 的轮次失败语义；初始化、计划或持久状态无效才标记 `invalid_run_payload`。Loop 子节点的 `error_detail` 归属于子节点，父节点只继承错误消息并保留自己的 payload；同轮活动兄弟节点取消时保留 `sibling_failed` 原因。
+
+#### 八节点行为与验收入口
+
+对照基线为 desktop [`df694c8836fc70b1c789cc7e8e523d4d5b1b6c66`](https://github.com/ora-space/desktop/tree/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66)。下表描述可执行语义；所有节点共用下文的串行派发、取消和重启边界。
+
+| 节点 | desktop 来源 | v2 行为 | 自动化入口 |
+| --- | --- | --- | --- |
+| Start | [control.rs][desktop-control]、[variable_pool.rs][desktop-pool] | 按声明校验并写入运行输入、初始变量与全局值；无效输入在启动边界拒绝 | [engine_test.go](internal/workflow/engine_test.go) 的输入与启动拒绝用例；[host_test.go](internal/workflowhost/host_test.go) 的双 Agent 链 |
+| Agent | [executor.rs][desktop-executor]、[structured_output.rs][desktop-structured] | 使用公共执行服务；按变量池渲染任务，传递上游结果；结构化契约验证成功才写 `structured_output`，失败保留原回答 | [host_test.go](internal/workflowhost/host_test.go) 的结果映射、结构化分流、取消与重启；[workflow-runs.spec.ts](../frontend-v2/e2e/workflow-runs.spec.ts) |
+| Output | [control.rs][desktop-control] | 从当前变量池解析命名选择器，按 JSON 对象输出；缺少所需值时失败 | [engine_test.go](internal/workflow/engine_test.go) 的完整链路；[workflow-runs.spec.ts](../frontend-v2/e2e/workflow-runs.spec.ts) 的结果页与刷新 |
+| Condition | [condition.rs][desktop-condition] | 首个成立的 case 胜出，否则走 else；未激活分支不建行；决定按根、Loop scope 或 Iteration 下标隔离 | [condition_test.go](internal/workflow/condition_test.go)、[branch_test.go](internal/workflow/branch_test.go)、[server-run-adapter.test.ts](../frontend-v2/src/features/chat/workflow-run/server-run-adapter.test.ts) |
+| Aggregator | [aggregator.rs][desktop-aggregator] | 取声明顺序中首个已赋值候选，保留 null 与 falsy 值；无候选或选择器无效时失败 | [branch_test.go](internal/workflow/branch_test.go) 的优先级与 falsy 表；[workflow-runs.spec.ts](../frontend-v2/e2e/workflow-runs.spec.ts) 的分支汇合 |
+| Loop | [loop_config.rs][desktop-loop-config]、[loop_round.rs][desktop-loop-round] | 1 基 round、每轮新池、同快照反馈、until/上限和显式导出；轮次转换原子提交，命名输出之外不隐式写变量 | [loop_runtime_test.go](internal/workflow/loop_runtime_test.go)、[containers_test.go](internal/workflowhost/containers_test.go)、[workflow-containers.spec.ts](../frontend-v2/e2e/workflow-containers.spec.ts) |
+| LoopExit | [loop_exit.rs][desktop-loop-exit] | 同波次优先，不创建其他待派发兄弟行；冻结结果、取消活动兄弟并等待 session End，未确认停止不推进 | [containers_test.go](internal/workflowhost/containers_test.go) 的同波次、活动会话与迟到回调；[workflow-containers.spec.ts](../frontend-v2/e2e/workflow-containers.spec.ts) 的退出原因与结果 |
+| Iteration | [node_runtime/iteration.rs][desktop-iteration] | 0 基数组下标、串行 collect、空集合、默认 50 上限、fail/continue；账本与后继原子提交，未执行 collect 不复用旧值 | [containers_test.go](internal/workflowhost/containers_test.go) 的集合边界、子节点失败与缺失 collect；[workflow-containers.spec.ts](../frontend-v2/e2e/workflow-containers.spec.ts) 的逐轮会话 |
+
+[desktop-control]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/node_runtime/control.rs
+[desktop-pool]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/variable_pool.rs
+[desktop-executor]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/backend/src/workflow/run/executor.rs
+[desktop-structured]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/structured_output.rs
+[desktop-condition]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/condition.rs
+[desktop-aggregator]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/aggregator.rs
+[desktop-loop-config]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/loop_config.rs
+[desktop-loop-round]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/db/src/repository/workflow_run_engine/loop_round.rs
+[desktop-loop-exit]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/backend/src/workflow/run/executor/loop_exit.rs
+[desktop-iteration]: https://github.com/ora-space/desktop/blob/df694c8836fc70b1c789cc7e8e523d4d5b1b6c66/crates/application/src/workflow_run/engine/node_runtime/iteration.rs
+
+领域测试验证纯规则；`workflowhost` 用真实 PostgreSQL 与可控执行替身验证事务、取消和回调次序。浏览器验收运行真实前后端；设置 `V2_NODE_ASSETS_DIR` 并准备 Node 资产后，以下组合通过真实 Node + fixture 执行全部八类节点，并检查轮次选择、会话归属和失败提示：
+
+```sh
+cd frontend-v2
+npm run e2e -- e2e/workflow-runs.spec.ts e2e/workflow-containers.spec.ts
+```
+
+命令从仓库根目录运行；Node 数据目录用独立的 `V2_DATA_DIR`，并与测试数据库配对。没有 Node 资产时，真实 Agent 容器用例按条件跳过，分支用例只验收缺少执行器的失败路径，不能据此认定 Agent 和 Aggregator 的成功链路已经验证。fixture 的回答是确定性的，外部模型服务的输出稳定性不在这些测试的证据范围内。
 
 与 desktop 的差异：
 
@@ -366,6 +408,9 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - **取消**：先用发起运行的用户身份取消活动 turn 并等待确认，再关闭运行；Start 正在进行时先等它返回。停止未确认时返回 `503 workflow_run_stop_unconfirmed`，运行保持打开但不再推进，turn 结束后由执行桥自行关闭为已取消。
 - **运行发起者只在内存里**：执行会话按用户隔离，执行桥记住每个运行由谁启动，进程重启后靠上面的中断收尾，不需要持久化。启动被拒（输入不合法、有不支持的节点）时运行仍是 pending，执行桥随即忘掉这次的发起者，之后由谁成功启动，Agent 就在谁的 scope 下执行。
 - **失效事件**：`workflowhost.Hub` 在每次提交的状态转移、会话绑定和取消后按运行发布一个不带数据的失效通知，供运行事件流使用；读者收到后重新读取运行，未消费的通知会合并。
+- **失败后的操作**：顶栏“再跑一次”创建新的运行，再从 Start 启动；不会续跑原失败节点或恢复原运行。失败提示指向这个现有入口。
+- **根作用域的并行 swift 行**：同波次一个 swift 节点失败后，另一个节点行可能仍保留 `running`，desktop 基线也有这一表现。运行本身已经失败，历史展示应以运行终态判断能否继续，不能将该行解释为仍有执行活动。Loop scope 的兄弟节点取消不受这一边界影响。
+- **失败节点的执行元数据**：`executor`、`model` 和渲染后的 `task` 随成功结果写入；包括结构化契约失败在内的失败结果不承诺这些字段。原回答与错误仍保留，界面不能用配置值冒充这次实际使用的执行元数据。
 
 ### 定时触发记录基础
 

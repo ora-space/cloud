@@ -127,8 +127,12 @@ type runState struct {
 	queue      []workflow.AgentDispatch
 	working    bool
 	// starting is closed when an in-flight Start returns, so a cancellation can learn its ref.
-	starting chan struct{}
-	active   *execution.Ref
+	starting           chan struct{}
+	active             *execution.Ref
+	activeScope        string
+	turnDone           chan struct{}
+	closedScopes       map[string]bool
+	scopeCleanupErrors map[string]error
 }
 
 // register records who is starting a run and counts the start under way. A run that already

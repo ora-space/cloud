@@ -18,3 +18,18 @@ func TestRunDetailShowsOnlyConditionDecisions(t *testing.T) {
 		}
 	}
 }
+
+func TestRunDetailSeparatesIterationDecisions(t *testing.T) {
+	payload := []byte(`{"conditionDecisions":{"gate":"outer"},"iterationConditionDecisions":{"gate#0":"yes","gate#1":"else"},"variablePool":{"values":{"private":"value"}}}`)
+	if got := payloadDecisions(payload, "iterationConditionDecisions"); !maps.Equal(got, map[string]string{"gate#0": "yes", "gate#1": "else"}) {
+		t.Fatal(got)
+	}
+	if got := conditionDecisions(payload); !maps.Equal(got, map[string]string{"gate": "outer"}) {
+		t.Fatal(got)
+	}
+	for _, raw := range []string{"", "{}", `{"iterationConditionDecisions":null}`, `{"iterationConditionDecisions":{"bad":1}}`} {
+		if got := payloadDecisions([]byte(raw), "iterationConditionDecisions"); got == nil || len(got) != 0 {
+			t.Fatal(got)
+		}
+	}
+}

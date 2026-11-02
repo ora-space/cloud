@@ -302,25 +302,29 @@ func (h *handler) getWorkflowRun(w http.ResponseWriter, r *http.Request, u store
 		scopeViews = append(scopeViews, toWorkflowScopeView(scope))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"run":                toWorkflowRunView(run),
-		"nodes":              nodeViews,
-		"scopes":             scopeViews,
-		"conditionDecisions": conditionDecisions(run.RuntimePayload),
+		"run":                         toWorkflowRunView(run),
+		"nodes":                       nodeViews,
+		"scopes":                      scopeViews,
+		"conditionDecisions":          conditionDecisions(run.RuntimePayload),
+		"iterationConditionDecisions": payloadDecisions(run.RuntimePayload, "iterationConditionDecisions"),
 	})
 }
 
 // conditionDecisions reads the root-scope decisions from the run payload (desktop's
-// WorkflowRunPayload.conditionDecisions), the only part of the private payload the detail shows,
+// WorkflowRunPayload.conditionDecisions),
 // so clients can tell a node behind a branch not taken from one still waiting. A run that has
 // not started, or a payload without decisions, reads as none.
 func conditionDecisions(payload []byte) map[string]string {
-	var p struct {
-		ConditionDecisions map[string]string `json:"conditionDecisions"`
-	}
-	if json.Unmarshal(payload, &p) != nil || p.ConditionDecisions == nil {
+	return payloadDecisions(payload, "conditionDecisions")
+}
+
+func payloadDecisions(payload []byte, key string) map[string]string {
+	var p map[string]json.RawMessage
+	result := map[string]string{}
+	if json.Unmarshal(payload, &p) != nil || json.Unmarshal(p[key], &result) != nil || result == nil {
 		return map[string]string{}
 	}
-	return p.ConditionDecisions
+	return result
 }
 
 func (h *handler) listWorkflowRunNodes(w http.ResponseWriter, r *http.Request, u store.User) {

@@ -13,7 +13,9 @@ import (
 // NodeRun is the engine's view of one live node attempt.
 type NodeRun struct {
 	ID, NodeID, NodeType, Status string
+	ScopeID                      string
 	Iteration                    *int
+	Error                        *string
 	Output                       *string
 	SessionID                    *string
 	FinishedAt                   *time.Time
@@ -30,6 +32,8 @@ type RunContext struct {
 // NodeStart is one node attempt a scheduling wave starts.
 type NodeStart struct {
 	NodeID, NodeType string
+	ScopeID          string
+	Iteration        *int
 	Input            *string
 }
 
@@ -48,8 +52,8 @@ type Repository interface {
 	// CompleteNode marks a running attempt succeeded, merges keys into its payload and applies
 	// fold to the run payload. false means the attempt was no longer running (a late callback).
 	CompleteNode(ctx context.Context, runID, nodeRunID string, output *string, keys map[string]any, fold func(payload []byte, node NodeRun) ([]byte, error)) (bool, error)
-	// FailNode marks a running attempt failed with the detail built for its attempt number and
-	// fails the run when it is still running. false means the attempt was no longer running.
+	// FailNode records failure with the detail built for its attempt number. Iteration members
+	// leave propagation to the owner; other failures fail the running run and enclosing Loop.
 	FailNode(ctx context.Context, runID, nodeRunID, message string, output *string, detail func(attempt int, payload []byte) map[string]any) (bool, error)
 	// AbandonNode closes a running attempt that has no session yet as cancelled when its run is no
 	// longer running, without moving the run's failure anchor. false means the run is running and
@@ -64,6 +68,8 @@ type Repository interface {
 // AgentDispatch is everything the execution bridge needs to drive one Agent attempt.
 type AgentDispatch struct {
 	RunID, NodeRunID, ProjectID, Locale string
+	ScopeID                             string
+	Iteration                           *int
 	Node                                Node
 	Graph                               *Graph
 	Pool                                VariablePool
@@ -108,7 +114,7 @@ func (e *Engine) gate(runID string) func() {
 // ErrNotStartable reports a run that is not pending with no started nodes.
 var ErrNotStartable = errors.New("workflow run is not startable")
 
-// runtime is one node kind's execution policy; the scheduling core never branches on kinds.
+// runtime describes scalar execution and output policies; containers have separate advancement.
 type runtime struct {
 	swift func(n Node, c swiftCompletion) (string, error)
 	async bool
@@ -149,6 +155,13 @@ var runtimes = map[string]runtime{
 	// Condition and Aggregator route and merge; neither contributes the run output.
 	"condition":  {swift: completeCondition},
 	"aggregator": {swift: completeAggregator},
+	"loop":       {rank: rank(1)},
+	"loopExit":   {},
+	"iteration": {rank: rank(1), startInput: func(n Node, _ RunContext) *string {
+		config := n.iterationConfig()
+		input := qualified(config.source)
+		return &input
+	}},
 }
 
 // completeCondition is desktop's ConditionRuntime: its output is the selected branch id, which
@@ -287,6 +300,18 @@ func (e *Engine) CompleteNode(ctx context.Context, runID, nodeRunID string, c Co
 
 func foldCompletion(output *string, structured any) func([]byte, NodeRun) ([]byte, error) {
 	return func(raw []byte, n NodeRun) ([]byte, error) {
+		if n.ScopeID != "" {
+			state, err := decodeLoopState(raw)
+			if err != nil {
+				return nil, err
+			}
+			p := RunPayload{VariablePool: state.VariablePool, ConditionDecisions: state.ConditionDecisions}
+			if err := p.Complete(n.NodeID, n.NodeType, nil, output, structured); err != nil {
+				return nil, err
+			}
+			state.VariablePool, state.ConditionDecisions = p.VariablePool, p.ConditionDecisions
+			return json.Marshal(state)
+		}
 		p, ok, err := DecodeRunPayload(raw)
 		if err != nil || !ok {
 			return raw, err
@@ -298,11 +323,14 @@ func foldCompletion(output *string, structured any) func([]byte, NodeRun) ([]byt
 	}
 }
 
-// FailNode records one attempt's failure, which fails the run (v2 performs no automatic
-// retry). A late callback is a no-op.
+// FailNode records one attempt's failure and lets its container decide propagation (v2 performs
+// no automatic retry). A late callback is a no-op.
 func (e *Engine) FailNode(ctx context.Context, runID, nodeRunID string, f Failure) error {
 	defer e.gate(runID)()
-	return e.fail(ctx, runID, nodeRunID, f)
+	if err := e.fail(ctx, runID, nodeRunID, f); err != nil {
+		return err
+	}
+	return e.schedule(ctx, runID)
 }
 
 func (e *Engine) fail(ctx context.Context, runID, nodeRunID string, f Failure) error {
@@ -370,13 +398,43 @@ func (e *Engine) schedule(ctx context.Context, runID string) error {
 				continue
 			}
 			n, ok := g.Node(r.NodeID)
+			if !ok {
+				continue
+			}
+			var progressed bool
+			switch n.Kind {
+			case "iteration":
+				progressed, err = e.advanceIteration(ctx, run, g, r, n, runs, payload)
+			case "loop":
+				progressed, err = e.advanceLoop(ctx, run, g, r, n, payload)
+			}
+			if err != nil {
+				return err
+			}
+			if progressed {
+				completedSwift = true
+				break
+			}
+		}
+		if completedSwift {
+			continue
+		}
+		for _, r := range runs {
+			if r.Status != StatusRunning {
+				continue
+			}
+			n, ok := g.Node(r.NodeID)
 			rt := runtimes[n.Kind]
 			if !ok || rt.swift == nil {
 				continue
 			}
 			output, swiftErr := rt.swift(n, swiftCompletion{run: r, runInput: run.Input, pool: &payload.VariablePool, runs: runs})
 			if swiftErr != nil {
-				return e.fail(ctx, runID, r.ID, runtimeFailure(n.Kind, swiftErr.Error()))
+				if err := e.fail(ctx, runID, r.ID, runtimeFailure(n.Kind, swiftErr.Error())); err != nil {
+					return err
+				}
+				completedSwift = true
+				break
 			}
 			advanced, err := e.repo.CompleteNode(ctx, runID, r.ID, &output, nil, foldCompletion(&output, nil))
 			if err != nil {
@@ -414,6 +472,9 @@ func (e *Engine) schedule(ctx context.Context, runID string) error {
 		}
 		e.publish(runID)
 		for i, n := range wave {
+			if i >= len(created) {
+				break
+			}
 			if runtimes[n.Kind].async {
 				e.agents.Dispatch(AgentDispatch{
 					RunID: runID, NodeRunID: created[i].ID, ProjectID: run.ProjectID, Locale: payload.Locale,
@@ -486,6 +547,15 @@ func validateExecutable(g *Graph) (Node, error) {
 		return Node{}, &StartError{Code: "workflow_run_missing_start_node", Detail: "the workflow has no Start node"}
 	}
 	for _, n := range g.Nodes() {
+		if n.Kind == "loop" {
+			body, ok := g.LoopBody(n.ID)
+			if !ok {
+				return Node{}, &StartError{Code: "workflow_run_invalid_loop", NodeID: n.ID, Detail: "Loop has no body"}
+			}
+			if _, err := validateExecutable(body); err != nil {
+				return Node{}, err
+			}
+		}
 		if _, supported := runtimes[n.Kind]; !supported {
 			return Node{}, &StartError{Code: "workflow_run_unsupported_node_type", NodeID: n.ID, Detail: "v2 does not execute " + n.Kind + " nodes yet"}
 		}

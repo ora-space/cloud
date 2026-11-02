@@ -97,7 +97,7 @@ e2e/            Playwright 端到端测试
 
 节点上配置了 v2 不应用的设置时，节点详情列出"v2 未应用"：角色、启用的 Skill 和 MCP、交互模式，以及自动重试（desktop 的重试策略会重跑这个节点时就算，包括没写 `retry` 时的默认策略，因为 v2 从不重试）。这份清单取节点记下的 `unapplied` 和节点配置的并集，所以还没执行或失败的节点也会标出来，不静默忽略。
 
-v2 只做核心执行，有几项界面在、但不会出现或不可用：服务端不执行需要人工参与的节点，回答人工介入的 hook 直接拒绝；节点失败即运行失败，没有重试和从失败处恢复；AI 诊断、会话索引和文件变更评审没有搬。条件分支没走的节点按运行详情里的 `conditionDecisions` 投影为“未激活分支”，投影规则沿用 desktop 的 `computeInactiveNodes`。
+v2 只做核心执行，有几项界面在、但不会出现或不可用：服务端不执行需要人工参与的节点，回答人工介入的 hook 直接拒绝；没有重试和从失败处恢复，Iteration 内失败可按配置继续；AI 诊断、会话索引和文件变更评审没有搬。条件分支没走的节点投影为“未激活分支”，规则沿用 desktop 的 `computeInactiveNodes`。根决策读取 `conditionDecisions`；Iteration 以 `iterationConditionDecisions` 和 0 基 `iteration` 投影 `roundStates`，包含本轮未走的成员；Loop 按 scope 的 1 基 `roundIndex`、独立决策和节点行投影 `rounds`。切换轮次只展示该轮会话与输出，循环结果区分条件满足、达到上限和 LoopExit 主动退出。
 
 ## 工作流
 

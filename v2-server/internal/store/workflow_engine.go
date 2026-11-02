@@ -26,6 +26,8 @@ type WorkflowEngineRun struct {
 // WorkflowEngineStart is one node attempt a scheduling wave starts.
 type WorkflowEngineStart struct {
 	NodeID, NodeType string
+	ScopeID          string
+	Iteration        *int
 	Input            *string
 }
 
@@ -120,11 +122,15 @@ func writeCurrentNodes(ctx context.Context, tx pgx.Tx, runID string, current []s
 // a wave inserts several attempts in one transaction, where now() is constant, and the engine
 // lists attempts by (created_at, id) as their creation order.
 func insertEngineNode(ctx context.Context, tx pgx.Tx, r engineRunRow, runID string, in WorkflowEngineStart) (WorkflowNodeRun, error) {
+	scopeID := in.ScopeID
+	if scopeID == "" {
+		scopeID = r.root
+	}
 	return scanNodeRun(tx.QueryRow(ctx, `
 		INSERT INTO v2_workflow_node_runs
-			(tenant_id, run_id, scope_id, node_id, node_type, status, input, started_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, 'running', $6, clock_timestamp(), clock_timestamp())
-		RETURNING `+workflowNodeRunColumns, r.tenant, runID, r.root, in.NodeID, in.NodeType, in.Input))
+			(tenant_id, run_id, scope_id, node_id, node_type, status, input, iteration, started_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, clock_timestamp(), clock_timestamp())
+		RETURNING `+workflowNodeRunColumns, r.tenant, runID, scopeID, in.NodeID, in.NodeType, in.Input, in.Iteration))
 }
 
 // StartWorkflowEngineRun moves a pending run that has started no node to running, applies
@@ -175,12 +181,23 @@ func (s *Store) StartWorkflowEngineNodes(ctx context.Context, runID string, wave
 		}
 		created = created[:0]
 		for _, in := range wave {
+			if in.ScopeID != "" && in.ScopeID != r.root {
+				var active bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM v2_workflow_scopes WHERE id=$1 AND run_id=$2 AND status='running' AND state->'exit' IS NULL)`, in.ScopeID, runID).Scan(&active); err != nil {
+					return err
+				}
+				if !active {
+					return ErrWorkflowScopeState
+				}
+			}
 			node, err := insertEngineNode(ctx, tx, r, runID, in)
 			if err != nil {
 				return err
 			}
 			created = append(created, node)
-			r.current = append(r.current, in.NodeID)
+			if node.ScopeID == r.root && node.Iteration == nil {
+				r.current = append(r.current, in.NodeID)
+			}
 		}
 		return writeCurrentNodes(ctx, tx, runID, r.current)
 	})
@@ -210,11 +227,24 @@ func (s *Store) CompleteWorkflowEngineNode(
 		if node.Status != WorkflowStatusRunning && node.Status != WorkflowStatusPending {
 			return nil
 		}
+		if r.status != WorkflowStatusRunning {
+			return nil
+		}
+		executionPayload := r.payload
+		if node.ScopeID != r.root {
+			var active bool
+			if err := tx.QueryRow(ctx, `SELECT state, status='running' AND state->'exit' IS NULL FROM v2_workflow_scopes WHERE id=$1 AND run_id=$2`, node.ScopeID, runID).Scan(&executionPayload, &active); err != nil {
+				return err
+			}
+			if !active {
+				return nil
+			}
+		}
 		nodePayload, err := merge(node.Payload)
 		if err != nil {
 			return err
 		}
-		runPayload, err := fold(r.payload, node)
+		runPayload, err := fold(executionPayload, node)
 		if err != nil {
 			return err
 		}
@@ -229,10 +259,19 @@ func (s *Store) CompleteWorkflowEngineNode(
 			WHERE id = $1`, nodeRunID, persisted, nodePayload); err != nil {
 			return fmt.Errorf("complete node: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE v2_workflow_runs SET payload = $2 WHERE id = $1`, runID, runPayload); err != nil {
-			return fmt.Errorf("fold run payload: %w", err)
+		if node.ScopeID == r.root {
+			if _, err := tx.Exec(ctx, `UPDATE v2_workflow_runs SET payload = $2 WHERE id = $1`, runID, runPayload); err != nil {
+				return fmt.Errorf("fold run payload: %w", err)
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `UPDATE v2_workflow_scopes SET state=$2, updated_at=now() WHERE id=$1`, node.ScopeID, runPayload); err != nil {
+				return fmt.Errorf("fold scope state: %w", err)
+			}
 		}
 		advanced = true
+		if node.ScopeID != r.root || node.Iteration != nil {
+			return nil
+		}
 		return writeCurrentNodes(ctx, tx, runID, without(r.current, node.NodeID))
 	})
 	return advanced, err
@@ -248,9 +287,9 @@ func without(items []string, drop string) []string {
 	return result
 }
 
-// FailWorkflowEngineNode marks a running attempt failed with the payload detail built for the
-// attempt number it receives, anchors current_nodes on it and fails the run if it is still
-// running. It returns false when the attempt is no longer running.
+// FailWorkflowEngineNode records the failed attempt. Iteration members leave propagation to
+// their owner; a Loop child closes its scope and parent. Other failures fail the root run.
+// Terminal attempts and runs reject late callbacks without moving the failure anchor.
 func (s *Store) FailWorkflowEngineNode(
 	ctx context.Context, runID, nodeRunID, message string, output *string,
 	detail func(attempt int, node, run []byte) ([]byte, error),
@@ -268,7 +307,7 @@ func (s *Store) FailWorkflowEngineNode(
 		if err != nil {
 			return err
 		}
-		if node.Status != WorkflowStatusRunning {
+		if node.Status != WorkflowStatusRunning || r.status != WorkflowStatusRunning {
 			return nil
 		}
 		attempt, err := workflowNodeAttempt(ctx, tx, runID, node)
@@ -285,13 +324,32 @@ func (s *Store) FailWorkflowEngineNode(
 			WHERE id = $1`, nodeRunID, message, output, payload); err != nil {
 			return fmt.Errorf("fail node: %w", err)
 		}
+		advanced = true
+		// A region failure is settled by its Iteration owner, which applies fail/continue.
+		if node.Iteration != nil {
+			return nil
+		}
+		anchor := node.NodeID
+		if node.ScopeID != r.root {
+			var parentID string
+			if err := tx.QueryRow(ctx, `UPDATE v2_workflow_scopes SET status='failed', updated_at=now() WHERE id=$1 AND status='running' RETURNING parent_loop_node_run_id`, node.ScopeID).Scan(&parentID); err != nil {
+				return err
+			}
+			// The child owns its failure detail; propagating its message must preserve the
+			// parent's own payload and must not present the child attempt as the parent attempt.
+			if err := tx.QueryRow(ctx, `UPDATE v2_workflow_node_runs SET status='failed', error=$2, finished_at=now(), updated_at=now() WHERE id=$1 RETURNING node_id`, parentID, message).Scan(&anchor); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE v2_workflow_node_runs SET status='cancelled', error=COALESCE(error,'{"reason":"sibling_failed"}'), finished_at=now(), updated_at=now() WHERE scope_id=$1 AND status IN ('pending','running') AND deleted_at IS NULL`, node.ScopeID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE v2_workflow_runs SET status = 'failed', error = $2, finished_at = now(), updated_at = now()
 			WHERE id = $1 AND status = 'running'`, runID, message); err != nil {
 			return fmt.Errorf("fail run: %w", err)
 		}
-		advanced = true
-		return writeCurrentNodes(ctx, tx, runID, []string{node.NodeID})
+		return writeCurrentNodes(ctx, tx, runID, []string{anchor})
 	})
 	return advanced, err
 }
@@ -301,14 +359,26 @@ func (s *Store) FailWorkflowEngineNode(
 // has not started anything yet; it is closed as cancelled, like the attempts a cancellation
 // closes, instead of starting a turn whose result could only be discarded. An attempt that already
 // holds a session is left to settle on its own. current_nodes and the run are not touched, so the
-// failure stays anchored on the node that caused it. It returns false while the run is running,
-// telling the caller to execute the attempt.
+// failure stays anchored on the node that caused it. It also refuses an attempt already
+// cancelled by LoopExit even while the root run is running.
 func (s *Store) AbandonWorkflowEngineNode(ctx context.Context, runID, nodeRunID string) (bool, error) {
 	abandoned := false
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		r, err := lockEngineRun(ctx, tx, runID)
 		if err != nil {
 			return err
+		}
+		node, err := lockWorkflowNodeRun(ctx, tx, r.tenant, runID, nodeRunID)
+		if errors.Is(err, ErrWorkflowNodeRunNotFound) {
+			abandoned = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if node.Status != WorkflowStatusRunning {
+			abandoned = true
+			return nil
 		}
 		if r.status == WorkflowStatusRunning {
 			return nil
