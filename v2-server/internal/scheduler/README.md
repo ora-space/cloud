@@ -55,3 +55,19 @@ V2_NODE_ASSETS_DIR=... TEST_DATABASE_URL=... go test -race -count=1 -tags execut
 ```
 
 每项测试先在子进程中经统一 Options 创建协调器和 Host，由真正运行的 ticker 扫描冻结时钟的到期配置，触发真实 fixture 执行、保存完整结果并确认 End；再经带登录 cookie 的 HTTP 立即运行（含同键重试）和取消入口，在实际 provider 边界暂停后验证 Cancel 的模式差异及 End。该进程退出后，第二个独立进程重新打开 PostgreSQL、Service 和 Host，核对两条原记录、完整结果与已结束会话，验证旧会话不可 Append、停机不补跑。Agent 路径还验证真实 shell 工具写出的文件在 End/重启后仍存在。测试配置使用已验证的持久绑定；页面上的项目选择、立即运行与历史读取由 `frontend-v2/e2e/schedule-runs.spec.ts` 在真实栈上核对。默认 fixture 不需要凭据，这不是远端真实模型 provider 验收。
+
+### 真实 Busy、跨任务隔离与接收后响应丢失
+
+`runtime_fault_integration_test.go` 在同一个 opt-in tag 下补三类故障证据：
+
+- `TestScheduledBusyAdmissionIsSkipped` 用一个仍占住公共执行分组的真实 turn，让下一条定时 admission 收到公共 `ErrWorkspaceBusy`；定时记录必须落为 `skipped / execution_busy`、释放占位，并且不为该 occurrence 创建任何 attempt。
+- `TestScheduledModelAcceptedResponseLossReconciles` 和 `TestScheduledAgentAcceptedResponseLossReconciles` 让真实 `Start`/`StartModel` 先提交执行，再向定时适配层返回超时，模拟“执行侧已接收、调用方响应丢失”。重启 Service 后只按原 Caller 核对；最终只能有一条 session/turn，绑定原 Ref、读取完整结果并经 End 释放，不能二次派发。
+- `TestScheduledAgentTasksWithSameProjectKeepDistinctWorkspaces` 同时启动同一项目的两个定时 Agent 任务，断言两者各有 session 和 Workspace、都执行成功。不同定时任务之间不共享目录，因此不存在旧式跨任务目录竞争；公共 Busy 只用于同一 session/运行的并发轮次。
+
+```sh
+TEST_DATABASE_URL=... go test -race -count=1 -tags execution_integration ./internal/scheduler \
+  -run 'TestScheduledBusyAdmissionIsSkipped|TestScheduledModelAcceptedResponseLossReconciles' -v
+
+V2_NODE_ASSETS_DIR=... TEST_DATABASE_URL=... go test -race -count=1 -tags execution_integration ./internal/scheduler \
+  -run 'TestScheduledAgentAcceptedResponseLossReconciles|TestScheduledAgentTasksWithSameProjectKeepDistinctWorkspaces' -v
+```
