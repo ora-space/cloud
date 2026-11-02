@@ -149,6 +149,18 @@ func TestScheduledTaskCreationOverThePublicHTTPBoundary(t *testing.T) {
 		t.Fatalf("persisted task = %+v", state)
 	}
 
+	// A repeated name is the caller's to fix, so it must cross the wire as a 409 business fault and
+	// not as the unique constraint's 500.
+	duplicate := call("POST", path, "scheduled-create-duplicate-over-http", core.Object{
+		"issueId": s.issueID, "agentId": agentID, "name": "HTTP create", "prompt": "run it again",
+		"timezone": "Asia/Shanghai",
+		"schedule": core.Object{"kind": "daily", "hour": int64(4), "minute": int64(0)},
+		"enabled":  false,
+	}, 409)
+	if duplicate.S("code") != "name_conflict" {
+		t.Fatalf("duplicate create = %v, want code name_conflict", duplicate)
+	}
+
 	// PATCH carries the same cadence object; a create-only fix would still leave the definition
 	// uneditable through the public API.
 	patched := call("PATCH", path+"/"+taskID, "scheduled-patch-over-http", core.Object{
@@ -247,4 +259,87 @@ func TestScheduledTaskRevokeConsentDisables(t *testing.T) {
 	if enabled || reason != "consent_revoked" || policy != "" || !consentedAtCleared {
 		t.Fatalf("revoke-consent must disable the task and clear consent, got enabled=%v reason=%q policy=%q consentedAtCleared=%v", enabled, reason, policy, consentedAtCleared)
 	}
+}
+
+// TestScheduledTaskNameIsUniquePerIssueAndCreator pins the name boundary of the
+// (tenant, issue, creator, name) uniqueness constraint: repeating a name the creator already holds on
+// the issue — by create or by rename, and including a soft-deleted task's name — is `409
+// name_conflict` with nothing written, while the same name on another issue or by another creator is
+// a different task.
+func TestScheduledTaskNameIsUniquePerIssueAndCreator(t *testing.T) {
+	store, s, agentID := scheduledTaskStore(t)
+	creator := scheduledTaskCaller(t, store, s.tenantID)
+	collection := "/api/v1/tenants/" + s.tenantID + "/scheduled-tasks"
+	create := func(key string, caller *core.Claims, issueID, name string) (string, error) {
+		t.Helper()
+		body := scheduledTaskCreateBody(s, agentID, false)
+		body["issueId"], body["name"] = issueID, name
+		out, _, err := store.Public(context.Background(), &core.PublicRequest{
+			Method: "POST", Key: key, Path: collection, TenantID: s.tenantID, Identity: caller, Body: body,
+		})
+		return out.O("resource").S("id"), err
+	}
+	taskCount := func() int {
+		t.Helper()
+		var count int
+		must(t, store.Pool.QueryRow(`SELECT count(*) FROM scheduled_tasks WHERE tenant_id=$1`, s.tenantID).Scan(&count))
+		return count
+	}
+	wantNameConflict := func(what string, err error) {
+		t.Helper()
+		if fault := core.ErrorCode(err); fault.Status != 409 || fault.Code != "name_conflict" {
+			t.Fatalf("%s = %v, want 409 name_conflict", what, err)
+		}
+	}
+
+	dailyID, err := create("name-first", creator, s.issueID, "Daily")
+	must(t, err)
+	_, err = create("name-repeat", creator, s.issueID, "Daily")
+	wantNameConflict("repeating a name on the same issue", err)
+	if count := taskCount(); count != 1 {
+		t.Fatalf("a refused create must persist nothing, got %d task(s)", count)
+	}
+
+	otherIssue := uuid.NewString()
+	_, err = store.Pool.Exec(`INSERT INTO issues(id, tenant_id, creator_user_id, title, number, project_ref)
+		VALUES($1, $2, $3, 'Second issue', 2, $4)`, otherIssue, s.tenantID, s.userID, s.projectID)
+	must(t, err)
+	_, err = create("name-other-issue", creator, otherIssue, "Daily")
+	must(t, err)
+
+	other := scheduledTaskOtherMember(t, store, s.tenantID)
+	var otherUserID string
+	must(t, store.Pool.QueryRow(`SELECT user_id FROM user_identities WHERE subject=$1`, other.Subject).Scan(&otherUserID))
+	seedScheduledTaskModelChain(t, store, otherUserID)
+	_, err = create("name-other-creator", other, s.issueID, "Daily")
+	must(t, err)
+
+	weeklyID, err := create("name-weekly", creator, s.issueID, "Weekly")
+	must(t, err)
+	weekly := collection + "/" + weeklyID
+	before := readScheduledTaskState(t, store, weeklyID)
+	_, _, err = store.Public(context.Background(), &core.PublicRequest{
+		Method: "PATCH", Key: "name-rename-taken", Path: weekly, TenantID: s.tenantID,
+		ScheduledTaskID: weeklyID, Identity: creator,
+		Body: core.Object{"name": "Daily", "prompt": "Renamed prompt", "version": int64(1)},
+	})
+	wantNameConflict("renaming onto a held name", err)
+	if after := readScheduledTaskState(t, store, weeklyID); after != before {
+		t.Fatalf("a refused rename must not change the task: before=%+v after=%+v", before, after)
+	}
+	// Keeping its own name is not a conflict with itself.
+	_, _, err = store.Public(context.Background(), &core.PublicRequest{
+		Method: "PATCH", Key: "name-rename-self", Path: weekly, TenantID: s.tenantID,
+		ScheduledTaskID: weeklyID, Identity: creator,
+		Body: core.Object{"name": "Weekly", "prompt": "Edited prompt", "version": int64(1)},
+	})
+	must(t, err)
+
+	_, _, err = store.Public(context.Background(), &core.PublicRequest{
+		Method: "DELETE", Key: "name-delete", Path: collection + "/" + dailyID, TenantID: s.tenantID,
+		ScheduledTaskID: dailyID, Identity: creator,
+	})
+	must(t, err)
+	_, err = create("name-after-delete", creator, s.issueID, "Daily")
+	wantNameConflict("reusing a deleted task's name", err)
 }
