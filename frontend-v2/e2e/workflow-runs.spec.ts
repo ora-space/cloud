@@ -195,6 +195,10 @@ test('workflow runs: a Condition takes one branch and the other shows as inactiv
   if (!realAgents) {
     // No Agent is installed: the taken branch's Agent fails, and the join after it never runs.
     await expect(card('常规处理').getByText('失败', { exact: true })).toBeVisible()
+    // Its details still say which configured settings v2 does not apply.
+    await card('常规处理').getByText('常规处理', { exact: true }).click()
+    await pane.getByRole('button', { name: '打开节点详情' }).click()
+    await expect(pane.getByLabel('v2 未应用的设置').filter({ visible: true }).first()).toContainText('自动重试')
     return
   }
   await expect(card('常规处理').getByText('成功', { exact: true })).toBeVisible()
@@ -203,4 +207,11 @@ test('workflow runs: a Condition takes one branch and the other shows as inactiv
   await pane.getByRole('button', { name: '舞台', exact: true }).click()
   await expect(pane.getByText('运行完成')).toBeVisible()
   await screenshot(page, testInfo.outputPath('s2-branch-result.png'))
+
+  // The branch that ran says what its Agent actually ran on, beside the branch that did not.
+  await pane.getByRole('button', { name: '全图', exact: true }).click()
+  await card('常规处理').getByText('常规处理', { exact: true }).click()
+  await pane.getByRole('button', { name: '打开节点详情' }).click()
+  await expect(pane.getByLabel('实际执行').filter({ visible: true }).first()).toContainText('· Fixture')
+  await screenshot(page, testInfo.outputPath('s2-branch-agent-details.png'))
 })
