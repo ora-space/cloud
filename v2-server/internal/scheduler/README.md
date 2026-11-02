@@ -29,7 +29,15 @@
 - 有项目文本对话使用 `Start`，传入冻结的 projectId 和 target.executorId（公共目录里的执行器绑定 ID）。每次触发都是独立会话，目录由公共服务创建，消费方不能选择或争抢目录。执行器名称、agent/model 展示文字不能替代绑定 ID。
 - 任一路的接收错误都不会降级到另一路；缺少绑定、空提示词及工作流目标明确拒绝。工作流必须经自己的运行入口，不能在这里当作 Agent 对话运行。
 
-配置接口和表单已经开放项目绑定：保存时按当前 `schedule-resources` 目录校验 projectId、模型与执行器绑定，触发时仍走同一个 `Start`；工作流目标仍未接入，写入返回 `503 schedule_target_unavailable`。
+配置接口和表单已经开放项目绑定：保存时按当前 `schedule-resources` 目录校验 projectId、模型与执行器绑定，触发时仍走同一个 `Start`。
+
+## 工作流执行适配
+
+`TargetRunner` 按冻结快照里的目标类型分派：对话交给 `ConversationAdapter`，工作流交给 `WorkflowAdapter`；没有工作流适配器时由对话适配器按不支持的目标拒绝。`WorkflowAdapter` 通过 `WorkflowRuns`（`server` 包把运行存储和执行桥 `WorkflowRunHost` 接成这个端口）在任务创建者的 scope 里执行，不复制图校验或引擎，也不直接驱动 Node：
+
+- **Dispatch**：`begin` 之后按 occurrence ID 这个稳定身份创建运行（重复创建得到 `store.ErrWorkflowRunTriggerTaken` 时按身份找回），再启动，成功后 `accepted` 并记 `{"workflowRunId"}`。快照、工作流或项目已不存在记 `rejected`（`workflow_unavailable` / `project_unavailable`）；执行桥拒绝启动或执行不可用时取消那个未开始的运行，记 `rejected`；结果未知（超时、取消、其他错误）记 `reconcile`，交给 Reconcile 按身份查。
+- **Reconcile**：按身份找运行。没有运行且没绑定过记 `not_accepted`；运行还是 pending 说明启动没有提交，取消它再记 `not_accepted`；运行中则绑定后等待；结束则记结果并释放占位（没有会话需要 End）。重启恢复（`server_restarted`）中失败的运行记 `interrupted`。
+- **Cancel**：`cancel_requested` 后经执行桥取消；停止未确认时保持 `cancelling`，运行真正结束后由 Reconcile 记录。
 
 两路共用结果、取消与释放流程。已接收的执行结果通过公共记录读取。成功必须满足 `AnswerComplete`；完整性不足不能标 succeeded。Agent Cancel 结束会话，model-only Cancel 只停止当前轮；定时任务不追问结果，两路随后都调用幂等 End。只有 End 确认后才释放同任务占位，历史和目录继续保留。
 

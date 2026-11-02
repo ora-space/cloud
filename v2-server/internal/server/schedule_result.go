@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
+	"github.com/wanglongan587/cloud/v2-server/internal/scheduler"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 )
 
@@ -54,7 +55,8 @@ func (h *handler) scheduleResult(w http.ResponseWriter, r *http.Request, u store
 	}
 	// The durable occurrence ID is the schedule Caller ID and AttemptID. Ref is the
 	// JSON execution.Ref saved by the dispatcher, never a browser-selected session.
-	if o.ExecutionRef == "" {
+	// A workflow occurrence's result is its run, read through the run routes, not a turn.
+	if _, workflow := scheduler.WorkflowRunOf(o.ExecutionRef); o.ExecutionRef == "" || workflow {
 		fault(w, 404, "execution_result_not_found")
 		return
 	}
