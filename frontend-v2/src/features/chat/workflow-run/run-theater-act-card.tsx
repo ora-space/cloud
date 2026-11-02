@@ -436,13 +436,18 @@ export function RunTheaterActCard({
             onClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            {/* A server run carries each node's task and answer, not a live session. */}
-            {conversation.length > 0 ? (
+            {/* v2 follows the attempt's session once it is bound, else shows its recorded task and answer. */}
+            {conversation.length > 0 || state.sessionId !== undefined ? (
               <RunNodeSessionChat
                 conversation={conversation}
                 status={state.status}
                 errorMessage={state.errorMessage}
                 sessionActions={hitlFooter === undefined ? stageDock : undefined}
+                session={
+                  runId !== undefined && state.nodeRunId !== undefined && state.sessionId !== undefined
+                    ? { runId, nodeRunId: state.nodeRunId }
+                    : undefined
+                }
               />
             ) : (
               <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">

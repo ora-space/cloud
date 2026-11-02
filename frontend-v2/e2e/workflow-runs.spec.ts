@@ -115,6 +115,14 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await pane.getByRole('button', { name: '查看节点会话' }).click()
   await expect(pane.getByText(/审阅上一步的方案：V2 fixture complete\./)).toBeVisible()
   await screenshot(page, testInfo.outputPath('3-review-session.png'))
+  // It is the Agent's real session, read from its events stream: the whole prompt the Agent was
+  // given, with the workflow context, then its turn down to the answer.
+  await expect(pane.getByText('<workspace_root>', { exact: false }).first()).toBeVisible()
+  const toEnd = pane.getByRole('button', { name: '滚动到底部' })
+  if (await toEnd.isVisible()) await toEnd.click()
+  // The fixture Agent ran a shell command: a tool call only the real session carries.
+  await expect(pane.getByText(/v2 fixture tool executed/).first()).toBeVisible()
+  await screenshot(page, testInfo.outputPath('3-review-session-end.png'))
 
   // Its details name the executor and the model it actually ran on.
   await pane.getByRole('button', { name: '打开节点详情' }).click()

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from '../page'
 import { resetChatStore } from '../store'
-import { chatBackend, FakeEventSource, tenantId } from '../test-backend'
+import { chatBackend, FakeEventSource, line, tenantId } from '../test-backend'
 import { sampleWorkflowBackend, serveWorkflows, type WorkflowServer } from '@/lib/workflows/test/workflow-server'
 import { runRefreshMs } from './server-runs'
 import { serveRuns, type RunServer } from './test-run-server'
@@ -132,6 +132,40 @@ describe('workflow runs in chat', () => {
     expect(await within(pane).findByText('运行完成')).toBeInTheDocument()
     await waitFor(() => expect(within(project()).getByRole('button', { name: '工作流运行 跟随事件（成功）' })).toBeInTheDocument())
     await waitFor(() => expect(stream.closed).toBe(true))
+  }, 30_000)
+
+  it('shows an Agent node its whole session once the session can be read', async () => {
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '完整会话')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await within(pane).findByRole('heading', { level: 2, name: '完整会话' }, { timeout: 10_000 })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '启动' }))
+    expect(await within(pane).findByText('运行完成', {}, { timeout: 25_000 })).toBeInTheDocument()
+
+    await user.click(within(pane).getByRole('button', { name: /Agent：审查改动/ }))
+    await user.click(await within(pane).findByRole('button', { name: '查看节点会话' }))
+    // Until the session stream sends anything, the recorded task and answer stand in.
+    expect(within(pane).getAllByText('回答：Agent：审查改动').length).toBeGreaterThan(0)
+
+    const [entry] = [...runs.runs.values()]
+    const attempt = entry!.detail.nodes.find((n) => n.nodeType === 'agent' && n.nodeId === 'review')!
+    const stream = FakeEventSource.all.find((s) => s.url.endsWith(`/workflow-runs/${entry!.detail.run.id}/nodes/${attempt.id}/events`))!
+    act(() => {
+      stream.emit({
+        kind: 'history_snapshot',
+        history: { records: [line.user(1, '完整的任务说明'), line.say(2, '读完了改动，结论是可以合并。'), line.ended(3)], incomplete: false },
+      })
+      stream.emit({ kind: 'turn_ended', prompt: '完整的任务说明', result: { status: 'completed', answer: '读完了改动，结论是可以合并。', answerComplete: true, stopReason: 'end_turn', failureCode: '' } })
+      stream.emit({ kind: 'session_ended' })
+      stream.fire('end')
+    })
+    expect(within(pane).getByText('读完了改动，结论是可以合并。')).toBeInTheDocument()
+    expect(within(pane).queryByText('回答：Agent：审查改动', { selector: '[data-slot="bubble-content"], p' })).not.toBeInTheDocument()
+    // The bridge ends a node's session after its turn; that is not shown as an interruption.
+    expect(within(pane).queryByText(/中断/)).not.toBeInTheDocument()
+    expect(stream.closed).toBe(true)
   }, 30_000)
 
   it('stops a run that is still executing', async () => {
