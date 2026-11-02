@@ -344,7 +344,10 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 演示范围（#827 的结论）：
 
 - **只做核心执行**：启动、取消、历史和刷新；节点失败即运行失败。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
-- **节点**：目前执行 Start、Agent、Output；Condition、Aggregator（含 Agent 结构化输出）和 Loop、LoopExit、Iteration 随后补上。图里有尚未执行的节点类型时，启动返回 `400 workflow_run_start_failed`。
+- **节点**：目前执行 Start、Agent、Output、Condition、Aggregator；Loop、LoopExit、Iteration 随后补上。图里有尚未执行的节点类型时，启动返回 `400 workflow_run_start_failed`。
+- **Condition**：按 desktop 的 `condition.rs` 依次判断各个 case，第一个成立的 case 胜出，都不成立走 `else`（没有 `sourceHandle` 的出边就是 `else`）；还没写规则的 case 直接跳过。16 个比较运算符同 desktop；只有 `exists`/`not_exists`/`empty`/`not_empty` 容忍未赋值，其余读到未赋值、未声明或类型不符的变量时节点以 `condition_evaluation` 失败，不猜分支。比较值只写一个 `{{#…#}}` 时保留变量的原类型，混排时按字符串渲染。选中的分支写进运行 payload 的 `conditionDecisions`，不写节点输出，也不进变量池；启动时拒绝重复的 case id（`workflow_run_duplicate_condition_case`）和指向不存在分支的出边（`workflow_run_unknown_condition_branch`）。没走的分支上的节点不建节点行（desktop 同样不落库分支激活），运行详情返回 `conditionDecisions`，由客户端投影为“未激活分支”。
+- **Aggregator**：按 desktop 的 V1 契约，按声明顺序取第一个**已赋值**的候选原样传出（键存在即算，`null`、`false`、`0`、`""`、`[]`、`{}` 都命中），写入 `{node}.output`；全部未赋值时以 `aggregator_no_match` 失败，读到未声明的候选直接失败。它不读分支决策，只看变量池。
+- **Agent 结构化输出**：`outputContract.type` 为 `structured` 的 Agent，prompt 末尾追加 desktop 的输出约定（示例和 Schema）；回答按 desktop 的顺序提取 JSON 对象（整段 → 代码块 → 文中第一个完整对象），再按 Schema 子集（`type`、`properties`、`required`、`additionalProperties`、`items`）校验。通过时原回答仍是 `{node}.output`，对象写入 `{node}.structured_output`；不通过时节点以 `structured_output` 失败并保留原回答。
 - **角色、per-node Skill、MCP 不应用**：节点照常运行，节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`skill`、`mcp`、`retry`、`interactive`），不静默忽略。
 - **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）、`model`（`id`、`name`、`requested`、`fallback`），以及按变量池渲染后的任务要求 `task`（节点尝试的 `input` 保留模板原文）。
 - **重启**：启动时先把上个进程留下的所有非终态节点以 `interrupted_by_restart` 失败，运行随之失败，然后才开始服务；不重放 Agent。

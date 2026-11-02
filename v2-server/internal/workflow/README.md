@@ -39,6 +39,9 @@ HTTP 错误码由适配层映射；诊断措辞不承诺逐字匹配 desktop。
 | `container_test.go` | Loop 轮次上限、携带值与可见性；Iteration 归属、输入 / 收集类型及边界 |
 | `testdata/spare-chain.json`、`testdata/iteration.json` | 改编自 desktop `execution_document/tests.rs` |
 | `testdata/loop.json` | 改编自 desktop `loop_graph/tests.rs` |
+| `condition_test.go` | Condition 的 case 顺序、空 case、and/or、各运算符、比较值模板与失败（改编自 desktop `condition.rs`） |
+| `branch_test.go` | 引擎层的条件分支、未走分支不建行、Aggregator 首个已赋值与 falsy 值、启动时的分支校验（改编自 desktop `aggregator_tests.rs`、`engine.rs`） |
+| `structured_test.go` | 结构化输出的提取顺序、Schema 子集校验与示例（改编自 desktop `structured_output.rs`） |
 
 ```sh
 go test -race ./internal/workflow
