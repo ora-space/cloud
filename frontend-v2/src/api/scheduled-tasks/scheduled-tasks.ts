@@ -160,7 +160,7 @@ export function useGetApiV1TenantsTidScheduledTasks<TData = Awaited<ReturnType<t
 
 
 /**
- * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. A task name is unique among the caller's scheduled tasks on the same issue, deleted tasks included: a create or rename that repeats one answers 409 name_conflict. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
  * @summary POST /api/v1/tenants/:tid/scheduled-tasks
  */
 export const postApiV1TenantsTidScheduledTasks = (
@@ -399,7 +399,7 @@ export function useGetApiV1TenantsTidScheduledTasksStid<TData = Awaited<ReturnTy
 
 
 /**
- * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. Only project name may change; version must match. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
+ * Public requests require a gateway service credential plus a caller-bound user credential. Active tenant membership is checked before lookup. Shared projects expose safe runtime summaries; runtime content and use require the verified creator or current tenant administrator. Conflicting mutations additionally require an effective server-confirmed control session. A task name is unique among the caller's scheduled tasks on the same issue, deleted tasks included: a create or rename that repeats one answers 409 name_conflict. Only project name may change; version must match. Mutation version conflicts return 409; a missing required version returns 428. Unknown fields are rejected. Lists use ascending UUID pagination.
  * @summary PATCH /api/v1/tenants/:tid/scheduled-tasks/:stid
  */
 export const patchApiV1TenantsTidScheduledTasksStid = (
