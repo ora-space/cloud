@@ -163,6 +163,27 @@ func TestWorkflowOccurrenceRecordsAFailedRun(t *testing.T) {
 	}
 }
 
+// A finished run can be deleted before the next tick settles its occurrence; the occurrence then
+// fails instead of erroring on every tick and keeping the schedule's slot.
+func TestWorkflowDeletedRunFailsAndReleasesTheOccurrence(t *testing.T) {
+	f := newWorkflowFixture(t)
+	ctx := context.Background()
+	if err := f.workflow.Dispatch(ctx, f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.runs.runs, f.occ.ID)
+	if err := f.workflow.Reconcile(ctx, f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	o := f.read(t)
+	if o.Status != "failed" || o.Reason != "workflow_run_deleted" || !o.Released || o.ExecutionRef != `{"workflowRunId":"run-1"}` {
+		t.Fatalf("occurrence of a deleted run = %+v", o)
+	}
+	if err := f.workflow.Reconcile(ctx, f.scope, f.occ); err != nil {
+		t.Fatalf("reconcile after release: %v", err)
+	}
+}
+
 func TestWorkflowStartRefusalWithdrawsTheRun(t *testing.T) {
 	for _, tc := range []struct {
 		err    error

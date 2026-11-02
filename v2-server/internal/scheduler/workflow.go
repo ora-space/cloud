@@ -196,7 +196,8 @@ func workflowTargetUnavailable(err error) string {
 }
 
 // Reconcile follows the occurrence's own run, found by its identity, without creating or starting
-// anything: a run the occurrence never started is withdrawn and the trigger closed as not started.
+// anything: a run the occurrence never started is withdrawn and the trigger closed as not started,
+// and an accepted run that was deleted fails the occurrence.
 // The coordinator calls it on every tick for unreleased occurrences, which is how a finished run
 // settles its occurrence and frees the schedule's slot.
 func (a *WorkflowAdapter) Reconcile(ctx context.Context, scope execution.Scope, occurrence store.Occurrence) error {
@@ -219,6 +220,14 @@ func (a *WorkflowAdapter) Reconcile(ctx context.Context, scope execution.Scope, 
 	if errors.Is(err, store.ErrWorkflowRunNotFound) && o.ExecutionRef == "" {
 		_, err = a.apply(ctx, scope, o, "not_accepted", "", "execution_not_started")
 		return err
+	}
+	if errors.Is(err, store.ErrWorkflowRunNotFound) {
+		// The accepted run was deleted before its end settled the occurrence; only a finished run
+		// can be deleted, so nothing is left to follow and the slot is freed.
+		if o, err = a.apply(ctx, scope, o, "failed", o.ExecutionRef, "workflow_run_deleted"); err != nil {
+			return err
+		}
+		return a.release(ctx, scope, o)
 	}
 	if err != nil {
 		return err
