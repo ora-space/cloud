@@ -6,7 +6,7 @@ import { signIn } from './login.ts'
 interface ContainerDetail {
   run: { status: string; output: string | null; error: string | null }
   scopes: { id: string; roundIndex: number; status: string }[]
-  nodes: { nodeId: string; scopeId: string; sessionId: string | null; iteration: number | null; payload: string | null }[]
+  nodes: { id: string; nodeId: string; scopeId: string; sessionId: string | null; iteration: number | null; payload: string | null }[]
 }
 
 const agent = (prompt: string) => ({ executor: { agentCli: 'official/ora-space.opencode', modelId: 'fixture' }, prompt })
@@ -116,6 +116,11 @@ test('workflow containers: LoopExit exports and displays the committed exit reas
 test('workflow containers: real Agents retain isolated Loop and Iteration round histories', async ({ page }, info) => {
   test.skip(!process.env.V2_NODE_ASSETS_DIR, 'needs the prepared Node fixture executor')
   test.setTimeout(240_000)
+  const subscribed: string[] = []
+  page.on('request', (request) => {
+    const match = /\/workflow-runs\/[^/]+\/nodes\/([^/]+)\/events/.exec(request.url())
+    if (match) subscribed.push(match[1]!)
+  })
   const detail = await execute(page, containers, '容器轮次验收')
   expect(detail.scopes.map((scope) => [scope.roundIndex, scope.status])).toEqual([[1, 'succeeded'], [2, 'succeeded']])
   const writers = detail.nodes.filter((node) => node.nodeId === 'writer')
@@ -128,18 +133,36 @@ test('workflow containers: real Agents retain isolated Loop and Iteration round 
   await pane.getByRole('button', { name: /第 2 轮 · 达到最大轮次/ }).click()
   await expect(pane.getByText('已开始 2 轮 / 最大 2 轮')).toBeVisible()
   await screenshot(page, info.outputPath('s3-loop-rounds.png'))
+  await pane.getByRole('region', { name: '本轮概览' }).getByRole('button', { name: /改进初稿/ }).click()
+  await pane.getByRole('button', { name: '查看节点会话' }).click()
+  await expect.poll(() => subscribed).toContain(writers[1]!.id)
+  await expect(pane.getByText('<workspace_root>', { exact: false }).first()).toBeVisible()
+  await pane.getByRole('button', { name: '反馈循环: 成功', exact: true }).click()
+  await pane.getByRole('button', { name: /第 1 轮 ·/ }).click()
+  await pane.getByRole('region', { name: '本轮概览' }).getByRole('button', { name: /改进初稿/ }).click()
+  await pane.getByRole('button', { name: '查看节点会话' }).click()
+  await expect.poll(() => subscribed).toContain(writers[0]!.id)
+  await expect(pane.getByText(/改进：初稿/)).toBeVisible()
   await pane.getByRole('button', { name: '逐段处理: 成功', exact: true }).click()
   await pane.getByRole('button', { name: '选择迭代轮次' }).click()
   await page.getByRole('option', { name: '第 2 轮', exact: true }).click()
   await expect(pane.getByRole('button', { name: '选择迭代轮次' })).toContainText('2')
   await pane.getByRole('button', { name: '处理段落: 成功', exact: true }).click()
   await pane.getByRole('button', { name: '查看节点会话' }).click()
-  await expect(pane.getByText('处理第 1 段：第二段', { exact: true })).toBeVisible()
+  const workers = detail.nodes.filter((node) => node.nodeId === 'worker')
+  await expect.poll(() => subscribed).toContain(workers.find((node) => node.iteration === 1)!.id)
+  await expect(pane.getByText('<workspace_root>', { exact: false }).first()).toBeVisible()
+  await expect(pane.getByText(/处理第 1 段：第二段/)).toBeVisible()
   await pane.getByRole('button', { name: '选择迭代轮次' }).click()
   await page.getByRole('option', { name: '第 1 轮', exact: true }).click()
-  await expect(pane.getByText('处理第 0 段：第一段', { exact: true })).toBeVisible()
-  await expect(pane.getByText('处理第 1 段：第二段', { exact: true })).toBeHidden()
+  await expect.poll(() => subscribed).toContain(workers.find((node) => node.iteration === 0)!.id)
+  await expect(pane.getByText(/处理第 0 段：第一段/)).toBeVisible()
+  await expect(pane.getByText(/处理第 1 段：第二段/)).toBeHidden()
   await pane.getByRole('button', { name: '选择迭代轮次' }).click()
   await page.getByRole('option', { name: '第 2 轮', exact: true }).click()
+  await expect(pane.getByText(/处理第 1 段：第二段/)).toBeVisible()
+  const toEnd = pane.getByRole('button', { name: '滚动到底部' })
+  if (await toEnd.isVisible()) await toEnd.click()
+  await expect(pane.getByText(/v2 fixture tool executed/).first()).toBeVisible()
   await screenshot(page, info.outputPath('s3-iteration-rounds.png'))
 })

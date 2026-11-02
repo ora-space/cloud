@@ -60,7 +60,7 @@ describe('toGraphWorkflowRun', () => {
     wire.scopes = [1, 2].map((index) => ({ id: `round${index}`, runId: 'run', parentLoopNodeRunId: 'parent', roundIndex: index, status: 'succeeded', state: JSON.stringify({ conditionDecisions: { gate: index === 1 ? 'yes' : 'else' } }), createdAt: index * 1_000, updatedAt: index * 1_000 }))
     const run = toGraphWorkflowRun(wire, graph)
     expect(run.nodeStates.a).toEqual({ status: 'idle' })
-    expect(run.rounds?.[0]?.nodeStates.a).toMatchObject({ sessionId: 'session1', output: { detail: 'first' }, executor: { id: 'first-executor' }, model: { name: 'first-model' }, unapplied: ['retry'] })
+    expect(run.rounds?.[0]?.nodeStates.a).toMatchObject({ nodeRunId: 'a1', sessionId: 'session1', output: { detail: 'first' }, executor: { id: 'first-executor' }, model: { name: 'first-model' }, unapplied: ['retry'] })
     expect(run.rounds?.[1]?.nodeStates.a).toEqual({ status: 'inactive' })
     expect(run.rounds?.map((round) => round.nodeStates.gate?.selectedBranchId)).toEqual(['yes', 'else'])
   })
@@ -77,7 +77,7 @@ describe('toGraphWorkflowRun', () => {
     wire.iterationConditionDecisions = { 'gate#0': 'yes', 'gate#1': 'else' }
     const run = toGraphWorkflowRun(wire, graph)
     expect(run.roundStates?.a).toHaveLength(2)
-    expect(run.roundStates?.a?.[0]).toMatchObject({ iteration: 0, sessionId: 'first', output: { detail: 'collected' }, executor: { id: 'collected-executor' }, model: { name: 'collected-model' }, unapplied: ['skill'] })
+    expect(run.roundStates?.a?.[0]).toMatchObject({ iteration: 0, nodeRunId: 'a0', sessionId: 'first', output: { detail: 'collected' }, executor: { id: 'collected-executor' }, model: { name: 'collected-model' }, unapplied: ['skill'] })
     expect(run.roundStates?.a?.[1]).toEqual({ iteration: 1, status: 'inactive' })
     expect(run.nodeStates.a).toEqual({ iteration: 1, status: 'inactive' })
     expect(run.roundStates?.gate?.map((state) => state.selectedBranchId)).toEqual(['yes', 'else'])

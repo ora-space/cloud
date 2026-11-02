@@ -258,6 +258,8 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 - **事件流**：运行事件流订阅 `server.Options.WorkflowRunEvents`，`main` 注入执行桥的 `workflowhost.Hub`。节点会话事件流以节点尝试为键（重试是新的尝试和新的会话），按当前用户的 scope 读公共执行服务：会话属于启动运行的人（定时触发时是任务的创建者），同租户其他成员读到 `404 workflow_node_session_not_found`，页面退回尝试记下的任务和回答。不跨用户读会话，所以也不需要持久化发起者。
 - **读取投影**：根 Condition 决策在 `conditionDecisions`，Iteration 决策在 `iterationConditionDecisions`（`nodeId#round`），Loop 决策留在每轮 `scope.state`。`failedAttempts`、根变量投影和整次运行 restart/resume 尚未在此提供。重启中断由执行桥提供，见下文“工作流执行”。
 
+运行页按选中的 Loop scope 或 Iteration 下标投影节点状态，并以该次尝试的 `nodeRunId` 订阅会话事件。该轮未执行的成员没有尝试身份，不继承前一轮的会话或执行元数据。
+
 ### 对话
 
 对话页使用独立候选契约 [`chat.openapi.json`](chat.openapi.json)。正式契约里的对话挂在 issue 下，没有独立的对话列表。前端以独立 Orval 配置生成客户端。领域逻辑在 [`internal/chat`](internal/chat)，只经 [`internal/execution`](internal/execution/README.md) 的公共接口运行 Agent。
