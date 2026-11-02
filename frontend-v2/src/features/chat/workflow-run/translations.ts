@@ -429,7 +429,7 @@ export const workflowRunTranslations = {
     "workflowRun.errorResumeWithoutInjectionHint":
       "本次运行关闭了失败信息注入：同版本续跑时，智能体不会得知这次失败的原因；若仍失败，再修改工作流并发布新版本。",
     "workflowRun.injectedFailure.title": "本次尝试注入的上次失败信息",
-    "workflowRun.resumeFromTopHint": "可在顶部点「从失败处继续」重跑这个节点",
+    "workflowRun.resumeFromTopHint": "可在顶部点击「再跑一次」创建新运行。",
     "workflowRun.nodeFromOlderSnapshotHint":
       "此节点的结果来自本运行之前使用的版本（续跑时已切换版本）",
     "workflowRun.aiDiagnosis.run": "让 AI 分析",
@@ -933,7 +933,7 @@ export const workflowRunTranslations = {
     "workflowRun.injectedFailure.title":
       "Previous-failure context injected into this attempt",
     "workflowRun.resumeFromTopHint":
-      "Use “Resume from failure” at the top to rerun this node",
+      "Use “Run again” at the top to create a new run.",
     "workflowRun.nodeFromOlderSnapshotHint":
       "This node's result comes from the version this run used before switching",
     "workflowRun.aiDiagnosis.run": "Ask AI to analyze",

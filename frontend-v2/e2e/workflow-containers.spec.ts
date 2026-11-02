@@ -94,6 +94,9 @@ test('workflow containers: a round limit shows the domain error without corrupt-
   await expect(pane.getByRole('alert').filter({ hasText: 'Loop did not terminate within 1 rounds' })).toBeVisible()
   await expect(pane.getByText('运行的冻结数据无效', { exact: true })).toBeHidden()
   await expect(pane.getByText(/该运行的快照已损坏/)).toBeHidden()
+  await expect(pane.getByRole('button', { name: '再跑一次', exact: true })).toBeVisible()
+  await expect(pane.getByText('可在顶部点击「再跑一次」创建新运行。', { exact: true })).toBeVisible()
+  await expect(pane.getByText(/从失败处继续/)).toBeHidden()
   await screenshot(page, info.outputPath('s3-loop-domain-failure.png'))
 })
 
