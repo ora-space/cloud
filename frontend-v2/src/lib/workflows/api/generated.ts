@@ -333,10 +333,17 @@ export interface WorkflowScope {
   updatedAt: number;
 }
 
+/**
+ * Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.
+ */
+export type WorkflowRunDetailConditionDecisions = {[key: string]: string};
+
 export interface WorkflowRunDetail {
   run: WorkflowRun;
   nodes: WorkflowNodeRun[];
   scopes: WorkflowScope[];
+  /** Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows. */
+  conditionDecisions: WorkflowRunDetailConditionDecisions;
 }
 
 /**

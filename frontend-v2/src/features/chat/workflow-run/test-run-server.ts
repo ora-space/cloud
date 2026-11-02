@@ -93,7 +93,7 @@ export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunS
         name: (body.name as string | undefined) ?? '', status: 'pending', state: JSON.stringify({ current_nodes: [] }),
         input: null, output: null, error: null, startedAt: null, finishedAt: null, createdAt: at, updatedAt: at,
       }
-      server.runs.set(run.id, { detail: { run, nodes: [], scopes: [] }, graph: published.graph, version: published.version })
+      server.runs.set(run.id, { detail: { run, nodes: [], scopes: [], conditionDecisions: {} }, graph: published.graph, version: published.version })
       return respond(config, 201, { run })
     }
     if (url === runsBase && method === 'GET') {
