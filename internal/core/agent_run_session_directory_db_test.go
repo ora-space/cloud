@@ -67,6 +67,7 @@ func TestSessionWorkspaceDirectoryListsTheProjectNewestFirst(t *testing.T) {
 	}
 
 	want := []Object{
+		{"workspaceId": workflowWorkspace, "kind": "workflow_run", "workflowRunId": workflowRun, "workflowName": "directory", "runStatus": "running"},
 		{"workspaceId": scene.ws, "kind": "run", "issueId": seed.issue, "issueTitle": "disp issue", "issueRunId": seed.run, "runStatus": "dispatched"},
 		{"workspaceId": isolated, "kind": "isolated"},
 		{"workspaceId": deletedRun, "kind": "run", "issueId": earlierIssue, "issueTitle": "Earlier issue", "issueRunId": earlierRun, "runStatus": "failed"},
@@ -93,13 +94,10 @@ func TestSessionWorkspaceDirectoryListsTheProjectNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := directory()
-	if len(got) != workspaceDirectoryLimit || got[0].S("workspaceId") != scene.ws {
+	if len(got) != workspaceDirectoryLimit || got[0].S("workspaceId") != workflowWorkspace {
 		t.Fatalf("directory holds %d listings starting with %v, want %d starting with the session's own", len(got), got[0], workspaceDirectoryLimit)
 	}
 	for _, listing := range got {
-		if id := listing.S("workspaceId"); id == workflowWorkspace {
-			t.Fatalf("the WorkflowRun Workspace %s entered the directory", id)
-		}
 		if id := listing.S("workspaceId"); id == isolated || id == deletedRun || id == main {
 			t.Fatalf("an older Workspace %s outlived the limit", id)
 		}

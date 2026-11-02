@@ -2836,6 +2836,30 @@ export interface WorkflowNodeSession {
  */
 export type WorkflowRunDefinitionSnapshot = { [key: string]: unknown } | null;
 
+export type WorkflowRunDeliveryState = typeof WorkflowRunDeliveryState[keyof typeof WorkflowRunDeliveryState];
+
+
+export const WorkflowRunDeliveryState = {
+  pending: 'pending',
+  delivering: 'delivering',
+  saved: 'saved',
+  unchanged: 'unchanged',
+  failed: 'failed',
+  skipped: 'skipped',
+  not_required: 'not_required',
+} as const;
+
+export type WorkflowRunDelivery = {
+  error: string;
+  /** @nullable */
+  revisionId: string | null;
+  /** @nullable */
+  settledAt: string | null;
+  /** @nullable */
+  startedAt: string | null;
+  state: WorkflowRunDeliveryState;
+};
+
 /**
  * The run's input object: each form value keyed by variable name, plus the reserved `input` key carrying the kickoff text the run submitted. A run that submitted no kickoff evaluates against the Start node's authored instruction instead.
  */
@@ -2859,6 +2883,24 @@ export const WorkflowRunStatus = {
   cancelled: 'cancelled',
 } as const;
 
+export type WorkflowRunWorkspaceReleaseState = typeof WorkflowRunWorkspaceReleaseState[keyof typeof WorkflowRunWorkspaceReleaseState];
+
+
+export const WorkflowRunWorkspaceReleaseState = {
+  pending: 'pending',
+  releasing: 'releasing',
+  released: 'released',
+  abandoned: 'abandoned',
+  not_required: 'not_required',
+} as const;
+
+export type WorkflowRunWorkspaceRelease = {
+  error: string;
+  /** @nullable */
+  releasedAt: string | null;
+  state: WorkflowRunWorkspaceReleaseState;
+};
+
 export interface WorkflowRunModelBinding {
   connectionName: string;
   modelId: string;
@@ -2876,6 +2918,7 @@ export interface WorkflowRun {
      * @nullable
      */
   definitionSnapshot?: WorkflowRunDefinitionSnapshot;
+  delivery?: WorkflowRunDelivery;
   error: string;
   /** @nullable */
   finishedAt: string | null;
@@ -2904,6 +2947,7 @@ export interface WorkflowRun {
   updatedAt: string;
   workflowId: string;
   workflowName: string;
+  workspaceRelease?: WorkflowRunWorkspaceRelease;
 }
 
 /**

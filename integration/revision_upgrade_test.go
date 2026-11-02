@@ -95,10 +95,10 @@ func TestRevisionUpgradePreservesPublishedWorkflowSchema(t *testing.T) {
 	must(t, tx.Commit())
 	// The run document strips the columns later migrations added to the published row: 0039's
 	// identity columns, 0042's frozen plugin version, 0062's frozen plugin release, 0051's
-	// cancellation request and 0055's Workspace release fact. They land as NULL or a constant
+	// cancellation request, 0055's Workspace release fact and 0071's delivery facts. They land as NULL or a constant
 	// default on published rows, which is an intended shape change, not a data change — the
 	// comparison keeps guarding the row data the published schema carried.
-	const documents = `SELECT jsonb_build_object('workflow',to_jsonb(w),'snapshot',to_jsonb(s),'run',to_jsonb(r) - ARRAY['created_by','project_id','plugin_version','plugin_release','cancel_requested_at','workspace_release_state','workspace_release_error','workspace_released_at'])::text FROM workflows w JOIN workflow_snapshots s ON s.workflow_id=w.id JOIN workflow_runs r ON r.snapshot_id=s.id WHERE r.id=$1`
+	const documents = `SELECT jsonb_build_object('workflow',to_jsonb(w),'snapshot',to_jsonb(s),'run',to_jsonb(r) - ARRAY['created_by','project_id','plugin_version','plugin_release','cancel_requested_at','workspace_release_state','workspace_release_error','workspace_released_at','delivery_state','delivery_error','delivery_started_at','delivery_settled_at','delivery_revision_id'])::text FROM workflows w JOIN workflow_snapshots s ON s.workflow_id=w.id JOIN workflow_runs r ON r.snapshot_id=s.id WHERE r.id=$1`
 	const ledger = `SELECT jsonb_object_agg(version,checksum)::text FROM schema_migrations WHERE version <> '0027_verified_revisions.sql' AND version < '0030'`
 	var beforeDocuments, beforeLedger string
 	must(t, pool.QueryRow(documents, run).Scan(&beforeDocuments))

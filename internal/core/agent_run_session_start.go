@@ -198,13 +198,15 @@ const workspaceDirectoryLimit = 100
 func workspaceDirectory(t *transaction, wid string) []Object {
 	rows := t.list(`
 		SELECT w.id AS workspace_id,
-		       CASE WHEN w.issue_run_id IS NOT NULL THEN 'run' ELSE w.kind END AS kind,
-		       r.issue_id, i.title AS issue_title, r.id AS issue_run_id, r.status AS run_status
+		       CASE WHEN w.workflow_run_id IS NOT NULL THEN 'workflow_run' WHEN w.issue_run_id IS NOT NULL THEN 'run' ELSE w.kind END AS kind,
+		       r.issue_id, i.title AS issue_title, r.id AS issue_run_id, COALESCE(wr.status,r.status) AS run_status,
+		       wr.id AS workflow_run_id,wr.name AS workflow_name
 		FROM workspaces w
 		JOIN workspaces self ON self.id=$1 AND self.project_id=w.project_id AND self.tenant_id=w.tenant_id
 		LEFT JOIN issue_runs r ON r.id=w.issue_run_id AND r.tenant_id=w.tenant_id
 		LEFT JOIN issues i ON i.id=r.issue_id AND i.tenant_id=r.tenant_id
-		WHERE (w.deleted_at IS NULL OR w.issue_run_id IS NOT NULL) AND w.workflow_run_id IS NULL
+		LEFT JOIN workflow_runs wr ON wr.id=w.workflow_run_id AND wr.tenant_id=w.tenant_id AND wr.project_id=w.project_id
+		WHERE (w.deleted_at IS NULL OR w.issue_run_id IS NOT NULL OR w.workflow_run_id IS NOT NULL)
 		ORDER BY w.created_at DESC, w.id DESC
 		LIMIT $2`, wid, workspaceDirectoryLimit)
 	out := make([]Object, 0, len(rows))
@@ -212,6 +214,9 @@ func workspaceDirectory(t *transaction, wid string) []Object {
 		listing := Object{"workspaceId": row.S("workspaceId"), "kind": row.S("kind")}
 		if row.S("issueRunId") != "" {
 			listing["issueId"], listing["issueTitle"], listing["issueRunId"], listing["runStatus"] = row.S("issueId"), row.S("issueTitle"), row.S("issueRunId"), row.S("runStatus")
+		}
+		if row.S("workflowRunId") != "" {
+			listing["workflowRunId"], listing["workflowName"], listing["runStatus"] = row.S("workflowRunId"), row.S("workflowName"), row.S("runStatus")
 		}
 		out = append(out, listing)
 	}

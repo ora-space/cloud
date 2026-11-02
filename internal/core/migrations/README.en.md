@@ -81,6 +81,8 @@ There are currently 76 SQL files.
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | Accept zero-length artifacts in verified registration |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | Persist omitted rejection counts and walk truncation facts |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | Per-attempt identity for workflow node work items, executions and end requests |
+| [0071_workflow_run_delivery.sql](0071_workflow_run_delivery.sql) | Whole-workflow Revision ownership, history type, save barrier and Node capability |
+| [0072_workflow_dispatch_order.sql](0072_workflow_dispatch_order.sql) | Durable workflow session dispatch order independent of wall-clock timestamps |
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | Explicit D8 missing-delete provenance and mutually exclusive identity constraints |
 | [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | Optional selected model on scheduled tasks |
 | [0072_scheduled_task_conversation_reasons.sql](0072_scheduled_task_conversation_reasons.sql) | Task-conversation rejection reasons for scheduled admission |

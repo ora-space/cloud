@@ -2,6 +2,8 @@
 
 [English](controller-integration.en.md) | 中文
 
+工作流整次交付在 Node 重启后保持原运行、Node、沙盒、代次和固定输入。同一维护运行重新绑定时，可以报告其已登记交付仍未完成；Cloud 逐项验证这些身份后确认绑定，不把责任报告成空闲。Node 仅在全部会话有持久停止证据、所有未完成责任都是该工作流交付时接纳此恢复，原执行许可和冻结计划不改写。交付的窄 Git/上传资格按原注册身份复核；会话仍要求当前已确认的准入资格。
+
 Controller（desktop 仓库的 `ora-controller`）是 Cloud 与沙盒里各个 Node 之间唯一的执行通道。它只主动拨出到 Cloud 的
 控制监听，Cloud 是全部 RPC 的服务端并拥有权威持久化；Controller 不向 Cloud 暴露服务，也不持有数据库连接。本文说明这份
 gRPC 契约的通用语义和各个服务的职责，字段以 [`proto/`](../../proto/README.md) 为准。

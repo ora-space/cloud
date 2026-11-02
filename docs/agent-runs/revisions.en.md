@@ -2,6 +2,8 @@
 
 English | [中文](revisions.md)
 
+The single-session delivery and resume rules below describe Agent IssueRuns. Workflow Revisions use exclusive `workflow_run_id` ownership and an explicit `workflow_manifest_v1` history type; see [workflow delivery](../workflows/workflows.en.md#delivery-and-history-archives). A manifest is never read as legacy JSONL, and task-predecessor restoration is not enabled.
+
 A Revision is what an Agent run saves: the final commit (after the Agent's own commits the Node may add
 an internal snapshot commit for remaining uncommitted changes), the **delivery ref** the Node gets by pushing
 that commit to the Project repository, and the session JSONL. Code is delivered only through the

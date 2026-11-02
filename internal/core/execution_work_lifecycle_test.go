@@ -68,6 +68,7 @@ func TestWorkflowWorkStaysClaimableBesideRetiredIssueRunWork(t *testing.T) {
 	runID, _, _ := seedWorkflowIdentityScene(t, store, true)
 	var wsID string
 	if _, err := store.transact(context.Background(), func(tx *transaction) Object {
+		tx.exec("UPDATE workflow_runs SET status='running' WHERE id=$1", runID)
 		created := createWorkflowRunWorkspace(tx, runID)
 		if created.B("busy") {
 			t.Fatal("the project must be idle")
