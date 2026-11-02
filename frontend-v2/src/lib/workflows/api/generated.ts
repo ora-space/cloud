@@ -334,6 +334,43 @@ export interface WorkflowScope {
 }
 
 /**
+ * One declared variable of the run's root variable pool, desktop's WorkflowRunVariable. value is absent while the variable is unassigned.
+ */
+export interface WorkflowRunVariable {
+  /**
+     * @minItems 2
+     * @maxItems 2
+     */
+  selector: string[];
+  valueType: string;
+  sourceNodeId: string;
+  /** Any JSON value, null included. */
+  value?: unknown;
+}
+
+/**
+ * An earlier attempt that failed and was run again, desktop's WorkflowNodeFailedAttempt, read from its payload.error_detail. v2 neither retries nor resumes, so none exists yet.
+ */
+export interface WorkflowNodeFailedAttempt {
+  nodeRunId: string;
+  nodeId: string;
+  scopeId: string;
+  /** @nullable */
+  iteration: number | null;
+  /** @nullable */
+  sessionId: string | null;
+  attempt: number;
+  kind: string;
+  message: string;
+  sourceChain: string[];
+  recordedAt: number;
+  /** @nullable */
+  startedAt: number | null;
+  /** @nullable */
+  finishedAt: number | null;
+}
+
+/**
  * Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.
  */
 export type WorkflowRunDetailConditionDecisions = {[key: string]: string};
@@ -344,6 +381,10 @@ export interface WorkflowRunDetail {
   scopes: WorkflowScope[];
   /** Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows. */
   conditionDecisions: WorkflowRunDetailConditionDecisions;
+  /** The root variable pool, from the run payload; empty until the run starts. */
+  variables: WorkflowRunVariable[];
+  /** Earlier failed attempts, oldest first; nodes holds only each node's latest attempt. */
+  failedAttempts: WorkflowNodeFailedAttempt[];
 }
 
 /**

@@ -19,6 +19,7 @@ type WorkflowRunStore interface {
 	WorkflowRuns(context.Context, string, string, string) ([]store.WorkflowRunSummary, error)
 	WorkflowRun(context.Context, string, string) (store.WorkflowRun, error)
 	WorkflowRunNodes(context.Context, string, string) ([]store.WorkflowNodeRun, error)
+	WorkflowRunFailedAttempts(context.Context, string, string) ([]store.WorkflowNodeRun, error)
 	WorkflowRunScopes(context.Context, string, string) ([]store.WorkflowScope, error)
 	WorkflowRunSnapshot(context.Context, string, string) (store.WorkflowSnapshot, error)
 	DeleteWorkflowRun(context.Context, string, string) error
@@ -293,6 +294,11 @@ func (h *handler) getWorkflowRun(w http.ResponseWriter, r *http.Request, u store
 		workflowRunFault(w, err, "get workflow run scopes")
 		return
 	}
+	failed, err := s.WorkflowRunFailedAttempts(r.Context(), tenant, runID)
+	if err != nil {
+		workflowRunFault(w, err, "get workflow run failed attempts")
+		return
+	}
 	nodeViews := make([]workflowNodeRunView, 0, len(nodes))
 	for _, node := range nodes {
 		nodeViews = append(nodeViews, toWorkflowNodeRunView(node))
@@ -306,6 +312,8 @@ func (h *handler) getWorkflowRun(w http.ResponseWriter, r *http.Request, u store
 		"nodes":              nodeViews,
 		"scopes":             scopeViews,
 		"conditionDecisions": conditionDecisions(run.RuntimePayload),
+		"variables":          workflowRunVariables(run.RuntimePayload),
+		"failedAttempts":     workflowFailedAttempts(failed),
 	})
 }
 

@@ -442,6 +442,26 @@ func (s *Store) WorkflowRunNodes(ctx context.Context, tenant, runID string) ([]W
 	return nodes, nil
 }
 
+// WorkflowRunFailedAttempts lists the soft-deleted failed rows of one run, oldest first, as
+// desktop's list_failed_attempts: a retry replaces a failed attempt by soft-deleting it, so these
+// rows are exactly the attempts that failed and were run again. Each keeps its error_detail.
+func (s *Store) WorkflowRunFailedAttempts(ctx context.Context, tenant, runID string) ([]WorkflowNodeRun, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+workflowNodeRunColumns+`
+		FROM v2_workflow_node_runs
+		WHERE tenant_id = $1 AND run_id = $2 AND deleted_at IS NOT NULL AND status = 'failed'
+		ORDER BY created_at, id`, tenant, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list failed attempts: %w", err)
+	}
+	nodes, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (WorkflowNodeRun, error) {
+		return scanNodeRun(row)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list failed attempts: %w", err)
+	}
+	return nodes, nil
+}
+
 // WorkflowRunSnapshot returns the snapshot a run froze. The run keeps its own pointer, so history
 // still renders the executed graph after the definition publishes a newer version.
 func (s *Store) WorkflowRunSnapshot(ctx context.Context, tenant, runID string) (WorkflowSnapshot, error) {

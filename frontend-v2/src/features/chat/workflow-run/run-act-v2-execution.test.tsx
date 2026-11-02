@@ -1,9 +1,17 @@
 import '@/lib/workflows/test/dom'
 import { render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { I18nextProvider } from 'react-i18next'
 import { describe, expect, it } from 'vitest'
+import { createWorkflowI18n } from '@/lib/workflows/host/i18n'
 import type { WorkflowAgentConfig } from '@/lib/workflows/runtime'
 import { unappliedAgentSettings } from './agent-unapplied'
 import { RunActV2Execution } from './run-act-v2-execution'
+import { workflowRunTranslations } from './translations'
+
+// The run page's own strings, as RunPane provides them.
+const runI18n = createWorkflowI18n(['zh-CN'], { 'zh-CN': workflowRunTranslations['zh-CN'] })
+const view = (ui: ReactElement) => render(<I18nextProvider i18n={runI18n}>{ui}</I18nextProvider>)
 
 const config = (over: Partial<WorkflowAgentConfig> = {}): WorkflowAgentConfig => ({
   schemaVersion: 3,
@@ -49,7 +57,7 @@ describe('unappliedAgentSettings', () => {
 
 describe('RunActV2Execution', () => {
   it('shows the executor and model the attempt ran on and what v2 did not apply', () => {
-    render(
+    view(
       <RunActV2Execution
         config={config({ roleId: 'reviewer', retry: undefined })}
         attempt={{
@@ -67,7 +75,7 @@ describe('RunActV2Execution', () => {
   })
 
   it('says a node without a model ran on the default one', () => {
-    render(
+    view(
       <RunActV2Execution
         config={config()}
         attempt={{
@@ -82,7 +90,7 @@ describe('RunActV2Execution', () => {
   })
 
   it('shows nothing about execution before the Agent has run', () => {
-    render(<RunActV2Execution config={config({ mcps: [{ mcpId: 'github', enabled: true }] })} attempt={{}} />)
+    view(<RunActV2Execution config={config({ mcps: [{ mcpId: 'github', enabled: true }] })} attempt={{}} />)
     expect(screen.queryByLabelText('实际执行')).not.toBeInTheDocument()
     expect(screen.getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent('v2 未应用：MCP')
   })

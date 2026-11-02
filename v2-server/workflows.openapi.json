@@ -766,9 +766,41 @@
           "updatedAt": {"type": "integer", "format": "int64"}
         }
       },
+      "WorkflowRunVariable": {
+        "type": "object",
+        "description": "One declared variable of the run's root variable pool, desktop's WorkflowRunVariable. value is absent while the variable is unassigned.",
+        "required": ["selector", "valueType", "sourceNodeId"],
+        "additionalProperties": false,
+        "properties": {
+          "selector": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2},
+          "valueType": {"type": "string"},
+          "sourceNodeId": {"type": "string"},
+          "value": {"nullable": true, "description": "Any JSON value, null included."}
+        }
+      },
+      "WorkflowNodeFailedAttempt": {
+        "type": "object",
+        "description": "An earlier attempt that failed and was run again, desktop's WorkflowNodeFailedAttempt, read from its payload.error_detail. v2 neither retries nor resumes, so none exists yet.",
+        "required": ["nodeRunId", "nodeId", "scopeId", "iteration", "sessionId", "attempt", "kind", "message", "sourceChain", "recordedAt", "startedAt", "finishedAt"],
+        "additionalProperties": false,
+        "properties": {
+          "nodeRunId": {"type": "string", "format": "uuid"},
+          "nodeId": {"type": "string"},
+          "scopeId": {"type": "string"},
+          "iteration": {"type": "integer", "nullable": true},
+          "sessionId": {"type": "string", "nullable": true},
+          "attempt": {"type": "integer"},
+          "kind": {"type": "string"},
+          "message": {"type": "string"},
+          "sourceChain": {"type": "array", "items": {"type": "string"}},
+          "recordedAt": {"type": "integer", "format": "int64"},
+          "startedAt": {"type": "integer", "format": "int64", "nullable": true},
+          "finishedAt": {"type": "integer", "format": "int64", "nullable": true}
+        }
+      },
       "WorkflowRunDetail": {
         "type": "object",
-        "required": ["run", "nodes", "scopes", "conditionDecisions"],
+        "required": ["run", "nodes", "scopes", "conditionDecisions", "variables", "failedAttempts"],
         "additionalProperties": false,
         "properties": {
           "run": {"$ref": "#/components/schemas/WorkflowRun"},
@@ -778,7 +810,9 @@
             "type": "object",
             "description": "Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.",
             "additionalProperties": {"type": "string"}
-          }
+          },
+          "variables": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowRunVariable"}, "description": "The root variable pool, from the run payload; empty until the run starts."},
+          "failedAttempts": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowNodeFailedAttempt"}, "description": "Earlier failed attempts, oldest first; nodes holds only each node's latest attempt."}
         }
       }
     }

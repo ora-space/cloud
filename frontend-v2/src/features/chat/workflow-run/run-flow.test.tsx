@@ -168,6 +168,26 @@ describe('workflow runs in chat', () => {
     expect(stream.closed).toBe(true)
   }, 30_000)
 
+  it("tells a member that a running node's live session belongs to whoever started the run", async () => {
+    runs.hold = true
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '别人的运行')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await within(pane).findByRole('heading', { level: 2, name: '别人的运行' }, { timeout: 10_000 })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '启动' }))
+    await user.click(await within(pane).findByRole('button', { name: '查看节点会话' }))
+    expect(within(pane).getByText('正在等待 Agent 的会话…')).toBeInTheDocument()
+
+    // v2-server answers 404 to anyone but the run's starter; the browser closes the stream for good.
+    const [entry] = [...runs.runs.values()]
+    const attempt = entry!.detail.nodes.find((n) => n.nodeType === 'agent')!
+    const stream = FakeEventSource.all.find((s) => s.url.endsWith(`/nodes/${attempt.id}/events`))!
+    act(() => stream.refuse())
+    expect(within(pane).getByText('只有启动这次运行的人能查看实时会话；节点完成后会显示任务和回答。')).toBeInTheDocument()
+  }, 30_000)
+
   it('stops a run that is still executing', async () => {
     runs.hold = true
     const user = userEvent.setup()

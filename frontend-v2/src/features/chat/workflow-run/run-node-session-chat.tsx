@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { GraphWorkflowNodeStatus, WorkflowNodeConversationItem } from '@/lib/workflows/runtime'
 import { Thread } from '../components/thread'
 import { useChatStore } from '../store'
@@ -28,8 +29,9 @@ export function RunNodeSessionChat({
   /** The attempt whose session to follow; absent before it was dispatched. */
   session?: { runId: string; nodeRunId: string }
 }) {
+  const { t } = useTranslation()
   const tenantId = useChatStore((s) => s.tenantId) ?? ''
-  const followed = useNodeSession(tenantId, session?.runId, session?.nodeRunId)
+  const { conversation: followed, refused } = useNodeSession(tenantId, session?.runId, session?.nodeRunId)
   const recorded = useMemo(() => nodeConversationTurns(conversation, status, errorMessage), [conversation, status, errorMessage])
   const thread = followed !== null && followed.turns.length > 0 ? followed : recorded
   return (
@@ -38,7 +40,7 @@ export function RunNodeSessionChat({
         {thread.turns.length > 0 ? (
           <Thread conversation={thread} onAnswer={noAnswer} />
         ) : (
-          <p className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">正在等待 Agent 的会话…</p>
+          <p className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">{t(refused ? 'workflowRun.v2.sessionRefused' : 'workflowRun.v2.sessionWaiting')}</p>
         )}
       </div>
       {sessionActions && <div className="flex shrink-0 items-center pt-1">{sessionActions}</div>}

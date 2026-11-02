@@ -38,6 +38,8 @@ function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[
     nodes,
     scopes: [],
     conditionDecisions,
+    variables: [],
+    failedAttempts: [],
   }
 }
 
@@ -116,6 +118,78 @@ describe('toGraphWorkflowRun', () => {
     expect(run.nodeStates.a).not.toHaveProperty('executor')
     expect(run.nodeStates.a).not.toHaveProperty('model')
     expect(run.nodeStates.a).not.toHaveProperty('unapplied')
+  })
+
+  it("overlays the run's own kickoff input and Start values on the frozen graph", () => {
+    const withVariables = normalizeWorkflowDefinition({
+      ...definition,
+      nodes: definition.nodes.map((node) =>
+        node.id === 'start'
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                input: '快照里的提示',
+                inputVariables: [
+                  { name: 'topic', valueType: 'string' as const, value: '默认主题' },
+                  { name: 'count', valueType: 'number' as const, value: 1 },
+                  { name: 'note', valueType: 'string' as const, value: '默认备注' },
+                ],
+              },
+            }
+          : node,
+      ),
+    })
+    const pending = toGraphWorkflowRun(detail({ status: 'pending', input: null }, []), withVariables)
+    // Nothing of the run's own yet: the snapshot stands.
+    expect(pending.definitionSnapshot).toBe(withVariables)
+
+    const run = toGraphWorkflowRun(
+      {
+        ...detail({ input: '本次需求' }, []),
+        variables: [
+          { selector: ['start', 'topic'], valueType: 'string', sourceNodeId: 'start', value: '对账' },
+          { selector: ['start', 'count'], valueType: 'number', sourceNodeId: 'start' },
+          { selector: ['a', 'output'], valueType: 'string', sourceNodeId: 'a', value: '初稿' },
+        ],
+      },
+      withVariables,
+    )
+    const start = run.definitionSnapshot.nodes.find((node) => node.id === 'start')!
+    expect(start.data.input).toBe('本次需求')
+    // A declared but unassigned variable has no value; one the pool does not declare keeps the snapshot's.
+    expect(start.data.inputVariables).toEqual([
+      { name: 'topic', valueType: 'string', value: '对账' },
+      { name: 'count', valueType: 'number', value: undefined },
+      { name: 'note', valueType: 'string', value: '默认备注' },
+    ])
+  })
+
+  it('gives each root node its earlier failed attempts, oldest first', () => {
+    const failed = (id: string, nodeId: string, attempt: number, over: Partial<WorkflowRunDetail['failedAttempts'][number]> = {}) => ({
+      nodeRunId: id, nodeId, scopeId: 'root:run', iteration: null, sessionId: `s-${id}`, attempt, kind: 'session',
+      message: `第 ${attempt} 次失败`, sourceChain: ['boom'], recordedAt: attempt, startedAt: 1_000, finishedAt: 2_000, ...over,
+    })
+    const run = toGraphWorkflowRun(
+      {
+        ...detail({}, [nodeRun({ id: 'a-3', nodeId: 'a', nodeType: 'agent', status: 'running', finishedAt: null })]),
+        scopes: [{ id: 'loop-round', runId: 'run', parentLoopNodeRunId: 'l', roundIndex: 1, status: 'running', state: null, createdAt: 0, updatedAt: 0 }],
+        failedAttempts: [
+          failed('a-1', 'a', 1),
+          failed('a-2', 'a', 2, { sessionId: null, startedAt: null }),
+          // Rounds are not mapped yet; neither are their attempts.
+          failed('r-1', 'a', 1, { iteration: 0 }),
+          failed('l-1', 'a', 1, { scopeId: 'loop-round' }),
+          failed('gone', 'not-in-graph', 1),
+        ],
+      },
+      definition,
+    )
+    expect(run.nodeStates.a!.failedAttempts).toEqual([
+      { nodeRunId: 'a-1', attempt: 1, kind: 'session', errorMessage: '第 1 次失败', sourceChain: ['boom'], recordedAt: 1, sessionId: 's-a-1', startedAt: new Date(1_000).toISOString(), finishedAt: new Date(2_000).toISOString() },
+      { nodeRunId: 'a-2', attempt: 2, kind: 'session', errorMessage: '第 2 次失败', sourceChain: ['boom'], recordedAt: 2, finishedAt: new Date(2_000).toISOString() },
+    ])
+    expect(run.nodeStates.out!.failedAttempts).toBeUndefined()
   })
 
   it('shows an Agent without an answer yet, and malformed payloads, without inventing anything', () => {

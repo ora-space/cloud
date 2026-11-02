@@ -13,7 +13,10 @@ const project = (id: string, name: string) => ({
 /** One followed event stream; tests push events into it as the backend would. */
 export class FakeEventSource {
   static all: FakeEventSource[] = []
+  static readonly CLOSED = 2
   onmessage: ((m: MessageEvent<string>) => void) | null = null
+  onerror: (() => void) | null = null
+  readyState = 1
   closed = false
   private listeners: Record<string, (() => void)[]> = {}
   url: string
@@ -23,6 +26,11 @@ export class FakeEventSource {
   }
   addEventListener(name: string, fn: () => void) {
     ;(this.listeners[name] ??= []).push(fn)
+  }
+  /** The server answered with an error status: the browser closes the stream for good. */
+  refuse() {
+    this.readyState = FakeEventSource.CLOSED
+    this.onerror?.()
   }
   close() {
     this.closed = true
