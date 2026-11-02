@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { OraMark } from '@/components/ora-mark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,7 +42,7 @@ export function LoginScreen({ returnTo }: { returnTo: string }) {
         }}
       >
         <div className="flex items-center gap-2">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">O</div>
+          <OraMark />
           <h1 className="text-lg font-medium">登录 Ora</h1>
         </div>
         {providers.isPending && <p className="text-sm text-muted-foreground">加载中…</p>}
