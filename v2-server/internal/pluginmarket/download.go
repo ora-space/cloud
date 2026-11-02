@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"golang.org/x/net/proxy"
 	"io"
 	"net"
 	"net/http"
-
 	"net/url"
 	"os"
 	"strings"
@@ -19,6 +19,9 @@ import (
 )
 
 var ErrPackage = errors.New("plugin package download or digest verification failed")
+
+// ErrTransient reports a package download failure that may succeed on retry.
+var ErrTransient = errors.New("transient plugin package download failure")
 
 func packageURL(locator string, r Retrieval) (*url.URL, bool, error) {
 	if e := validateLocator(locator); e != nil {
@@ -49,22 +52,48 @@ func packageURL(locator string, r Retrieval) (*url.URL, bool, error) {
 	return u, signed, nil
 }
 
-// Resolve and dial the same public address, including every redirected request.
-func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
+// Resolve and dial the same public address, including every redirected request. A configured
+// SOCKS proxy receives the pinned numeric address rather than the hostname, so it cannot resolve
+// the request to a different, non-public endpoint.
+func dialPublic(ctx context.Context, network, address string, useProxy bool) (net.Conn, error) {
 	host, port, e := net.SplitHostPort(address)
 	if e != nil {
 		return nil, ErrSource
 	}
 	ips, e := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if e != nil || len(ips) == 0 {
-		return nil, ErrSource
+		return nil, ErrTransient
 	}
 	for _, ip := range ips {
 		if !publicIP(ip) {
 			return nil, ErrSource
 		}
 	}
-	return (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+	dial := (&net.Dialer{Timeout: 15 * time.Second}).DialContext
+	if useProxy {
+		raw, e := sourceProxy()
+		if e != nil {
+			return nil, e
+		}
+		u, _ := url.Parse(raw)
+		forward, e := proxy.SOCKS5("tcp", u.Host, nil, &net.Dialer{Timeout: 15 * time.Second})
+		if e != nil {
+			return nil, ErrTransient
+		}
+		d, ok := forward.(proxy.ContextDialer)
+		if !ok {
+			return nil, ErrTransient
+		}
+		dial = d.DialContext
+	}
+	conn, e := dial(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
+	if e != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, ErrTransient
+	}
+	return conn, nil
 }
 
 // Download stages a bounded, verified archive; callers own the returned temporary file.
@@ -76,7 +105,13 @@ func Download(ctx context.Context, locator, digest string, r Retrieval, credenti
 	if e != nil {
 		return "", e
 	}
-	tr := &http.Transport{DialContext: dialPublic, DisableCompression: true, TLSHandshakeTimeout: 15 * time.Second}
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dialPublic(ctx, network, address, r.UseProxy)
+		},
+		DisableCompression:  true,
+		TLSHandshakeTimeout: 15 * time.Second,
+	}
 	defer tr.CloseIdleConnections()
 	client := http.Client{Transport: tr, Timeout: 2 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if signed || len(via) > 5 || req.URL.Scheme != "https" || req.URL.User != nil {
@@ -100,11 +135,17 @@ func Download(ctx context.Context, locator, digest string, r Retrieval, credenti
 	}
 	resp, e := client.Do(req)
 	if e != nil {
-		return "", ErrPackage
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", downloadRequestError(e)
 	}
 	defer resp.Body.Close()
 	const limit = 256 << 20
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
+	if resp.StatusCode != http.StatusOK {
+		return "", packageStatusError(resp.StatusCode)
+	}
+	if resp.ContentLength > limit {
 		return "", ErrPackage
 	}
 	f, e := os.CreateTemp("", "ora-skill-*.orax")
@@ -114,9 +155,34 @@ func Download(ctx context.Context, locator, digest string, r Retrieval, credenti
 	h := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, limit+1))
 	closeErr := f.Close()
-	if copyErr != nil || closeErr != nil || n > limit || !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), digest) {
+	if copyErr != nil {
+		os.Remove(f.Name())
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", ErrTransient
+	}
+	if closeErr != nil || n > limit || !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), digest) {
 		os.Remove(f.Name())
 		return "", ErrPackage
 	}
 	return f.Name(), nil
+}
+
+func downloadRequestError(e error) error {
+	switch {
+	case errors.Is(e, ErrSource):
+		return ErrSource
+	case errors.Is(e, ErrPackage):
+		return ErrPackage
+	default:
+		return ErrTransient
+	}
+}
+
+func packageStatusError(status int) error {
+	if status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500 {
+		return ErrTransient
+	}
+	return ErrPackage
 }

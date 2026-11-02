@@ -24,6 +24,8 @@ go run .                               # 监听 127.0.0.1:8090
 | `V2_PLUGIN_MARKETPLACE_URL` | `https://github.com/ora-space/marketplace` | 插件市场 Git HTTPS 地址；禁止携带凭据、query 或 fragment。离线测试直接构造 Syncer 使用本地仓库 |
 | `V2_PLUGIN_MARKETPLACE_BRANCH` | `main` | 市场同步分支；启动时浅克隆并拉取，之后按间隔快进工作副本 |
 | `V2_PLUGIN_MARKETPLACE_INTERVAL` | `5m` | 市场刷新间隔；必须为正 duration。失败时保留上一版 PostgreSQL 快照 |
+| `V2_MARKET_SOCKS_PROXY` | 未设置 | 自定义来源启用代理时使用的部署级 SOCKS5 地址；Git 与 Skill 包下载都使用，客户端只把已校验的公网 IP 交给代理 |
+| `V2_MARKET_CREDENTIAL_KEY` | 未设置 | S3 来源凭据的 AES-256-GCM 密钥（Base64 编码的 32 字节）；启用 S3 来源时必须持久提供 |
 | `V2_NODE_ASSETS_DIR` | 未设置 | `task v2:node:prepare` 生成的固定 Node、host、guardian、Deno、OpenCode 和 Claude Code 资源；未设置时只启用纯模型路径 |
 | `V2_MODEL_BASE_URL` / `V2_MODEL_API_KEY` / `V2_MODEL_NAME` | 未设置 | 可选的一组 HTTPS OpenAI 兼容 provider；必须同时设置，OpenCode 与纯模型共用，清单只公开模型名称与版本 |
 | `V2_ANTHROPIC_MODEL_BASE_URL` / `V2_ANTHROPIC_MODEL_API_KEY` / `V2_ANTHROPIC_MODEL_NAME` | 未设置 | 可选的一组 HTTPS Anthropic 兼容 provider（Messages API，base URL 写到 `/v1`，如 `https://api.anthropic.com/v1`）；必须同时设置，只供 Claude Code 使用 |
@@ -396,12 +398,17 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 设置 → 插件保留共享官方市场，允许 owner 添加空间私有的公共 HTTPS Git 仓库。来源管理接口见 `market-sources.openapi.json`；目录和安装选择继续使用原 Cloud 客户端。自定义来源按仓库分配命名空间。同仓库的不同 URL 写法共享身份；改到另一仓库会更换命名空间并清空旧目录，改到已配置的仓库返回冲突。官方市场在后台启动首次同步，手动同步每分钟最多触发一次（超出返回 429）。每次同步只提交该来源的完整快照，失败保留上次成功内容。停用或移除来源不会删除空间选择。
 
-自定义来源的 Git 连接只允许访问本次解析并固定的公网地址；禁止二次请求连接其他主机、私网、保留地址和 Git 重定向。可选 `V2_MARKET_SOCKS_PROXY` 为部署信任的 SOCKS5 代理（本地解析 DNS）；空间不能指定代理地址。S3 凭据以 AES-256-GCM 加密，S3 来源需要部署持久提供 `V2_MARKET_CREDENTIAL_KEY`（Base64 格式的 32 字节随机密钥），备份数据库时单独保管密钥。凭据绑定到空间、来源、端点和桶，不通过读取接口返回。
+自定义来源的 Git 连接和 Skill 包下载只允许访问本次解析并固定的公网地址；禁止二次请求连接其他主机、私网、保留地址和 Git 重定向。来源启用代理时，可选 `V2_MARKET_SOCKS_PROXY` 为部署信任的 SOCKS5 代理；客户端先解析并校验公网 IP，再把数字地址交给代理，避免代理重新解析到其他端点。空间不能指定代理地址。S3 凭据以 AES-256-GCM 加密，S3 来源需要部署持久提供 `V2_MARKET_CREDENTIAL_KEY`（Base64 格式的 32 字节随机密钥），备份数据库时单独保管密钥。凭据绑定到空间、来源、端点和桶，不通过读取接口返回；删除来源时会在同一事务中清空对应安装计划保存的加密凭据。
 
 ### 项目 Skill 安装
 
 空间选择冻结 Skill 的来源、版本、目标平台和 SHA-256，项目 Node 负责确认安装或移除。历史项目绑定到同一租户的默认演示空间；创建项目可传 `spaceId`，省略则沿用默认演示空间。离线时保留选择；已上线的项目通过 Node 的 `install_plugins` / `remove_plugins` 处理。目录升级不会改变现有选择。成员可读项目回执；只有全部关联项目确认后空间才显示已安装。
 
-下载限制为公网 HTTPS、归属来源的 S3 SigV4 或直接 HTTPS。校验摘要和归档中的 Skill 标识、版本后，才通过节点已有的包服务交付。技能在项目工作副本的 `.opencode/skills`、`.claude/skills` 中发现；已有项目文件不被覆盖，同名冲突返回失败。Agent 的固定版本保持独立。MCP 和其他未验证类型仅供浏览。
+下载限制为公网 HTTPS、归属来源的 S3 SigV4 或直接 HTTPS。校验摘要和归档中的 Skill 标识、版本后，才通过节点已有的包服务交付。网络、临时 HTTP 状态、Node 中途退出等可恢复错误会按 5 秒起步、最长 5 分钟的指数退避自动重试；摘要不符、包校验失败、同名冲突等确定错误立即失败，等待用户重新选择。旧版本升级后若 Skill 选择缺少冻结安装计划，会显示“请重新安装”，不会静默卡在等待节点。技能在项目工作副本的 `.opencode/skills`、`.claude/skills` 中发现；已有项目文件不被覆盖，同名冲突返回失败。Agent 的固定版本保持独立。MCP 和其他未验证类型仅供浏览。
+
+与 Desktop 的差异：
+
+- Desktop 从 Agent 插件声明中发现 Skill 目录，复制到工作区并写 ownership marker；v2 固定使用 `.opencode/skills`、`.claude/skills`，以 symlink 指向该项目的 Node 内部安装目录，因此依赖当前 Node 的目录布局。
+- Desktop 会先让 Agent 停下，再在会话进行中应用变化；v2 只在项目 Node 已在线且项目空闲时安装或移除。新选择要等该项目有一个会话结束后才生效，服务启动后的第一个会话也拿不到尚未应用的 Skill。
 
 测试真实 Node 时设置 `V2_NODE_ASSETS_DIR`、`V2_TEST_SKILL_ARCHIVE`（官方 Matt Pocock Skills 1.3.1）和可选的 `V2_TEST_SKILL_UPDATE_ARCHIVE`（1.3.2），在 Linux 原生、路径足够短的用户目录下运行 `go test -run TestRealMarketSkillNode ./internal/agentruntime`。

@@ -120,11 +120,22 @@ func (s *Store) ChangeMarket(ctx context.Context, tenant, space, user, id, actio
 		}
 		return tx.Commit(ctx)
 	case "DELETE":
-		tag, e := s.pool.Exec(ctx, `delete from v2_market_sources where space_id=$1 and namespace=$2`, space, id)
+		tx, e := s.pool.Begin(ctx)
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback(ctx)
+		if _, e := tx.Exec(ctx, `update v2_skill_plans p set credentials=null from v2_space_agents a where p.selection_id=a.id and a.space_id=$1 and a.source_namespace=$2`, space, id); e != nil {
+			return e
+		}
+		tag, e := tx.Exec(ctx, `delete from v2_market_sources where space_id=$1 and namespace=$2`, space, id)
 		if e == nil && tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return e
+		if e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
 	case "sync":
 		var m MarketSource
 		var revision int64
