@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -301,10 +302,25 @@ func (h *handler) getWorkflowRun(w http.ResponseWriter, r *http.Request, u store
 		scopeViews = append(scopeViews, toWorkflowScopeView(scope))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"run":    toWorkflowRunView(run),
-		"nodes":  nodeViews,
-		"scopes": scopeViews,
+		"run":                toWorkflowRunView(run),
+		"nodes":              nodeViews,
+		"scopes":             scopeViews,
+		"conditionDecisions": conditionDecisions(run.RuntimePayload),
 	})
+}
+
+// conditionDecisions reads the root-scope decisions from the run payload (desktop's
+// WorkflowRunPayload.conditionDecisions), the only part of the private payload the detail shows,
+// so clients can tell a node behind a branch not taken from one still waiting. A run that has
+// not started, or a payload without decisions, reads as none.
+func conditionDecisions(payload []byte) map[string]string {
+	var p struct {
+		ConditionDecisions map[string]string `json:"conditionDecisions"`
+	}
+	if json.Unmarshal(payload, &p) != nil || p.ConditionDecisions == nil {
+		return map[string]string{}
+	}
+	return p.ConditionDecisions
 }
 
 func (h *handler) listWorkflowRunNodes(w http.ResponseWriter, r *http.Request, u store.User) {

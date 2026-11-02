@@ -28,7 +28,7 @@ function nodeRun(over: Partial<WorkflowNodeRun>): WorkflowNodeRun {
   }
 }
 
-function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[]): WorkflowRunDetail {
+function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[], conditionDecisions: Record<string, string> = {}): WorkflowRunDetail {
   return {
     run: {
       id: 'run', workflowId: 'wf', snapshotId: 'snap', projectId: 'p', name: '运行', status: 'running', state: '{"current_nodes":["a"]}',
@@ -37,6 +37,7 @@ function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[
     },
     nodes,
     scopes: [],
+    conditionDecisions,
   }
 }
 
@@ -87,5 +88,38 @@ describe('toGraphWorkflowRun', () => {
     const run = toGraphWorkflowRun(detail({}, [nodeRun({ nodeId: 'a', nodeType: 'agent', status: 'running', finishedAt: null, payload: '{oops' })]), definition)
     expect(run.status).toBe('running')
     expect(run.nodeStates.a).toEqual({ status: 'running', startedAt: new Date(1_000).toISOString() })
+  })
+
+  it('shows the nodes behind a Condition branch not taken as inactive, and the join they share still pending', () => {
+    const branching = normalizeWorkflowDefinition({
+      id: 'wf', name: 'v1', description: '', updatedAt: new Date(0).toISOString(), viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: 'start', type: 'workflow', position: { x: 0, y: 0 }, data: { kind: 'start', title: '开始', description: '' } },
+        { id: 'cond', type: 'workflow', position: { x: 1, y: 0 }, data: { kind: 'condition', title: '判断', description: '', cases: [{ id: 'ok', logic: 'and', conditions: [] }] } },
+        { id: 'ship', type: 'workflow', position: { x: 2, y: 0 }, data: { kind: 'agent', title: '发布', description: '' } },
+        { id: 'fix', type: 'workflow', position: { x: 2, y: 1 }, data: { kind: 'agent', title: '返工', description: '' } },
+        { id: 'after', type: 'workflow', position: { x: 3, y: 0 }, data: { kind: 'agent', title: '发布后', description: '' } },
+        { id: 'join', type: 'workflow', position: { x: 4, y: 0 }, data: { kind: 'aggregator', title: '汇合', description: '' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'start', target: 'cond' },
+        { id: 'e2', source: 'cond', sourceHandle: 'ok', target: 'ship' },
+        { id: 'e3', source: 'cond', sourceHandle: 'else', target: 'fix' },
+        { id: 'e4', source: 'ship', target: 'after' },
+        { id: 'e5', source: 'after', target: 'join' },
+        { id: 'e6', source: 'fix', target: 'join' },
+      ],
+    })
+    const run = toGraphWorkflowRun(
+      detail({}, [
+        nodeRun({ id: 'n1' }),
+        nodeRun({ id: 'n2', nodeId: 'cond', nodeType: 'condition' }),
+        nodeRun({ id: 'n3', nodeId: 'fix', nodeType: 'agent', status: 'running', finishedAt: null }),
+      ], { cond: 'else' }),
+      branching,
+    )
+    expect(Object.fromEntries(Object.entries(run.nodeStates).map(([id, state]) => [id, state.status]))).toEqual({
+      start: 'succeeded', cond: 'succeeded', ship: 'inactive', after: 'inactive', fix: 'running', join: 'idle',
+    })
   })
 })

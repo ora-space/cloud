@@ -459,3 +459,87 @@ func TestRefusedStartForgetsTheStarter(t *testing.T) {
 		t.Fatalf("Agent scopes = %+v, want %+v", scopes, want)
 	}
 }
+
+// reviewBranches is the S2 demo shape: a structured review decides which Agent runs, and the
+// Aggregator joins whichever answered.
+const reviewBranches = `{"nodes":[
+ {"id":"start","data":{"kind":"start"}},
+ {"id":"review","data":{"kind":"agent","title":"评审","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"评审：{{#start.input#}}",
+  "outputContract":{"type":"structured","schema":{"type":"object","properties":{"approved":{"type":"boolean"}},"required":["approved"]}}}}},
+ {"id":"cond","data":{"kind":"condition","cases":[{"id":"ok","logic":"and","conditions":[{"variableSelector":["review","structured_output","approved"],"operator":"is","value":true}]}]}},
+ {"id":"ship","data":{"kind":"agent","title":"发布","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"发布"}}},
+ {"id":"fix","data":{"kind":"agent","title":"返工","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"返工"}}},
+ {"id":"join","data":{"kind":"aggregator","aggregatorConfig":{"variables":[["ship","output"],["fix","output"]]}}},
+ {"id":"out","data":{"kind":"output","outputs":[{"name":"result","variableSelector":["join","output"]}]}}
+],"edges":[{"source":"start","target":"review"},{"source":"review","target":"cond"},
+ {"source":"cond","sourceHandle":"ok","target":"ship"},{"source":"cond","sourceHandle":"else","target":"fix"},
+ {"source":"ship","target":"join"},{"source":"fix","target":"join"},{"source":"join","target":"out"}]}`
+
+func TestStructuredReviewRoutesOneBranchThroughTheAggregator(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	runID := f.run(t, reviewBranches, str("支付重构"))
+	if _, err := f.host.StartRun(ctx, f.scope, runID); err != nil {
+		t.Fatal(err)
+	}
+	review := f.exec.awaitStart(t)
+	text := promptText(t, f.exec.request(review).Prompt)
+	if !strings.HasSuffix(text, "</structured_output_contract>") || !strings.Contains(text, "\"approved\": true") {
+		t.Fatalf("review prompt does not end with the output contract:\n%s", text)
+	}
+	f.exec.finish(review, completed("评审结论：\n{\"approved\": false}"))
+	fix := f.exec.awaitStart(t)
+	if f.exec.request(fix).Caller.NodeID != "fix" {
+		t.Fatalf("started %s, want the else branch", f.exec.request(fix).Caller.NodeID)
+	}
+	f.exec.finish(fix, completed("已返工"))
+	run, nodes := f.await(t, runID, terminal)
+	if run.Status != store.WorkflowStatusSucceeded || run.Output == nil || *run.Output != `{"result":"已返工"}` {
+		t.Fatalf("run = %s %v", run.Status, run.Output)
+	}
+	if node(nodes, "ship").ID != "" {
+		t.Fatal("the branch not taken created a node row")
+	}
+	if c := node(nodes, "cond"); c.Status != store.WorkflowStatusSucceeded || c.Output != nil {
+		t.Fatalf("condition row = %+v (decisions are not node output)", c)
+	}
+	if j := node(nodes, "join"); j.Output == nil || *j.Output != `"已返工"` {
+		t.Fatalf("aggregator row = %+v", j)
+	}
+	if r := node(nodes, "review"); r.Output == nil || !strings.HasPrefix(*r.Output, "评审结论") {
+		t.Fatalf("the structured node lost its raw answer: %+v", r)
+	}
+	c, err := f.s.WorkflowEngineContext(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		ConditionDecisions map[string]string `json:"conditionDecisions"`
+		VariablePool       struct {
+			Values map[string]any `json:"values"`
+		} `json:"variablePool"`
+	}
+	if err := json.Unmarshal(c.Run.RuntimePayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ConditionDecisions["cond"] != "else" || payload.VariablePool.Values["review.structured_output"] == nil {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestNonconformingStructuredAnswerFailsTheNode(t *testing.T) {
+	f := newFixture(t)
+	runID := f.run(t, reviewBranches, str("支付重构"))
+	if _, err := f.host.StartRun(context.Background(), f.scope, runID); err != nil {
+		t.Fatal(err)
+	}
+	f.exec.finish(f.exec.awaitStart(t), completed(`{"verdict": "ok"}`))
+	run, nodes := f.await(t, runID, terminal)
+	r := node(nodes, "review")
+	if run.Status != store.WorkflowStatusFailed || errorKind(t, r) != "structured_output" || r.Output == nil || *r.Output != `{"verdict": "ok"}` {
+		t.Fatalf("run %s review %+v kind %s", run.Status, r, errorKind(t, r))
+	}
+	if node(nodes, "cond").ID != "" {
+		t.Fatal("the run advanced past a failed structured node")
+	}
+}

@@ -1,6 +1,7 @@
 package workflowhost
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -18,13 +19,17 @@ const promptWorkspaceRoot = "."
 // without the parts v2 does not apply: required Skills, the role block and previous-failure
 // injection (v2 never retries). The node's prompt is already rendered against the pool. Each
 // section is one ACP text block, separated by a blank line because providers may concatenate
-// block text verbatim.
+// block text verbatim. A structured-output node ends with its output contract, last so the
+// final-response constraint has the strongest recency.
 func agentPrompt(d workflow.AgentDispatch, renderedTask string) execution.Prompt {
 	c := promptCopyFor(d.Locale)
 	sections := []string{
 		workspaceRootBlock(d.Locale),
 		currentStepBlock(d.Node, renderedTask, c),
 		workflowContextBlock(d, c),
+	}
+	if schema := d.Node.Agent().Structured; schema != nil {
+		sections = append(sections, structuredContractBlock(schema, d.Locale))
 	}
 	prompt := make(execution.Prompt, 0, len(sections))
 	for i, text := range sections {
@@ -41,6 +46,19 @@ func workspaceRootBlock(locale string) string {
 		return "<workspace_root>\n你的工作区根目录是：\n" + promptWorkspaceRoot + "\n\n该目录是本次工作流运行的主工作空间，项目文件、Git 仓库与构建产物通常都在其中。\n\n规则：\n1. 任务需要时，可以读取、搜索、创建、修改和删除该目录之外的文件——例如依赖源码、共享配置、其他仓库，或用户指定的路径。不要仅因为路径位于工作区之外就停下或拒绝任务。\n2. 运行项目命令时，以该工作区根目录作为工作目录，除非任务明确要求在别处执行。\n</workspace_root>"
 	}
 	return "<workspace_root>\nYour workspace root is:\n" + promptWorkspaceRoot + "\n\nThis directory is the primary workspace for this workflow run: the project files, Git repository, and build output normally live inside it.\n\nRules:\n1. When the task requires it, you may read, search, create, modify, and delete files outside this directory — dependency sources, shared configuration, other repositories, or paths the user points you at. Do not stop or refuse a task merely because a path lies outside the workspace.\n2. Run project commands with this workspace root as the working directory, unless the task explicitly calls for running them elsewhere.\n</workspace_root>"
+}
+
+// structuredContractBlock is desktop's render_structured_output_contract: it constrains only the
+// final answer, with a sample built from the schema and the schema itself.
+func structuredContractBlock(schema map[string]any, locale string) string {
+	example, _ := json.MarshalIndent(workflow.StructuredExample(schema), "", "  ")
+	pretty, _ := json.MarshalIndent(schema, "", "  ")
+	if locale == workflow.LocaleZhCN {
+		return "<structured_output_contract>\n本工作流步骤需要结构化输出。你可以正常思考、调用工具、读写文件并执行任务；以下规则只约束你的最终助手回复。\n\n规则：\n1. 最终助手回复必须只包含一个 JSON 对象。\n2. 不要使用 Markdown 代码块，也不要在 JSON 前后添加解释、标题或其他文字。\n3. Schema 中每个字段的 type 就是变量池要求的类型；必须按类型和下方示例的数据形状输出。\n4. 必须包含 Schema 中声明的所有 required 字段。\n5. 当 additionalProperties 为 false 时，不得添加未声明的字段。\n6. file 类型必须写成 {\"kind\":\"workspace_file\",\"path\":\"相对于本次运行 Workspace 的路径\"}；array[file] 是此类对象的数组。不得使用绝对路径或包含 .. 的路径。\n\n合法输出示例：\n" +
+			string(example) + "\n\nJSON Schema：\n" + string(pretty) + "\n</structured_output_contract>"
+	}
+	return "<structured_output_contract>\nThis workflow step requires structured output. You may reason, call tools, read or write files, and perform the task normally; the rules below constrain only your final assistant response.\n\nRules:\n1. The final assistant response must contain exactly one JSON object and nothing else.\n2. Do not use a Markdown code fence or add explanations, headings, or other text before or after the JSON.\n3. Each Schema field's type is the type required by the variable pool; follow both the types and the data shapes in the example below.\n4. Include every field declared in the schema's required list.\n5. When additionalProperties is false, do not add undeclared fields.\n6. A file value must be {\"kind\":\"workspace_file\",\"path\":\"path relative to this run's Workspace\"}; array[file] is an array of those objects. Never use an absolute path or a path containing `..`.\n\nValid output example:\n" +
+		string(example) + "\n\nJSON Schema:\n" + string(pretty) + "\n</structured_output_contract>"
 }
 
 func currentStepBlock(n workflow.Node, task string, c promptCopy) string {

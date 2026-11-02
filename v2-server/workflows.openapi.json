@@ -731,12 +731,17 @@
       },
       "WorkflowRunDetail": {
         "type": "object",
-        "required": ["run", "nodes", "scopes"],
+        "required": ["run", "nodes", "scopes", "conditionDecisions"],
         "additionalProperties": false,
         "properties": {
           "run": {"$ref": "#/components/schemas/WorkflowRun"},
           "nodes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowNodeRun"}},
-          "scopes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowScope"}}
+          "scopes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowScope"}},
+          "conditionDecisions": {
+            "type": "object",
+            "description": "Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.",
+            "additionalProperties": {"type": "string"}
+          }
         }
       }
     }

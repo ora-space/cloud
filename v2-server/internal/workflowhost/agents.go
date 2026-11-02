@@ -295,7 +295,19 @@ func (h *Host) settle(d workflow.AgentDispatch, r execution.Result, ex resolvedE
 	switch r.StopReason {
 	case "end_turn", "max_tokens", "max_turn_requests":
 		answer := r.Answer
-		h.complete(d, workflow.Completion{Output: &answer, Keys: completionKeys(r, ex, cfg, task)})
+		completion := workflow.Completion{Output: &answer, Keys: completionKeys(r, ex, cfg, task)}
+		if cfg.Structured != nil {
+			// desktop's apply_output_contract: the raw answer stays the output, the validated
+			// object becomes {node}.structured_output, and a nonconforming answer fails the node
+			// while keeping the answer inspectable.
+			structured, err := workflow.ParseStructuredOutput(answer, cfg.Structured)
+			if err != nil {
+				h.fail(d, workflow.Failure{Kind: workflow.FailureStructuredOutput, Message: err.Error(), Output: &answer})
+				return
+			}
+			completion.Structured = structured
+		}
+		h.complete(d, completion)
 	case "refusal":
 		h.fail(d, workflow.Failure{Kind: workflow.FailureAgentRefusal, Message: "agent refused the request", Output: output})
 	case "":
