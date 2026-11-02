@@ -32,7 +32,8 @@ export class FakeEventSource {
   emit(event: Partial<ChatEvent>) {
     this.onmessage?.({ data: JSON.stringify({ sequence: ++this.sequence, occurredAt: at, turnId: 't', ...event }) } as MessageEvent<string>)
   }
-  fire(name: 'end' | 'failure') {
+  /** Delivers a named event: `end` or `failure` of a session stream, or a run stream's invalidation. */
+  fire(name: 'end' | 'failure' | 'workflow_run_invalidated') {
     for (const fn of this.listeners[name] ?? []) fn()
   }
   /** The latest stream following conversation `cid`. */

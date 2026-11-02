@@ -85,12 +85,13 @@ e2e/            Playwright 端到端测试
 | `run-act-v2-execution.tsx`、`agent-unapplied.ts` | 新写：节点详情里 Agent 实际使用的执行器和模型，以及 v2 没有应用的设置（见下文） |
 | `workflow-run-start-dialog.tsx`、`translations.ts` | 同名文件 |
 | `run-node-session-chat.tsx`、`conversation-turns.ts` | 新写：desktop 在这里嵌入完整的聊天视图读取节点的真实会话；这里只有服务端运行带回的对话记录（见下文），`conversation-turns.ts` 把它们转成对话页的轮次（发给 Agent 的消息开启一轮，之后的回复、思考和工具调用归入这一轮），再交给对话页的 `Thread` 渲染，所以节点会话和对话页的样式一致；不能在里面接着发消息 |
+| `run-events.ts` | 新写：订阅运行的失效事件流（见下文） |
 | `hitl-text-editor.tsx` | 新写：人工介入回答框，用纯文本输入框代替 desktop 的 TipTap 编辑器 |
 | `demo-host.ts` | 新写：Theater 调用的 desktop hook（保存启动输入、回答人工介入、错误提示等），同名同参数；保存启动输入走服务端，其余见下文 |
 | `run-pane.tsx`、`run-sidebar.tsx` | 新写：desktop 的运行页、侧栏行和运行对话框的精简版 |
 | `server-runs.ts`、`server-run-adapter.ts` | 新写：调用服务端的运行接口，把服务端的运行投影成 Theater 读取的 `GraphWorkflowRun`；`test-run-server.ts` 是单元测试的假服务端 |
 
-运行由 v2-server 执行（见 `v2-server/README.md` 的"工作流执行"一节），客户端和工作流定义一样由 `v2-server/workflows.openapi.json` 生成。`server-runs.ts` 把创建、启动、修改启动输入、取消、删除和再跑一次接到生成的客户端上，拒绝同样转成 `ContractError`；运行详情、冻结的图和项目下的运行列表由 TanStack Query 读取，运行没结束时每 1 秒重新读一次（`runRefreshMs`），服务端的事件流还没接。刷新页面后运行还在，执行也不依赖页面开着。
+运行由 v2-server 执行（见 `v2-server/README.md` 的"工作流执行"一节），客户端和工作流定义一样由 `v2-server/workflows.openapi.json` 生成。`server-runs.ts` 把创建、启动、修改启动输入、取消、删除和再跑一次接到生成的客户端上，拒绝同样转成 `ContractError`；运行详情、冻结的图和项目下的运行列表由 TanStack Query 读取。运行没结束时，运行页照 desktop 订阅它的失效事件流（`GET …/workflow-runs/{rid}/events`，`run-events.ts`）：每条 `workflow_run_invalidated` 都让运行详情和项目运行列表重新读取，事件本身不带状态，页面只信 HTTP 读到的持久状态。轮询是兜底（`runRefreshMs`）：事件流连着时每 4 秒（desktop 的兜底间隔），没连上或断开时每 1 秒；运行结束后关闭事件流。侧边栏的项目运行列表照旧在有未结束的运行时每 1 秒读一次。刷新页面后运行还在，执行也不依赖页面开着。
 
 `server-run-adapter.ts` 把服务端的节点运行按 desktop 读取后端运行时的规则投影成节点状态：节点状态、开始结束时间、输入输出、失败原因和失败详情（`payload.error_detail`）照搬。Agent 节点有了回答后，节点会话是两条消息：发给 Agent 的任务（服务端记下的渲染后任务 `payload.task`，没有时用节点的输入）和 Agent 的回答；服务端不保存 Agent 的完整会话，所以看不到思考和工具调用。成功的 Agent 还带着 v2 自己记下的三项：实际使用的执行器（`payload.executor`，Agent 名和插件版本）、模型（`payload.model`，配置的模型找不到或没配时 `fallback` 为真，用的是 Agent 的默认模型）和没有应用的设置（`payload.unapplied`）。节点详情在配置的"Agent 模型"下面显示"实际执行"，退回默认模型时说明原因。
 

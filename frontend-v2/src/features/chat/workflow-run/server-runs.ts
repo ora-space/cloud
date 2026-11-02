@@ -35,8 +35,11 @@ export interface PublishedWorkflow {
   snapshotId: string
 }
 
-/** How often an open run is read again while it executes; the events stream comes later. */
-export const runRefreshMs = { interval: 1_000 }
+/**
+ * How often an open run is read again while it executes: every second, or, while its events stream
+ * is connected and announces each change, every four seconds as desktop's fallback.
+ */
+export const runRefreshMs = { interval: 1_000, followed: 4_000 }
 
 async function call<T>(request: () => Promise<T>): Promise<T> {
   try {
@@ -107,10 +110,11 @@ export function runSnapshotQuery(tenantId: string, runId: string) {
 }
 
 /**
- * One run with its nodes, projected for Theater. It is read again every second until the run
- * reaches a terminal state, which is how the page follows an executing run for now.
+ * One run with its nodes, projected for Theater. Until the run reaches a terminal state it is read
+ * again on every invalidation its events stream announces, and polled as a fallback: slowly while
+ * that stream is `followed`, every second otherwise.
  */
-export function runQuery(tenantId: string, runId: string, definition: WorkflowDefinition | undefined) {
+export function runQuery(tenantId: string, runId: string, definition: WorkflowDefinition | undefined, followed = false) {
   return queryOptions({
     queryKey: runKeys.run(tenantId, runId),
     enabled: definition !== undefined,
@@ -118,7 +122,8 @@ export function runQuery(tenantId: string, runId: string, definition: WorkflowDe
     queryFn: async ({ signal }) => toGraphWorkflowRun(await call(() => getWorkflowRun(tenantId, runId, undefined, signal)), definition!),
     refetchInterval: (query) => {
       const run = query.state.data
-      return run && isTerminalRunStatus(run.status) ? false : runRefreshMs.interval
+      if (run && isTerminalRunStatus(run.status)) return false
+      return followed ? runRefreshMs.followed : runRefreshMs.interval
     },
   })
 }
