@@ -361,6 +361,10 @@ CREATE INDEX IF NOT EXISTS v2_workflow_runs_history
 	ON v2_workflow_runs (workflow_id, created_at, id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS v2_workflow_runs_project
 	ON v2_workflow_runs (tenant_id, project_id, created_at, id) WHERE deleted_at IS NULL;
+-- A scheduled trigger runs at most one workflow run, ever: its occurrence ID is the run's stable
+-- identity, so a repeated dispatch or a recovery finds the same run instead of creating another.
+CREATE UNIQUE INDEX IF NOT EXISTS v2_workflow_runs_schedule_trigger
+	ON v2_workflow_runs (tenant_id, trigger_ref) WHERE trigger_kind = 'schedule';
 
 -- Execution scopes are the run's root and one row per started Loop round. Root rows carry no
 -- status, state or parent; only Loop rounds do. The cross references to node runs are enforced in

@@ -33,6 +33,8 @@ var (
 	ErrWorkflowActiveRuns = errors.New("workflow has live runs")
 	// ErrWorkflowRunActive reports a run that still has work in flight.
 	ErrWorkflowRunActive = errors.New("workflow run is active")
+	// ErrWorkflowRunTriggerTaken reports a scheduled trigger that already created its run.
+	ErrWorkflowRunTriggerTaken = errors.New("workflow run trigger already used")
 )
 
 // WorkflowRunStatuses are the states a run and its node rows share. Awaiting input is deliberately
@@ -221,6 +223,10 @@ func (s *Store) CreateWorkflowRun(ctx context.Context, tenant, workflowID, snaps
 			VALUES ($1, $2, $3, $4, $5, 'pending', '{"current_nodes":[]}'::jsonb, $6, $7, $8)
 			RETURNING `+workflowRunColumns,
 			tenant, workflowID, snapshotID, in.ProjectID, name, in.Input, trigger, in.TriggerRef))
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "v2_workflow_runs_schedule_trigger" {
+			return ErrWorkflowRunTriggerTaken
+		}
 		if err != nil {
 			return err
 		}
@@ -422,6 +428,17 @@ func (s *Store) WorkflowRun(ctx context.Context, tenant, runID string) (Workflow
 			r.state, r.input, r.output, r.error, r.payload, r.started_at, r.finished_at, r.created_at, r.updated_at
 		FROM v2_workflow_runs r
 		WHERE r.tenant_id = $1 AND r.id = $2 AND r.deleted_at IS NULL`, tenant, runID))
+}
+
+// ScheduledWorkflowRun returns the run a scheduled trigger created, found by the trigger's stable
+// reference (its occurrence ID), so a dispatcher that lost track of it never creates another.
+func (s *Store) ScheduledWorkflowRun(ctx context.Context, tenant, triggerRef string) (WorkflowRun, error) {
+	return scanWorkflowRun(s.pool.QueryRow(ctx, `
+		SELECT r.id, r.tenant_id, r.workflow_id, r.snapshot_id, r.project_id, r.name, `+derivedRunStatus+`,
+			r.state, r.input, r.output, r.error, r.payload, r.started_at, r.finished_at, r.created_at, r.updated_at
+		FROM v2_workflow_runs r
+		WHERE r.tenant_id = $1 AND r.trigger_kind = 'schedule' AND r.trigger_ref = $2 AND r.deleted_at IS NULL`,
+		tenant, triggerRef))
 }
 
 // WorkflowRunNodes lists the live (latest attempt) rows of one run in commit order.
