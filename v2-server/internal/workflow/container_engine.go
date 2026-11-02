@@ -96,13 +96,18 @@ func (e *Engine) applyContainer(ctx context.Context, run RunContext, g *Graph, p
 	return true, nil
 }
 
-func (e *Engine) containerFailure(message string) *ContainerResult {
+// A failed round is a domain outcome, not evidence that its frozen payload is corrupt.
+func containerFailure(message string) *ContainerResult {
+	return &ContainerResult{Status: StatusFailed, Error: &message}
+}
+
+func (e *Engine) invalidContainerFailure(message string) *ContainerResult {
 	f := Failure{Kind: FailureInvalidRunPayload, Message: message}
 	return &ContainerResult{Status: StatusFailed, Error: &message, Keys: map[string]any{"error_detail": f.Detail(1, true, e.now())}}
 }
 
 func (e *Engine) failContainer(ctx context.Context, run RunContext, parent NodeRun, scopeID, message string) (bool, error) {
-	a := ContainerAdvance{ScopeID: scopeID, Result: e.containerFailure(message)}
+	a := ContainerAdvance{ScopeID: scopeID, Result: e.invalidContainerFailure(message)}
 	if scopeID != "" {
 		a.ScopeStatus = StatusFailed
 	}
@@ -125,9 +130,7 @@ func loopSuccess(n Node, scopeID, reason string, outputs map[string]any) Contain
 			if err != nil {
 				return nil, err
 			}
-			if err := p.Complete(n.ID, "loop", nil, &text, nil); err != nil {
-				return nil, err
-			}
+			// The parent row retains the JSON result; only configured named exports enter the pool.
 			for name, value := range outputs {
 				if err := p.VariablePool.Set(n.ID+"."+name, n.ID, value); err != nil {
 					return nil, err
@@ -238,7 +241,7 @@ func (e *Engine) advanceLoop(ctx context.Context, run RunContext, g *Graph, pare
 	}
 	carried, outputs, reason, err := cfg.complete(current.Index, &state.VariablePool)
 	if err != nil {
-		return e.failContainer(ctx, run, parent, current.ID, err.Error())
+		return e.applyContainer(ctx, run, body, parent.ID, ContainerAdvance{ScopeID: current.ID, ScopeStatus: StatusFailed, Result: containerFailure(err.Error())})
 	}
 	if reason != "" {
 		return e.applyContainer(ctx, run, body, parent.ID, loopSuccess(n, current.ID, reason, outputs))
@@ -289,7 +292,7 @@ func (e *Engine) FinishLoopExit(ctx context.Context, runID, parentID, scopeID st
 				cleanupErr = fmt.Errorf("%s", message)
 			}
 			if cleanupErr != nil {
-				_, err = e.failContainer(ctx, run, parent, scopeID, cleanupErr.Error())
+				_, err = e.applyContainer(ctx, run, nil, parent.ID, ContainerAdvance{ScopeID: scopeID, ScopeStatus: StatusFailed, Result: containerFailure(cleanupErr.Error())})
 			} else {
 				g, parseErr := ParseGraph(run.Graph)
 				if parseErr != nil {

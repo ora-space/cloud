@@ -173,7 +173,12 @@ func (e *Engine) advanceIteration(ctx context.Context, run RunContext, g *Graph,
 	a := ContainerAdvance{}
 	if settled, exists := nextLedger[current]; exists && settled.Status == StatusFailed && cfg.strategy == "fail" {
 		message := fmt.Sprintf("iteration round %d failed: %s", current, *settled.Error)
-		a.Result = e.containerFailure(message)
+		a.Result = containerFailure(message)
+		if entry == nil {
+			// Settlement and parent failure commit together; a running owner with an already
+			// failed ledger is invalid state, unlike a failure being settled for the first time.
+			a.Result = e.invalidContainerFailure(message)
+		}
 	} else if current+1 < len(items) {
 		next := current + 1
 		a.Starts = iterationStarts(g, n.ID, next, runs, p.iterationDecisions(next), run)

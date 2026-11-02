@@ -335,10 +335,12 @@ func (s *Store) FailWorkflowEngineNode(
 			if err := tx.QueryRow(ctx, `UPDATE v2_workflow_scopes SET status='failed', updated_at=now() WHERE id=$1 AND status='running' RETURNING parent_loop_node_run_id`, node.ScopeID).Scan(&parentID); err != nil {
 				return err
 			}
-			if err := tx.QueryRow(ctx, `UPDATE v2_workflow_node_runs SET status='failed', error=$2, payload=$3, finished_at=now(), updated_at=now() WHERE id=$1 RETURNING node_id`, parentID, message, payload).Scan(&anchor); err != nil {
+			// The child owns its failure detail; propagating its message must preserve the
+			// parent's own payload and must not present the child attempt as the parent attempt.
+			if err := tx.QueryRow(ctx, `UPDATE v2_workflow_node_runs SET status='failed', error=$2, finished_at=now(), updated_at=now() WHERE id=$1 RETURNING node_id`, parentID, message).Scan(&anchor); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE v2_workflow_node_runs SET status='cancelled', finished_at=now(), updated_at=now() WHERE scope_id=$1 AND status IN ('pending','running') AND deleted_at IS NULL`, node.ScopeID); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE v2_workflow_node_runs SET status='cancelled', error=COALESCE(error,'{"reason":"sibling_failed"}'), finished_at=now(), updated_at=now() WHERE scope_id=$1 AND status IN ('pending','running') AND deleted_at IS NULL`, node.ScopeID); err != nil {
 				return err
 			}
 		}

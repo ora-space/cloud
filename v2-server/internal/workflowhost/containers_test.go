@@ -55,6 +55,9 @@ func TestLoopFeedbackScopesAndExports(t *testing.T) {
 	if p.VariablePool.Values["loop.result"] != "done" {
 		t.Fatal(p.VariablePool)
 	}
+	if _, assigned := p.VariablePool.Values["loop.output"]; assigned {
+		t.Fatal("Loop must publish only its configured exports, not an implicit output variable")
+	}
 	if _, leaked := p.VariablePool.Catalog["writer.output"]; leaked {
 		t.Fatal("child pool leaked to root")
 	}
@@ -109,6 +112,9 @@ func TestLoopLimitBehaviorAndLastRoundUntil(t *testing.T) {
 			_ = json.Unmarshal(node(rows, "loop").Payload, &p)
 			if tc.reason != "" && p["stop_reason"] != tc.reason {
 				t.Fatal(p)
+			}
+			if _, detailed := p["error_detail"]; detailed {
+				t.Fatalf("a round limit is not corrupt frozen data: %v", p)
 			}
 		})
 	}
@@ -194,12 +200,18 @@ func TestIterationEmptyLimitAndFailStrategy(t *testing.T) {
 		{"empty", []string{}, 50, "succeeded", 0},
 		{"limit", []string{"one", "two"}, 1, "failed", 0},
 		{"collect skipped", []string{"skip", "one"}, 50, "failed", 1},
+		{"child failed", []string{"one", "two"}, 50, "failed", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
 			id := f.run(t, iterationGraph("fail", tc.items, tc.max), nil)
 			if _, err := f.host.StartRun(context.Background(), f.scope, id); err != nil {
 				t.Fatal(err)
+			}
+			if tc.name == "child failed" {
+				result := completed("refused")
+				result.StopReason = "refusal"
+				f.exec.finish(f.exec.awaitStart(t), result)
 			}
 			run, rows := f.await(t, id, terminal)
 			if run.Status != tc.status {
@@ -216,6 +228,16 @@ func TestIterationEmptyLimitAndFailStrategy(t *testing.T) {
 			}
 			if tc.name == "empty" && (run.Output == nil || *run.Output != `{"failed":0,"items":[]}`) {
 				t.Fatalf("%+v", run)
+			}
+			var payload map[string]any
+			_ = json.Unmarshal(node(rows, "iter").Payload, &payload)
+			if tc.name == "limit" {
+				detail, ok := payload["error_detail"].(map[string]any)
+				if !ok || detail["kind"] != "invalid_run_payload" {
+					t.Fatalf("invalid iteration plans must keep their classification: %v", payload)
+				}
+			} else if _, detailed := payload["error_detail"]; detailed {
+				t.Fatalf("an ordinary iteration failure is not corrupt frozen data: %v", payload)
 			}
 		})
 	}
@@ -247,6 +269,14 @@ func TestLoopExitSkipsSameWaveAgentAndUnusedFeedback(t *testing.T) {
 	f.exec.mu.Unlock()
 	if count != 0 {
 		t.Fatalf("same-wave Agent started %d times", count)
+	}
+	rounds, err := f.s.WorkflowEngineLoopRounds(context.Background(), id)
+	if err != nil || len(rounds) != 1 {
+		t.Fatalf("rounds: %v %v", rounds, err)
+	}
+	children, err := f.s.WorkflowEngineScopeNodes(context.Background(), id, rounds[0].ID)
+	if err != nil || node(children, "writer").ID != "" {
+		t.Fatalf("LoopExit must prevent the sibling row, not just cancel its queued execution: %+v %v", children, err)
 	}
 }
 
@@ -357,6 +387,11 @@ func TestLoopExitCannotAdvanceAfterUnconfirmedSessionEnd(t *testing.T) {
 	if run.Status != "failed" || run.Error == nil || !strings.Contains(*run.Error, "could not confirm session cleanup") || node(rows, "out").ID != "" {
 		t.Fatalf("unsafe advance %+v %+v", run, rows)
 	}
+	var payload map[string]any
+	_ = json.Unmarshal(node(rows, "loop").Payload, &payload)
+	if _, detailed := payload["error_detail"]; detailed {
+		t.Fatalf("unconfirmed cleanup is not corrupt frozen data: %v", payload)
+	}
 }
 
 func TestLoopInterruptedByRestartDoesNotReplay(t *testing.T) {
@@ -461,7 +496,9 @@ func TestLoopChildFailureAndCancellationCloseScope(t *testing.T) {
 		t.Run(fmt.Sprint(cancel), func(t *testing.T) {
 			f := newFixture(t)
 			ctx := context.Background()
-			id := f.run(t, loopGraph, nil)
+			graph := strings.Replace(loopGraph, `{"id":"out"`, `{"id":"sibling","data":{"kind":"agent","containerId":"loop","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"queued sibling"}}},{"id":"out"`, 1)
+			graph = strings.Replace(graph, `{"source":"entry","target":"writer"}`, `{"source":"entry","target":"writer"},{"source":"entry","target":"sibling"}`, 1)
+			id := f.run(t, graph, nil)
 			if _, err := f.host.StartRun(ctx, f.scope, id); err != nil {
 				t.Fatal(err)
 			}
@@ -471,6 +508,10 @@ func TestLoopChildFailureAndCancellationCloseScope(t *testing.T) {
 				t.Fatal(err)
 			}
 			awaitScopeSession(t, f, id, rounds[0].ID, "writer")
+			children, err := f.s.WorkflowEngineScopeNodes(ctx, id, rounds[0].ID)
+			if err != nil || node(children, "sibling").Status != "running" {
+				t.Fatalf("expected a queued same-wave sibling: %+v %v", children, err)
+			}
 			status := "failed"
 			if cancel {
 				status = "cancelled"
@@ -486,6 +527,22 @@ func TestLoopChildFailureAndCancellationCloseScope(t *testing.T) {
 			rounds, _ = f.s.WorkflowEngineLoopRounds(ctx, id)
 			if run.Status != status || node(roots, "loop").Status != status || *rounds[0].Status != status {
 				t.Fatalf("run %s parent %s scope %s", run.Status, node(roots, "loop").Status, *rounds[0].Status)
+			}
+			children, err = f.s.WorkflowEngineScopeNodes(ctx, id, rounds[0].ID)
+			sibling := node(children, "sibling")
+			if err != nil || sibling.Status != "cancelled" || sibling.SessionID != nil {
+				t.Fatalf("queued sibling was not cancelled with its scope: %+v %v", sibling, err)
+			}
+			if !cancel {
+				if sibling.Error == nil || *sibling.Error != `{"reason":"sibling_failed"}` {
+					t.Fatalf("sibling cancellation lost its reason: %+v", sibling)
+				}
+				var parent, child map[string]any
+				_ = json.Unmarshal(node(roots, "loop").Payload, &parent)
+				_ = json.Unmarshal(node(children, "writer").Payload, &child)
+				if _, detailed := parent["error_detail"]; detailed || child["error_detail"] == nil {
+					t.Fatalf("failure detail belongs to the child, not its parent: parent=%v child=%v", parent, child)
+				}
 			}
 		})
 	}

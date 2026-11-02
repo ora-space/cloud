@@ -6,7 +6,7 @@ import { signIn } from './login.ts'
 interface ContainerDetail {
   run: { status: string; output: string | null; error: string | null }
   scopes: { id: string; roundIndex: number; status: string }[]
-  nodes: { nodeId: string; scopeId: string; sessionId: string | null; iteration: number | null }[]
+  nodes: { nodeId: string; scopeId: string; sessionId: string | null; iteration: number | null; payload: string | null }[]
 }
 
 const agent = (prompt: string) => ({ executor: { agentCli: 'official/ora-space.opencode', modelId: 'fixture' }, prompt })
@@ -39,7 +39,18 @@ const exit = JSON.stringify({ schemaVersion: 2, nodes: [
   node('out', 'output', '输出', 1100, 0, { outputs: [{ name: 'result', variableSelector: ['loop', 'result'] }] }),
 ], edges: [edge('start', 'loop'), edge('entry', 'exit'), edge('loop', 'out')] })
 
-async function execute(page: Page, graph: string, title: string): Promise<ContainerDetail> {
+const capFailure = JSON.stringify({ schemaVersion: 2, nodes: [
+  node('start', 'start', '开始', 0, 0),
+  node('loop', 'loop', '轮次上限', 320, 0, { loopConfig: {
+    maxIterations: 1, maxIterationsBehavior: 'fail',
+    variables: [{ name: 'draft', valueType: 'string', initial: { kind: 'constant', value: '待改进' }, feedback: ['loop', 'draft'] }],
+    until: { logic: 'and', conditions: [] }, outputs: [{ name: 'result', variableSelector: ['loop', 'draft'] }],
+  } }),
+  node('entry', 'start', '本轮开始', 40, 80, { containerId: 'loop' }, 'loop'),
+  node('out', 'output', '输出', 1100, 0, { outputs: [{ name: 'result', variableSelector: ['loop', 'result'] }] }),
+], edges: [edge('start', 'loop'), edge('loop', 'out')] })
+
+async function execute(page: Page, graph: string, title: string, expectedStatus: 'succeeded' | 'failed' = 'succeeded'): Promise<ContainerDetail> {
   await page.goto('/chat')
   await signIn(page)
   const tenant = (await (await page.request.get('/api/v1/me/tenants')).json()).items[0].id as string
@@ -59,9 +70,9 @@ async function execute(page: Page, graph: string, title: string): Promise<Contai
   expect(started.ok(), await started.text()).toBe(true)
   await expect.poll(async () => (await (await page.request.get(`${base}/workflow-runs/${id}`)).json()).run.status, { timeout: 150_000 }).not.toMatch(/^(pending|running)$/)
   const detail = await (await page.request.get(`${base}/workflow-runs/${id}`)).json() as ContainerDetail
-  expect(detail.run.status, detail.run.error ?? '').toBe('succeeded')
+  expect(detail.run.status, detail.run.error ?? '').toBe(expectedStatus)
   await page.reload()
-  await page.getByRole('button', { name: `工作流运行 ${name}（成功）` }).click()
+  await page.getByRole('button', { name: `工作流运行 ${name}（${expectedStatus === 'succeeded' ? '成功' : '失败'}）` }).click()
   await expect(page.getByRole('region', { name: '工作流运行' }).getByRole('heading', { name })).toBeVisible()
   await page.getByRole('region', { name: '工作流运行' }).getByRole('button', { name: '舞台', exact: true }).click()
   return detail
@@ -71,6 +82,20 @@ async function screenshot(page: Page, path: string) {
   await page.waitForFunction(() => document.getAnimations().filter((animation) => animation.timeline === document.timeline && animation.effect?.getComputedTiming().endTime !== Infinity).every((animation) => animation.playState !== 'running'))
   await page.screenshot({ path })
 }
+
+test('workflow containers: a round limit shows the domain error without corrupt-snapshot advice', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  const detail = await execute(page, capFailure, '轮次上限失败验收', 'failed')
+  expect(detail.run.error).toContain('Loop did not terminate within 1 rounds')
+  expect(JSON.parse(detail.nodes.find((node) => node.nodeId === 'loop')!.payload ?? '{}')).not.toHaveProperty('error_detail')
+  const pane = page.getByRole('region', { name: '工作流运行' })
+  await pane.getByRole('button', { name: '全图', exact: true }).click()
+  await pane.getByLabel('工作流全图俯瞰').locator('.react-flow__node').filter({ has: page.getByText('轮次上限', { exact: true }) }).click()
+  await expect(pane.getByRole('alert').filter({ hasText: 'Loop did not terminate within 1 rounds' })).toBeVisible()
+  await expect(pane.getByText('运行的冻结数据无效', { exact: true })).toBeHidden()
+  await expect(pane.getByText(/该运行的快照已损坏/)).toBeHidden()
+  await screenshot(page, info.outputPath('s3-loop-domain-failure.png'))
+})
 
 test('workflow containers: LoopExit exports and displays the committed exit reason', async ({ page }, info) => {
   const detail = await execute(page, exit, '主动退出验收')

@@ -350,7 +350,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 - **只做核心执行**：启动、取消、历史和刷新；普通节点失败使运行失败，Iteration 内失败由其 `errorStrategy` 决定停止或继续。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
 - **节点**：执行 Start、Agent、Output、Condition、Aggregator、Loop、LoopExit、Iteration。历史 `prompt` / `tool` 节点仍可解析，但启动返回 `400 workflow_run_start_failed`。
-- **Loop**：轮次从 1 开始、最多 100 轮，每轮重新建独立变量池，只导入上游、全局与显式携带值。反馈值从同一完成快照读取，随后检查 `until`；最后一轮满足条件仍成功，未满足时按 `maxIterationsBehavior` 失败或导出。父节点一次性发布命名输出与 JSON `.output`，`stop_reason` 区分 `loop_succeeded`、`loop_max_iterations`。轮次关闭与下一轮入口同事务提交。
+- **Loop**：轮次从 1 开始、最多 100 轮，每轮重新建独立变量池，只导入上游、全局与显式携带值。反馈值从同一完成快照读取，随后检查 `until`；最后一轮满足条件仍成功，未满足时按 `maxIterationsBehavior` 失败或导出。父节点行保存 JSON 结果，变量池只发布配置过的命名输出，不隐式赋值 `{loop}.output`；`stop_reason` 区分 `loop_succeeded`、`loop_max_iterations`。轮次关闭与下一轮入口同事务提交。
 - **LoopExit**：同一 ready wave 优先退出，先冻结导出结果、将同轮未完成子节点取消，再由 host 停止活动 turn 并确认 session End。确认前父 Loop 保持运行；停止未确认时失败，不启动下游。成功原因为 `loop_exit`，不读取下一轮反馈。取消后的回调不能改写变量池或冻结输出；进程重启直接中断，不重放。
 - **Iteration**：串行遍历数组，节点 `iteration` 为 0 基，默认 `maxIterations=50`，可显式设置更大值。空数组直接成功，超限在首轮前失败。每轮必须有 collect 节点成功记录，未执行 collect 不能借用上一轮的值。`fail` 停在失败轮；`continue` 保留失败并继续。父节点输出 `output`（成功值）、`entries`（每项成功或失败）和 `failed_count`；ledger 与下一轮或父节点终态原子提交。成员始终留在原 scope，不复用 Loop scope 作为数组下标。
 - **Condition**：按 desktop 的 `condition.rs` 依次判断各个 case，第一个成立的 case 胜出，都不成立走 `else`（没有 `sourceHandle` 的出边就是 `else`）；还没写规则的 case 直接跳过。16 个比较运算符同 desktop；只有 `exists`/`not_exists`/`empty`/`not_empty` 容忍未赋值，其余读到未赋值、未声明或类型不符的变量时节点以 `condition_evaluation` 失败，不猜分支。比较值只写一个 `{{#…#}}` 时保留变量的原类型，混排时按字符串渲染。选中的分支写进运行 payload 的 `conditionDecisions`，不写节点输出，也不进变量池；启动时拒绝重复的 case id（`workflow_run_duplicate_condition_case`）和指向不存在分支的出边（`workflow_run_unknown_condition_branch`）。没走的分支上的节点不建节点行（desktop 同样不落库分支激活），运行详情返回 `conditionDecisions`，由客户端投影为“未激活分支”。
@@ -359,6 +359,8 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - **角色、per-node Skill、MCP 不应用**：节点照常运行，节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`skill`、`mcp`、`retry`、`interactive`），不静默忽略。
 - **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，找不到时退回该 Agent 的第一个（默认）执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）、`model`（`id`、`name`、`requested`、`fallback`），以及按变量池渲染后的任务要求 `task`（节点尝试的 `input` 保留模板原文）。
 - **重启**：启动时先把上个进程留下的所有非终态节点以 `interrupted_by_restart` 失败，运行随之失败，然后才开始服务；不重放 Agent。
+
+容器的普通业务失败（Loop 上限、反馈/结束判断、LoopExit 结算失败、Iteration 的 `fail` 策略）只写错误消息，沿用 desktop 的轮次失败语义；初始化、计划或持久状态无效才标记 `invalid_run_payload`。Loop 子节点的 `error_detail` 归属于子节点，父节点只继承错误消息并保留自己的 payload；同轮活动兄弟节点取消时保留 `sibling_failed` 原因。
 
 与 desktop 的差异：
 
