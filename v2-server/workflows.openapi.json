@@ -768,12 +768,17 @@
       },
       "WorkflowRunDetail": {
         "type": "object",
-        "required": ["run", "nodes", "scopes", "conditionDecisions"],
+        "required": ["run", "nodes", "scopes", "conditionDecisions", "iterationConditionDecisions"],
         "additionalProperties": false,
         "properties": {
           "run": {"$ref": "#/components/schemas/WorkflowRun"},
           "nodes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowNodeRun"}},
           "scopes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowScope"}},
+          "iterationConditionDecisions": {
+            "type": "object",
+            "description": "Committed Iteration-region Condition decisions keyed by nodeId#round (zero-based); empty before execution. Loop decisions stay inside each scope state.",
+            "additionalProperties": { "type": "string" }
+          },
           "conditionDecisions": {
             "type": "object",
             "description": "Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.",

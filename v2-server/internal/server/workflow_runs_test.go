@@ -112,7 +112,7 @@ func TestWorkflowRunsOverHTTP(t *testing.T) {
 	}
 
 	_, detail := call("GET", "/api/v2/tenants/"+tid+"/workflow-runs/"+runID, nil)
-	if len(detail["nodes"].([]any)) != 0 || len(detail["scopes"].([]any)) != 0 || len(detail["conditionDecisions"].(map[string]any)) != 0 {
+	if len(detail["nodes"].([]any)) != 0 || len(detail["scopes"].([]any)) != 0 || len(detail["conditionDecisions"].(map[string]any)) != 0 || len(detail["iterationConditionDecisions"].(map[string]any)) != 0 {
 		t.Fatalf("empty detail = %v", detail)
 	}
 

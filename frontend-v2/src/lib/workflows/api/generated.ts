@@ -334,6 +334,11 @@ export interface WorkflowScope {
 }
 
 /**
+ * Committed Iteration-region Condition decisions keyed by nodeId#round (zero-based); empty before execution. Loop decisions stay inside each scope state.
+ */
+export type WorkflowRunDetailIterationConditionDecisions = {[key: string]: string};
+
+/**
  * Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows.
  */
 export type WorkflowRunDetailConditionDecisions = {[key: string]: string};
@@ -342,6 +347,8 @@ export interface WorkflowRunDetail {
   run: WorkflowRun;
   nodes: WorkflowNodeRun[];
   scopes: WorkflowScope[];
+  /** Committed Iteration-region Condition decisions keyed by nodeId#round (zero-based); empty before execution. Loop decisions stay inside each scope state. */
+  iterationConditionDecisions: WorkflowRunDetailIterationConditionDecisions;
   /** Root-scope Condition decisions keyed by Condition node id: a case id, or `else`, as desktop's run detail. Branch activation is never stored; clients project the nodes behind a branch not taken from these decisions and the node rows. */
   conditionDecisions: WorkflowRunDetailConditionDecisions;
 }

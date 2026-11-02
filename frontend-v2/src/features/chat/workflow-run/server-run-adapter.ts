@@ -6,6 +6,7 @@ import {
   type GraphWorkflowNodeState,
   type GraphWorkflowRun,
   type WorkflowAgentUnappliedCapability,
+  type GraphWorkflowRound,
   type WorkflowDefinition,
   type WorkflowNodeConversationItem,
   type WorkflowNodeErrorDetail,
@@ -71,9 +72,9 @@ function unapplied(payload: Record<string, unknown>): WorkflowAgentUnappliedCapa
 }
 
 /**
- * The node's turn as its conversation: what it was asked and what it answered. v2-server does not
- * serve node session transcripts yet, so the task (as the engine rendered it, else the attempt's
- * template input) and the settled answer are the two messages; nothing is invented while it runs.
+ * Fallback conversation when the attempt has no readable session: its rendered task (else the
+ * template input) and settled answer. The session stream, when available, replaces this fallback;
+ * neither path invents messages while the node runs.
  */
 function conversation(runId: string, node: WorkflowNodeRun, payload: Record<string, unknown>): WorkflowNodeConversationItem[] | undefined {
   if (node.nodeType !== 'agent' || node.output === null || node.output === '') return undefined
@@ -87,9 +88,11 @@ function conversation(runId: string, node: WorkflowNodeRun, payload: Record<stri
   return items
 }
 
-function nodeState(runId: string, node: WorkflowNodeRun): GraphWorkflowNodeState {
+function nodeState(runId: string, node: WorkflowNodeRun, decisions: Record<string, string>): GraphWorkflowNodeState {
   const payload = parseObject(node.payload)
   const state: GraphWorkflowNodeState = { status: projectNodeStatus({ status: node.status }), nodeRunId: node.id }
+  if (node.iteration !== null) state.iteration = node.iteration
+  if (node.nodeType === 'condition' && decisions[node.nodeId] !== undefined) state.selectedBranchId = decisions[node.nodeId]
   if (node.sessionId !== null) state.sessionId = node.sessionId
   if (node.startedAt !== null) state.startedAt = iso(node.startedAt)
   if (node.finishedAt !== null) state.finishedAt = iso(node.finishedAt)
@@ -115,24 +118,71 @@ function currentNodes(state: string | null): string[] {
   return Array.isArray(nodes) ? nodes.filter((n): n is string => typeof n === 'string') : []
 }
 
+/** Projects one exact scope/round; absent members cannot inherit another occurrence's answer. */
+function scopedStates(runId: string, definition: WorkflowDefinition, rows: WorkflowNodeRun[], decisions: Record<string, string>, iteration?: number, owner?: string): Record<string, GraphWorkflowNodeState> {
+  const states: Record<string, GraphWorkflowNodeState> = {}
+  for (const node of definition.nodes) states[node.id] = { status: 'idle', ...(iteration === undefined ? {} : { iteration }) }
+  if (owner) states[owner] = { status: 'succeeded' }
+  for (const row of rows) states[row.nodeId] = nodeState(runId, row, decisions)
+  const statuses = Object.fromEntries(Object.entries(states).map(([id, state]) => [id, state.status]))
+  for (const id of computeInactiveNodes(definition, statuses, decisions)) states[id] = { ...states[id]!, status: 'inactive' }
+  if (owner) delete states[owner]
+  return states
+}
+
+function subgraph(definition: WorkflowDefinition, ids: Set<string>): WorkflowDefinition {
+  return { ...definition, nodes: definition.nodes.filter((node) => ids.has(node.id)), edges: definition.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) }
+}
+
+function stringMap(value: unknown): Record<string, string> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
 /**
  * Projects a v2-server run onto the run model Theater and Overview render, as desktop's backend
  * run adapter does. The detail lists each node's latest attempt; graph nodes without one stay idle,
  * except those behind a Condition branch not taken, which never get a row and are shown inactive,
- * projected from the run's Condition decisions as desktop does. Loop and Iteration rounds are not
- * executed by v2-server yet, so only root-scope rows are mapped.
+ * projected from the decisions of that exact execution. Loop scopes and Iteration array indices
+ * stay separate, preserving historical sessions even when the same node runs again.
  */
 export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: WorkflowDefinition): GraphWorkflowRun {
   const { run } = detail
   const nodeStates: Record<string, GraphWorkflowNodeState> = {}
   for (const node of definition.nodes) nodeStates[node.id] = { status: 'idle' }
-  for (const node of detail.nodes) {
-    if (node.iteration !== null) continue
-    nodeStates[node.nodeId] = nodeState(run.id, node)
+  const loops = new Set(definition.nodes.filter((node) => node.data.kind === 'loop').map((node) => node.id))
+  const iterations = new Set(definition.nodes.filter((node) => node.data.kind === 'iteration').map((node) => node.id))
+  const loopOwner = (node: WorkflowDefinition['nodes'][number]) => loops.has(node.data.containerId ?? node.parentId ?? '') ? (node.data.containerId ?? node.parentId) : undefined
+  const rootIds = new Set(definition.nodes.filter((node) => !loopOwner(node) && !iterations.has(node.parentId ?? '')).map((node) => node.id))
+  const scopeIds = new Set(detail.scopes.map((scope) => scope.id))
+  const rootRows = detail.nodes.filter((node) => !scopeIds.has(node.scopeId))
+  Object.assign(nodeStates, scopedStates(run.id, subgraph(definition, rootIds), rootRows.filter((node) => node.iteration === null && rootIds.has(node.nodeId)), detail.conditionDecisions))
+  const rounds: GraphWorkflowRound[] = []
+  for (const scope of detail.scopes) {
+    const parent = rootRows.find((node) => node.id === scope.parentLoopNodeRunId)
+    if (!parent) continue
+    const ids = new Set(definition.nodes.filter((node) => loopOwner(node) === parent.nodeId).map((node) => node.id))
+    const decisions = stringMap(parseObject(scope.state).conditionDecisions)
+    rounds.push({ id: scope.id, parentLoopNodeRunId: parent.id, parentLoopNodeId: parent.nodeId, roundIndex: scope.roundIndex,
+      status: scope.status, nodeStates: scopedStates(run.id, subgraph(definition, ids), detail.nodes.filter((node) => node.scopeId === scope.id), decisions),
+      createdAt: iso(scope.createdAt)!, updatedAt: iso(scope.updatedAt)!,
+    })
   }
-  const statuses = Object.fromEntries(Object.entries(nodeStates).map(([id, state]) => [id, state.status]))
-  for (const id of computeInactiveNodes(definition, statuses, detail.conditionDecisions)) {
-    nodeStates[id] = { ...nodeStates[id], status: 'inactive' }
+  rounds.sort((a, b) => a.roundIndex - b.roundIndex || a.id.localeCompare(b.id))
+  const roundStates: Record<string, GraphWorkflowNodeState[]> = {}
+  for (const owner of iterations) {
+    const members = new Set(definition.nodes.filter((node) => node.parentId === owner).map((node) => node.id))
+    const rows = rootRows.filter((node) => members.has(node.nodeId) && node.iteration !== null)
+    const indices = [...new Set(rows.map((node) => node.iteration!))].sort((a, b) => a - b)
+    for (const index of indices) {
+      const suffix = `#${index}`
+      const decisions = Object.fromEntries(Object.entries(detail.iterationConditionDecisions).filter(([key]) => key.endsWith(suffix)).map(([key, branch]) => [key.slice(0, -suffix.length), branch]))
+      const states = scopedStates(run.id, subgraph(definition, new Set([owner, ...members])), rows.filter((node) => node.iteration === index), decisions, index, owner)
+      for (const [id, state] of Object.entries(states)) {
+        (roundStates[id] ??= []).push(state)
+        nodeStates[id] = state
+      }
+    }
   }
   const result: GraphWorkflowRun = {
     id: run.id,
@@ -142,6 +192,8 @@ export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: Workfl
     name: run.name,
     status: projectRunStatus(run.status, currentNodes(run.state)),
     nodeStates,
+    rounds,
+    roundStates,
     openHitls: [],
     createdAt: iso(run.createdAt)!,
     updatedAt: iso(run.updatedAt)!,

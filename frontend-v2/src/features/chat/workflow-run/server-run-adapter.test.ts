@@ -28,6 +28,10 @@ function nodeRun(over: Partial<WorkflowNodeRun>): WorkflowNodeRun {
   }
 }
 
+function graphNode(id: string, kind: (typeof definition.nodes)[number]['data']['kind'], parentId?: string, containerId?: string): (typeof definition.nodes)[number] {
+  return { id, type: 'workflow', position: { x: 0, y: 0 }, parentId, data: { kind, title: id, description: '', containerId } }
+}
+
 function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[], conditionDecisions: Record<string, string> = {}): WorkflowRunDetail {
   return {
     run: {
@@ -38,10 +42,47 @@ function detail(over: Partial<WorkflowRunDetail['run']>, nodes: WorkflowNodeRun[
     nodes,
     scopes: [],
     conditionDecisions,
+    iterationConditionDecisions: {},
   }
 }
 
 describe('toGraphWorkflowRun', () => {
+  it('keeps Loop scope sessions and Condition branches separate from root and from other rounds', () => {
+    const graph = normalizeWorkflowDefinition({ ...definition, nodes: [
+      graphNode('start', 'start'), graphNode('loop', 'loop'),
+      graphNode('entry', 'start', undefined, 'loop'), graphNode('gate', 'condition', undefined, 'loop'), graphNode('a', 'agent', undefined, 'loop'),
+    ], edges: [{ id: 'outer', source: 'start', target: 'loop' }, { id: 'body', source: 'entry', target: 'gate' }, { id: 'branch', source: 'gate', sourceHandle: 'yes', target: 'a' }] })
+    const wire = detail({}, [nodeRun({ id: 'parent', nodeId: 'loop', nodeType: 'loop', status: 'running' }),
+      nodeRun({ id: 'gate1', scopeId: 'round1', nodeId: 'gate', nodeType: 'condition' }),
+      nodeRun({ id: 'gate2', scopeId: 'round2', nodeId: 'gate', nodeType: 'condition' }),
+      nodeRun({ id: 'a1', scopeId: 'round1', nodeId: 'a', nodeType: 'agent', sessionId: 'session1', output: 'first', payload: JSON.stringify({ executor: { id: 'first-executor' }, model: { name: 'first-model' }, unapplied: ['retry'] }) }),
+    ], { gate: 'unrelated root decision' })
+    wire.scopes = [1, 2].map((index) => ({ id: `round${index}`, runId: 'run', parentLoopNodeRunId: 'parent', roundIndex: index, status: 'succeeded', state: JSON.stringify({ conditionDecisions: { gate: index === 1 ? 'yes' : 'else' } }), createdAt: index * 1_000, updatedAt: index * 1_000 }))
+    const run = toGraphWorkflowRun(wire, graph)
+    expect(run.nodeStates.a).toEqual({ status: 'idle' })
+    expect(run.rounds?.[0]?.nodeStates.a).toMatchObject({ sessionId: 'session1', output: { detail: 'first' }, executor: { id: 'first-executor' }, model: { name: 'first-model' }, unapplied: ['retry'] })
+    expect(run.rounds?.[1]?.nodeStates.a).toEqual({ status: 'inactive' })
+    expect(run.rounds?.map((round) => round.nodeStates.gate?.selectedBranchId)).toEqual(['yes', 'else'])
+  })
+
+  it('projects all Iteration members per index including skipped collect targets, without copying prior sessions', () => {
+    const graph = normalizeWorkflowDefinition({ ...definition, nodes: [
+      graphNode('start', 'start'), graphNode('iter', 'iteration'), graphNode('gate', 'condition', 'iter'), graphNode('a', 'agent', 'iter'),
+    ], edges: [{ id: 'outer', source: 'start', target: 'iter' }, { id: 'body', source: 'iter', target: 'gate' }, { id: 'branch', source: 'gate', sourceHandle: 'yes', target: 'a' }] })
+    const wire = detail({ status: 'succeeded' }, [nodeRun({ id: 'parent', nodeId: 'iter', nodeType: 'iteration' }),
+      nodeRun({ id: 'gate0', nodeId: 'gate', nodeType: 'condition', iteration: 0 }),
+      nodeRun({ id: 'gate1', nodeId: 'gate', nodeType: 'condition', iteration: 1 }),
+      nodeRun({ id: 'a0', nodeId: 'a', nodeType: 'agent', iteration: 0, sessionId: 'first', output: 'collected', payload: JSON.stringify({ executor: { id: 'collected-executor' }, model: { name: 'collected-model' }, unapplied: ['skill'] }) }),
+    ])
+    wire.iterationConditionDecisions = { 'gate#0': 'yes', 'gate#1': 'else' }
+    const run = toGraphWorkflowRun(wire, graph)
+    expect(run.roundStates?.a).toHaveLength(2)
+    expect(run.roundStates?.a?.[0]).toMatchObject({ iteration: 0, sessionId: 'first', output: { detail: 'collected' }, executor: { id: 'collected-executor' }, model: { name: 'collected-model' }, unapplied: ['skill'] })
+    expect(run.roundStates?.a?.[1]).toEqual({ iteration: 1, status: 'inactive' })
+    expect(run.nodeStates.a).toEqual({ iteration: 1, status: 'inactive' })
+    expect(run.roundStates?.gate?.map((state) => state.selectedBranchId)).toEqual(['yes', 'else'])
+  })
+
   it('projects the run, leaves nodes without an attempt idle and shows an Agent turn', () => {
     const run = toGraphWorkflowRun(
       detail({ status: 'succeeded', output: '{"draft":"初稿"}', finishedAt: 3_000, state: '{"current_nodes":[]}' }, [
