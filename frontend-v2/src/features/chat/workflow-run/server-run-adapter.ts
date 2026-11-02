@@ -1,4 +1,4 @@
-import type { WorkflowNodeRun, WorkflowRunDetail } from '@/lib/workflows/api/generated'
+import type { WorkflowNodeFailedAttempt, WorkflowNodeRun, WorkflowRunDetail } from '@/lib/workflows/api/generated'
 import {
   computeInactiveNodes,
   projectNodeStatus,
@@ -7,6 +7,7 @@ import {
   type GraphWorkflowRun,
   type WorkflowAgentUnappliedCapability,
   type WorkflowDefinition,
+  type WorkflowNodeAttemptFailure,
   type WorkflowNodeConversationItem,
   type WorkflowNodeErrorDetail,
   type WorkflowNodeExecutorUsed,
@@ -116,11 +117,54 @@ function currentNodes(state: string | null): string[] {
 }
 
 /**
+ * The frozen graph with this run's own start values, as desktop's run adapter overlays them: the
+ * Start node shows the run's kickoff input, and each input variable the run's pool declares shows
+ * the value it holds there (none while unassigned). A run that has not started has no pool yet, so
+ * its variables keep the snapshot's values until then.
+ */
+function withRunStartValues(definition: WorkflowDefinition, detail: WorkflowRunDetail): WorkflowDefinition {
+  const declared = new Map(detail.variables.map((variable) => [variable.selector.join('.'), variable]))
+  const input = detail.run.input
+  if (declared.size === 0 && input === null) return definition
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => {
+      if (node.data.kind !== 'start') return node
+      const data = { ...node.data }
+      if (input !== null) data.input = input
+      if (node.data.inputVariables) {
+        data.inputVariables = node.data.inputVariables.map((variable) => {
+          const held = declared.get(`${node.id}.${variable.name}`)
+          return held === undefined ? variable : { ...variable, value: held.value }
+        })
+      }
+      return { ...node, data }
+    }),
+  }
+}
+
+function attemptFailure(attempt: WorkflowNodeFailedAttempt): WorkflowNodeAttemptFailure {
+  const failure: WorkflowNodeAttemptFailure = {
+    nodeRunId: attempt.nodeRunId,
+    attempt: attempt.attempt,
+    kind: attempt.kind,
+    errorMessage: attempt.message,
+    sourceChain: attempt.sourceChain,
+    recordedAt: attempt.recordedAt,
+  }
+  if (attempt.startedAt !== null) failure.startedAt = iso(attempt.startedAt)
+  if (attempt.finishedAt !== null) failure.finishedAt = iso(attempt.finishedAt)
+  if (attempt.sessionId !== null) failure.sessionId = attempt.sessionId
+  return failure
+}
+
+/**
  * Projects a v2-server run onto the run model Theater and Overview render, as desktop's backend
  * run adapter does. The detail lists each node's latest attempt; graph nodes without one stay idle,
  * except those behind a Condition branch not taken, which never get a row and are shown inactive,
- * projected from the run's Condition decisions as desktop does. Loop and Iteration rounds are not
- * executed by v2-server yet, so only root-scope rows are mapped.
+ * projected from the run's Condition decisions as desktop does. Earlier failed attempts go to their
+ * node, oldest first; v2 never says what replaced one, so none is marked. Loop and Iteration rounds
+ * are not executed by v2-server yet, so only root-scope rows are mapped.
  */
 export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: WorkflowDefinition): GraphWorkflowRun {
   const { run } = detail
@@ -130,6 +174,12 @@ export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: Workfl
     if (node.iteration !== null) continue
     nodeStates[node.nodeId] = nodeState(run.id, node)
   }
+  const loopScopes = new Set(detail.scopes.map((scope) => scope.id))
+  for (const attempt of detail.failedAttempts) {
+    const state = nodeStates[attempt.nodeId]
+    if (state === undefined || attempt.iteration !== null || loopScopes.has(attempt.scopeId)) continue
+    state.failedAttempts = [...(state.failedAttempts ?? []), attemptFailure(attempt)]
+  }
   const statuses = Object.fromEntries(Object.entries(nodeStates).map(([id, state]) => [id, state.status]))
   for (const id of computeInactiveNodes(definition, statuses, detail.conditionDecisions)) {
     nodeStates[id] = { ...nodeStates[id], status: 'inactive' }
@@ -138,7 +188,7 @@ export function toGraphWorkflowRun(detail: WorkflowRunDetail, definition: Workfl
     id: run.id,
     projectId: run.projectId,
     definitionId: run.workflowId,
-    definitionSnapshot: definition,
+    definitionSnapshot: withRunStartValues(definition, detail),
     name: run.name,
     status: projectRunStatus(run.status, currentNodes(run.state)),
     nodeStates,

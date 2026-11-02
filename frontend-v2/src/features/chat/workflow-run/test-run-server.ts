@@ -101,7 +101,7 @@ export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunS
         name: (body.name as string | undefined) ?? '', status: 'pending', state: JSON.stringify({ current_nodes: [] }),
         input: null, output: null, error: null, startedAt: null, finishedAt: null, createdAt: at, updatedAt: at,
       }
-      server.runs.set(run.id, { detail: { run, nodes: [], scopes: [], conditionDecisions: {} }, graph: published.graph, version: published.version })
+      server.runs.set(run.id, { detail: { run, nodes: [], scopes: [], conditionDecisions: {}, variables: [], failedAttempts: [] }, graph: published.graph, version: published.version })
       return respond(config, 201, { run })
     }
     if (url === runsBase && method === 'GET') {
@@ -122,6 +122,12 @@ export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunS
     if (action === '/input') {
       if (run.status !== 'pending') return refuse(config, 409, 'workflow_run_not_editable')
       run.input = body.input as string | null
+      // As v2-server folds them into the run's variable pool, under the Start node.
+      const start = parseWorkflowGraph(entry.graph).nodes.find((n) => n.data.kind === 'start')
+      const values = (body.variables ?? {}) as Record<string, unknown>
+      if (start) {
+        entry.detail.variables = Object.entries(values).map(([name, value]) => ({ selector: [start.id, name], valueType: 'string', sourceNodeId: start.id, value }))
+      }
       return respond(config, 200, { run })
     }
     if (action === '/start') {

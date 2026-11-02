@@ -100,6 +100,9 @@ test('workflow runs: v2-server executes a published workflow started from chat',
     await expect(pane.getByText(/not available in v2/).filter({ visible: true }).first()).toBeVisible()
     // The node configures no retry, so desktop would retry it by default; v2 says it did not.
     await expect(pane.getByLabel('v2 未应用的设置').filter({ visible: true }).first()).toContainText('自动重试')
+    // The Start node shows what this run was started with, not the frozen graph's empty prompt.
+    await pane.getByRole('button', { name: '开始: 成功' }).click()
+    await expect(pane.getByLabel('阶段详情').getByText('给支付模块加一个对账接口')).toBeVisible()
     await runAgain()
     return
   }
