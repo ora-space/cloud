@@ -21,6 +21,7 @@ var (
 	ErrPluginVersionUnavailable = errors.New("plugin version unavailable")
 	ErrPluginNotInstalled       = errors.New("plugin not installed")
 	ErrPluginKindNotInstallable = errors.New("plugin kind not installable")
+	ErrPluginRuntimeManaged     = errors.New("plugin runtime managed")
 	ErrIdempotencyConflict      = errors.New("idempotency key reused")
 )
 
@@ -132,13 +133,12 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space, caller string)
 	rows, e := s.pool.Query(ctx, `
 		SELECT data, synced_at
 		FROM v2_plugin_catalog
-		WHERE (data->>'marketplaceVisible')::boolean AND data->>'kind' <> 'agent'
+		WHERE (data->>'marketplaceVisible')::boolean
 		UNION ALL
 		SELECT item, synced_at
 		FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item
 		WHERE space_id = $1 AND enabled
 			AND COALESCE((item->>'marketplaceVisible')::boolean, false)
-			AND item->>'kind' <> 'agent'
 		ORDER BY 2 DESC`, space)
 	if e != nil {
 		return nil, time.Time{}, fmt.Errorf("list plugin catalog: %w", e)
@@ -167,8 +167,8 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space, caller string)
 	return items, syncedAt, nil
 }
 
-// SpacePlugins returns every live market selection in a space. Removed non-Agent rows remain in
-// the response so the UI can distinguish "never selected" from "explicitly removed".
+// SpacePlugins returns every live market selection in a space. Removed rows remain in the
+// response so the UI can distinguish "never selected" from "explicitly removed".
 func (s *Store) SpacePlugins(ctx context.Context, tenant, space, caller string) ([]SpacePlugin, error) {
 	if _, e := requireSpaceAccess(ctx, s.pool, tenant, space, caller); e != nil {
 		return nil, e
@@ -212,7 +212,7 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		if e != nil {
 			return fmt.Errorf("read catalog entry: %w", e)
 		}
-		if kind != "skill" {
+		if kind != "skill" && kind != "agent" {
 			return ErrPluginKindNotInstallable
 		}
 		desired := in.PluginVersion
@@ -229,6 +229,9 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		old, oldErr := querySpacePlugin(ctx, tx, space, namespace, identifier, true)
 		switch {
 		case oldErr == nil:
+			if old.Kind == "agent" && old.RequestedByUserID == nil {
+				return ErrPluginRuntimeManaged
+			}
 			if in.Version != old.Version {
 				return ErrConflict
 			}
@@ -236,25 +239,33 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 				out = old
 				return recordPluginMutation(ctx, tx, tenant, caller, "POST", path, key, pluginInstallHash(in), out)
 			}
+			observedState, observedVersion := "pending", any(nil)
+			if kind == "agent" {
+				observedState, observedVersion = "installed", desired
+			}
 			if _, e := tx.Exec(ctx, `
 				UPDATE v2_space_agents
 				SET name = $4, kind = $5, desired_state = 'installed', desired_version = $6,
-					observed_state = 'pending', install_error = NULL,
-					requested_by_user_id = $7, status = 'active', version = version + 1, updated_at = now()
-				WHERE space_id = $1 AND tenant_id = $2 AND source_namespace = $3 AND identifier = $8`,
-				space, tenant, namespace, entry.Title, kind, desired, caller, identifier); e != nil {
+					observed_state = $7, observed_version = $8, install_error = NULL,
+					requested_by_user_id = $9, status = 'active', version = version + 1, updated_at = now()
+				WHERE space_id = $1 AND tenant_id = $2 AND source_namespace = $3 AND identifier = $10`,
+				space, tenant, namespace, entry.Title, kind, desired, observedState, observedVersion, caller, identifier); e != nil {
 				return fmt.Errorf("update plugin selection: %w", e)
 			}
 		case errors.Is(oldErr, ErrNotFound):
 			if in.Version != 0 {
 				return ErrConflict
 			}
+			observedState, observedVersion := "pending", any(nil)
+			if kind == "agent" {
+				observedState, observedVersion = "installed", desired
+			}
 			if _, e := tx.Exec(ctx, `
 				INSERT INTO v2_space_agents
 					(tenant_id, space_id, name, status, source_namespace, identifier, kind,
 					 desired_state, desired_version, observed_state, observed_version, requested_by_user_id)
-				VALUES ($1, $2, $3, 'active', $4, $5, $6, 'installed', $7, 'pending', NULL, $8)`,
-				tenant, space, entry.Title, namespace, identifier, kind, desired, caller); e != nil {
+				VALUES ($1, $2, $3, 'active', $4, $5, $6, 'installed', $7, $8, $9, $10)`,
+				tenant, space, entry.Title, namespace, identifier, kind, desired, observedState, observedVersion, caller); e != nil {
 				return fmt.Errorf("insert plugin selection: %w", e)
 			}
 		default:
@@ -264,8 +275,10 @@ func (s *Store) InstallSpacePlugin(ctx context.Context, tenant, space, caller, p
 		if e != nil {
 			return e
 		}
-		if e := freezeSkill(ctx, tx, out, entry); e != nil {
-			return e
+		if kind == "skill" {
+			if e := freezeSkill(ctx, tx, out, entry); e != nil {
+				return e
+			}
 		}
 		return recordPluginMutation(ctx, tx, tenant, caller, "POST", path, key, pluginInstallHash(in), out)
 	})
@@ -301,12 +314,13 @@ func (s *Store) RemoveSpacePlugin(ctx context.Context, tenant, space, caller, pa
 		if old.Version != in.Version {
 			return ErrConflict
 		}
-		if old.Kind == "agent" {
-			return ErrPluginKindNotInstallable
+		if old.Kind == "agent" && old.RequestedByUserID == nil {
+			return ErrPluginRuntimeManaged
 		}
 		if _, e := tx.Exec(ctx, `
 			UPDATE v2_space_agents
 			SET desired_state = 'removed', observed_state = CASE WHEN EXISTS(SELECT 1 FROM v2_skill_results r WHERE r.selection_id=v2_space_agents.id AND (r.installed_version IS NOT NULL OR r.state IN ('applying','failed'))) THEN 'removing' ELSE 'removed' END,
+				observed_version = CASE WHEN EXISTS(SELECT 1 FROM v2_skill_results r WHERE r.selection_id=v2_space_agents.id AND (r.installed_version IS NOT NULL OR r.state IN ('applying','failed'))) THEN observed_version ELSE NULL END,
 				install_error = NULL, requested_by_user_id = $4, version = version + 1, updated_at = now()
 			WHERE space_id = $1 AND tenant_id = $2 AND source_namespace = $3 AND identifier = $5`,
 			space, tenant, namespace, caller, identifier); e != nil {
@@ -339,15 +353,15 @@ func requireSpaceAccess(ctx context.Context, q dbTX, tenant, space, caller strin
 	return role, nil
 }
 
-func querySpacePlugins(ctx context.Context, q dbTX, space string, agentsOnly bool) ([]SpacePlugin, error) {
+func querySpacePlugins(ctx context.Context, q dbTX, space string, runtimeAgentsOnly bool) ([]SpacePlugin, error) {
 	query := `
 		SELECT id::text, space_id::text, tenant_id::text, source_namespace, identifier, kind,
 			desired_state, desired_version, observed_state, observed_version,
 			requested_by_user_id::text, install_error, version, created_at, updated_at
 		FROM v2_space_agents
 		WHERE space_id = $1 AND status = 'active'`
-	if agentsOnly {
-		query += ` AND kind = 'agent' AND observed_state = 'installed'`
+	if runtimeAgentsOnly {
+		query += ` AND kind = 'agent' AND observed_state = 'installed' AND requested_by_user_id IS NULL`
 	}
 	query += ` ORDER BY source_namespace, identifier`
 	rows, e := q.Query(ctx, query, space)

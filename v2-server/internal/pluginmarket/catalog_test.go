@@ -43,13 +43,20 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(entries) != 1 || len(skipped) != 1 {
+	if len(entries) != 2 || len(skipped) != 1 {
 		t.Fatalf("entries=%+v skipped=%+v", entries, skipped)
 	}
-	entry := entries[0]
+	byIdentifier := map[string]Entry{}
+	for _, entry := range entries {
+		byIdentifier[entry.Identifier] = entry
+	}
+	entry := byIdentifier["acme.skill"]
 	if entry.Namespace != "official" || entry.Identifier != "acme.skill" ||
 		entry.Version != "1.2.3" || entry.Readme == "" {
 		t.Fatalf("entry = %+v", entry)
+	}
+	if agent := byIdentifier["runtime.agent"]; agent.Kind != "agent" || agent.Version != "0.3.18" {
+		t.Fatalf("agent entry = %+v", agent)
 	}
 	logo, ok := entry.Logo.(map[string]any)
 	if !ok || logo["light"] == nil || logo["dark"] == nil {

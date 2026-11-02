@@ -79,6 +79,12 @@ func TestSpaceAgentPlugins(t *testing.T) {
 		VALUES ($1, $2, '失败的 Agent', 'broken', 'failed')`, f.tenant, space); e != nil {
 		t.Fatal(e)
 	}
+	if _, e := f.db.Exec(ctx, `INSERT INTO v2_space_agents
+		(tenant_id, space_id, name, source_namespace, identifier, kind, observed_state, requested_by_user_id)
+		VALUES ($1, $2, 'Codex', 'official', 'ora-space.codex', 'agent', 'installed', $3)`,
+		f.tenant, space, owner); e != nil {
+		t.Fatal(e)
+	}
 	if items, e = f.store.SpaceAgentPlugins(ctx, f.tenant, space, owner); e != nil || len(items) != 2 {
 		t.Fatalf("plugins after failed install = %+v %v", items, e)
 	}

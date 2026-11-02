@@ -82,9 +82,7 @@ func Scan(root, namespace, sourceURL string) ([]Entry, []string, error) {
 			skipped = append(skipped, path+": "+e.Error())
 			continue
 		}
-		// Agent versions are owned by the installed runtime, not by the marketplace catalog.
-		// Keeping them out here prevents stale registry versions from becoming install candidates.
-		if !manifest.MarketplaceVisible || manifest.Kind == "agent" {
+		if !manifest.MarketplaceVisible {
 			continue
 		}
 		id := namespace + "/" + manifest.Identifier

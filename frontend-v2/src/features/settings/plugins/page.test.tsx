@@ -36,6 +36,18 @@ const official = marketplaceEntry('mattpocock.skills', {
   title: 'Matt Pocock Skills',
   sourceNamespace: 'official',
 })
+const opencode = marketplaceEntry('ora-space.opencode', {
+  kind: 'agent',
+  title: 'OpenCode',
+  sourceNamespace: 'official',
+  version: '0.6.8',
+})
+const codex = marketplaceEntry('ora-space.codex', {
+  kind: 'agent',
+  title: 'Codex',
+  sourceNamespace: 'official',
+  version: '0.3.14',
+})
 
 beforeEach(() => {
   useDemoPluginSelections.getState().reset()
@@ -147,24 +159,43 @@ it('lets a member browse the catalog but not change it', async () => {
   ).toBeInTheDocument()
 })
 
-it('keeps runtime-owned Agents out of the plugin marketplace', async () => {
+it('installs and removes a marketplace Agent', async () => {
+  const backend = installMarketplaceBackend({
+    catalog: [writing, opencode, codex],
+    selections: [marketplaceSelection(opencode)],
+  })
+  const user = userEvent.setup()
+  renderSettingsPage(<PluginsPage />)
+  const row = await screen.findByRole('article', { name: 'Codex' })
+  expect(screen.getByRole('heading', { name: 'Agent' })).toBeInTheDocument()
+  expect(within(row).getByText('未安装')).toBeInTheDocument()
+  await user.click(within(row).getByRole('button', { name: '安装' }))
+  await waitFor(() => expect(within(row).getByText('已安装')).toBeInTheDocument())
+  expect(backend.bodies.at(-1)).toEqual({
+    identifier: 'official/ora-space.codex',
+    pluginVersion: '0.3.14',
+    version: 0,
+  })
+  await user.click(within(row).getByRole('button', { name: '移除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: '移除' }))
+  await waitFor(() => expect(within(row).getByText('未安装')).toBeInTheDocument())
+  expect(backend.bodies.at(-1)).toEqual({
+    identifier: 'official/ora-space.codex',
+    version: 1,
+  })
+})
+
+it('keeps a runtime-preinstalled Agent read-only', async () => {
   installMarketplaceBackend({
-    catalog: [
-      writing,
-      marketplaceEntry('ora-space.opencode', {
-        kind: 'agent',
-        title: 'OpenCode',
-        sourceNamespace: 'official',
-      }),
-    ],
+    catalog: [opencode],
+    selections: [marketplaceSelection(opencode)],
   })
   renderSettingsPage(<PluginsPage />)
-  expect(
-    await screen.findByRole('article', { name: '写作工具箱' }),
-  ).toBeVisible()
-  expect(
-    screen.queryByRole('article', { name: 'OpenCode' }),
-  ).not.toBeInTheDocument()
+  const row = await screen.findByRole('article', { name: 'OpenCode' })
+  expect(within(row).getByText('运行时预装')).toBeInTheDocument()
+  expect(within(row).queryByRole('button', { name: '安装' })).not.toBeInTheDocument()
+  expect(within(row).queryByRole('button', { name: '移除' })).not.toBeInTheDocument()
 })
 
 it('shows the shared official market and manages space sources', async () => {

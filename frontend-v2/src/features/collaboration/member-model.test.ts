@@ -51,7 +51,7 @@ describe('member search', () => {
 })
 
 describe('agent candidates', () => {
-  it('offers only installed agents, and only ones without a live membership', () => {
+  it('offers only runnable preinstalled agents without a live membership', () => {
     const detail = squad([
       member({ id: 'live', type: 'agent', userId: null, spaceAgentId: 'joined' }),
       member({ id: 'left', type: 'agent', userId: null, spaceAgentId: 'rejoinable', endedAt: '2026-10-02T00:00:00Z' }),
@@ -63,6 +63,7 @@ describe('agent candidates', () => {
       plugin({ id: 'failed', observedState: 'failed' }),
       plugin({ id: 'pending', observedState: 'pending' }),
       plugin({ id: 'skill', kind: 'skill' }),
+      plugin({ id: 'market', requestedByUserId: 'owner' }),
     ]
     expect(agentCandidatesFor(detail, plugins).map(p => p.id)).toEqual(['rejoinable', 'fresh'])
   })
