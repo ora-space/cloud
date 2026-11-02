@@ -45,7 +45,7 @@ const catalogKinds: Record<string, CatalogKind> = {
     icon: Workflow,
   },
   hook: {
-    label: '钩子',
+    label: 'Hooks',
     groupDescription: '扩展生命周期中的自动化行为',
     icon: MousePointer2,
   },
