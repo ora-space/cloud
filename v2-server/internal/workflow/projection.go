@@ -32,12 +32,28 @@ type projection struct {
 	g         *Graph
 	decisions map[string]string
 	states    map[string]projected
+	region    string
 }
 
 func newProjection(g *Graph, runs []NodeRun, decisions map[string]string) *projection {
-	p := &projection{g: g, decisions: decisions, states: map[string]projected{}}
+	return projectRound(g, runs, decisions, "", nil)
+}
+
+func newRegionProjection(g *Graph, runs []NodeRun, decisions map[string]string, owner string, round int) *projection {
+	return projectRound(g, runs, decisions, owner, &round)
+}
+
+func projectRound(g *Graph, runs []NodeRun, decisions map[string]string, region string, round *int) *projection {
+	p := &projection{g: g, decisions: decisions, states: map[string]projected{}, region: region}
+	if region != "" {
+		p.states[region] = succeeded
+	}
 	for _, r := range runs {
-		if r.Iteration != nil {
+		n := g.root.byID[r.NodeID]
+		if n == nil || !p.outer(n) {
+			continue
+		}
+		if (round == nil && r.Iteration != nil) || (round != nil && (r.Iteration == nil || *r.Iteration != *round)) {
 			continue
 		}
 		switch r.Status {
@@ -71,7 +87,12 @@ func newProjection(g *Graph, runs []NodeRun, decisions map[string]string) *proje
 	return p
 }
 
-func (p *projection) outer(n *node) bool { return n.container || n.owner == "" }
+func (p *projection) outer(n *node) bool {
+	if p.region != "" {
+		return !n.container && n.owner == p.region
+	}
+	return n.container || n.owner == ""
+}
 
 func (p *projection) compute(id string) projected {
 	edges := p.g.Incoming(id)

@@ -16,6 +16,7 @@ import (
 type repository struct{ s *store.Store }
 
 var _ workflow.Repository = repository{}
+var _ workflow.ContainerRepository = repository{}
 
 func (r repository) RunContext(ctx context.Context, runID string) (workflow.RunContext, error) {
 	c, err := r.s.WorkflowEngineContext(ctx, runID)
@@ -29,9 +30,13 @@ func (r repository) RunContext(ctx context.Context, runID string) (workflow.RunC
 }
 
 func nodeRun(n store.WorkflowNodeRun) workflow.NodeRun {
+	scopeID := n.ScopeID
+	if scopeID == "root:"+n.RunID {
+		scopeID = ""
+	}
 	return workflow.NodeRun{
 		ID: n.ID, NodeID: n.NodeID, NodeType: n.NodeType, Status: n.Status,
-		Iteration: n.Iteration, Output: n.Output, SessionID: n.SessionID, FinishedAt: n.FinishedAt,
+		ScopeID: scopeID, Iteration: n.Iteration, Error: n.Error, Output: n.Output, SessionID: n.SessionID, FinishedAt: n.FinishedAt,
 	}
 }
 
@@ -48,7 +53,7 @@ func (r repository) NodeRuns(ctx context.Context, runID string) ([]workflow.Node
 }
 
 func engineStart(in workflow.NodeStart) store.WorkflowEngineStart {
-	return store.WorkflowEngineStart{NodeID: in.NodeID, NodeType: in.NodeType, Input: in.Input}
+	return store.WorkflowEngineStart{NodeID: in.NodeID, NodeType: in.NodeType, Input: in.Input, ScopeID: in.ScopeID, Iteration: in.Iteration}
 }
 
 func (r repository) StartRun(ctx context.Context, runID string, entry workflow.NodeStart, prepare func([]byte) ([]byte, error)) (bool, error) {
@@ -100,4 +105,48 @@ func (r repository) FinishRun(ctx context.Context, runID string, output *string)
 
 func (r repository) UpdateRunInput(ctx context.Context, runID string, input *string, fold func([]byte) ([]byte, error)) error {
 	return r.s.UpdateWorkflowEngineRunInput(ctx, runID, input, fold)
+}
+
+func (r repository) LoopRounds(ctx context.Context, runID string) ([]workflow.LoopRound, error) {
+	rows, err := r.s.WorkflowEngineLoopRounds(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]workflow.LoopRound, len(rows))
+	for i, row := range rows {
+		result[i] = workflow.LoopRound{ID: row.ID, ParentID: *row.ParentLoopNodeRunID, Index: *row.RoundIndex, Status: *row.Status, State: row.State}
+	}
+	return result, nil
+}
+
+func (r repository) ScopeNodes(ctx context.Context, runID, scopeID string) ([]workflow.NodeRun, error) {
+	rows, err := r.s.WorkflowEngineScopeNodes(ctx, runID, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]workflow.NodeRun, len(rows))
+	for i, row := range rows {
+		result[i] = nodeRun(row)
+	}
+	return result, nil
+}
+
+func (r repository) AdvanceContainer(ctx context.Context, runID, parentID string, in workflow.ContainerAdvance) ([]workflow.NodeRun, bool, error) {
+	a := store.WorkflowEngineContainerAdvance{ScopeID: in.ScopeID, ScopeStatus: in.ScopeStatus, ScopeState: in.ScopeState, CancelScope: in.CancelScope, ExitNodeID: in.ExitNodeID, Fold: in.Fold}
+	if in.Next != nil {
+		a.Next = &store.WorkflowEngineRoundStart{Index: in.Next.Index, State: in.Next.State, Entry: engineStart(in.Next.Entry)}
+	}
+	for _, start := range in.Starts {
+		a.Starts = append(a.Starts, engineStart(start))
+	}
+	if in.Result != nil {
+		a.Result = &store.WorkflowEngineContainerResult{Status: in.Result.Status, Output: in.Result.Output, Error: in.Result.Error,
+			Merge: func(raw []byte) ([]byte, error) { return workflow.MergePayload(raw, in.Result.Keys) }}
+	}
+	rows, changed, err := r.s.AdvanceWorkflowEngineContainer(ctx, runID, parentID, a)
+	result := make([]workflow.NodeRun, len(rows))
+	for i, row := range rows {
+		result[i] = nodeRun(row)
+	}
+	return result, changed, err
 }

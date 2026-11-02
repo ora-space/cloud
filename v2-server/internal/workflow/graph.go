@@ -79,6 +79,19 @@ func (g *Graph) Node(id string) (Node, bool) {
 	return g.view(n), true
 }
 
+// LoopBody returns a view of the isolated execution graph owned by a Loop.
+func (g *Graph) LoopBody(id string) (*Graph, bool) {
+	s := g.scopes[id]
+	if s == nil || id == "" {
+		return nil, false
+	}
+	body := &Graph{doc: g.doc, root: s, scopes: g.scopes, rank: map[string]int{}}
+	for i, n := range s.order {
+		body.rank[n.id] = i
+	}
+	return body, true
+}
+
 // Start returns the root entry node, if the graph has one.
 func (g *Graph) Start() (Node, bool) {
 	for _, n := range g.root.nodes {

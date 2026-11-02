@@ -78,6 +78,12 @@ func NewPool(g *Graph) VariablePool {
 			p.Declare(n.id+".output", "string", n.id)
 		}
 		view := g.view(n)
+		if n.kind == "loop" {
+			cfg, _ := view.loopConfig()
+			for _, output := range cfg.Outputs {
+				p.Declare(n.id+"."+output.Name, "any", n.id)
+			}
+		}
 		switch n.kind {
 		case "start":
 			p.Declare(n.id+".input", "string", n.id)

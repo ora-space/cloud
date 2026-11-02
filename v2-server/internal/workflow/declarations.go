@@ -31,6 +31,12 @@ func (s *scope) validateDeclarations(globals map[string]string) error {
 		if n.kind == "agent" && n.structured {
 			declare(n, "structured_output", "object")
 		}
+		if n.kind == "loop" {
+			cfg, _ := (Node{data: n.data}).loopConfig()
+			for _, output := range cfg.Outputs {
+				declare(n, output.Name, "any")
+			}
+		}
 	}
 	for _, n := range s.order {
 		if n.kind == "aggregator" {

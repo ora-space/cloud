@@ -14,14 +14,14 @@ import (
 // keys so persisted runs stay readable by the same projections. v2 freezes no Skill
 // materialization (per-node Skills are not applied), so that receipt is always empty.
 type RunPayload struct {
-	Locale                      string            `json:"locale"`
-	SkillMaterialization        skillReceipt      `json:"skillMaterialization"`
-	StartNodeID                 *string           `json:"startNodeId"`
-	VariablePool                VariablePool      `json:"variablePool"`
-	ConditionDecisions          map[string]string `json:"conditionDecisions"`
-	IterationLedger             map[string]any    `json:"iterationLedger,omitempty"`
-	IterationConditionDecisions map[string]string `json:"iterationConditionDecisions,omitempty"`
-	InjectLastFailure           bool              `json:"injectLastFailure"`
+	Locale                      string                          `json:"locale"`
+	SkillMaterialization        skillReceipt                    `json:"skillMaterialization"`
+	StartNodeID                 *string                         `json:"startNodeId"`
+	VariablePool                VariablePool                    `json:"variablePool"`
+	ConditionDecisions          map[string]string               `json:"conditionDecisions"`
+	IterationLedger             map[string]map[int]RoundOutcome `json:"iterationLedger,omitempty"`
+	IterationConditionDecisions map[string]string               `json:"iterationConditionDecisions,omitempty"`
+	InjectLastFailure           bool                            `json:"injectLastFailure"`
 }
 
 type skillReceipt struct {

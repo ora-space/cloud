@@ -138,7 +138,7 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch) {
 		ExecutorID: executor.executor.ID, Prompt: agentPrompt(d, task),
 	}
 
-	if !st.beginStart() {
+	if !st.beginStart(d.ScopeID) {
 		return
 	}
 	ref, err := h.start(st.scope, request)
@@ -156,8 +156,8 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch) {
 	// Ref is that acceptance here. A refused binding (the attempt was cancelled or already
 	// bound elsewhere) must not leave the new session running unowned.
 	if _, err := h.store.BindWorkflowNodeSession(h.ctx, st.scope.TenantID, d.RunID, d.NodeRunID, ref.SessionID); err != nil {
-		h.end(st.scope, ref.SessionID)
-		if st.endTurn() {
+		endErr := h.end(st.scope, ref.SessionID)
+		if st.endTurn(endErr) {
 			h.finishCancel(st, d.RunID)
 			return
 		}
@@ -167,8 +167,8 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch) {
 	h.hub.Publish(d.RunID)
 
 	result, err := h.awaitTurn(st.scope, ref, caller)
-	h.end(st.scope, ref.SessionID)
-	if st.endTurn() {
+	endErr := h.end(st.scope, ref.SessionID)
+	if st.endTurn(endErr) {
 		h.finishCancel(st, d.RunID)
 		return
 	}
@@ -183,13 +183,15 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch) {
 }
 
 // beginStart reserves the start slot, or reports false once cancellation was requested.
-func (st *runState) beginStart() bool {
+func (st *runState) beginStart(scopeID string) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.cancelling {
+	if st.cancelling || st.closedScopes[scopeID] {
 		return false
 	}
 	st.starting = make(chan struct{})
+	st.turnDone = make(chan struct{})
+	st.activeScope = scopeID
 	return true
 }
 
@@ -200,6 +202,10 @@ func (st *runState) endStart(ref execution.Ref, err error) bool {
 	defer st.mu.Unlock()
 	if err == nil {
 		st.active = &ref
+	} else {
+		close(st.turnDone)
+		st.turnDone = nil
+		st.activeScope = ""
 	}
 	close(st.starting)
 	st.starting = nil
@@ -207,10 +213,21 @@ func (st *runState) endStart(ref execution.Ref, err error) bool {
 }
 
 // endTurn forgets the finished turn and reports whether cancellation was requested.
-func (st *runState) endTurn() bool {
+func (st *runState) endTurn(endErr error) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.active = nil
+	if endErr != nil && st.activeScope != "" {
+		if st.scopeCleanupErrors == nil {
+			st.scopeCleanupErrors = map[string]error{}
+		}
+		st.scopeCleanupErrors[st.activeScope] = endErr
+	}
+	st.activeScope = ""
+	if st.turnDone != nil {
+		close(st.turnDone)
+		st.turnDone = nil
+	}
 	return st.cancelling
 }
 
@@ -267,12 +284,14 @@ func (h *Host) recordedResult(scope execution.Scope, caller execution.Caller, ca
 
 // end stops the node's session, as desktop's stop_session after the turn; the transcript stays
 // readable. Failing to confirm is logged: the outcome is already decided by the turn's result.
-func (h *Host) end(scope execution.Scope, sessionID string) {
+func (h *Host) end(scope execution.Scope, sessionID string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(h.ctx), h.stopTimeout)
 	defer cancel()
 	if err := h.exec.End(ctx, scope, sessionID); err != nil {
 		h.log.Warn("end workflow node session", "session", sessionID, "error", err)
+		return err
 	}
+	return nil
 }
 
 // settle maps the turn's result onto the engine like desktop's report_outcome. Only an

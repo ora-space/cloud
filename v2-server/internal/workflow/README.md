@@ -1,7 +1,7 @@
 # 工作流文档边界
 
-本包对 React Flow 工作流 JSON 字符串做纯分析和发布校验，不访问数据库、HTTP、已安装能力清单或执行副作用。
-两个接口都保留传入的完整编排文档，不修改或持久化投影。
+本包包含 React Flow 工作流文档的纯分析、发布校验、变量与节点语义，以及通过 Repository / Dispatcher 端口驱动的调度引擎。
+文档分析与校验不访问数据库、HTTP、已安装能力清单或执行副作用；两个接口都保留传入的完整编排文档，不修改或持久化投影。
 
 ```go
 analysis, err := workflow.AnalyzeWorkflow(graph)
@@ -42,6 +42,12 @@ HTTP 错误码由适配层映射；诊断措辞不承诺逐字匹配 desktop。
 | `condition_test.go` | Condition 的 case 顺序、空 case、and/or、各运算符、比较值模板与失败（改编自 desktop `condition.rs`） |
 | `branch_test.go` | 引擎层的条件分支、未走分支不建行、Aggregator 首个已赋值与 falsy 值、启动时的分支校验（改编自 desktop `aggregator_tests.rs`、`engine.rs`） |
 | `structured_test.go` | 结构化输出的提取顺序、Schema 子集校验与示例（改编自 desktop `structured_output.rs`） |
+| `loop_runtime_test.go` | Loop feedback 同快照读取、until 的顺序与退出绕过未使用反馈 |
+| `../workflowhost/containers_test.go` | PostgreSQL 上的 Loop 隔离、轮数上限、退出排空和晚回调、重启中断、Iteration 空数组/超限/失败策略、缺失 collect 与原子推进回滚 |
+
+Loop 的每一轮是独立 scope，调度使用该轮的变量池和 Condition 决策；Iteration 的成员共享根 scope，以数组下标隔离节点记录与分支决策。
+`ContainerRepository.AdvanceContainer` 将轮次 ledger、旧 scope 关闭、下一轮入口或父节点终态一次提交。LoopExit 先提交冻结输出和取消事实，再通过 `LoopExitDispatcher` 异步排空执行中的 session；清理回调持有运行门禁核对同一个父节点和 scope 后结算。
+持久化仍由 store 实现，host 仍负责每次运行内的 Agent 串行执行。服务重启只中断，不恢复调度或重放 Agent。
 
 ```sh
 go test -race ./internal/workflow
