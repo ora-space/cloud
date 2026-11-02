@@ -51,6 +51,10 @@ type Repository interface {
 	// FailNode marks a running attempt failed with the detail built for its attempt number and
 	// fails the run when it is still running. false means the attempt was no longer running.
 	FailNode(ctx context.Context, runID, nodeRunID, message string, output *string, detail func(attempt int, payload []byte) map[string]any) (bool, error)
+	// AbandonNode closes a running attempt that has no session yet as cancelled when its run is no
+	// longer running, without moving the run's failure anchor. false means the run is running and
+	// the attempt must execute.
+	AbandonNode(ctx context.Context, runID, nodeRunID string) (bool, error)
 	// FinishRun marks a running run succeeded with its final output.
 	FinishRun(ctx context.Context, runID string, output *string) error
 	// UpdateRunInput replaces the kickoff input of an editable run and applies fold to its payload.
@@ -301,6 +305,20 @@ func (e *Engine) fail(ctx context.Context, runID, nodeRunID string, f Failure) e
 	}
 	e.publish(runID)
 	return nil
+}
+
+// Abandon reports whether a dispatched Agent attempt must not execute because its run already
+// ended, closing the attempt as cancelled. The execution bridge asks before every start: v2 runs a
+// run's Agents one at a time, so a sibling queued behind a node that failed the run has not begun,
+// and starting it could only produce a discarded late result.
+func (e *Engine) Abandon(ctx context.Context, runID, nodeRunID string) (bool, error) {
+	defer e.gate(runID)()
+	abandoned, err := e.repo.AbandonNode(ctx, runID, nodeRunID)
+	if err != nil || !abandoned {
+		return false, err
+	}
+	e.publish(runID)
+	return true, nil
 }
 
 // Resume reruns one scheduling pass for a running run, e.g. after a crash between a completion

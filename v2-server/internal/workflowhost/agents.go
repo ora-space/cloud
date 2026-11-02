@@ -38,7 +38,8 @@ func (h *Host) Dispatch(d workflow.AgentDispatch) {
 }
 
 // work drains the run's queue. Attempts dispatched after a cancellation request are dropped:
-// the run is about to close as cancelled together with their rows.
+// the run is about to close as cancelled together with their rows. Attempts whose run ended
+// while they waited (a sibling failed it) are closed without starting a turn.
 func (h *Host) work(runID string, st *runState) {
 	defer h.workers.Done()
 	for {
@@ -54,9 +55,10 @@ func (h *Host) work(runID string, st *runState) {
 		st.queue = st.queue[1:]
 		cancelling := st.cancelling
 		st.mu.Unlock()
-		if !cancelling {
-			h.runAgent(st, d)
+		if cancelling || h.abandoned(d) {
+			continue
 		}
+		h.runAgent(st, d)
 	}
 }
 
@@ -76,6 +78,17 @@ func (h *Host) forgetFinished(runID string, st *runState) {
 	if idle && h.runs[runID] == st {
 		delete(h.runs, runID)
 	}
+}
+
+// abandoned asks the engine whether the attempt's run ended while it was queued. If the check
+// itself fails, the attempt still executes: its outcome is then recorded as a late callback, the
+// behavior before this check existed.
+func (h *Host) abandoned(d workflow.AgentDispatch) bool {
+	abandoned, err := h.engine.Abandon(h.ctx, d.RunID, d.NodeRunID)
+	if err != nil {
+		h.log.Warn("check workflow run before starting an Agent", "run", d.RunID, "node_run", d.NodeRunID, "error", err)
+	}
+	return abandoned
 }
 
 func (h *Host) fail(d workflow.AgentDispatch, f workflow.Failure) {

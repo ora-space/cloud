@@ -351,7 +351,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 与 desktop 的差异：
 
-- **同一运行的 Agent 串行执行**：公共执行服务让一个运行的所有会话共用一个目录，并以 `ErrWorkspaceBusy` 拒绝并发 turn，所以执行桥按派发顺序逐个执行同一运行的 Agent；上一个 turn 收尾期间短暂的 busy 会在有限时间内重试。
+- **同一运行的 Agent 串行执行**：公共执行服务让一个运行的所有会话共用一个目录，并以 `ErrWorkspaceBusy` 拒绝并发 turn，所以执行桥按派发顺序逐个执行同一运行的 Agent；上一个 turn 收尾期间短暂的 busy 会在有限时间内重试。排在后面的 Agent 开始前先确认运行仍在执行：前面的节点已让运行失败时，它还没有启动任何东西，直接收为 `cancelled`，不再发起注定被丢弃的 turn（desktop 的兄弟节点本来就在并行执行，迟到结果照常记录；v2 串行，排队的兄弟还没开始）。
 - **prompt**：按 desktop 的 `assemble_workflow_prompt` 组装 `workspace_root`、`current_workflow_step`、`workflow_context`，按运行冻结的 locale 选文案；不带角色、Skill 和上次失败注入。节点 prompt 的 `{{#…#}}` 先按变量池渲染，渲染失败的节点以 `prompt_template` 失败，不启动 Agent。公共执行服务在接受 prompt 之后才在 Node 里克隆运行目录，也不暴露它的路径，所以 `workspace_root` 写 `.`（Agent 进程的工作目录就是运行目录），不写 desktop 的绝对路径。
 - **会话绑定时机**：`Start` 返回 turn 引用即视为 prompt 已被接受，随后把 session 绑定到节点尝试（desktop 同样在 prompt 被接受后才发布绑定）；绑定被拒（尝试已不在运行）时结束该会话。turn 结束后执行桥结束会话，对话历史保留。
 - **结果映射**：只有 `completed` 且答案完整（`AnswerComplete`）才可能成功，再按 desktop 的停止原因映射：`end_turn`、`max_tokens`、`max_turn_requests` 成功；`refusal` 为 `agent_refusal`；缺少停止原因为 `session_ended_without_stop_reason`；其他为 `unknown_stop_reason`。turn 失败、取消、中断或答案不完整一律以 `session` 失败，失败节点保留已有的回答。

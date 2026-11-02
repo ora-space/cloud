@@ -334,3 +334,56 @@ func TestInterruptWorkflowRunsFailsOnlyLiveWork(t *testing.T) {
 		t.Fatalf("second interrupt = %v %v", again, err)
 	}
 }
+
+func TestWorkflowEngineAbandonClosesOnlyUnstartedAttemptsOfEndedRuns(t *testing.T) {
+	s := storetest.Open(t)
+	user, tenant := storetest.Login(t, s, "engine-abandon")
+	ctx := context.Background()
+	run := pendingRun(t, s, user, tenant, "放弃")
+	if _, err := s.StartWorkflowEngineRun(ctx, run.ID, store.WorkflowEngineStart{NodeID: "start", NodeType: "start"}, keep); err != nil {
+		t.Fatal(err)
+	}
+	wave, err := s.StartWorkflowEngineNodes(ctx, run.ID, []store.WorkflowEngineStart{
+		{NodeID: "agent-a", NodeType: "agent"}, {NodeID: "agent-b", NodeType: "agent"}, {NodeID: "agent-c", NodeType: "agent"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// While the run is running every queued attempt must execute.
+	if abandoned, err := s.AbandonWorkflowEngineNode(ctx, run.ID, wave[1].ID); err != nil || abandoned {
+		t.Fatalf("abandon in a running run = %v %v", abandoned, err)
+	}
+
+	// agent-c already holds a session when agent-a fails the run.
+	if _, err := s.BindWorkflowNodeSession(ctx, tenant, run.ID, wave[2].ID, "session-c"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FailWorkflowEngineNode(ctx, run.ID, wave[0].ID, "失败", nil, func(int, []byte, []byte) ([]byte, error) {
+		return []byte(`{}`), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range wave[1:] {
+		if abandoned, err := s.AbandonWorkflowEngineNode(ctx, run.ID, n.ID); err != nil || !abandoned {
+			t.Fatalf("abandon %s in a failed run = %v %v", n.NodeID, abandoned, err)
+		}
+	}
+	nodes, _ := s.WorkflowEngineNodeRuns(ctx, run.ID)
+	status := map[string]string{}
+	for _, n := range nodes {
+		status[n.NodeID] = n.Status
+	}
+	want := map[string]string{"start": "running", "agent-a": "failed", "agent-b": "cancelled", "agent-c": "running"}
+	for id, s := range want {
+		if status[id] != s {
+			t.Fatalf("statuses = %v, want %v", status, want)
+		}
+	}
+	if b := nodes[2]; b.FinishedAt == nil {
+		t.Fatalf("abandoned attempt has no finish time: %+v", b)
+	}
+	if got := currentNodes(t, s, run.ID); !slices.Equal(got, []string{"agent-a"}) {
+		t.Fatalf("abandon moved the failure anchor: %v", got)
+	}
+}

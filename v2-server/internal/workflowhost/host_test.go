@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/server"
@@ -393,4 +394,36 @@ func TestLifecycleAuthorizesAndTranslatesRefusals(t *testing.T) {
 	if f.host.state(runID) != nil {
 		t.Fatal("a finished run kept its process state")
 	}
+}
+
+// parallelAgents fans Start out to two Agents; v2 executes them one at a time.
+const parallelAgents = `{"nodes":[
+ {"id":"start","data":{"kind":"start"}},
+ {"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"A"}}},
+ {"id":"b","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"B"}}}
+],"edges":[{"source":"start","target":"a"},{"source":"start","target":"b"}]}`
+
+func TestQueuedSiblingOfAFailedNodeNeverStarts(t *testing.T) {
+	f := newFixture(t)
+	runID := f.run(t, parallelAgents, nil)
+	if _, err := f.host.StartRun(context.Background(), f.scope, runID); err != nil {
+		t.Fatal(err)
+	}
+	first := f.exec.awaitStart(t)
+	f.exec.finish(first, execution.Result{Status: execution.StatusFailed, FailureCode: "execution_failed"})
+	run, nodes := f.await(t, runID, func(_ store.WorkflowRun, n []store.WorkflowNodeRun) bool {
+		return node(n, "b").Status == store.WorkflowStatusCancelled
+	})
+	if run.Status != store.WorkflowStatusFailed || node(nodes, "a").Status != store.WorkflowStatusFailed {
+		t.Fatalf("run %s, a %+v", run.Status, node(nodes, "a"))
+	}
+	if b := node(nodes, "b"); b.SessionID != nil || b.FinishedAt == nil {
+		t.Fatalf("queued sibling = %+v", b)
+	}
+	select {
+	case id := <-f.exec.startedCh:
+		t.Fatalf("the sibling of a failed node started session %s", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	f.await(t, runID, func(store.WorkflowRun, []store.WorkflowNodeRun) bool { return f.host.state(runID) == nil })
 }

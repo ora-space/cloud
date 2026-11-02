@@ -95,6 +95,16 @@ func (m *memoryRepo) FailNode(_ context.Context, _, id, _ string, output *string
 	return true, nil
 }
 
+func (m *memoryRepo) AbandonNode(_ context.Context, _, id string) (bool, error) {
+	if m.run.Status == StatusRunning {
+		return false, nil
+	}
+	if r := m.find(id); r != nil && r.Status == StatusRunning && r.SessionID == nil {
+		r.Status = StatusCancelled
+	}
+	return true, nil
+}
+
 func (m *memoryRepo) FinishRun(_ context.Context, _ string, output *string) error {
 	m.run.Status, m.output = StatusSucceeded, output
 	return nil
