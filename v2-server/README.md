@@ -102,7 +102,11 @@ key 放在仓库外的 `~/ora-demo/.env`，一台机器配一次，主目录和�
 
 定时任务只负责计划、触发身份、防重叠、调用提供方的执行接口，以及关联和展示外部运行事实。工作流的定义、发布快照、参数模式/语义校验、节点调度和执行由工作流模块拥有；任务目录、描述、项目和执行绑定由任务模块拥有。定时模块不要求这些提供方实现自己预设的解析协议。
 
-当前写入契约只接受已接通的 chat 配置。workflow/task 写入明确返回 `503 schedule_target_unavailable`；没有 ScheduleTargetResolver、参数字符串化或可由替身开启的引用写入通道。后续接入以提供方实际交付的接口为准。
+写入契约接受 chat 配置和工作流目标；task 写入明确返回 `503 schedule_target_unavailable`，没有 ScheduleTargetResolver、参数字符串化或可由替身开启的引用写入通道。
+
+**工作流目标** `{kind: "workflow", workflowId, snapshotId, input}` 在配置的 `projectId`（必填）里运行一个工作流。保存时校验项目属于当前用户、`snapshotId` 是这个工作流在本租户的非草稿版本；`schedule-resources` 的 `workflows` 列出已发布的工作流和它当前生效的快照，页面保存时固定这个快照，之后发布的新版本要重新保存任务才会使用。启动变量用快照里的默认值，`input` 作为开始节点的初始输入。进程没有执行桥时（`Options.WorkflowRuns` 为空）不列出工作流，写入返回 `503 schedule_target_unavailable`。旧的、没有这些字段的 workflow 引用照旧只读，按它写入返回 `400 invalid_target`。
+
+执行走页面同一个运行入口：`scheduler.WorkflowAdapter` 用任务创建者的 scope 创建运行（冻结快照、项目、输入，名称取任务名）并经执行桥启动，occurrence 的 `executionRef` 记 `{"workflowRunId"}`。运行的 `trigger_kind = 'schedule'`、`trigger_ref = <occurrence ID>`，唯一索引 `v2_workflow_runs_schedule_trigger` 保证一个触发只对应一个运行，重复派发和恢复都按这个身份找回原运行，不创建替代运行。执行桥拒绝启动（图里有还不能执行的节点、输入不满足开始节点）时记 `skipped / workflow_run_not_startable` 并取消那个未开始的运行。协调器每次 Tick 核对未释放的记录：运行结束后成功记 `succeeded`、失败记 `failed / workflow_run_failed`（重启恢复中失败的记 `interrupted`）、取消记 `cancelled`，随即释放占位；节点会话由执行桥自己结束，定时侧没有会话要 End。还是 pending 的运行说明启动没有提交（进程重启过），取消它并记 `execution_not_started`。工作流 occurrence 的结果就是它的运行，`…/runs/{oid}/result` 返回 `404 execution_result_not_found`，页面按 `workflowRunId` 读运行详情。
 
 之前已保存的引用仍按原 JSON 读取，可暂停/恢复计划；只读候选类型 `ScheduleLegacyTarget` 保留未知字段，不解释、改写或校验其中的提供方参数。没有删除数据库数据或迁移其字段，前端也不提供引用参数编辑/执行入口。
 

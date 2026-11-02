@@ -66,6 +66,15 @@ func validateSchedule(in *store.ScheduleInput) string {
 	if target.Kind == "chat" && in.ProjectID != "" && (!scheduleUUID.MatchString(in.ProjectID) || target.ExecutorID == "") {
 		return "invalid_project_executor"
 	}
+	if target.Kind == "workflow" {
+		if _, code := decodeScheduleWorkflow(in.Target); code != "" {
+			return code
+		}
+		// Every workflow run executes in a project.
+		if !scheduleUUID.MatchString(in.ProjectID) {
+			return "project_required"
+		}
+	}
 	var rule struct {
 		Kind     string `json:"kind"`
 		Time     string `json:"time"`
@@ -168,8 +177,17 @@ func (h *handler) scheduleConfigs(w http.ResponseWriter, r *http.Request, u stor
 			return
 		}
 		target, _ := decodeScheduleChat(in.Target)
-		if err := h.resolveScheduleChat(r.Context(), tenant, u.ID, &in, target); err != nil {
+		var err error
+		if target.Kind == "workflow" {
+			workflow, _ := decodeScheduleWorkflow(in.Target)
+			err = h.resolveScheduleWorkflow(r.Context(), tenant, u.ID, &in, workflow)
+		} else {
+			err = h.resolveScheduleChat(r.Context(), tenant, u.ID, &in, target)
+		}
+		if err != nil {
 			switch {
+			case errors.Is(err, errScheduleWorkflowsUnavailable):
+				fault(w, 503, "schedule_target_unavailable")
 			case errors.Is(err, ErrScheduleResourcesUnavailable):
 				fault(w, 503, "schedule_resources_unavailable")
 			case errors.Is(err, store.ErrNotFound):

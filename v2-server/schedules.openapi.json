@@ -520,9 +520,12 @@
   "components": {
     "schemas": {
       "ScheduleTarget": {
-        "oneOf": [
+        "anyOf": [
           {
             "$ref": "#/components/schemas/ScheduleChatTarget"
+          },
+          {
+            "$ref": "#/components/schemas/ScheduleWorkflowTarget"
           },
           {
             "$ref": "#/components/schemas/ScheduleLegacyTarget"
@@ -585,7 +588,14 @@
             "type": "string"
           },
           "target": {
-            "$ref": "#/components/schemas/ScheduleChatTarget"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleChatTarget"
+              },
+              {
+                "$ref": "#/components/schemas/ScheduleWorkflowTarget"
+              }
+            ]
           },
           "rule": {
             "$ref": "#/components/schemas/ScheduleRule"
@@ -610,7 +620,14 @@
             "type": "string"
           },
           "target": {
-            "$ref": "#/components/schemas/ScheduleChatTarget"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleChatTarget"
+              },
+              {
+                "$ref": "#/components/schemas/ScheduleWorkflowTarget"
+              }
+            ]
           },
           "rule": {
             "$ref": "#/components/schemas/ScheduleRule"
@@ -765,6 +782,7 @@
           "projects",
           "models",
           "executors",
+          "workflows",
           "available"
         ],
         "properties": {
@@ -837,13 +855,44 @@
               }
             }
           },
+          "workflows": {
+            "type": "array",
+            "description": "Workflows with a published version, each with the snapshot a schedule would freeze.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "version",
+                "snapshotId"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "snapshotId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
           "available": {
             "type": "object",
             "additionalProperties": false,
             "required": [
               "projects",
               "models",
-              "executors"
+              "executors",
+              "workflows"
             ],
             "properties": {
               "projects": {
@@ -853,6 +902,9 @@
                 "type": "boolean"
               },
               "executors": {
+                "type": "boolean"
+              },
+              "workflows": {
                 "type": "boolean"
               }
             }
@@ -874,7 +926,38 @@
           }
         },
         "additionalProperties": true,
-        "description": "Read-only compatibility for previously stored references. Provider fields are preserved without interpretation; no write API is defined."
+        "description": "Read-only compatibility for previously stored references. Provider fields are preserved without interpretation; only the workflow target above can be written."
+      },
+      "ScheduleWorkflowTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "workflowId",
+          "snapshotId",
+          "input"
+        ],
+        "additionalProperties": false,
+        "description": "A workflow run in the schedule's project: one published snapshot of the workflow, frozen when the schedule is saved, and the kickoff input (may be empty). Each trigger creates and starts one run whose stable identity is the occurrence.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "workflow"
+            ]
+          },
+          "workflowId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshotId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "input": {
+            "type": "string",
+            "maxLength": 32000
+          }
+        }
       }
     }
   }
