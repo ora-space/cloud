@@ -87,6 +87,19 @@ function renderPage() {
   )
 }
 
+/** Opens the creation dialog and fills the required fields with the served issue and agent. */
+async function fillCreation(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  prompt: string,
+) {
+  await user.click(await screen.findByRole('button', { name: '新建定时任务' }))
+  await user.selectOptions(screen.getByLabelText('绑定 issue'), 'i1')
+  await user.selectOptions(screen.getByLabelText('执行智能体'), 'a1')
+  await user.type(screen.getByLabelText('名称'), name)
+  await user.type(screen.getByLabelText('提示词'), prompt)
+}
+
 describe('ScheduledTasksPage', () => {
   it('renders the task list with its schedule summary and enabled state', async () => {
     serve([
@@ -170,16 +183,43 @@ describe('ScheduledTasksPage', () => {
     )
     const user = userEvent.setup()
     renderPage()
-    await user.click(await screen.findByRole('button', { name: '新建定时任务' }))
-    await user.selectOptions(screen.getByLabelText('绑定 issue'), 'i1')
-    await user.selectOptions(screen.getByLabelText('执行智能体'), 'a1')
-    await user.type(screen.getByLabelText('名称'), '无授权草稿')
-    await user.type(screen.getByLabelText('提示词'), '稍后再启用')
+    await fillCreation(user, '无授权草稿', '稍后再启用')
     expect(await screen.findByRole('option', { name: /Model V1/ })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '创建' }))
     await waitFor(() => expect(created).toBeDefined())
     expect(created).toMatchObject({ enabled: false, model: '' })
     expect(created).not.toHaveProperty('approval')
+  })
+
+  it('explains a duplicate name and keeps the form open so a rename can retry', async () => {
+    serve([], true)
+    const names: unknown[] = []
+    server.use(
+      http.post(LIST, async ({ request }) => {
+        const payload = await request.json()
+        const name = isRecord(payload) ? payload['name'] : undefined
+        names.push(name)
+        if (name === '每日同步') {
+          return HttpResponse.json(
+            { code: 'name_conflict', params: {}, requestId: 'fixture' },
+            { status: 409 },
+          )
+        }
+        return HttpResponse.json({ resource: task({ name: '每日同步 2' }) })
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage()
+    await fillCreation(user, '每日同步', '同步仓库')
+    await user.click(screen.getByRole('button', { name: '创建' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '同一 issue 下你已有同名定时任务（已删除的也算），请换一个名称',
+    )
+    expect(screen.getByRole('dialog', { name: '新建定时任务' })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('名称'), ' 2')
+    await user.click(screen.getByRole('button', { name: '创建' }))
+    await waitFor(() => expect(names).toEqual(['每日同步', '每日同步 2']))
   })
 
   it('deletes a task only after confirmation', async () => {

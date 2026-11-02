@@ -46,4 +46,6 @@ Artifact lists contain metadata only. Download links target same-origin Cloud ro
 
 History uses `artifactsExpired` to identify artifacts removed after successful delivery; a run that produced none is never labeled expired.
 
+A failed save renders a bounded message per fault code and never the server's detail. `name_conflict` means the creator already has a task with that name on the same issue (a deleted task still holds its name); the message asks for a rename and the form stays open for the retry.
+
 The failure reasons `task_paused` and `task_handoff_pending` render as a pointer to the task conversation: they are resolved there, not in the task or Agent configuration. Other failure reasons keep their raw code.

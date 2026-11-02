@@ -209,6 +209,7 @@ const FAULT_MESSAGES: Record<string, string> = {
   approval_policy_invalid: '无人值守授权已失效，请重新确认',
   scheduled_task_acceptance_pending: '定时任务正在进行端到端验收，暂不可保存或启用',
   version_conflict: '任务已在别处修改，请刷新后重试',
+  name_conflict: '同一 issue 下你已有同名定时任务（已删除的也算），请换一个名称',
 }
 
 /** Maps public fault codes to bounded messages without rendering upstream error details. */
