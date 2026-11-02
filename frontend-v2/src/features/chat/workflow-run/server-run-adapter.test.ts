@@ -84,6 +84,39 @@ describe('toGraphWorkflowRun', () => {
     expect(run.nodeStates.a!.conversation).toBeUndefined()
   })
 
+  it('reads the executor and model an Agent ran on and the settings v2 did not apply', () => {
+    const run = toGraphWorkflowRun(
+      detail({ status: 'succeeded', state: '{"current_nodes":[]}' }, [
+        nodeRun({
+          nodeId: 'a', nodeType: 'agent', output: '初稿',
+          payload: JSON.stringify({
+            stop_reason: 'end_turn',
+            executor: { id: 'opencode:fixture', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '1.4.0' },
+            model: { id: 'fixture', name: 'Fixture', requested: 'claude-sonnet-5-5', fallback: true },
+            unapplied: ['role', 'retry', 'webhook'],
+          }),
+        }),
+      ]),
+      definition,
+    )
+    expect(run.nodeStates.a).toMatchObject({
+      executor: { id: 'opencode:fixture', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '1.4.0' },
+      model: { id: 'fixture', name: 'Fixture', requested: 'claude-sonnet-5-5', fallback: true },
+      // A name this version does not know is dropped rather than shown raw.
+      unapplied: ['role', 'retry'],
+    })
+  })
+
+  it('records no executor or model for an attempt without them', () => {
+    const run = toGraphWorkflowRun(
+      detail({}, [nodeRun({ nodeId: 'a', nodeType: 'agent', payload: JSON.stringify({ executor: { name: 'OpenCode' }, model: {}, unapplied: 'role' }) })]),
+      definition,
+    )
+    expect(run.nodeStates.a).not.toHaveProperty('executor')
+    expect(run.nodeStates.a).not.toHaveProperty('model')
+    expect(run.nodeStates.a).not.toHaveProperty('unapplied')
+  })
+
   it('shows an Agent without an answer yet, and malformed payloads, without inventing anything', () => {
     const run = toGraphWorkflowRun(detail({}, [nodeRun({ nodeId: 'a', nodeType: 'agent', status: 'running', finishedAt: null, payload: '{oops' })]), definition)
     expect(run.status).toBe('running')

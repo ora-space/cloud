@@ -5,9 +5,12 @@ import {
   projectRunStatus,
   type GraphWorkflowNodeState,
   type GraphWorkflowRun,
+  type WorkflowAgentUnappliedCapability,
   type WorkflowDefinition,
   type WorkflowNodeConversationItem,
   type WorkflowNodeErrorDetail,
+  type WorkflowNodeExecutorUsed,
+  type WorkflowNodeModelUsed,
 } from '@/lib/workflows/runtime'
 
 const iso = (ms: number | null): string | undefined => (ms === null ? undefined : new Date(ms).toISOString())
@@ -40,6 +43,33 @@ function errorDetail(payload: Record<string, unknown>): WorkflowNodeErrorDetail 
   }
 }
 
+const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+
+/** Reads `payload.executor`, the executor a successful Agent attempt ran on. */
+function executorUsed(payload: Record<string, unknown>): WorkflowNodeExecutorUsed | undefined {
+  const e = record(payload.executor)
+  if (e === undefined || text(e.id) === '') return undefined
+  return { id: text(e.id), agentId: text(e.agentId), name: text(e.name), pluginVersion: text(e.pluginVersion) }
+}
+
+/** Reads `payload.model`, the model a successful Agent attempt ran on and whether it was a fallback. */
+function modelUsed(payload: Record<string, unknown>): WorkflowNodeModelUsed | undefined {
+  const m = record(payload.model)
+  if (m === undefined || (text(m.id) === '' && text(m.name) === '')) return undefined
+  return { id: text(m.id), name: text(m.name), requested: text(m.requested), fallback: m.fallback === true }
+}
+
+const unappliedNames: ReadonlySet<string> = new Set<WorkflowAgentUnappliedCapability>(['role', 'skill', 'mcp', 'retry', 'interactive'])
+
+/** Reads `payload.unapplied`, the configured settings v2 ran the attempt without; unknown names are dropped. */
+function unapplied(payload: Record<string, unknown>): WorkflowAgentUnappliedCapability[] | undefined {
+  if (!Array.isArray(payload.unapplied)) return undefined
+  return payload.unapplied.filter((name): name is WorkflowAgentUnappliedCapability => typeof name === 'string' && unappliedNames.has(name))
+}
+
 /**
  * The node's turn as its conversation: what it was asked and what it answered. v2-server does not
  * serve node session transcripts yet, so the task (as the engine rendered it, else the attempt's
@@ -67,6 +97,12 @@ function nodeState(runId: string, node: WorkflowNodeRun): GraphWorkflowNodeState
   const detail = errorDetail(payload)
   if (detail) state.errorDetail = detail
   if (typeof payload.stop_reason === 'string') state.stopReason = payload.stop_reason
+  const executor = executorUsed(payload)
+  if (executor) state.executor = executor
+  const model = modelUsed(payload)
+  if (model) state.model = model
+  const skipped = unapplied(payload)
+  if (skipped) state.unapplied = skipped
   if (node.input !== null && node.input !== '') state.input = { summary: node.input.split('\n')[0]!, detail: node.input }
   if (node.output !== null && node.output !== '') state.output = { summary: node.output.split('\n')[0]!, detail: node.output }
   const items = conversation(runId, node, payload)

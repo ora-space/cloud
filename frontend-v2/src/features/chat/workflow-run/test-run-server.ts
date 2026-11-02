@@ -16,7 +16,8 @@ export interface RunServer {
 /**
  * Serves v2-server's run routes for `tenantId` over the workflow library the fake definition server
  * holds, layered in front of it. A started run executes at once, node by node in the graph's edge
- * order, each Agent answering `回答：<title>`; with `hold` it waits at the first Agent instead.
+ * order, each Agent answering `回答：<title>` on the fixture model; with `hold` it waits at the first
+ * Agent instead.
  */
 export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunServer {
   const server: RunServer = { runs: new Map(), seen: [], hold: false }
@@ -66,7 +67,14 @@ export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunS
           return
         }
         row.output = `回答：${node.data.title ?? id}`
-        row.payload = JSON.stringify({ stop_reason: 'end_turn', task: `请完成：${node.data.title ?? id}` })
+        // What v2-server records for a successful Agent: here every node falls back to the fixture model.
+        row.payload = JSON.stringify({
+          stop_reason: 'end_turn',
+          task: `请完成：${node.data.title ?? id}`,
+          executor: { id: 'claude-code:fixture', agentId: 'ora/claude-code', name: 'Claude Code', pluginVersion: '0.4.0' },
+          model: { id: 'fixture', name: 'Fixture', requested: node.data.agentConfig?.executor?.modelId ?? '', fallback: true },
+          unapplied: [],
+        })
         answers[id] = row.output
       }
       if (node.data.kind === 'output') row.output = JSON.stringify(answers)
