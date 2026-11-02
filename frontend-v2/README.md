@@ -83,7 +83,7 @@ e2e/            Playwright 端到端测试
 |---|---|
 | `run-theater*`、`run-act-*`、`run-overview-*`、`run-status-*`、`run-loop-*`、`run-condition-stage.tsx`、`run-result-act.tsx`、`run-brief-popover.tsx`、`run-hitl-composer.tsx`、`use-theater-hitl.tsx`、`run-path-structure.ts`、`run-focus.ts`、`run-node-completion.ts` 和其余同名小文件 | 同名文件，只改了 import 路径；`run-act-agent-config.tsx` 另外挂上 `run-act-v2-execution.tsx`，`run-act-inspector.tsx` 把节点状态传给它 |
 | `run-act-v2-execution.tsx`、`agent-unapplied.ts` | 新写：节点详情里 Agent 实际使用的执行器和模型，以及 v2 没有应用的设置（见下文） |
-| `workflow-run-start-dialog.tsx`、`translations.ts` | 同名文件 |
+| `workflow-run-start-dialog.tsx`、`translations.ts` | 同名文件；`translations.ts` 里的 `workflowRun.v2.*` 是 v2 新写组件的文案 |
 | `run-node-session-chat.tsx`、`node-session.ts`、`conversation-turns.ts` | 新写：desktop 在这里嵌入完整的聊天视图读取节点的真实会话；这里按节点尝试订阅服务端的节点会话事件流（`node-session.ts`，见下文），用对话页的会话归并得到完整对话；读不到时用服务端运行带回的对话记录，`conversation-turns.ts` 把它们转成对话页的轮次（发给 Agent 的消息开启一轮，之后的回复、思考和工具调用归入这一轮）。两者都交给对话页的 `Thread` 渲染，所以节点会话和对话页的样式一致；不能在里面接着发消息 |
 | `run-events.ts` | 新写：订阅运行的失效事件流（见下文） |
 | `hitl-text-editor.tsx` | 新写：人工介入回答框，用纯文本输入框代替 desktop 的 TipTap 编辑器 |

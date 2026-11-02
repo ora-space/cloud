@@ -2,15 +2,15 @@ import { normalizeWorkflowAgentConfig } from '@/lib/workflows/mock'
 import type { WorkflowAgentConfig, WorkflowAgentUnappliedCapability } from '@/lib/workflows/runtime'
 import { resolveAgentRetryDisplay } from './agent-config-display'
 
-/** How the run inspector names each Agent setting v2 does not apply, in display order. */
-export const unappliedSettingNames: Readonly<Record<WorkflowAgentUnappliedCapability, string>> = {
-  role: '角色',
-  skill: 'Skill',
-  mcp: 'MCP',
-  retry: '自动重试',
-  interactive: '交互模式',
+/** The translation key the run inspector names each Agent setting v2 does not apply by, in display order. */
+export const unappliedSettingKeys: Readonly<Record<WorkflowAgentUnappliedCapability, string>> = {
+  role: 'workflowRun.v2.setting.role',
+  skill: 'workflowRun.v2.setting.skill',
+  mcp: 'workflowRun.v2.setting.mcp',
+  retry: 'workflowRun.v2.setting.retry',
+  interactive: 'workflowRun.v2.setting.interactive',
 }
-const settingOrder = Object.keys(unappliedSettingNames) as WorkflowAgentUnappliedCapability[]
+const settingOrder = Object.keys(unappliedSettingKeys) as WorkflowAgentUnappliedCapability[]
 
 /**
  * The Agent settings v2 keeps in the graph but runs without: those the attempt recorded, plus those

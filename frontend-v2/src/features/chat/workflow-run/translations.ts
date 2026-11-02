@@ -460,6 +460,22 @@ export const workflowRunTranslations = {
     "workflowRun.retry.abandoned": "运行在等待自动重试时结束，这次重试没有开始",
     "workflowRun.retry.notStarted": "这次自动重试已安排，但没有开始",
     "workflowRun.retry.kindNotRetried": "这类失败不会自动重试",
+    "workflowRun.v2.executedOn": "实际执行",
+    "workflowRun.v2.pluginVersion": "插件版本 {{version}}",
+    "workflowRun.v2.modelDefault": "节点没有指定模型，使用了 Agent 的默认模型",
+    "workflowRun.v2.modelFallback": "没有找到配置的模型「{{model}}」，使用了 Agent 的默认模型",
+    "workflowRun.v2.unappliedLabel": "v2 未应用的设置",
+    "workflowRun.v2.unapplied": "v2 未应用：{{settings}}",
+    "workflowRun.v2.unappliedHint": "这些设置保存在工作流里，v2 执行时不生效，节点照常运行。",
+    "workflowRun.v2.listSeparator": "、",
+    "workflowRun.v2.setting.role": "角色",
+    "workflowRun.v2.setting.skill": "Skill",
+    "workflowRun.v2.setting.mcp": "MCP",
+    "workflowRun.v2.setting.retry": "自动重试",
+    "workflowRun.v2.setting.interactive": "交互模式",
+    "workflowRun.v2.sessionWaiting": "正在等待 Agent 的会话…",
+    "workflowRun.v2.sessionRefused":
+      "只有启动这次运行的人能查看实时会话；节点完成后会显示任务和回答。",
   },
   "en-US": {
     "workflowRun.loopExit.completed": "Loop ended through an exit node",
@@ -970,5 +986,24 @@ export const workflowRunTranslations = {
       "This automatic retry was scheduled but never started",
     "workflowRun.retry.kindNotRetried":
       "This kind of failure is not retried automatically",
+    "workflowRun.v2.executedOn": "Ran on",
+    "workflowRun.v2.pluginVersion": "Plugin version {{version}}",
+    "workflowRun.v2.modelDefault":
+      "The node names no model, so the Agent's default model ran",
+    "workflowRun.v2.modelFallback":
+      "The configured model “{{model}}” was not found, so the Agent's default model ran",
+    "workflowRun.v2.unappliedLabel": "Settings v2 does not apply",
+    "workflowRun.v2.unapplied": "Not applied in v2: {{settings}}",
+    "workflowRun.v2.unappliedHint":
+      "These settings stay in the workflow; v2 runs the node without them.",
+    "workflowRun.v2.listSeparator": ", ",
+    "workflowRun.v2.setting.role": "Role",
+    "workflowRun.v2.setting.skill": "Skill",
+    "workflowRun.v2.setting.mcp": "MCP",
+    "workflowRun.v2.setting.retry": "Automatic retry",
+    "workflowRun.v2.setting.interactive": "Interactive mode",
+    "workflowRun.v2.sessionWaiting": "Waiting for the Agent's session…",
+    "workflowRun.v2.sessionRefused":
+      "Only whoever started this run can follow its live session; the task and answer show once the node finishes.",
   },
 } as const;
