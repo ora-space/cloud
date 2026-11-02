@@ -70,6 +70,9 @@ type Options struct {
 	// WorkflowRuns is the execution bridge's run lifecycle. Nil keeps start, cancel, input and
 	// interactive completion unavailable; definition and history reads still work.
 	WorkflowRuns WorkflowRunHost
+	// WorkflowRunEvents announces committed run changes to the run events route; nil keeps that
+	// route unavailable, and pages poll instead.
+	WorkflowRunEvents WorkflowRunEvents
 }
 
 // New returns the handler for every route v2-server serves.
@@ -150,6 +153,8 @@ func New(s Store, o Options) http.Handler {
 	mux.HandleFunc("PATCH /api/v2/tenants/{tid}/workflow-runs/{rid}/input", h.authed(h.updateWorkflowRunInput))
 	mux.HandleFunc("POST /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes/{nodeId}/complete", h.authed(h.completeWorkflowNode))
 	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes", h.authed(h.listWorkflowRunNodes))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/events", h.authed(h.workflowRunEvents))
+	mux.HandleFunc("GET /api/v2/tenants/{tid}/workflow-runs/{rid}/nodes/{nodeRunId}/events", h.authed(h.workflowNodeEvents))
 	h.chatRoutes(mux)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { fault(w, http.StatusNotFound, "not_found") })
 	return mux

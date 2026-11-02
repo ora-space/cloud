@@ -57,7 +57,8 @@ describe('toGraphWorkflowRun', () => {
     expect(run.finishedAt).toBe(new Date(3_000).toISOString())
     expect(run.nodeStates.out).toEqual({ status: 'idle' })
     const a = run.nodeStates.a!
-    expect(a).toMatchObject({ status: 'succeeded', sessionId: 's-1', stopReason: 'end_turn', output: { summary: '初稿', detail: '初稿' } })
+    // The attempt row is kept, so the run page can follow its session.
+    expect(a).toMatchObject({ status: 'succeeded', nodeRunId: 'n2', sessionId: 's-1', stopReason: 'end_turn', output: { summary: '初稿', detail: '初稿' } })
     // The rendered task, not the template the attempt input keeps, is what the Agent was asked.
     expect(a.conversation?.map((item) => item.kind === 'message' && [item.role, item.markdown])).toEqual([
       ['user', '起草：需求'],
@@ -120,7 +121,7 @@ describe('toGraphWorkflowRun', () => {
   it('shows an Agent without an answer yet, and malformed payloads, without inventing anything', () => {
     const run = toGraphWorkflowRun(detail({}, [nodeRun({ nodeId: 'a', nodeType: 'agent', status: 'running', finishedAt: null, payload: '{oops' })]), definition)
     expect(run.status).toBe('running')
-    expect(run.nodeStates.a).toEqual({ status: 'running', startedAt: new Date(1_000).toISOString() })
+    expect(run.nodeStates.a).toEqual({ status: 'running', nodeRunId: 'nr', startedAt: new Date(1_000).toISOString() })
   })
 
   it('shows the nodes behind a Condition branch not taken as inactive, and the join they share still pending', () => {

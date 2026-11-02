@@ -532,6 +532,8 @@ export interface GraphWorkflowNodeState {
   iteration?: number;
   /** Session bound to this node execution; opaque to the workflow UI. */
   sessionId?: string;
+  /** The node run (attempt) row this state was read from; v2 follows its session by it. */
+  nodeRunId?: string;
   startedAt?: string;
   finishedAt?: string;
   errorMessage?: string;

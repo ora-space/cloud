@@ -353,8 +353,20 @@ export type WorkflowErrorResponse = WorkflowError;
 
 export type RunProjectQueryParameter = string;
 
+/**
+ * Resume after this session sequence; Last-Event-ID takes precedence.
+ */
+export type EventCursorParameter = string;
+
 export type ListWorkflowRunsParams = {
 projectId?: RunProjectQueryParameter;
+};
+
+export type StreamWorkflowNodeRunEventsParams = {
+/**
+ * Resume after this session sequence; Last-Event-ID takes precedence.
+ */
+after?: EventCursorParameter;
 };
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
@@ -2100,6 +2112,223 @@ export function useListWorkflowNodeRuns<TData = Awaited<ReturnType<typeof listWo
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getListWorkflowNodeRunsQueryOptions(tid,rid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * Only `workflow_run_invalidated` events, the shape of desktop's app event: data `{"runId": "<rid>"}` and no state, so the page reads the run again. One is sent as soon as the stream opens; after that one per committed change, unread ones coalesced. Idle streams carry a `: ping` comment every 15 seconds. 503 workflow_run_events_unavailable when the process has no run host.
+ * @summary Follow when the run changes, as Server-Sent Events
+ */
+export const streamWorkflowRunEvents = (
+    tid: string,
+    rid: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<string>(
+      {url: `/api/v2/tenants/${tid}/workflow-runs/${rid}/events`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getStreamWorkflowRunEventsQueryKey = (tid: string,
+    rid: string,) => {
+    return [
+    `/api/v2/tenants/${tid}/workflow-runs/${rid}/events`
+    ] as const;
+    }
+
+
+export const getStreamWorkflowRunEventsQueryOptions = <TData = Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(tid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamWorkflowRunEventsQueryKey(tid,rid);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamWorkflowRunEvents>>> = ({ signal }) => streamWorkflowRunEvents(tid,rid, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type StreamWorkflowRunEventsQueryResult = NonNullable<Awaited<ReturnType<typeof streamWorkflowRunEvents>>>
+export type StreamWorkflowRunEventsQueryError = ErrorType<WorkflowErrorResponse>
+
+
+export function useStreamWorkflowRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamWorkflowRunEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamWorkflowRunEvents>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useStreamWorkflowRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamWorkflowRunEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamWorkflowRunEvents>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useStreamWorkflowRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Follow when the run changes, as Server-Sent Events
+ */
+
+export function useStreamWorkflowRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getStreamWorkflowRunEventsQueryOptions(tid,rid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * The same stream as chat.openapi.json's conversation events: each message's id is its session sequence and its data a ChatEvent (a turn_ended carries its prompt); an `end` event follows session_ended and `failure` (data `{code}`) reports a broken stream. The session is read in the caller's own scope, so only whoever started the run can read it. 404 workflow_node_run_not_found when the attempt is not this run's; 404 workflow_node_session_not_found before the attempt was dispatched or when the session is not the caller's.
+ * @summary Follow one node attempt's session events, as Server-Sent Events
+ */
+export const streamWorkflowNodeRunEvents = (
+    tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<string>(
+      {url: `/api/v2/tenants/${tid}/workflow-runs/${rid}/nodes/${nodeRunId}/events`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getStreamWorkflowNodeRunEventsQueryKey = (tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams,) => {
+    return [
+    `/api/v2/tenants/${tid}/workflow-runs/${rid}/nodes/${nodeRunId}/events`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getStreamWorkflowNodeRunEventsQueryOptions = <TData = Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamWorkflowNodeRunEventsQueryKey(tid,rid,nodeRunId,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>> = ({ signal }) => streamWorkflowNodeRunEvents(tid,rid,nodeRunId,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && rid !== null && rid !== undefined && nodeRunId !== null && nodeRunId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type StreamWorkflowNodeRunEventsQueryResult = NonNullable<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>>
+export type StreamWorkflowNodeRunEventsQueryError = ErrorType<WorkflowErrorResponse>
+
+
+export function useStreamWorkflowNodeRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string,
+    nodeRunId: string,
+    params: undefined |  StreamWorkflowNodeRunEventsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useStreamWorkflowNodeRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>,
+          TError,
+          Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useStreamWorkflowNodeRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Follow one node attempt's session events, as Server-Sent Events
+ */
+
+export function useStreamWorkflowNodeRunEvents<TData = Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError = ErrorType<WorkflowErrorResponse>>(
+ tid: string,
+    rid: string,
+    nodeRunId: string,
+    params?: StreamWorkflowNodeRunEventsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof streamWorkflowNodeRunEvents>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getStreamWorkflowNodeRunEventsQueryOptions(tid,rid,nodeRunId,params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

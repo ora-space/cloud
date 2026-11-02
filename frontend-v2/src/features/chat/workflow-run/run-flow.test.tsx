@@ -1,12 +1,12 @@
 import '@/lib/workflows/test/dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from '../page'
 import { resetChatStore } from '../store'
-import { chatBackend, tenantId } from '../test-backend'
+import { chatBackend, FakeEventSource, line, tenantId } from '../test-backend'
 import { sampleWorkflowBackend, serveWorkflows, type WorkflowServer } from '@/lib/workflows/test/workflow-server'
 import { runRefreshMs } from './server-runs'
 import { serveRuns, type RunServer } from './test-run-server'
@@ -95,6 +95,77 @@ describe('workflow runs in chat', () => {
     expect(within(details).getByLabelText('实际执行')).toHaveTextContent('Claude Code · Fixture')
     expect(within(details).getByLabelText('实际执行')).toHaveTextContent('没有找到配置的模型「claude-sonnet-5-5」')
     expect(within(details).getByLabelText('v2 未应用的设置')).toHaveTextContent('v2 未应用：自动重试')
+  }, 30_000)
+
+  it('reads an executing run again whenever its events stream says it changed', async () => {
+    runs.hold = true
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '跟随事件')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await within(pane).findByRole('heading', { level: 2, name: '跟随事件' }, { timeout: 10_000 })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '启动' }))
+    await waitFor(() => expect(within(project()).getByRole('button', { name: '工作流运行 跟随事件（运行中）' })).toBeInTheDocument())
+
+    // From here only the stream can tell the page anything: polling is effectively off.
+    const [entry] = [...runs.runs.values()]
+    const stream = await waitFor(() => {
+      const found = FakeEventSource.all.find((s) => s.url === `/api/v2/tenants/${tenantId}/workflow-runs/${entry!.detail.run.id}/events` && !s.closed)
+      expect(found).toBeDefined()
+      return found!
+    })
+    runRefreshMs.interval = 60_000
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const { run, nodes } = entry!.detail
+    for (const node of nodes) {
+      node.status = 'succeeded'
+      node.output = '回答'
+    }
+    run.status = 'succeeded'
+    run.output = '{}'
+    run.finishedAt = Date.now()
+    run.state = JSON.stringify({ current_nodes: [] })
+    act(() => stream.fire('workflow_run_invalidated'))
+
+    // The run page and the sidebar's list both read the run again; an ended run is not followed.
+    expect(await within(pane).findByText('运行完成')).toBeInTheDocument()
+    await waitFor(() => expect(within(project()).getByRole('button', { name: '工作流运行 跟随事件（成功）' })).toBeInTheDocument())
+    await waitFor(() => expect(stream.closed).toBe(true))
+  }, 30_000)
+
+  it('shows an Agent node its whole session once the session can be read', async () => {
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '完整会话')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await within(pane).findByRole('heading', { level: 2, name: '完整会话' }, { timeout: 10_000 })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '启动' }))
+    expect(await within(pane).findByText('运行完成', {}, { timeout: 25_000 })).toBeInTheDocument()
+
+    await user.click(within(pane).getByRole('button', { name: /Agent：审查改动/ }))
+    await user.click(await within(pane).findByRole('button', { name: '查看节点会话' }))
+    // Until the session stream sends anything, the recorded task and answer stand in.
+    expect(within(pane).getAllByText('回答：Agent：审查改动').length).toBeGreaterThan(0)
+
+    const [entry] = [...runs.runs.values()]
+    const attempt = entry!.detail.nodes.find((n) => n.nodeType === 'agent' && n.nodeId === 'review')!
+    const stream = FakeEventSource.all.find((s) => s.url.endsWith(`/workflow-runs/${entry!.detail.run.id}/nodes/${attempt.id}/events`))!
+    act(() => {
+      stream.emit({
+        kind: 'history_snapshot',
+        history: { records: [line.user(1, '完整的任务说明'), line.say(2, '读完了改动，结论是可以合并。'), line.ended(3)], incomplete: false },
+      })
+      stream.emit({ kind: 'turn_ended', prompt: '完整的任务说明', result: { status: 'completed', answer: '读完了改动，结论是可以合并。', answerComplete: true, stopReason: 'end_turn', failureCode: '' } })
+      stream.emit({ kind: 'session_ended' })
+      stream.fire('end')
+    })
+    expect(within(pane).getByText('读完了改动，结论是可以合并。')).toBeInTheDocument()
+    expect(within(pane).queryByText('回答：Agent：审查改动', { selector: '[data-slot="bubble-content"], p' })).not.toBeInTheDocument()
+    // The bridge ends a node's session after its turn; that is not shown as an interruption.
+    expect(within(pane).queryByText(/中断/)).not.toBeInTheDocument()
+    expect(stream.closed).toBe(true)
   }, 30_000)
 
   it('stops a run that is still executing', async () => {

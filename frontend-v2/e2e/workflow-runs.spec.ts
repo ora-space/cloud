@@ -49,8 +49,10 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   const workflowId = ((await created.json()) as { draft: { workflowId: string } }).draft.workflowId
   expect((await page.request.post(`/api/v2/tenants/${tenantId}/workflows/${workflowId}/publish`, { data: { version: 'v1' } })).ok()).toBe(true)
 
-  // A project's + offers the published workflows; the run opens pending in the main area.
+  // A project's + offers the published workflows; the run opens pending in the main area, and
+  // follows the run's invalidation stream while it has not ended.
   await page.reload()
+  const runEvents = page.waitForResponse((r) => /\/workflow-runs\/[^/]+\/events$/.test(new URL(r.url()).pathname))
   const demo = page.getByRole('complementary', { name: '聊天记录' }).getByRole('region', { name: '项目 Demo' })
   await demo.getByRole('button', { name: '在 Demo 新建对话' }).click()
   await page.getByRole('menuitem', { name: '运行工作流' }).hover()
@@ -63,6 +65,7 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await expect(pane.getByText('演示运行')).toBeHidden()
   const row = (status: string) => demo.getByRole('button', { name: `工作流运行 ${runName}（${status}）` })
   await expect(row('未运行')).toBeVisible()
+  expect((await runEvents).headers()['content-type']).toBe('text/event-stream')
 
   // 再跑一次 creates a pending run of the same version; the sidebar lists it at once, although
   // every run it held had ended and it had stopped polling. The pending run is deleted again: one
@@ -112,6 +115,14 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await pane.getByRole('button', { name: '查看节点会话' }).click()
   await expect(pane.getByText(/审阅上一步的方案：V2 fixture complete\./)).toBeVisible()
   await screenshot(page, testInfo.outputPath('3-review-session.png'))
+  // It is the Agent's real session, read from its events stream: the whole prompt the Agent was
+  // given, with the workflow context, then its turn down to the answer.
+  await expect(pane.getByText('<workspace_root>', { exact: false }).first()).toBeVisible()
+  const toEnd = pane.getByRole('button', { name: '滚动到底部' })
+  if (await toEnd.isVisible()) await toEnd.click()
+  // The fixture Agent ran a shell command: a tool call only the real session carries.
+  await expect(pane.getByText(/v2 fixture tool executed/).first()).toBeVisible()
+  await screenshot(page, testInfo.outputPath('3-review-session-end.png'))
 
   // Its details name the executor and the model it actually ran on.
   await pane.getByRole('button', { name: '打开节点详情' }).click()
@@ -184,6 +195,10 @@ test('workflow runs: a Condition takes one branch and the other shows as inactiv
   if (!realAgents) {
     // No Agent is installed: the taken branch's Agent fails, and the join after it never runs.
     await expect(card('常规处理').getByText('失败', { exact: true })).toBeVisible()
+    // Its details still say which configured settings v2 does not apply.
+    await card('常规处理').getByText('常规处理', { exact: true }).click()
+    await pane.getByRole('button', { name: '打开节点详情' }).click()
+    await expect(pane.getByLabel('v2 未应用的设置').filter({ visible: true }).first()).toContainText('自动重试')
     return
   }
   await expect(card('常规处理').getByText('成功', { exact: true })).toBeVisible()
@@ -192,4 +207,11 @@ test('workflow runs: a Condition takes one branch and the other shows as inactiv
   await pane.getByRole('button', { name: '舞台', exact: true }).click()
   await expect(pane.getByText('运行完成')).toBeVisible()
   await screenshot(page, testInfo.outputPath('s2-branch-result.png'))
+
+  // The branch that ran says what its Agent actually ran on, beside the branch that did not.
+  await pane.getByRole('button', { name: '全图', exact: true }).click()
+  await card('常规处理').getByText('常规处理', { exact: true }).click()
+  await pane.getByRole('button', { name: '打开节点详情' }).click()
+  await expect(pane.getByLabel('实际执行').filter({ visible: true }).first()).toContainText('· Fixture')
+  await screenshot(page, testInfo.outputPath('s2-branch-agent-details.png'))
 })

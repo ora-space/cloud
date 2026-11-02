@@ -291,8 +291,14 @@ func (s *Service) Delete(ctx context.Context, scope execution.Scope, conversatio
 // TurnPrompt returns the text a turn of the session was asked. A turn stopped before its Agent
 // started never reaches the Node history, so this is how a page can still show what was asked.
 func (s *Service) TurnPrompt(ctx context.Context, scope execution.Scope, sessionID, turnID string) (string, error) {
+	return TurnPrompt(ctx, s.runtime, scope, sessionID, turnID)
+}
+
+// TurnPrompt reads the text a turn was asked from the shared execution service, for any session
+// the scope owns: a conversation's, or a workflow node's, whose events have the same shape.
+func TurnPrompt(ctx context.Context, runtime execution.Service, scope execution.Scope, sessionID, turnID string) (string, error) {
 	for cursor := ""; ; {
-		page, e := s.runtime.ReadTurns(ctx, scope, sessionID, cursor, 100)
+		page, e := runtime.ReadTurns(ctx, scope, sessionID, cursor, 100)
 		if e != nil {
 			return "", e
 		}

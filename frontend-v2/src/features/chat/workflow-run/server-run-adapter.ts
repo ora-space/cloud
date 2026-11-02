@@ -89,7 +89,7 @@ function conversation(runId: string, node: WorkflowNodeRun, payload: Record<stri
 
 function nodeState(runId: string, node: WorkflowNodeRun): GraphWorkflowNodeState {
   const payload = parseObject(node.payload)
-  const state: GraphWorkflowNodeState = { status: projectNodeStatus({ status: node.status }) }
+  const state: GraphWorkflowNodeState = { status: projectNodeStatus({ status: node.status }), nodeRunId: node.id }
   if (node.sessionId !== null) state.sessionId = node.sessionId
   if (node.startedAt !== null) state.startedAt = iso(node.startedAt)
   if (node.finishedAt !== null) state.finishedAt = iso(node.finishedAt)

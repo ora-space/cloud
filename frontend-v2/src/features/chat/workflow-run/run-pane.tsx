@@ -18,6 +18,7 @@ import { isTerminalRunStatus, type GraphWorkflowRun, type WorkflowArtifact, type
 import { FadeText } from '../components/fade-text'
 import { ShowSidebarButton } from '../components/sidebar'
 import { useChatStore } from '../store'
+import { useRunInvalidations } from './run-events'
 import { cancelRun, rerun, runKeys, runQuery, runSnapshotQuery, startRun } from './server-runs'
 import { isLoopHistoryNode } from './loop-round-state'
 import { resolveStageFocusNodeId, resolveTheaterFocus, shouldReleaseLivePinToFollow, shouldStealFocusForArtifactReveal, type TheaterFocusStatusSample } from './run-focus'
@@ -40,7 +41,8 @@ const noArtifacts: WorkflowArtifact[] = []
 /**
  * A workflow run in the chat page's main area, as desktop's run workspace: Theater plays the run
  * one act at a time, Overview shows the frozen graph with each node's status. v2-server executes
- * the run; the page reads it again every second until it ends. The page brings the tenant's
+ * the run; the page reads it again each time its events stream announces a change, polling as a
+ * fallback, until it ends. The page brings the tenant's
  * workflow client and query cache, which the run and the inspector's Agent configuration read.
  */
 export default function RunPane({ runId }: { runId: string }) {
@@ -71,11 +73,24 @@ function RunToaster() {
   return <Toaster position="bottom-right" theme={dark ? 'dark' : 'light'} closeButton />
 }
 
-/** Reads the run's frozen graph once, then the run itself until it ends. */
+/**
+ * Reads the run's frozen graph once, then the run itself until it ends: again whenever its events
+ * stream says it changed, with polling as the fallback.
+ */
 function LoadedRun({ tenantId, runId, refreshProjectRuns }: { tenantId: string; runId: string; refreshProjectRuns: (projectId: string) => void }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const snapshot = useQuery({ ...runSnapshotQuery(tenantId, runId), enabled: tenantId !== '' })
-  const run = useQuery(runQuery(tenantId, runId, snapshot.data))
+  const [followed, setFollowed] = useState(false)
+  const run = useQuery(runQuery(tenantId, runId, snapshot.data, followed))
+  const projectId = run.data?.projectId
+  useRunInvalidations(tenantId, runId, run.data !== undefined && !isTerminalRunStatus(run.data.status), {
+    invalidated: () => {
+      void queryClient.invalidateQueries({ queryKey: runKeys.run(tenantId, runId) })
+      if (projectId !== undefined) refreshProjectRuns(projectId)
+    },
+    connected: setFollowed,
+  })
   const error = snapshot.error ?? run.error
   if (run.data) return <RunWorkspace tenantId={tenantId} run={run.data} refreshProjectRuns={refreshProjectRuns} />
   return (
