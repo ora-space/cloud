@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router'
+import { OraMark } from '@/components/ora-mark'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { UserMenu } from './auth/user-menu'
@@ -8,7 +9,7 @@ import { features } from './features'
 export function NavRail() {
   return (
     <nav aria-label="主导航" className="flex w-13 shrink-0 flex-col items-center gap-1 border-r bg-muted/40 py-3">
-      <div className="mb-3 flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">O</div>
+      <OraMark className="mb-3" />
       {features.map((f) => (
         <Tooltip key={f.path}>
           <TooltipTrigger
