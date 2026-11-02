@@ -1,6 +1,6 @@
 import { QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MapIcon, PlayIcon, RotateCcwIcon, SquareIcon, TheaterIcon, WorkflowIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { I18nextProvider, useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,11 +47,18 @@ export default function RunPane({ runId }: { runId: string }) {
   const tenantId = useChatStore((s) => s.tenantId) ?? ''
   const client = useMemo(() => createContractsClient(createHttpWorkflowContracts(tenantId)), [tenantId])
   const [queryClient] = useState(createWorkflowQueryClient)
+  // The sidebar's project run list lives in the page's cache, not the run page's own; a run this
+  // page creates must reach it at once, since the list stops polling once every run has ended.
+  const pageQueryClient = useQueryClient()
+  const refreshProjectRuns = useCallback(
+    (projectId: string) => void pageQueryClient.invalidateQueries({ queryKey: runKeys.project(tenantId, projectId) }),
+    [pageQueryClient, tenantId],
+  )
   return (
     <I18nextProvider i18n={runI18n}>
       <QueryClientProvider client={queryClient}>
         <ContractsClientProvider client={client}>
-          <LoadedRun key={runId} tenantId={tenantId} runId={runId} />
+          <LoadedRun key={runId} tenantId={tenantId} runId={runId} refreshProjectRuns={refreshProjectRuns} />
           <RunToaster />
         </ContractsClientProvider>
       </QueryClientProvider>
@@ -65,12 +72,12 @@ function RunToaster() {
 }
 
 /** Reads the run's frozen graph once, then the run itself until it ends. */
-function LoadedRun({ tenantId, runId }: { tenantId: string; runId: string }) {
+function LoadedRun({ tenantId, runId, refreshProjectRuns }: { tenantId: string; runId: string; refreshProjectRuns: (projectId: string) => void }) {
   const { t } = useTranslation()
   const snapshot = useQuery({ ...runSnapshotQuery(tenantId, runId), enabled: tenantId !== '' })
   const run = useQuery(runQuery(tenantId, runId, snapshot.data))
   const error = snapshot.error ?? run.error
-  if (run.data) return <RunWorkspace tenantId={tenantId} run={run.data} />
+  if (run.data) return <RunWorkspace tenantId={tenantId} run={run.data} refreshProjectRuns={refreshProjectRuns} />
   return (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       <p>{error === null ? '正在读取运行…' : isMissing(error) ? '这次运行已经不在了。' : localizeContractError(error, t)}</p>
@@ -85,7 +92,7 @@ function runConversations(run: GraphWorkflowRun): WorkflowNodeConversationItem[]
   return Object.values(run.nodeStates).flatMap((state) => state.conversation ?? [])
 }
 
-function RunWorkspace({ tenantId, run }: { tenantId: string; run: GraphWorkflowRun }) {
+function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string; run: GraphWorkflowRun; refreshProjectRuns: (projectId: string) => void }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const conversations = useMemo(() => runConversations(run), [run])
@@ -283,7 +290,9 @@ function RunWorkspace({ tenantId, run }: { tenantId: string; run: GraphWorkflowR
               disabled={busy}
               onClick={() =>
                 act(async () => {
-                  selectRun(await rerun(tenantId, run))
+                  const next = await rerun(tenantId, run)
+                  refreshProjectRuns(run.projectId)
+                  selectRun(next)
                 })
               }
             >

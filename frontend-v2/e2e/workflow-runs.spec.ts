@@ -64,6 +64,23 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   const row = (status: string) => demo.getByRole('button', { name: `工作流运行 ${runName}（${status}）` })
   await expect(row('未运行')).toBeVisible()
 
+  // 再跑一次 creates a pending run of the same version; the sidebar lists it at once, although
+  // every run it held had ended and it had stopped polling. The pending run is deleted again: one
+  // left behind would keep the list polling and hide this check from the next spec run.
+  async function runAgain() {
+    await pane.getByRole('button', { name: '再跑一次' }).click()
+    await expect(row('未运行')).toBeVisible({ timeout: 3_000 })
+    await screenshot(page, testInfo.outputPath('rerun-sidebar.png'))
+    const pending = row('未运行').locator('..')
+    await pending.hover()
+    await pending.getByRole('button', { name: `${runName} 的更多操作` }).click()
+    await page.getByRole('menuitem', { name: '删除' }).click()
+    const confirm = page.getByRole('dialog', { name: /删除运行/ })
+    await confirm.getByRole('button', { name: '删除' }).click()
+    await expect(confirm).toBeHidden()
+    await expect(row('未运行')).toBeHidden()
+  }
+
   // Start sends the kickoff input to v2-server, which executes the run; the page follows it.
   await pane.getByRole('button', { name: '启动' }).click()
   const start = page.getByRole('dialog')
@@ -78,6 +95,7 @@ test('workflow runs: v2-server executes a published workflow started from chat',
     await pane.getByLabel('工作流全图俯瞰').getByText('起草', { exact: true }).click()
     await pane.getByRole('button', { name: '打开节点详情' }).click()
     await expect(pane.getByText(/not available in v2/).filter({ visible: true }).first()).toBeVisible()
+    await runAgain()
     return
   }
 
@@ -92,4 +110,5 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await pane.getByRole('button', { name: '查看节点会话' }).click()
   await expect(pane.getByText(/审阅上一步的方案：V2 fixture complete\./)).toBeVisible()
   await screenshot(page, testInfo.outputPath('3-review-session.png'))
+  await runAgain()
 })
