@@ -132,8 +132,23 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
 
   await page.goto('/settings/plugins')
   const tavily = page.getByRole('article', { name: 'Tavily' })
-  await expect(tavily.getByText('当前节点不支持此类型')).toBeVisible()
-  await expect(tavily.getByRole('button', { name: '安装' })).toHaveCount(0)
+  await tavily.getByRole('button', { name: '安装' }).click()
+  await expect(tavily.getByText('已安装（演示）', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(tavily.getByText('已安装（演示）', { exact: true })).toBeVisible()
+  await tavily.getByRole('button', { name: '移除' }).click()
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: '移除' })
+    .click()
+  await expect(tavily.getByText('未安装', { exact: true })).toBeVisible()
+
+  const hooks = page.getByRole('article', { name: '示例 Hooks' })
+  await expect(page.getByRole('heading', { name: 'Hooks' })).toBeVisible()
+  await hooks.getByRole('button', { name: '安装' }).click()
+  await expect(hooks.getByText('已安装（演示）', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(hooks.getByText('已安装（演示）', { exact: true })).toBeVisible()
 })
 
 test('owner manages a space market while the official catalog stays shared', async ({
@@ -305,6 +320,19 @@ test('five desktop pages and keyboard-accessible details', async ({
     ).toBeVisible()
     if (path !== 'theme')
       await expect(page.getByText('正在加载…', { exact: true })).toHaveCount(0)
+    if (path === 'plugins') {
+      for (const name of ['Tavily', '示例 Hooks']) {
+        const plugin = page.getByRole('article', { name })
+        const install = plugin.getByRole('button', { name: '安装' })
+        if (await install.count()) await install.click()
+      }
+      await expect(
+        page.getByRole('article', { name: 'Tavily' }).getByText(
+          '已安装（演示）',
+          { exact: true },
+        ),
+      ).toBeVisible()
+    }
     await page.screenshot({
       path: info.outputPath(path + '-light.png'),
       fullPage: true,

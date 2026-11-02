@@ -9,6 +9,7 @@ import {
   renderSettingsPage,
 } from '../test-utils'
 import PluginsPage from './page'
+import { useDemoPluginSelections } from './demo-state'
 
 const writing = marketplaceEntry('writing-kit', {
   kind: 'skill',
@@ -36,7 +37,10 @@ const official = marketplaceEntry('mattpocock.skills', {
   sourceNamespace: 'official',
 })
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  useDemoPluginSelections.getState().reset()
+  localStorage.clear()
+})
 
 it('searches and filters the server catalog, then confirms a server-backed removal', async () => {
   const backend = installMarketplaceBackend({
@@ -79,16 +83,33 @@ it('searches and filters the server catalog, then confirms a server-backed remov
   })
 })
 
-it('shows MCP details but does not offer installation without a runtime', async () => {
+it('installs and removes MCP and Hooks as browser-local demo state', async () => {
   const backend = installMarketplaceBackend({
     catalog: [writing, github, pack],
   })
   const user = userEvent.setup()
   renderSettingsPage(<PluginsPage />)
   const row = await screen.findByRole('article', { name: 'GitHub 工具' })
+  await user.click(within(row).getByRole('button', { name: '安装' }))
   expect(
-    within(row).queryByRole('button', { name: '安装' }),
-  ).not.toBeInTheDocument()
+    within(row).getByText('已安装（演示）', { exact: true }),
+  ).toBeInTheDocument()
+  await user.click(within(row).getByRole('button', { name: '移除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog).toHaveTextContent('不会卸载真实插件包')
+  await user.click(within(dialog).getByRole('button', { name: '移除' }))
+  expect(within(row).getByText('未安装', { exact: true })).toBeInTheDocument()
+
+  const hook = screen.getByRole('article', { name: '示例 Hooks' })
+  expect(screen.getByRole('heading', { name: 'Hooks' })).toBeInTheDocument()
+  await user.click(within(hook).getByRole('button', { name: '安装' }))
+  expect(
+    within(hook).getByText('已安装（演示）', { exact: true }),
+  ).toBeInTheDocument()
+  expect(localStorage.getItem('ora-v2-plugin-demo:v1')).toContain(
+    'demo/sample-hooks',
+  )
+
   await user.click(
     within(row).getByRole('button', { name: '查看插件 GitHub 工具' }),
   )
@@ -109,7 +130,7 @@ it('keeps unsupported packs disabled and clears no-result filters', async () => 
     'nothing-matches',
   )
   await user.click(screen.getByRole('button', { name: '清除筛选' }))
-  expect(screen.getAllByRole('article')).toHaveLength(3)
+  expect(screen.getAllByRole('article')).toHaveLength(4)
 })
 
 it('lets a member browse the catalog but not change it', async () => {
