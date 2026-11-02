@@ -88,6 +88,13 @@ describe('workflow runs in chat', () => {
     await user.click(await within(pane).findByRole('button', { name: '查看节点会话' }))
     expect(within(pane).getByText('请完成：Agent：审查改动', { selector: '[data-slot="bubble-content"]' })).toBeInTheDocument()
     expect(within(pane).getAllByText('回答：Agent：审查改动').length).toBeGreaterThan(0)
+
+    // Its details say what it actually ran on, and that v2 did not retry it as desktop would.
+    await user.click(within(pane).getByRole('button', { name: '打开节点详情' }))
+    const details = await within(pane).findByLabelText('阶段详情')
+    expect(within(details).getByLabelText('实际执行')).toHaveTextContent('Claude Code · Fixture')
+    expect(within(details).getByLabelText('实际执行')).toHaveTextContent('没有找到配置的模型「claude-sonnet-5-5」')
+    expect(within(details).getByLabelText('v2 未应用的设置')).toHaveTextContent('v2 未应用：自动重试')
   }, 30_000)
 
   it('stops a run that is still executing', async () => {

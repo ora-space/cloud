@@ -95,6 +95,8 @@ test('workflow runs: v2-server executes a published workflow started from chat',
     await pane.getByLabel('工作流全图俯瞰').getByText('起草', { exact: true }).click()
     await pane.getByRole('button', { name: '打开节点详情' }).click()
     await expect(pane.getByText(/not available in v2/).filter({ visible: true }).first()).toBeVisible()
+    // The node configures no retry, so desktop would retry it by default; v2 says it did not.
+    await expect(pane.getByLabel('v2 未应用的设置').filter({ visible: true }).first()).toContainText('自动重试')
     await runAgain()
     return
   }
@@ -110,5 +112,11 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await pane.getByRole('button', { name: '查看节点会话' }).click()
   await expect(pane.getByText(/审阅上一步的方案：V2 fixture complete\./)).toBeVisible()
   await screenshot(page, testInfo.outputPath('3-review-session.png'))
+
+  // Its details name the executor and the model it actually ran on.
+  await pane.getByRole('button', { name: '打开节点详情' }).click()
+  await expect(pane.getByLabel('实际执行').filter({ visible: true }).first()).toContainText('· Fixture')
+  await expect(pane.getByLabel('v2 未应用的设置').filter({ visible: true }).first()).toContainText('自动重试')
+  await screenshot(page, testInfo.outputPath('4-review-details.png'))
   await runAgain()
 })

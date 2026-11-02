@@ -1,6 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/workflows/host/ui";
-import type { WorkflowAgentConfig } from "@/lib/workflows/runtime";
+import type {
+  GraphWorkflowNodeState,
+  WorkflowAgentConfig,
+} from "@/lib/workflows/runtime";
 import { normalizeWorkflowAgentConfig } from "@/lib/workflows/mock";
 import { IconRobot } from "@tabler/icons-react";
 import { PluginLogoMark } from "@/lib/workflows/host/plugin-logo";
@@ -12,11 +15,14 @@ import {
   formatAgentExecutorLabel,
   resolveAgentRetryDisplay,
 } from "./agent-config-display";
+import { RunActV2Execution } from "./run-act-v2-execution";
 import { RunBriefPopover } from "./run-brief-popover";
 import { shouldPreviewBrief } from "./should-preview-brief";
 
 interface RunActAgentConfigProps {
   config: WorkflowAgentConfig;
+  /** The node's attempt, for what v2 actually ran it on and the settings it did not apply. */
+  attempt?: Pick<GraphWorkflowNodeState, "executor" | "model" | "unapplied">;
 }
 
 /**
@@ -25,9 +31,11 @@ interface RunActAgentConfigProps {
  * brief popover (catalog label/description, or a quiet “no description” tip when
  * empty). Long prompt text also opens a preview when it would otherwise truncate.
  * Retry always shows the policy the engine applies, including the implicit default.
+ * v2 adds the executor and model the attempt ran on and the settings it did not apply.
  */
 export function RunActAgentConfig({
   config: rawConfig,
+  attempt = {},
 }: RunActAgentConfigProps) {
   const config = normalizeWorkflowAgentConfig(rawConfig);
   const { t } = useTranslation();
@@ -99,6 +107,8 @@ export function RunActAgentConfig({
           </span>
         </div>
       </div>
+
+      <RunActV2Execution config={config} attempt={attempt} />
 
       <div className="space-y-1">
         <p className="text-[11px] text-muted-foreground">

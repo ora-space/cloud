@@ -81,7 +81,8 @@ e2e/            Playwright 端到端测试
 
 | 文件 | 来自 desktop `packages/app-shell/src/features/workflow-run` |
 |---|---|
-| `run-theater*`、`run-act-*`、`run-overview-*`、`run-status-*`、`run-loop-*`、`run-condition-stage.tsx`、`run-result-act.tsx`、`run-brief-popover.tsx`、`run-hitl-composer.tsx`、`use-theater-hitl.tsx`、`run-path-structure.ts`、`run-focus.ts`、`run-node-completion.ts` 和其余同名小文件 | 同名文件，只改了 import 路径 |
+| `run-theater*`、`run-act-*`、`run-overview-*`、`run-status-*`、`run-loop-*`、`run-condition-stage.tsx`、`run-result-act.tsx`、`run-brief-popover.tsx`、`run-hitl-composer.tsx`、`use-theater-hitl.tsx`、`run-path-structure.ts`、`run-focus.ts`、`run-node-completion.ts` 和其余同名小文件 | 同名文件，只改了 import 路径；`run-act-agent-config.tsx` 另外挂上 `run-act-v2-execution.tsx`，`run-act-inspector.tsx` 把节点状态传给它 |
+| `run-act-v2-execution.tsx`、`agent-unapplied.ts` | 新写：节点详情里 Agent 实际使用的执行器和模型，以及 v2 没有应用的设置（见下文） |
 | `workflow-run-start-dialog.tsx`、`translations.ts` | 同名文件 |
 | `run-node-session-chat.tsx`、`conversation-turns.ts` | 新写：desktop 在这里嵌入完整的聊天视图读取节点的真实会话；这里只有服务端运行带回的对话记录（见下文），`conversation-turns.ts` 把它们转成对话页的轮次（发给 Agent 的消息开启一轮，之后的回复、思考和工具调用归入这一轮），再交给对话页的 `Thread` 渲染，所以节点会话和对话页的样式一致；不能在里面接着发消息 |
 | `hitl-text-editor.tsx` | 新写：人工介入回答框，用纯文本输入框代替 desktop 的 TipTap 编辑器 |
@@ -91,7 +92,9 @@ e2e/            Playwright 端到端测试
 
 运行由 v2-server 执行（见 `v2-server/README.md` 的"工作流执行"一节），客户端和工作流定义一样由 `v2-server/workflows.openapi.json` 生成。`server-runs.ts` 把创建、启动、修改启动输入、取消、删除和再跑一次接到生成的客户端上，拒绝同样转成 `ContractError`；运行详情、冻结的图和项目下的运行列表由 TanStack Query 读取，运行没结束时每 1 秒重新读一次（`runRefreshMs`），服务端的事件流还没接。刷新页面后运行还在，执行也不依赖页面开着。
 
-`server-run-adapter.ts` 把服务端的节点运行按 desktop 读取后端运行时的规则投影成节点状态：节点状态、开始结束时间、输入输出、失败原因和失败详情（`payload.error_detail`）照搬。Agent 节点有了回答后，节点会话是两条消息：发给 Agent 的任务（服务端记下的渲染后任务 `payload.task`，没有时用节点的输入）和 Agent 的回答；服务端不保存 Agent 的完整会话，所以看不到思考和工具调用。
+`server-run-adapter.ts` 把服务端的节点运行按 desktop 读取后端运行时的规则投影成节点状态：节点状态、开始结束时间、输入输出、失败原因和失败详情（`payload.error_detail`）照搬。Agent 节点有了回答后，节点会话是两条消息：发给 Agent 的任务（服务端记下的渲染后任务 `payload.task`，没有时用节点的输入）和 Agent 的回答；服务端不保存 Agent 的完整会话，所以看不到思考和工具调用。成功的 Agent 还带着 v2 自己记下的三项：实际使用的执行器（`payload.executor`，Agent 名和插件版本）、模型（`payload.model`，配置的模型找不到或没配时 `fallback` 为真，用的是 Agent 的默认模型）和没有应用的设置（`payload.unapplied`）。节点详情在配置的"Agent 模型"下面显示"实际执行"，退回默认模型时说明原因。
+
+节点上配置了 v2 不应用的设置时，节点详情列出"v2 未应用"：角色、启用的 Skill 和 MCP、交互模式，以及自动重试（desktop 的重试策略会重跑这个节点时就算，包括没写 `retry` 时的默认策略，因为 v2 从不重试）。这份清单取节点记下的 `unapplied` 和节点配置的并集，所以还没执行或失败的节点也会标出来，不静默忽略。
 
 v2 只做核心执行，有几项界面在、但不会出现或不可用：服务端不执行需要人工参与的节点，回答人工介入的 hook 直接拒绝；节点失败即运行失败，没有重试和从失败处恢复；AI 诊断、会话索引和文件变更评审没有搬。条件分支没走的节点还不标为未执行，等服务端支持条件节点后补上。
 

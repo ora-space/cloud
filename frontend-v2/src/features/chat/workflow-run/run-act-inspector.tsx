@@ -440,7 +440,7 @@ function RunActInspectorPanel({
         <InspectorSection>
           {nodeType.configFields.includes("agent") &&
             agentConfig !== undefined && (
-              <RunActAgentConfig config={agentConfig} />
+              <RunActAgentConfig config={agentConfig} attempt={state} />
             )}
           {data.inputVariables !== undefined &&
             data.inputVariables.length > 0 &&
