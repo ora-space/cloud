@@ -2,6 +2,7 @@ import '@/lib/workflows/test/dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from '../page'
@@ -14,11 +15,13 @@ import { serveRuns, type RunServer } from './test-run-server'
 /** Renders the page and waits until it has loaded the backend's projects. */
 const renderPage = async () => {
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <TooltipProvider>
-        <Page />
-      </TooltipProvider>
-    </QueryClientProvider>,
+    <MemoryRouter initialEntries={['/chat']}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <TooltipProvider>
+          <Page />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
   await within(sidebar()).findByRole('region', { name: '项目 ora-space/cloud' })
 }

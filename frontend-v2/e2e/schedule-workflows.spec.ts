@@ -83,6 +83,13 @@ for (const containers of [false, true]) {
     await dialog.getByRole('button', { name: '暂停任务' }).click()
     await expect(dialog.getByText('已暂停')).toBeVisible()
 
+    // The history opens the occurrence's own run page directly.
+    await dialog.getByRole('link', { name: '打开运行页' }).click()
+    await expect(page).toHaveURL(/\/chat$/)
+    const pane = page.getByRole('region', { name: '工作流运行' })
+    await expect(pane.getByRole('heading', { name: taskName })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('schedule-workflow-run-page.png'), fullPage: true })
+
     // The run is an ordinary run of the project: the chat page lists it under Demo.
     await page.goto('/chat')
     const demo = page.getByRole('complementary', { name: '聊天记录' }).getByRole('region', { name: '项目 Demo' })
@@ -104,7 +111,6 @@ for (const containers of [false, true]) {
     expect(JSON.parse(detail.run.output!)).toMatchObject({ draft: expect.stringContaining('V2 fixture complete'), paragraphs: [expect.any(String), expect.any(String)] })
 
     await runRow.click()
-    const pane = page.getByRole('region', { name: '工作流运行' })
     await pane.getByRole('button', { name: '全图', exact: true }).click()
     await pane.getByLabel('工作流全图俯瞰').getByTestId('rf__node-start').click()
     await pane.getByRole('button', { name: '打开节点详情', exact: true }).click()

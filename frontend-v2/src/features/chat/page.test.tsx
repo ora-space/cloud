@@ -1,19 +1,22 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import Page from './page'
 import { resetChatStore, useChatStore } from './store'
 import { type ChatBackend, chatBackend, FakeEventSource, line, tenantId } from './test-backend'
 
-const renderPage = () =>
+const renderPage = (url = '/chat') =>
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <TooltipProvider>
-        <Page />
-      </TooltipProvider>
-    </QueryClientProvider>,
+    <MemoryRouter initialEntries={[url]}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <TooltipProvider>
+          <Page />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
 const sidebar = () => screen.getByRole('complementary', { name: '聊天记录' })
 /** Renders the page and waits until it has loaded the backend's projects. */
@@ -35,6 +38,12 @@ describe('chat page', () => {
     const cloud = within(sidebar()).getByRole('region', { name: '项目 ora-space/cloud' })
     expect(within(cloud).getByText('梳理 v2 接口缺口')).toBeInTheDocument()
     expect(within(cloud).getByText('对话页样式')).toBeInTheDocument()
+  })
+
+  it('opens the run a link names', async () => {
+    renderPage('/chat?run=run-9')
+    expect(await screen.findByRole('region', { name: '工作流运行' })).toBeInTheDocument()
+    expect(useChatStore.getState().selectedRunId).toBe('run-9')
   })
 
   it('opens on a new chat in the first project, as desktop lands', async () => {

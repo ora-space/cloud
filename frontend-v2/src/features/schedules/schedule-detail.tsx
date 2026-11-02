@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import { Check, Clock3, Pause, Pencil, Play, RefreshCw, Square, TriangleAlert } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Link } from 'react-router'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { getWorkflowRun } from '@/lib/workflows/api/generated'
 import { listScheduleHistory, getScheduleHistoryItem, getScheduleExecutionResult } from './api/history/generated'
 import { runScheduleNow, cancelScheduleRun } from './api/actions/generated'
@@ -72,10 +73,10 @@ export function ScheduleDetail({data,resources,tenantId,scope,task,initialTab='c
      {selected&&<section aria-label="选中运行的结果">
       <div className="sp-config-heading">{runLabels[selected.status]}{!selected.released?' · 等待结束确认':''}</div>
       {selected.reason&&<p className="sp-helper">{reasonText(selected.reason)}</p>}
+      {workflowRunId&&<Link className={buttonVariants({variant:'outline',size:'sm'})} to={`/chat?run=${encodeURIComponent(workflowRunId)}`}>打开运行页</Link>}
       {workflowRunId?workflowRun.isPending?<p role="status">正在读取工作流运行…</p>:workflowRun.isError?<p role="alert">{scheduleError(workflowRun.error,'工作流运行暂时无法读取。')} <Button variant="outline" size="sm" onClick={()=>void workflowRun.refetch()}>重试读取运行</Button></p>:<>
        <div className="sp-config-heading">工作流运行 · {workflowRunLabels[workflowRun.data.run.status]??workflowRun.data.run.status}</div>
        <pre className="sp-prompt-preview" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{workflowRun.data.run.output??workflowRun.data.run.error??'运行尚未产生输出'}</pre>
-       <p className="sp-helper">这次运行也列在对话页「{projectName(task.projectId,data)}」项目下，可以打开查看每个节点。</p>
       </>:!selected.executionRef?<p className="sp-helper">此次运行尚无可读取的执行结果。</p>:output.isPending?<p role="status">正在读取结果…</p>:output.isError?<p role="alert">{scheduleError(output.error,'完整结果暂时无法读取。')} <Button variant="outline" size="sm" onClick={()=>void output.refetch()}>重试读取结果</Button></p>:output.data?.result?<>
        <div className="sp-config-heading">{completeResult(output.data)?'完整结果':'部分结果或未完成结果'}</div>
        <pre className="sp-prompt-preview" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{output.data.result.answer||'未返回文本回答'}</pre>

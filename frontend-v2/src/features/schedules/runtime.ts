@@ -8,7 +8,7 @@ export function resourceCatalog(resources: ScheduleResources): Catalog { return 
 export const runLabels: Record<string,string> = { recorded: '已记录', starting: '正在启动', reconciling: '正在核对', running: '进行中', cancelling: '正在取消', succeeded: '成功', success: '成功', failed: '失败', cancelled: '已取消', interrupted: '已中断', skipped: '已跳过' }
 const reasons: Record<string,string> = {
   previous_unfinished: '上一次运行尚未结束', execution_busy: '执行器正忙', server_restarted: '服务重启，本次不补跑', execution_not_started: '本次执行未启动', lookup_required: '正在核对执行结果', configuration_changed: '配置已修改', paused: '计划已暂停', result_incomplete: '回答不完整', model_required: '尚未选择模型', executor_required: '尚未选择执行器', execution_unavailable: '执行服务尚未就绪', execution_target_unavailable: '执行目标已不可用', unsupported_schedule_target: '此执行方式尚未接入', execution_failed: '执行失败', cancelled: '运行已取消',
-  workflow_run_failed: '工作流运行失败', workflow_run_not_startable: '工作流不能启动：图里有当前版本还不能执行的节点，或输入不满足开始节点', workflow_unavailable: '工作流或所选版本已不可用', project_unavailable: '项目已不可用', workflow_required: '尚未选择工作流', project_required: '工作流必须关联项目',
+  workflow_run_failed: '工作流运行失败', workflow_run_deleted: '工作流运行已被删除', workflow_run_not_startable: '工作流不能启动：图里有当前版本还不能执行的节点，或输入不满足开始节点', workflow_unavailable: '工作流或所选版本已不可用', project_unavailable: '项目已不可用', workflow_required: '尚未选择工作流', project_required: '工作流必须关联项目',
 }
 export function reasonText(reason: string) { return reasons[reason] ?? (reason ? `原因：${reason}` : '') }
 export function scheduleError(error: unknown, fallback: string) {

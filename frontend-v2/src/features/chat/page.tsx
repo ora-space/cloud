@@ -1,5 +1,6 @@
 import { SquarePenIcon } from 'lucide-react'
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router'
 import { useGetApiV1MeTenants } from '@/api/me/me'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -29,15 +30,28 @@ const slide = { duration: 420, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' }
 
 /**
  * Chat: history on the left; on the right the selected session, a picked workflow run, or a new
- * chat when neither is.
+ * chat when neither is. `?run=<id>` opens that run, so other pages can link straight to it.
  */
 export default function Page() {
   const session = useChatStore((s) => s.sessions.find((x) => x.id === s.selectedId))
   const runId = useChatStore((s) => s.selectedRunId)
   const tenantId = useGetApiV1MeTenants().data?.items[0]?.id
+  const [params, setParams] = useSearchParams()
+  const linkedRun = params.get('run')
   useEffect(() => {
     if (tenantId) void useChatStore.getState().connect(tenantId)
   }, [tenantId])
+  useEffect(() => {
+    if (!linkedRun) return
+    useChatStore.getState().selectRun(linkedRun)
+    setParams(
+      (p) => {
+        p.delete('run')
+        return p
+      },
+      { replace: true },
+    )
+  }, [linkedRun, setParams])
   return (
     <div className="flex min-h-0 flex-1">
       <Sidebar />

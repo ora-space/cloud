@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import Page from './page'
 import * as api from './api/generated'
@@ -18,7 +19,7 @@ vi.mock('@/lib/workflows/api/generated',()=>({getWorkflowRun:vi.fn()}))
 const resources={projects:[{id:'project-id',name:'真实项目',description:''}],models:[{id:'fixture',name:'固定模型'}],executors:[{id:'executor-id',name:'项目执行器',agentName:'Agent',modelId:'fixture'}],workflows:[{id:'wf-1',name:'周报流程',version:'v2',snapshotId:'snap-2'}],available:{projects:true,models:true,executors:true,workflows:true}}
 const item={id:'task-1',name:'早报',projectId:'',target:{kind:'chat' as const,prompt:'摘要',agent:'',model:'fixture'},rule:{kind:'daily' as const,time:'09:00',days:[1],hours:6,timezone:'Asia/Shanghai'},enabled:true,version:1,createdAt:'2026-10-01T00:00:00Z',updatedAt:'2026-10-01T00:00:00Z',runs:[]}
 const occurrence:history.Occurrence={id:'run-1',scheduleId:item.id,key:'key',kind:'manual',status:'running',reason:'',executionRef:'ref',scheduledAt:item.createdAt,recordedAt:item.createdAt,configVersion:1,snapshot:{},released:false,version:1}
-function mount(client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})){return render(<QueryClientProvider client={client}><Page/></QueryClientProvider>)}
+function mount(client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})){return render(<MemoryRouter><QueryClientProvider client={client}><Page/></QueryClientProvider></MemoryRouter>)}
 async function detail(){await screen.findByText('早报');await userEvent.click(screen.getByRole('button',{name:'查看早报'}));return screen.getByRole('dialog')}
 beforeEach(()=>{
  sessionStorage.clear();vi.resetAllMocks()
@@ -68,8 +69,20 @@ it("says when a workflow schedule still runs an older version, and shows an occu
  expect(await within(dialog).findByText('工作流运行 · 成功')).toBeInTheDocument()
  expect(within(dialog).getByText('{"summary":"本周合并了 3 个改动"}')).toBeInTheDocument()
  expect(workflowRuns.getWorkflowRun).toHaveBeenCalledWith('tenant','run-9',undefined,expect.anything())
+ expect(within(dialog).getByRole('link',{name:'打开运行页'})).toHaveAttribute('href','/chat?run=run-9')
  // The schedule's own result route is for conversations; a workflow's result is its run.
  expect(history.getScheduleExecutionResult).not.toHaveBeenCalled()
+})
+
+it('offers no run page for a workflow occurrence that started no run',async()=>{
+ const scheduled={...item,projectId:'project-id',target:{kind:'workflow' as const,workflowId:'wf-1',snapshotId:'snap-1',input:'整理本周'}}
+ vi.mocked(api.listScheduleConfigs).mockResolvedValue({items:[scheduled],nextCursor:''})
+ vi.mocked(history.listScheduleHistory).mockResolvedValue({items:[{...occurrence,status:'skipped',reason:'workflow_run_not_startable',released:true,executionRef:''}],nextCursor:''})
+ mount();const dialog=await detail()
+ await userEvent.click(within(dialog).getByRole('button',{name:'运行历史'}))
+ expect(await within(dialog).findByText(/工作流不能启动/)).toBeInTheDocument()
+ expect(within(dialog).queryByRole('link',{name:'打开运行页'})).not.toBeInTheDocument()
+ expect(workflowRuns.getWorkflowRun).not.toHaveBeenCalled()
 })
 
 it('shows unavailable resources, keeps reference modes disabled and allows unbound text configuration',async()=>{
