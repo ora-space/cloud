@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { targetFromDraft, formatTime, nextTimes, type Draft, type Task } from './schedule-model'
+import { targetFromDraft, formatTime, nextTimes, type Catalog, type Draft, type Task } from './schedule-model'
 import { ScheduleDrawer } from './schedule-drawer'
 import { ScheduleForm } from './schedule-form'
 import { ScheduleDetail } from './schedule-detail'
@@ -56,9 +56,9 @@ function SchedulesPage({ tenantId, scope, tenantsLoading, tenantsError }: { tena
   const [saveError, setSaveError] = useState('')
   const [conflict, setConflict] = useState(false)
   const [editTask, setEditTask] = useState<Task>()
-  const saveMutation = useMutation({ mutationFn: async ({ draft, task }: { draft: Draft; task?: Task }) => {
-    if (draft.kind !== 'chat') throw new Error('此执行方式尚未接入真实资源')
-    const payload = { name: draft.name.trim(), projectId: draft.projectId, target: targetFromDraft(draft), rule: draft.rule }
+  const saveMutation = useMutation({ mutationFn: async ({ draft, task, data }: { draft: Draft; task?: Task; data: Catalog }) => {
+    if (draft.kind === 'task') throw new Error('此执行方式尚未接入真实资源')
+    const payload = { name: draft.name.trim(), projectId: draft.projectId, target: targetFromDraft(draft, data), rule: draft.rule }
     return task ? updateScheduleConfig(tenantId, task.id, { ...payload, version: task.version! }) : createScheduleConfig(tenantId, payload)
   }, onSuccess: async (item, variables) => { await refresh(); setPanel(current => current && (current.kind === 'create' || (current.kind === 'edit' && current.id === variables.task?.id)) ? { kind: 'detail', id: item.id } : current); setSaveError(''); setConflict(false); setToast(variables.task ? '修改已保存' : '任务配置已保存') }, onError: error => { setConflict(statusOf(error) === 409); setSaveError(scheduleError(error,'保存失败，请重试。')); if (statusOf(error) === 409) void refresh() } })
   const toggleMutation = useMutation({ mutationFn: (task: Task) => setScheduleConfigEnabled(tenantId, task.id, { version: task.version!, enabled: !task.enabled }), onSuccess: async () => { await refresh(); setToast('任务状态已更新') }, onError: error => { setToast(scheduleError(error,'更新失败，请重试')); void refresh() } })
@@ -77,7 +77,7 @@ function SchedulesPage({ tenantId, scope, tenantsLoading, tenantsError }: { tena
   const enabled = tasks.filter(t => t.enabled).length
   const nearest = tasks.filter(t => t.enabled).flatMap(t => nextTimes(t.rule, now, new Date(t.createdAt)).slice(0, 1).map(date => ({ task: t, date }))).sort((a, b) => a.date.getTime() - b.date.getTime())[0]
   const open = (task: Task, tab?: 'config' | 'history') => setPanel({ kind: 'detail', id: task.id, tab })
-  const saved = (draft:Draft) => {setSaveError('');saveMutation.mutate({draft,task:panel?.kind==='edit'?editTask:undefined})}
+  const saved = (draft:Draft,catalog:Catalog) => {setSaveError('');saveMutation.mutate({draft,task:panel?.kind==='edit'?editTask:undefined,data:catalog})}
   const toggleTask = (task:Task) => {if(!toggleMutation.isPending)toggleMutation.mutate(task)}
   const openCreate = () => { setConflict(false); setSaveError(''); setEditTask(undefined); setPanel({ kind: 'create' }) }
   const clearFilters = () => { setQuery(''); setStatus('all'); setKind('all'); setProject('all') }

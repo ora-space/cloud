@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { catalog, emptyDraft, formatTime, nextTimes, summary, taskDraft, validateDraft, weekdayNames, type Catalog, type Draft, type Task } from './schedule-model'
+import { catalog, editableDraft, emptyDraft, formatTime, nextTimes, summary, taskDraft, validateDraft, weekdayNames, type Catalog, type Draft, type Task } from './schedule-model'
 
 export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blocked=false,saveError,onCloseReady,resourcesLoading=false,resourcesError,onRetryResources}:{task?:Task;onSave:(draft:Draft,data:Catalog)=>void;onCancel:()=>void;data?:Catalog;saving?:boolean;blocked?:boolean;saveError?:string;onCloseReady?:(close:()=>void)=>void;resourcesLoading?:boolean;resourcesError?:string;onRetryResources?:()=>void}) {
  const [draft,setDraft]=useState(()=>task?taskDraft(task):emptyDraft())
@@ -22,13 +22,20 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
  const models=data.models??[]
  const executors=(data.executors??[]).filter(e=>!draft.model||e.modelId===draft.model)
  const unavailable=resourcesLoading||(!!resourcesError&&!data.available?.models&&!data.available?.projects)
+ const editable=editableDraft(draft,task)
+ const workflows=data.workflows??[]
+ const chosen=workflows.find(w=>w.id===draft.workflowId)
+ // The version a save freezes is the one published now, which may differ from the one frozen before.
+ const workflowHint=!chosen?'只列出已发布的工作流。':draft.snapshotId&&draft.snapshotId!==chosen.snapshotId?`当前固定的是旧版本，保存后改为生效版本 ${chosen.version}。`:`保存时固定生效版本 ${chosen.version}；之后发布的新版本要重新保存任务才会使用。`
  function submit(event:FormEvent<HTMLFormElement>){
   event.preventDefault()
-  if(saving||blocked||resourcesLoading||draft.kind!=='chat')return
+  if(saving||blocked||resourcesLoading||!editable)return
   const next=validateDraft(draft,data)
-  if(data.available?.models&&!models.some(m=>m.id===draft.model))next.model='请选择当前可用的模型'
-  if(!data.available?.models&&draft.model)next.model='模型目录尚未就绪，请刷新后再保存'
-  if(draft.projectId&&(!data.available?.executors||!executors.some(e=>e.id===draft.executorId&&e.modelId===draft.model)))next.executorId='请选择当前可用的执行器'
+  if(draft.kind==='chat'){
+   if(data.available?.models&&!models.some(m=>m.id===draft.model))next.model='请选择当前可用的模型'
+   if(!data.available?.models&&draft.model)next.model='模型目录尚未就绪，请刷新后再保存'
+   if(draft.projectId&&(!data.available?.executors||!executors.some(e=>e.id===draft.executorId&&e.modelId===draft.model)))next.executorId='请选择当前可用的执行器'
+  }
   setErrors(next)
   if(Object.keys(next).length){const form=event.currentTarget;requestAnimationFrame(()=>form.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());return}
   onSave(draft,data)
@@ -39,12 +46,21 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
     <FieldLegend variant="label"><span className="sp-section-number">01</span>执行内容</FieldLegend>
     <FieldGroup>
      <ScheduleField name="name" label="任务名称" error={errors.name}><Input placeholder="例如：每日 AI 简报" value={draft.name} onChange={e=>patch({name:e.target.value})} {...control('name')}/></ScheduleField>
-     <ToggleGroup className="sp-kind-picker w-full" aria-label="执行方式" value={[draft.kind]} variant="outline" spacing={3}>
-      <ToggleGroupItem disabled={draft.kind!=='chat'} className="sp-choice h-auto min-h-24 flex-1 flex-col items-start gap-2 p-4" value="chat"><MessageSquare/><strong>直接对话</strong><small>用一段指令完成工作</small>{draft.kind==='chat'&&<Check className="sp-selected-check"/>}</ToggleGroupItem>
-      <ToggleGroupItem disabled className="sp-choice h-auto min-h-24 flex-1 flex-col items-start gap-2 p-4" value="workflow"><GitBranch/><strong>运行工作流</strong><small>执行服务待接入</small></ToggleGroupItem>
+     <ToggleGroup className="sp-kind-picker w-full" aria-label="执行方式" value={[draft.kind]} onValueChange={values=>{const kind=values.at(-1);if(kind==='chat'||kind==='workflow')patch({kind})}} variant="outline" spacing={3}>
+      <ToggleGroupItem disabled={draft.kind==='task'} className="sp-choice h-auto min-h-24 flex-1 flex-col items-start gap-2 p-4" value="chat"><MessageSquare/><strong>直接对话</strong><small>用一段指令完成工作</small>{draft.kind==='chat'&&<Check className="sp-selected-check"/>}</ToggleGroupItem>
+      <ToggleGroupItem disabled={draft.kind==='task'||!data.available?.workflows} className="sp-choice h-auto min-h-24 flex-1 flex-col items-start gap-2 p-4" value="workflow"><GitBranch/><strong>运行工作流</strong><small>{data.available?.workflows?'按已发布的版本运行':'工作流服务尚未就绪'}</small>{draft.kind==='workflow'&&<Check className="sp-selected-check"/>}</ToggleGroupItem>
       <ToggleGroupItem disabled className="sp-choice h-auto min-h-24 flex-1 flex-col items-start gap-2 p-4" value="task"><ListTodo/><strong>已有任务</strong><small>任务目录待接入</small></ToggleGroupItem>
      </ToggleGroup>
-     {draft.kind==='chat'?<ScheduleField name="prompt" label="任务指令" error={errors.prompt} hint="每次运行新建独立对话，不携带上次聊天记录。"><Textarea className="min-h-28" rows={4} placeholder="描述任务目标与期望的输出格式…" value={draft.prompt} onChange={e=>patch({prompt:e.target.value})} {...control('prompt')}/></ScheduleField>:<p role="status">此执行方式尚未接入真实目录，已有配置保留，暂不能编辑。</p>}
+     {draft.kind==='chat'?<ScheduleField name="prompt" label="任务指令" error={errors.prompt} hint="每次运行新建独立对话，不携带上次聊天记录。"><Textarea className="min-h-28" rows={4} placeholder="描述任务目标与期望的输出格式…" value={draft.prompt} onChange={e=>patch({prompt:e.target.value})} {...control('prompt')}/></ScheduleField>:editable?<>
+      <ScheduleField name="workflowId" label="工作流" error={errors.workflowId} hint={workflowHint}>
+       <NativeSelect className="w-full" disabled={unavailable||!data.available?.workflows} value={draft.workflowId} onChange={e=>patch({workflowId:e.target.value})} {...control('workflowId')}>
+        <NativeSelectOption value="">{data.available?.workflows?(workflows.length?'请选择已发布的工作流':'暂无已发布的工作流'):'工作流服务尚未就绪'}</NativeSelectOption>
+        {draft.workflowId&&!chosen&&<NativeSelectOption value={draft.workflowId} disabled>原工作流暂不可用</NativeSelectOption>}
+        {workflows.map(w=><NativeSelectOption key={w.id} value={w.id}>{w.name}（{w.version}）</NativeSelectOption>)}
+       </NativeSelect>
+      </ScheduleField>
+      <ScheduleField name="input" label="初始输入" hint="可选。每次运行都作为开始节点的输入；开始节点的变量使用工作流里的默认值。"><Textarea className="min-h-24" rows={3} placeholder="例如：整理本周合并的改动" value={draft.input} onChange={e=>patch({input:e.target.value})} {...control('input')}/></ScheduleField>
+     </>:<p role="status">此执行方式尚未接入真实目录，已有配置保留，暂不能编辑。</p>}
     </FieldGroup>
    </FieldSet>
    <FieldSet className="sp-section" aria-busy={resourcesLoading}>
@@ -52,14 +68,14 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
     <FieldGroup>
      {resourcesLoading&&<p role="status">正在读取执行资源…</p>}
      {resourcesError&&<p role="alert">{resourcesError} <Button type="button" variant="outline" size="sm" onClick={onRetryResources}>重试加载</Button></p>}
-     <ScheduleField name="projectId" label="关联项目" error={errors.projectId} hint="可选。不关联项目时直接调用模型；关联项目时使用该项目独立的执行环境。">
+     <ScheduleField name="projectId" label="关联项目" error={errors.projectId} hint={draft.kind==='workflow'?'必选。每次运行在这个项目的独立目录中执行工作流。':'可选。不关联项目时直接调用模型；关联项目时使用该项目独立的执行环境。'}>
       <NativeSelect className="w-full" disabled={unavailable||!data.available?.projects} value={draft.projectId} onChange={e=>patch({projectId:e.target.value,executorId:'',agent:''})} {...control('projectId')}>
        <NativeSelectOption value="">不关联项目</NativeSelectOption>
        {draft.projectId&&!data.projects.some(p=>p.id===draft.projectId)&&<NativeSelectOption value={draft.projectId} disabled>原项目暂不可用</NativeSelectOption>}
        {data.projects.map(p=><NativeSelectOption key={p.id} value={p.id}>{p.name}</NativeSelectOption>)}
       </NativeSelect>
      </ScheduleField>
-     <FieldGroup className="grid grid-cols-2 gap-4">
+     {draft.kind==='chat'&&<FieldGroup className="grid grid-cols-2 gap-4">
       <ScheduleField name="model" label="模型" error={errors.model}>
        <NativeSelect className="w-full" disabled={unavailable||!data.available?.models} value={draft.model} onChange={e=>patch({model:e.target.value,executorId:'',agent:''})} {...control('model')}>
         <NativeSelectOption value="">{data.available?.models?(models.length?'请选择模型':'暂无可用模型'):'模型服务尚未就绪'}</NativeSelectOption>
@@ -74,8 +90,9 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
         {executors.map(e=><NativeSelectOption key={e.id} value={e.id}>{e.name}</NativeSelectOption>)}
        </NativeSelect>
       </ScheduleField>
-     </FieldGroup>
-     {!resourcesLoading&&!data.available?.models&&<FieldDescription>模型服务尚未就绪。可以先保存无项目、未选模型的配置，接入后再选择模型；当前不会执行。</FieldDescription>}
+     </FieldGroup>}
+     {draft.kind==='workflow'&&<FieldDescription>Agent 和模型由工作流里各个节点的配置决定。</FieldDescription>}
+     {draft.kind==='chat'&&!resourcesLoading&&!data.available?.models&&<FieldDescription>模型服务尚未就绪。可以先保存无项目、未选模型的配置，接入后再选择模型；当前不会执行。</FieldDescription>}
      {!resourcesLoading&&data.available?.projects&&!data.projects.length&&<FieldDescription>暂无可用项目，可先配置无项目对话。</FieldDescription>}
     </FieldGroup>
    </FieldSet>
@@ -96,7 +113,7 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
   </FieldGroup></div>
   {saveError&&<p role="alert" className="sp-helper">{saveError}</p>}
   <footer className="sp-form-footer">
-   {discard?<><span>放弃未保存的修改？</span><Button type="button" variant="outline" onClick={()=>setDiscard(false)}>继续编辑</Button><Button type="button" onClick={onCancel}>放弃修改</Button></>:<><Button type="button" variant="outline" onClick={()=>dirty?setDiscard(true):onCancel()}>取消</Button><span className="sp-footer-spacer"/><Button type="submit" disabled={saving||blocked||resourcesLoading||draft.kind!=='chat'}>{saving?'保存中…':task?'保存修改':'创建并启用'}</Button></>}
+   {discard?<><span>放弃未保存的修改？</span><Button type="button" variant="outline" onClick={()=>setDiscard(false)}>继续编辑</Button><Button type="button" onClick={onCancel}>放弃修改</Button></>:<><Button type="button" variant="outline" onClick={()=>dirty?setDiscard(true):onCancel()}>取消</Button><span className="sp-footer-spacer"/><Button type="submit" disabled={saving||blocked||resourcesLoading||!editable}>{saving?'保存中…':task?'保存修改':'创建并启用'}</Button></>}
   </footer>
  </form>
 }

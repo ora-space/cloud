@@ -15,6 +15,9 @@ import (
 )
 
 func TestLegacyScheduleReferencesRemainReadableButCannotBeWritten(t *testing.T) {
+	// A task reference has no writable target at all; a workflow reference without the workflow
+	// target's fields is not one.
+	refusal := map[string]int{"task": 503, "workflow": 400}
 	for _, kind := range []string{"workflow", "task"} {
 		t.Run(kind, func(t *testing.T) {
 			db := openStore(t)
@@ -47,12 +50,12 @@ func TestLegacyScheduleReferencesRemainReadableButCannotBeWritten(t *testing.T) 
 				return out
 			}
 			path := "/api/v2/tenants/" + tenant + "/schedule-configs"
-			if out := call("POST", path, input); out.Code != 503 {
+			if out := call("POST", path, input); out.Code != refusal[kind] {
 				t.Fatalf("new reference write: %d %s", out.Code, out.Body)
 			}
 			input.Version = 1
 			input.Name = "must not overwrite"
-			if out := call("PUT", path+"/"+saved.ID, input); out.Code != 503 {
+			if out := call("PUT", path+"/"+saved.ID, input); out.Code != refusal[kind] {
 				t.Fatalf("reference update: %d %s", out.Code, out.Body)
 			}
 			out := call("GET", path, nil)
