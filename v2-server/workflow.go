@@ -10,14 +10,16 @@ import (
 )
 
 // withWorkflowDomain injects the desktop-equivalent workflow rules into the HTTP layer, which
-// must not import the domain package itself, and the run host that executes runs. A nil host
-// keeps run start, cancel and input unavailable.
+// must not import the domain package itself, and the run host that executes runs together with
+// the hub its committed changes are announced on. A nil host keeps run start, cancel and input,
+// and the run events stream, unavailable.
 func withWorkflowDomain(o server.Options, runs *workflowhost.Host) server.Options {
 	o.AnalyzeWorkflow = analyzeWorkflow
 	// Publish already reports a refusal as store.ErrWorkflowDocumentInvalid.
 	o.ValidateWorkflow = workflow.ValidateWorkflow
 	if runs != nil {
 		o.WorkflowRuns = runs
+		o.WorkflowRunEvents = runs.Hub()
 	}
 	return o
 }

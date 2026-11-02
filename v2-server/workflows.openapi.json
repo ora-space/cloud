@@ -327,6 +327,41 @@
         }
       }
     },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/events": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
+      "get": {
+        "operationId": "streamWorkflowRunEvents",
+        "tags": ["workflowRuns"],
+        "summary": "Follow when the run changes, as Server-Sent Events",
+        "description": "Only `workflow_run_invalidated` events, the shape of desktop's app event: data `{\"runId\": \"<rid>\"}` and no state, so the page reads the run again. One is sent as soon as the stream opens; after that one per committed change, unread ones coalesced. Idle streams carry a `: ping` comment every 15 seconds. 503 workflow_run_events_unavailable when the process has no run host.",
+        "responses": {
+          "200": {"description": "An event stream of `workflow_run_invalidated` events.", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
+    "/api/v2/tenants/{tid}/workflow-runs/{rid}/nodes/{nodeRunId}/events": {
+      "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}, {"$ref": "#/components/parameters/NodeRun"}],
+      "get": {
+        "operationId": "streamWorkflowNodeRunEvents",
+        "tags": ["workflowRuns"],
+        "summary": "Follow one node attempt's session events, as Server-Sent Events",
+        "description": "The same stream as chat.openapi.json's conversation events: each message's id is its session sequence and its data a ChatEvent (a turn_ended carries its prompt); an `end` event follows session_ended and `failure` (data `{code}`) reports a broken stream. The session is read in the caller's own scope, so only whoever started the run can read it. 404 workflow_node_run_not_found when the attempt is not this run's; 404 workflow_node_session_not_found before the attempt was dispatched or when the session is not the caller's.",
+        "parameters": [{"$ref": "#/components/parameters/EventCursor"}],
+        "responses": {
+          "200": {"description": "An event stream of the attempt's session events.", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "400": {"$ref": "#/components/responses/WorkflowError"},
+          "401": {"$ref": "#/components/responses/WorkflowError"},
+          "404": {"$ref": "#/components/responses/WorkflowError"},
+          "500": {"$ref": "#/components/responses/WorkflowError"},
+          "503": {"$ref": "#/components/responses/WorkflowError"}
+        }
+      }
+    },
     "/api/v2/tenants/{tid}/workflow-runs/{rid}/start": {
       "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Run"}],
       "post": {
@@ -402,7 +437,9 @@
       "Snapshot": {"name": "sid", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
       "Run": {"name": "rid", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
       "RunProjectQuery": {"name": "projectId", "in": "query", "required": false, "schema": {"type": "string"}},
-      "NodeId": {"name": "nodeId", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1}}
+      "NodeId": {"name": "nodeId", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1}},
+      "NodeRun": {"name": "nodeRunId", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+      "EventCursor": {"name": "after", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Resume after this session sequence; Last-Event-ID takes precedence."}
     },
     "responses": {
       "WorkflowError": {

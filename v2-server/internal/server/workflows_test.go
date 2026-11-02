@@ -35,6 +35,19 @@ func workflowServer(t *testing.T, mutate func(*server.Options)) workflowCall {
 
 func workflowServerWithStore(t *testing.T, mutate func(*server.Options)) (workflowCall, *store.Store) {
 	t.Helper()
+	call, s, _ := workflowServerWithClient(t, mutate)
+	return call, s
+}
+
+// signedInServer is the workflow test server's address and the signed-in owner's client, for
+// requests call cannot make, such as reading an event stream.
+type signedInServer struct {
+	base   string
+	client *http.Client
+}
+
+func workflowServerWithClient(t *testing.T, mutate func(*server.Options)) (workflowCall, *store.Store, signedInServer) {
+	t.Helper()
 	s := openStore(t)
 	storetest.SignIn(t, s, "workflow-owner", "Owner", store.RoleOwner)
 	now := time.Date(2026, 10, 31, 9, 30, 0, 0, time.UTC)
@@ -118,7 +131,7 @@ func workflowServerWithStore(t *testing.T, mutate func(*server.Options)) (workfl
 		return res.StatusCode, out
 	}
 	call("POST", "/auth/login", map[string]string{"provider": "email", "email": storetest.Email("workflow-owner")})
-	return call, s
+	return call, s, signedInServer{base: srv.URL, client: c}
 }
 
 var errUnrunnable = &unrunnableGraphError{"document cannot execute"}

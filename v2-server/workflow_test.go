@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wanglongan587/cloud/v2-server/internal/execution/executiontest"
 	"github.com/wanglongan587/cloud/v2-server/internal/server"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 	"github.com/wanglongan587/cloud/v2-server/internal/store/storetest"
+	"github.com/wanglongan587/cloud/v2-server/internal/workflowhost"
 )
 
 // TestWorkflowDomainServesAnalyzeAndPublish drives the assembled server, so the routes answer with
@@ -93,5 +95,23 @@ func TestWorkflowDomainServesAnalyzeAndPublish(t *testing.T) {
 	}
 	if _, after := call("GET", base+"/"+id+"/versions", nil); !reflect.DeepEqual(after, before) {
 		t.Fatalf("refused publish changed versions: %v -> %v", before, after)
+	}
+}
+
+// TestWorkflowDomainStreamsTheHostsRunChanges subscribes the run events route to the hub the host's
+// engine publishes on, so a committed change reaches an open run page.
+func TestWorkflowDomainStreamsTheHostsRunChanges(t *testing.T) {
+	s := storetest.Open(t)
+	stub := &executiontest.Stub{}
+	host, err := workflowhost.NewHost(workflowhost.Config{Store: s, Execution: stub, Catalog: stub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(host.Close)
+	if o := withWorkflowDomain(server.Options{}, host); o.WorkflowRunEvents != server.WorkflowRunEvents(host.Hub()) {
+		t.Fatalf("run events = %v, want the host's hub", o.WorkflowRunEvents)
+	}
+	if o := withWorkflowDomain(server.Options{}, nil); o.WorkflowRunEvents != nil {
+		t.Fatalf("run events without a host = %v", o.WorkflowRunEvents)
 	}
 }
