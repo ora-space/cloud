@@ -498,6 +498,29 @@ export interface WorkflowNodeAttemptFailure {
   beforeRestart?: boolean;
 }
 
+/** Executor an Agent attempt actually ran on, as v2 records it in `payload.executor`. */
+export interface WorkflowNodeExecutorUsed {
+  id: string;
+  agentId: string;
+  /** The Agent's display name. */
+  name: string;
+  pluginVersion: string;
+}
+
+/** Model an Agent attempt actually ran on, as v2 records it in `payload.model`. */
+export interface WorkflowNodeModelUsed {
+  id: string;
+  name: string;
+  /** The node's configured `modelId`; empty when the node names none. */
+  requested: string;
+  /** No model matched `requested`, so the Agent's default model ran instead. */
+  fallback: boolean;
+}
+
+/** Agent settings v2 keeps in the graph but runs without (`payload.unapplied`). */
+export type WorkflowAgentUnappliedCapability =
+  "role" | "skill" | "mcp" | "retry" | "interactive";
+
 export interface GraphWorkflowNodeState {
   /** The branch committed for this exact node execution, not a global latest decision. */
   selectedBranchId?: string;
@@ -533,6 +556,12 @@ export interface GraphWorkflowNodeState {
   failedAttempts?: WorkflowNodeAttemptFailure[];
   /** ACP stop reason recorded in `payload.stop_reason` when the node succeeded. */
   stopReason?: string;
+  /** Executor the attempt ran on; v2 records it when an Agent succeeds. */
+  executor?: WorkflowNodeExecutorUsed;
+  /** Model the attempt ran on; v2 records it when an Agent succeeds. */
+  model?: WorkflowNodeModelUsed;
+  /** Configured settings v2 ran the attempt without; v2 records it when an Agent succeeds. */
+  unapplied?: WorkflowAgentUnappliedCapability[];
   /** Parked interactive completion gate from `payload.completion`; absent on older node runs. */
   completion?: WorkflowNodeCompletion;
   /** What this step received when it started (kickoff, upstream, schema…). */
