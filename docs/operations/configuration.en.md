@@ -96,8 +96,15 @@ to create tables.
 | `tokens.lifetime` | `1m` | At most 5 minutes |
 | `github.client_id`, `client_secret_file` | — | The GitHub OAuth App; `authorize_url`, `token_url`, `user_url` and `source` can point at GitHub Enterprise Server |
 | `idaas.base_url`, `client_id`, `client_secret_file`, `display_name_field`, `timeout` | —, —, —, —, `10s` | Huawei IDaaS |
+| `idaas.authorize_url`, `token_url`, `userinfo_url` | Empty | Independent full HTTPS endpoint overrides; URL credentials, queries and fragments are rejected |
 | `web.dist_dir` | Empty | The frontend build directory; when empty no frontend is served |
 | `model_credentials.upstream`, `ca_file` | Empty | The fixed HTTPS model-gateway address and its CA; both must be set together |
+
+`GATEWAY_IDAAS_AUTHORIZE_URL`, `GATEWAY_IDAAS_TOKEN_URL` and `GATEWAY_IDAAS_USERINFO_URL` override those three endpoints
+respectively. Each omitted endpoint retains `GATEWAY_IDAAS_BASE_URL` plus its `/saaslogin1/oauth2/v1/authorize`, `token`
+or `userinfo` path. These values are deployment-owned, never selected by the browser; see
+[Gateway](../identity/gateway.en.md) for the authentication protocol and identity mapping. For configuration changes and
+secret rotation, see [Deployment and operations](deployment.en.md#huawei-idaas-site-configuration).
 
 ## model-gateway
 
