@@ -228,8 +228,8 @@ func TestEngineStartRefusals(t *testing.T) {
 		graph, code string
 	}{
 		"required start value": {chain, "workflow_run_input_invalid"},
-		"unsupported kind": {`{"nodes":[{"id":"start","data":{"kind":"start"}},{"id":"c","data":{"kind":"condition","cases":[]}}],
-			"edges":[{"source":"start","target":"c"}]}`, "workflow_run_unsupported_node_type"},
+		"unsupported kind": {`{"nodes":[{"id":"start","data":{"kind":"start"}},{"id":"t","data":{"kind":"tool"}}],
+			"edges":[{"source":"start","target":"t"}]}`, "workflow_run_unsupported_node_type"},
 		"missing start": {`{"nodes":[{"id":"a","data":{"kind":"agent","agentConfig":{"prompt":"x"}}}],"edges":[]}`, "workflow_run_missing_start_node"},
 		"output with successor": {`{"nodes":[{"id":"start","data":{"kind":"start"}},{"id":"o","data":{"kind":"output"}},{"id":"a","data":{"kind":"agent","agentConfig":{"prompt":"x"}}}],
 			"edges":[{"source":"start","target":"o"},{"source":"o","target":"a"}]}`, "workflow_run_output_has_successors"},

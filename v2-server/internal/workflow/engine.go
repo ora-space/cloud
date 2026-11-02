@@ -146,6 +146,19 @@ var runtimes = map[string]runtime{
 		},
 	},
 	"output": {swift: completeOutput, rank: rank(0)},
+	// Condition and Aggregator route and merge; neither contributes the run output.
+	"condition":  {swift: completeCondition},
+	"aggregator": {swift: completeAggregator},
+}
+
+// completeCondition is desktop's ConditionRuntime: its output is the selected branch id, which
+// the completion fold records in conditionDecisions and never as a pool variable.
+func completeCondition(n Node, c swiftCompletion) (string, error) {
+	cases, err := n.conditionCases()
+	if err != nil {
+		return "", err
+	}
+	return evaluateCondition(cases, c.pool)
 }
 
 func completeOutput(n Node, c swiftCompletion) (string, error) {
@@ -438,6 +451,33 @@ func runOutput(runs []NodeRun) *string {
 	return candidates[0].Output
 }
 
+// validateConditionBranches rejects duplicate case ids and outgoing handles that name neither a
+// case nor the else branch, which would leave a branch that can never be taken (desktop's
+// DuplicateConditionCase and UnknownConditionBranch).
+func validateConditionBranches(g *Graph, n Node) error {
+	cases, err := n.conditionCases()
+	if err != nil {
+		return &StartError{Code: "workflow_run_invalid_condition", NodeID: n.ID, Detail: err.Error()}
+	}
+	ids := map[string]bool{}
+	for _, c := range cases {
+		if ids[c.id] {
+			return &StartError{Code: "workflow_run_duplicate_condition_case", NodeID: n.ID, Detail: "duplicate case id " + c.id}
+		}
+		ids[c.id] = true
+	}
+	for _, e := range g.Outgoing(n.ID) {
+		handle := e.SourceHandle
+		if handle == "" {
+			handle = ElseBranch
+		}
+		if handle != ElseBranch && !ids[handle] {
+			return &StartError{Code: "workflow_run_unknown_condition_branch", NodeID: n.ID, Detail: "edge leaves through unknown branch " + handle}
+		}
+	}
+	return nil
+}
+
 // validateExecutable applies desktop's start-time policy: an entry, only kinds v2 executes,
 // terminal Outputs with unique result names, and well-formed Condition cases and handles.
 func validateExecutable(g *Graph) (Node, error) {
@@ -448,6 +488,11 @@ func validateExecutable(g *Graph) (Node, error) {
 	for _, n := range g.Nodes() {
 		if _, supported := runtimes[n.Kind]; !supported {
 			return Node{}, &StartError{Code: "workflow_run_unsupported_node_type", NodeID: n.ID, Detail: "v2 does not execute " + n.Kind + " nodes yet"}
+		}
+		if n.Kind == "condition" {
+			if err := validateConditionBranches(g, n); err != nil {
+				return Node{}, err
+			}
 		}
 		if n.Kind == "output" {
 			if len(g.Outgoing(n.ID)) != 0 {
