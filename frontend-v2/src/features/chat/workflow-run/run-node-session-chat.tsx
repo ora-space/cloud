@@ -29,7 +29,7 @@ export function RunNodeSessionChat({
   session?: { runId: string; nodeRunId: string }
 }) {
   const tenantId = useChatStore((s) => s.tenantId) ?? ''
-  const followed = useNodeSession(tenantId, session?.runId, session?.nodeRunId)
+  const { conversation: followed, refused } = useNodeSession(tenantId, session?.runId, session?.nodeRunId)
   const recorded = useMemo(() => nodeConversationTurns(conversation, status, errorMessage), [conversation, status, errorMessage])
   const thread = followed !== null && followed.turns.length > 0 ? followed : recorded
   return (
@@ -38,7 +38,7 @@ export function RunNodeSessionChat({
         {thread.turns.length > 0 ? (
           <Thread conversation={thread} onAnswer={noAnswer} />
         ) : (
-          <p className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">正在等待 Agent 的会话…</p>
+          <p className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">{refused ? '只有启动这次运行的人能查看实时会话；节点完成后会显示任务和回答。' : '正在等待 Agent 的会话…'}</p>
         )}
       </div>
       {sessionActions && <div className="flex shrink-0 items-center pt-1">{sessionActions}</div>}
