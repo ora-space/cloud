@@ -356,7 +356,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - **会话绑定时机**：`Start` 返回 turn 引用即视为 prompt 已被接受，随后把 session 绑定到节点尝试（desktop 同样在 prompt 被接受后才发布绑定）；绑定被拒（尝试已不在运行）时结束该会话。turn 结束后执行桥结束会话，对话历史保留。
 - **结果映射**：只有 `completed` 且答案完整（`AnswerComplete`）才可能成功，再按 desktop 的停止原因映射：`end_turn`、`max_tokens`、`max_turn_requests` 成功；`refusal` 为 `agent_refusal`；缺少停止原因为 `session_ended_without_stop_reason`；其他为 `unknown_stop_reason`。turn 失败、取消、中断或答案不完整一律以 `session` 失败，失败节点保留已有的回答。
 - **取消**：先用发起运行的用户身份取消活动 turn 并等待确认，再关闭运行；Start 正在进行时先等它返回。停止未确认时返回 `503 workflow_run_stop_unconfirmed`，运行保持打开但不再推进，turn 结束后由执行桥自行关闭为已取消。
-- **运行发起者只在内存里**：执行会话按用户隔离，执行桥记住每个运行由谁启动，进程重启后靠上面的中断收尾，不需要持久化。
+- **运行发起者只在内存里**：执行会话按用户隔离，执行桥记住每个运行由谁启动，进程重启后靠上面的中断收尾，不需要持久化。启动被拒（输入不合法、有不支持的节点）时运行仍是 pending，执行桥随即忘掉这次的发起者，之后由谁成功启动，Agent 就在谁的 scope 下执行。
 - **失效事件**：`workflowhost.Hub` 在每次提交的状态转移、会话绑定和取消后按运行发布一个不带数据的失效通知，供运行事件流使用；读者收到后重新读取运行，未消费的通知会合并。
 
 ### 定时触发记录基础

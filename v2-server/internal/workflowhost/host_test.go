@@ -427,3 +427,35 @@ func TestQueuedSiblingOfAFailedNodeNeverStarts(t *testing.T) {
 	}
 	f.await(t, runID, func(store.WorkflowRun, []store.WorkflowNodeRun) bool { return f.host.state(runID) == nil })
 }
+
+func TestRefusedStartForgetsTheStarter(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	graph := `{"nodes":[{"id":"start","data":{"kind":"start","inputVariables":[{"name":"topic","valueType":"string","required":true}]}},` +
+		`{"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"{{#start.topic#}}"}}}],` +
+		`"edges":[{"source":"start","target":"a"}]}`
+	runID := f.run(t, graph, nil)
+	var invalid *server.WorkflowRunInputInvalid
+	if _, err := f.host.StartRun(ctx, f.scope, runID); !errors.As(err, &invalid) {
+		t.Fatalf("start without the required input = %v", err)
+	}
+	if f.host.state(runID) != nil {
+		t.Fatal("a refused start kept its starter as the run's owner")
+	}
+
+	// A teammate fixes the input and starts the run: the Agent executes under their scope.
+	teammate := server.WorkflowRunScope{TenantID: f.scope.TenantID, UserID: "00000000-0000-0000-0000-0000000000aa"}
+	if _, err := f.host.UpdateRunInput(ctx, teammate, runID, nil, map[string]json.RawMessage{"topic": json.RawMessage(`"支付"`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.host.StartRun(ctx, teammate, runID); err != nil {
+		t.Fatal(err)
+	}
+	f.exec.awaitStart(t)
+	f.exec.mu.Lock()
+	scopes := append([]execution.Scope{}, f.exec.scopes...)
+	f.exec.mu.Unlock()
+	if want := (execution.Scope{TenantID: teammate.TenantID, UserID: teammate.UserID}); len(scopes) != 1 || scopes[0] != want {
+		t.Fatalf("Agent scopes = %+v, want %+v", scopes, want)
+	}
+}

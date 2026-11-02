@@ -122,6 +122,7 @@ type runState struct {
 	scope execution.Scope
 
 	mu         sync.Mutex
+	starters   int
 	cancelling bool
 	queue      []workflow.AgentDispatch
 	working    bool
@@ -130,7 +131,9 @@ type runState struct {
 	active   *execution.Ref
 }
 
-// register records who started a run. A run keeps its first owner.
+// register records who is starting a run and counts the start under way. A run that already
+// started keeps its first owner; a pending run's state is dropped again when every start of it
+// failed (see forgetFinished), so a later start by someone else executes under their scope.
 func (h *Host) register(runID string, scope execution.Scope) *runState {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -139,7 +142,17 @@ func (h *Host) register(runID string, scope execution.Scope) *runState {
 		st = &runState{scope: scope}
 		h.runs[runID] = st
 	}
+	st.mu.Lock()
+	st.starters++
+	st.mu.Unlock()
 	return st
+}
+
+// started ends one start counted by register.
+func (st *runState) started() {
+	st.mu.Lock()
+	st.starters--
+	st.mu.Unlock()
 }
 
 func (h *Host) state(runID string) *runState {
@@ -165,7 +178,10 @@ func (h *Host) StartRun(ctx context.Context, scope server.WorkflowRunScope, runI
 	// The run outlives the request once it starts; a disconnecting client must not abandon the
 	// first scheduling pass halfway.
 	err = h.engine.Start(context.WithoutCancel(ctx), runID)
-	h.forgetFinished(runID, st) // a run without Agents can finish within its first pass
+	st.started()
+	// A run without Agents can finish within its first pass, and a refused start leaves the run
+	// pending without an owner.
+	h.forgetFinished(runID, st)
 	if err != nil {
 		return store.WorkflowRun{}, lifecycleError(err)
 	}

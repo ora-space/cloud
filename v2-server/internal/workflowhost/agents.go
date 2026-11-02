@@ -62,18 +62,20 @@ func (h *Host) work(runID string, st *runState) {
 	}
 }
 
-// forgetFinished drops the state of a run that reached a terminal status while its worker was
-// idle, so the process does not keep every run it ever executed. A run that is still open keeps
-// its owner for the next wave.
+// forgetFinished drops the state of a run that is not running while nothing of it is in flight,
+// so the process does not keep every run it ever executed. A running run keeps its owner for the
+// next wave. A run still pending once no start is under way was refused (bad input, an unsupported
+// node): forgetting its starter lets the next start record its own owner instead of executing under
+// the scope of whoever tried first.
 func (h *Host) forgetFinished(runID string, st *runState) {
 	c, err := h.store.WorkflowEngineContext(h.ctx, runID)
-	if err != nil || c.Run.Status == workflow.StatusPending || c.Run.Status == workflow.StatusRunning {
+	if err != nil || c.Run.Status == workflow.StatusRunning {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	st.mu.Lock()
-	idle := !st.working && st.starting == nil && st.active == nil
+	idle := !st.working && st.starters == 0 && st.starting == nil && st.active == nil
 	st.mu.Unlock()
 	if idle && h.runs[runID] == st {
 		delete(h.runs, runID)
