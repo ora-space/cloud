@@ -50,6 +50,7 @@ func TestPluginMarketLifecycle(t *testing.T) {
 		{Namespace: "official", Identifier: "ora-space.tavily-search", Title: "Tavily", Kind: "mcp", Version: "0.1.0", Description: "Web search", Readme: "# Tavily", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.workflow-examples", Title: "Workflow Examples", Kind: "workflow", Version: "0.1.0", Description: "Examples", Readme: "# Workflow Examples", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "ora-space.opencode", Title: "OpenCode", Kind: "agent", Version: "0.6.8", Description: "Agent", Readme: "# OpenCode", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
+		{Namespace: "official", Identifier: "ora-space.codex", Title: "Codex", Kind: "agent", Version: "0.3.14", Description: "Agent", Readme: "# Codex", MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 		{Namespace: "official", Identifier: "test-pack", Title: "Test Pack", Kind: "pack", Version: "1.0.0", Description: "Pack", PackMembers: []string{"official/mattpocock.skills"}, MarketplaceVisible: true, SourceURL: "https://github.com/ora-space/marketplace"},
 	}, time.Now()); e != nil {
 		t.Fatal(e)
@@ -59,20 +60,17 @@ func TestPluginMarketLifecycle(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if syncedAt.IsZero() || len(catalog) != 4 {
+	if syncedAt.IsZero() || len(catalog) != 6 {
 		t.Fatalf("catalog = %d entries at %v", len(catalog), syncedAt)
 	}
 	kinds := map[string]bool{}
 	for _, entry := range catalog {
-		if entry.Kind == "agent" {
-			t.Fatalf("catalog exposed runtime-owned Agent: %+v", entry)
-		}
 		kinds[entry.Kind] = true
 		if entry.ID == "official/mattpocock.skills" && entry.Readme == nil {
 			t.Fatalf("skill package has no document: %+v", entry)
 		}
 	}
-	for _, kind := range []string{"skill", "mcp", "workflow", "pack"} {
+	for _, kind := range []string{"agent", "skill", "mcp", "workflow", "pack"} {
 		if !kinds[kind] {
 			t.Fatalf("catalog is missing kind %q: %+v", kind, kinds)
 		}
@@ -116,10 +114,59 @@ func TestPluginMarketLifecycle(t *testing.T) {
 	}); !errors.Is(e, store.ErrPluginKindNotInstallable) {
 		t.Fatalf("pack install = %v", e)
 	}
-	if _, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "install-agent", store.PluginInstallInput{
+	if _, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "install-preinstalled-agent", store.PluginInstallInput{
 		Identifier: "official/ora-space.opencode", Version: 0,
-	}); !errors.Is(e, store.ErrPluginKindNotInstallable) {
+	}); !errors.Is(e, store.ErrPluginRuntimeManaged) {
 		t.Fatalf("agent install = %v", e)
+	}
+	var preinstalled store.SpacePlugin
+	for _, item := range initial {
+		if item.Identifier == "ora-space.opencode" {
+			preinstalled = item
+			break
+		}
+	}
+	if _, e := f.store.RemoveSpacePlugin(ctx, f.tenant, space, owner, path, "remove-preinstalled-agent", store.PluginRemoveInput{
+		Identifier: "official/ora-space.opencode", Version: preinstalled.Version,
+	}); !errors.Is(e, store.ErrPluginRuntimeManaged) {
+		t.Fatalf("preinstalled agent removal = %v", e)
+	}
+	codex, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "install-codex", store.PluginInstallInput{
+		Identifier: "official/ora-space.codex", PluginVersion: "0.3.14", Version: 0,
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if codex.Kind != "agent" || codex.DesiredState != "installed" ||
+		codex.ObservedState != "installed" || codex.ObservedVersion == nil ||
+		*codex.ObservedVersion != "0.3.14" || codex.RequestedByUserID == nil ||
+		*codex.RequestedByUserID != owner {
+		t.Fatalf("codex install = %+v", codex)
+	}
+	if agents, e := f.store.SpaceAgentPlugins(ctx, f.tenant, space, member); e != nil || len(agents) != 2 {
+		t.Fatalf("runnable agents after codex install = %+v %v", agents, e)
+	}
+	if _, e := f.store.CreateSquad(ctx, f.tenant, owner, store.SquadInput{
+		Name: "market agent", LeaderAgentID: &codex.ID,
+	}); !errors.Is(e, store.ErrAgentUnavailable) {
+		t.Fatalf("market agent as squad leader = %v", e)
+	}
+	removedCodex, e := f.store.RemoveSpacePlugin(ctx, f.tenant, space, owner, path, "remove-codex", store.PluginRemoveInput{
+		Identifier: "official/ora-space.codex", Version: codex.Version,
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if removedCodex.DesiredState != "removed" || removedCodex.ObservedState != "removed" ||
+		removedCodex.ObservedVersion != nil {
+		t.Fatalf("removed codex = %+v", removedCodex)
+	}
+	reinstalledCodex, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, owner, path, "reinstall-codex", store.PluginInstallInput{
+		Identifier: "official/ora-space.codex", PluginVersion: "0.3.14", Version: removedCodex.Version,
+	})
+	if e != nil || reinstalledCodex.DesiredState != "installed" ||
+		reinstalledCodex.ObservedState != "installed" {
+		t.Fatalf("reinstalled codex = %+v %v", reinstalledCodex, e)
 	}
 	if _, e := f.store.InstallSpacePlugin(ctx, f.tenant, space, member, path, "member-install", store.PluginInstallInput{
 		Identifier: "official/ora-space.tavily-search", Version: 0,
@@ -155,7 +202,7 @@ func TestPluginMarketLifecycle(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(selections) != 3 {
+	if len(selections) != 4 {
 		t.Fatalf("selections after removal = %+v", selections)
 	}
 	agents, e := f.store.SpaceAgentPlugins(ctx, f.tenant, space, member)

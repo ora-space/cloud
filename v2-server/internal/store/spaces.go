@@ -96,9 +96,10 @@ func (s *Store) TenantSpaces(ctx context.Context, tenant, caller string) ([]Spac
 	return items, nil
 }
 
-// SpaceAgentPlugins returns the agent plugins installed in one of the caller's spaces. A space
-// outside the caller's workspace answers ErrNotFound, which the HTTP layer turns into 403 so an
-// outsider cannot tell a missing space from a forbidden one.
+// SpaceAgentPlugins returns the system-preinstalled executable Agents in one of the caller's
+// spaces. Marketplace Agent selections are deliberately excluded. A space outside the caller's
+// workspace answers ErrNotFound, which the HTTP layer turns into 403 so an outsider cannot tell a
+// missing space from a forbidden one.
 func (s *Store) SpaceAgentPlugins(ctx context.Context, tenant, space, caller string) ([]SpacePlugin, error) {
 	if _, e := tenantRole(ctx, s.pool, tenant, caller); e != nil {
 		return nil, e

@@ -90,7 +90,7 @@ func TestSyncerClonesAndRefreshesARealisticMarketplace(t *testing.T) {
 	}
 }
 
-func TestSyncerRejectsEmptySnapshot(t *testing.T) {
+func TestSyncerAcceptsAgentOnlySnapshot(t *testing.T) {
 	repo := t.TempDir()
 	runTestGit(t, "", "init", "-b", "main", repo)
 	runTestGit(t, repo, "config", "user.email", "market@example.test")
@@ -109,11 +109,11 @@ func TestSyncerRejectsEmptySnapshot(t *testing.T) {
 		WorkDir: filepath.Join(t.TempDir(), "marketplace"),
 	}
 	sink := &recordingSink{}
-	if e := syncer.Sync(context.Background(), sink, time.Now()); e == nil {
-		t.Fatal("expected empty snapshot refusal")
+	if e := syncer.Sync(context.Background(), sink, time.Now()); e != nil {
+		t.Fatal(e)
 	}
-	if sink.calls != 0 {
-		t.Fatalf("empty snapshot reached sink: calls=%d", sink.calls)
+	if sink.calls != 1 || len(sink.entries) != 1 || sink.entries[0].Kind != "agent" {
+		t.Fatalf("agent-only sync = %+v", sink)
 	}
 }
 

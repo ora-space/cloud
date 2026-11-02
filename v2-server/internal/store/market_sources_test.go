@@ -51,7 +51,7 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	for _, pair := range []struct {
 		space string
 		n     int
-	}{{a, 1}, {b, 0}} {
+	}{{a, 2}, {b, 0}} {
 		list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, pair.space, member)
 		if e != nil || len(list) != pair.n {
 			t.Fatal(list, e)
@@ -70,8 +70,18 @@ func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	if e := change(a, owner, id, "PATCH"); e != nil {
 		t.Fatal(e)
 	}
-	if list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, a, member); e != nil || len(list) != 1 || list[0].ID != item.ID {
+	if list, _, e := f.store.PluginCatalog(f.ctx, f.tenant, a, member); e != nil || len(list) != 2 {
 		t.Fatal("alias lost catalog", list, e)
+	} else {
+		found := false
+		for _, entry := range list {
+			if entry.ID == item.ID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("alias lost original entry", list)
+		}
 	}
 	in.URL = "https://example.org/other"
 	if e := change(a, owner, "", "POST"); e != nil {

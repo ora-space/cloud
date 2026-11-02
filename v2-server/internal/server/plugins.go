@@ -134,6 +134,8 @@ func pluginError(w http.ResponseWriter, operation string, e error) {
 		fault(w, http.StatusNotFound, "plugin_not_installed")
 	case errors.Is(e, store.ErrPluginKindNotInstallable):
 		fault(w, http.StatusBadRequest, "plugin_kind_not_installable")
+	case errors.Is(e, store.ErrPluginRuntimeManaged):
+		fault(w, http.StatusConflict, "plugin_runtime_managed")
 	case errors.Is(e, store.ErrConflict):
 		fault(w, http.StatusConflict, "version_conflict")
 	case errors.Is(e, store.ErrIdempotencyConflict):

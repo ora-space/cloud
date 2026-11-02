@@ -59,10 +59,10 @@ key 放在仓库外的 `~/ora-demo/.env`，一台机器配一次，主目录和�
 | `GET /api/v1/me/tenants` | 契约 | 当前用户所在租户，一页返回全部，`nextCursor` 为空 |
 | `GET /api/v1/tenants/{tid}/members` | 契约 | 当前用户所在工作区成员，一页返回全部，按显示名排序；非成员 `403 forbidden`，非法租户 id `404 not_found` |
 | `GET /api/v1/tenants/{tid}/spaces` | 契约 | 当前用户所在工作区的空间，一页返回全部；v2 每个租户一个「演示空间」，`role` 取调用者的工作区角色；非成员 `403 forbidden` |
-| `GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/catalog` | 契约 | 从 `ora-space/marketplace` 的 `registry/**/orax.toml` 同步的真实非 Agent 市场快照；启动时先同步，之后每 5 分钟刷新并原子替换 PostgreSQL 目录。成员可读 |
+| `GET /api/v1/tenants/{tid}/spaces/{sid}/plugins/catalog` | 契约 | 从 `ora-space/marketplace` 的 `registry/**/orax.toml` 同步的真实市场快照，包含 Agent；启动时先同步，之后每 5 分钟刷新并原子替换 PostgreSQL 目录。成员可读 |
 | `GET /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | 当前空间的全部活动插件选择，包括显式移除的行；空间不属于调用者的工作区时 `403 forbidden` |
-| `POST /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | owner 安装目录中的非 Agent、非合集包；写 PostgreSQL，返回 `SpacePlugin`。支持版本保护与 `Idempotency-Key` 重放 |
-| `DELETE /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | owner 移除插件选择，保留 `desiredState=removed` 行；同样要求版本与幂等键 |
+| `POST /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | owner 安装目录中的 Skill 或市场 Agent；Agent 立即记录为空间选择，不下载或执行。预装 Agent 只读并返回 `409 plugin_runtime_managed`。支持版本保护与 `Idempotency-Key` 重放 |
+| `DELETE /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | owner 移除 Skill 或市场 Agent 选择，保留 `desiredState=removed` 行；预装 Agent 同样返回 `409 plugin_runtime_managed`；要求版本与幂等键 |
 
 ## 契约之外
 
@@ -138,9 +138,9 @@ main 创建一个共用协调器/Host，用一秒 ticker 发现持久配置的�
 | `PUT /api/v2/tenants/{tid}/squads/{sid}/members/{mid}` | 修改职责文本与维护者标记，携带 version |
 | `DELETE /api/v2/tenants/{tid}/squads/{sid}/members/{mid}?version=N` | 结束编组并保留历史 |
 
-成员是显式类型化引用：人类引用 user 身份，Agent 引用 Space Agent 身份，不使用裸 memberId。人类必须是当前有效的租户成员；Agent 必须是同工作区活动且观测为已安装的 Space Agent。当前工作区成员可读取小队与成员；编辑、增员、移除成员与归档只限工作区 owner（v2 只有 owner/member，没有 admin）或本队有效人类维护者。有效人类成员可以自己退出所在小队：被移除的是调用者本人时跳过维护者检查，即使他是最后一名维护者也成功退出，退出保留编组历史；不设"最后维护者"保护，退出后允许零维护者，之后只有工作区 owner 能恢复维护者。本队有效人类维护者可增删其他维护者的标记；Agent 不能成为维护者。leader 必须引用本队所属空间的活动 Space Agent，本队维护者或工作区 owner 可设置或清除。写操作按小队 version 做乐观校验：过期返回 409 `version_conflict`，缺 version 返回 428，归档后返回 409 `squad_archived`。归档结束全部有效编组、保留历史且不提供恢复；移除现任 leader 会在同一事务清除 leader 配置。
+成员是显式类型化引用：人类引用 user 身份，Agent 引用 Space Agent 身份，不使用裸 memberId。人类必须是当前有效的租户成员；Agent 必须是同工作区活动、观测为已安装且由系统预装的可执行 Space Agent。市场 Agent 的安装标记不进入小队和任务候选。当前工作区成员可读取小队与成员；编辑、增员、移除成员与归档只限工作区 owner（v2 只有 owner/member，没有 admin）或本队有效人类维护者。有效人类成员可以自己退出所在小队：被移除的是调用者本人时跳过维护者检查，即使他是最后一名维护者也成功退出，退出保留编组历史；不设"最后维护者"保护，退出后允许零维护者，之后只有工作区 owner 能恢复维护者。本队有效人类维护者可增删其他维护者的标记；Agent 不能成为维护者。leader 必须引用本队所属空间的活动 Space Agent，本队维护者或工作区 owner 可设置或清除。写操作按小队 version 做乐观校验：过期返回 409 `version_conflict`，缺 version 返回 428，归档后返回 409 `squad_archived`。归档结束全部有效编组、保留历史且不提供恢复；移除现任 leader 会在同一事务清除 leader 配置。
 
-Agent 成员引用 `v2_space_agents` 里观测为已安装的插件，候选由契约的空间插件读取路由提供（见上方契约路由表）；没有安装、卸载写接口，也不使用虚构 Agent。
+Agent 成员只引用 `v2_space_agents` 里由系统预装、可执行且观测为已安装的插件。Plugins 页的市场 Agent 选择不改变这个小队/任务候选集合，也不使用虚构 Agent。
 
 小队与成员关系不授予私人模型、Git 凭据或运行时权限，也不触发 Agent 执行、leader 路由或自动委派。
 
@@ -159,7 +159,7 @@ Agent 成员引用 `v2_space_agents` 里观测为已安装的插件，候选由�
 | `PUT /api/v2/tenants/{tid}/tasks/{taskid}/assignment` | 携带 version 指派或清除指派人，显式 `null` 表示清除 |
 
 任务归属于一个工作区项目，`projectId` 必须在同一工作区内，否则 400 `invalid_project`。指派人显式类型化，
-与小队成员一致：`human` 引用当前有效的租户成员，`agent` 引用同工作区活动且已安装的 Space Agent，
+与小队成员一致：`human` 引用当前有效的租户成员，`agent` 引用同工作区活动且可执行的预装 Space Agent，
 `squad` 引用未归档小队；名字与 Agent 的 `namespace/identifier` 由实时 join 读取，不在任务行上复制。
 `squad` 只表示该小队负责这件事，不派发给某个成员。指派接口里缺 `assignee` 字段是 400
 `invalid_assignee`，只有显式 `null` 才清除，避免客户端缺陷悄悄解除指派。
@@ -386,7 +386,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - 会话存在同一个库里，只存 token 的 SHA-256；没有 Gateway 现签的内部 JWT。
 - 对话与插件市场写请求检查 `Idempotency-Key`；插件市场同时保存成功响应以重放同一选择。其余写请求不检查该头，也没有执行代次隔离。定时任务配置与小队更新使用乐观版本检查，对话的创建和发消息把 `Idempotency-Key` 用作执行的 attempt ID。
 - 小队权限把 workspace `owner` 角色当作工作区管理员；成员撤销不会自动关闭其小队编组（由后续接入撤销事务的运行承接）。
-- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。Agent 由既有 Node 运行时链路管理，设置页仅供查看；Skill 按空间选择，由项目 Node 确认安装或移除。其他未接入宿主的类型仅可浏览。安装写入口要求 owner、`Idempotency-Key` 和当前 version。
+- 空间与插件：每个租户固定一个「演示空间」，开发登录时自动创建；里面登记两个真实安装、不可从设置页移除的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、chat、工作流与定时任务真正加载的那两个。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。Plugins 页允许 owner 安装或移除其他市场 Agent，但这些操作只保存空间选择，不下载、部署或执行插件，也不改变系统预装 Agent 的可执行候选。Skill 按空间选择，由项目 Node 确认安装或移除。其他未接入宿主的类型仅可浏览。安装写入口要求 owner、`Idempotency-Key` 和当前 version。
 - 成员列表：`memberships` 没有成员 id、版本和加入来源，所以 `id` 直接用 user id、`version` 恒为 1、`status` 取用户状态，`joinMethod` / `joinedAt` / `actorDisplayName` 恒为空；分页参数被忽略，一页返回全部。切到正式 Cloud 的成员接口时替换。
 - 启动时直接建表，没有迁移。
 - 本地 Node 的传输、监督和配套服务位于 [`internal/node`](internal/node/README.md) 与
@@ -410,7 +410,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 
 空间选择冻结 Skill 的来源、版本、目标平台和 SHA-256，项目 Node 负责确认安装或移除。历史项目绑定到同一租户的默认演示空间；创建项目可传 `spaceId`，省略则沿用默认演示空间。离线时保留选择；已上线的项目通过 Node 的 `install_plugins` / `remove_plugins` 处理。目录升级不会改变现有选择。成员可读项目回执；只有全部关联项目确认后空间才显示已安装。
 
-下载限制为公网 HTTPS、归属来源的 S3 SigV4 或直接 HTTPS。校验摘要和归档中的 Skill 标识、版本后，才通过节点已有的包服务交付。网络、临时 HTTP 状态、Node 中途退出等可恢复错误会按 5 秒起步、最长 5 分钟的指数退避自动重试；摘要不符、包校验失败、同名冲突等确定错误立即失败，等待用户重新选择。旧版本升级后若 Skill 选择缺少冻结安装计划，会显示“请重新安装”，不会静默卡在等待节点。技能在项目工作副本的 `.opencode/skills`、`.claude/skills` 中发现；已有项目文件不被覆盖，同名冲突返回失败。Agent 的固定版本保持独立。MCP 和其他未验证类型仅供浏览。
+下载限制为公网 HTTPS、归属来源的 S3 SigV4 或直接 HTTPS。校验摘要和归档中的 Skill 标识、版本后，才通过节点已有的包服务交付。网络、临时 HTTP 状态、Node 中途退出等可恢复错误会按 5 秒起步、最长 5 分钟的指数退避自动重试；摘要不符、包校验失败、同名冲突等确定错误立即失败，等待用户重新选择。旧版本升级后若 Skill 选择缺少冻结安装计划，会显示“请重新安装”，不会静默卡在等待节点。技能在项目工作副本的 `.opencode/skills`、`.claude/skills` 中发现；已有项目文件不被覆盖，同名冲突返回失败。Agent 的固定运行时版本保持独立；市场 Agent 选择只保存在空间选择状态。MCP 和其他未验证类型仅供浏览。
 
 与 Desktop 的差异：
 

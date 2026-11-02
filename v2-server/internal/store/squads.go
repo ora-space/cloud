@@ -358,7 +358,8 @@ func requireActiveAgent(ctx context.Context, q dbTX, tenant, id string) error {
 	e := q.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM v2_space_agents
 			WHERE id = $1 AND tenant_id = $2 AND kind = 'agent'
-				AND status = 'active' AND observed_state = 'installed')`,
+				AND status = 'active' AND observed_state = 'installed'
+				AND requested_by_user_id IS NULL)`,
 		id, tenant).Scan(&active)
 	if e != nil {
 		return fmt.Errorf("look up space agent: %w", e)
