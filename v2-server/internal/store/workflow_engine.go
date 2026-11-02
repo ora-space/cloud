@@ -296,6 +296,36 @@ func (s *Store) FailWorkflowEngineNode(
 	return advanced, err
 }
 
+// AbandonWorkflowEngineNode settles a dispatched attempt whose run ended before the attempt began
+// executing. v2 executes a run's Agents one at a time, so a sibling queued behind a failed node
+// has not started anything yet; it is closed as cancelled, like the attempts a cancellation
+// closes, instead of starting a turn whose result could only be discarded. An attempt that already
+// holds a session is left to settle on its own. current_nodes and the run are not touched, so the
+// failure stays anchored on the node that caused it. It returns false while the run is running,
+// telling the caller to execute the attempt.
+func (s *Store) AbandonWorkflowEngineNode(ctx context.Context, runID, nodeRunID string) (bool, error) {
+	abandoned := false
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		r, err := lockEngineRun(ctx, tx, runID)
+		if err != nil {
+			return err
+		}
+		if r.status == WorkflowStatusRunning {
+			return nil
+		}
+		abandoned = true
+		_, err = tx.Exec(ctx, `
+			UPDATE v2_workflow_node_runs SET status = 'cancelled', finished_at = now(), updated_at = now()
+			WHERE id = $1 AND run_id = $2 AND status = 'running' AND session_id IS NULL AND deleted_at IS NULL`,
+			nodeRunID, runID)
+		if err != nil {
+			return fmt.Errorf("abandon node: %w", err)
+		}
+		return nil
+	})
+	return abandoned, err
+}
+
 // FinishWorkflowEngineRun marks a drained running run succeeded with its output.
 func (s *Store) FinishWorkflowEngineRun(ctx context.Context, runID string, output *string) error {
 	_, err := s.pool.Exec(ctx, `

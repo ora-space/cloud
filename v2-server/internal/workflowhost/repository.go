@@ -90,6 +90,10 @@ func (r repository) FailNode(ctx context.Context, runID, nodeRunID, message stri
 	})
 }
 
+func (r repository) AbandonNode(ctx context.Context, runID, nodeRunID string) (bool, error) {
+	return r.s.AbandonWorkflowEngineNode(ctx, runID, nodeRunID)
+}
+
 func (r repository) FinishRun(ctx context.Context, runID string, output *string) error {
 	return r.s.FinishWorkflowEngineRun(ctx, runID, output)
 }

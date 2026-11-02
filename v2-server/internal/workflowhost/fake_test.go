@@ -22,6 +22,7 @@ type fakeExecution struct {
 
 	mu       sync.Mutex
 	started  []execution.StartRequest
+	scopes   []execution.Scope
 	sessions map[string]*fakeSession
 	ended    []string
 	cancels  []execution.Ref
@@ -73,7 +74,7 @@ func newFakeExecution() *fakeExecution {
 	return f
 }
 
-func (f *fakeExecution) start(_ context.Context, _ execution.Scope, req execution.StartRequest) (execution.Ref, error) {
+func (f *fakeExecution) start(_ context.Context, scope execution.Scope, req execution.StartRequest) (execution.Ref, error) {
 	if f.beforeStart != nil {
 		if err := f.beforeStart(req); err != nil {
 			return execution.Ref{}, err
@@ -93,6 +94,7 @@ func (f *fakeExecution) start(_ context.Context, _ execution.Scope, req executio
 	}
 	f.sessions[s.ref.SessionID] = s
 	f.started = append(f.started, req)
+	f.scopes = append(f.scopes, scope)
 	f.mu.Unlock()
 	f.startedCh <- s.ref.SessionID
 	return s.ref, nil
