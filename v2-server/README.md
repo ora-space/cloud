@@ -239,7 +239,7 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 | `POST …/workflows/{wid}/runs` | 冻结并创建 `pending` 运行；`snapshotId` 缺省取当前活跃版本，草稿快照拒绝；`projectId` 必填且必须是本租户项目 |
 | `GET …/workflows/{wid}/runs` | 该定义的全部运行（最新创建在后，与 desktop 的列表顺序一致），带冻结版本号 |
 | `GET …/workflow-runs?projectId=` | 按项目列运行；不传项目则列出本租户全部运行 |
-| `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）与 Loop 轮次 scope |
+| `GET …/workflow-runs/{rid}` | 运行、节点（每个身份只返回最新一次尝试）、Loop 轮次 scope，以及照 desktop 投影的 `variables`（根变量池）和 `failedAttempts`（被替换的失败尝试） |
 | `GET …/workflow-runs/{rid}/snapshot` | 运行冻结的快照图；定义发布新版本后历史仍按原图渲染 |
 | `DELETE …/workflow-runs/{rid}` | 软删已结束的运行及其节点；running 或还有 pending/running 节点时拒绝 |
 | `POST …/workflow-runs/{rid}/start` | 交给执行桥启动运行 |
@@ -256,7 +256,8 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 - **执行桥接缝**：`server.Options.WorkflowRuns`（`server.WorkflowRunHost`）由执行桥实现、在 `main` 注入；未注入时 start/cancel/input/complete 返回 `503 workflow_run_host_unavailable`，定义与历史读取照常。HTTP 只做登录/成员校验、严格解码和错误码映射，派发、停止确认、会话与对话历史都留在执行桥；拒绝用 server 包的哨兵错误表达（`ErrWorkflowRunNotStartable`、`ErrWorkflowRunNotEditable`、`ErrWorkflowNodeNotAwaitingInput`、`ErrWorkflowNodeNotFound`、`ErrWorkflowRunStopUnconfirmed`、`WorkflowRunInputInvalid`）。
 - **进程内存储端口**：执行桥直接调用 store 上的状态转移，不经 HTTP——`StartWorkflowRun`、`CreateWorkflowNodeRun`、`BindWorkflowNodeSession`、`CompleteWorkflowNodeRun`、`FailWorkflowNodeRun`（失败 attempt 号在同一事务里分配，payload 由领域构造）、`RetryWorkflowNodeRun`（失败行软删 + 插入等待运行的下一 attempt，编号连续）、`WakeWorkflowNodeRun`（唤醒等待的重试，重复唤醒 no-op）、`FinishWorkflowRun`、`CancelWorkflowRun`（同一事务里收尾活动 Loop 轮次并去掉等待中重试的 `retry_wait`）、`StartWorkflowLoopRound`（同一 Loop 只允许一个活动轮）、`SettleWorkflowLoopRound`（重复结算同状态为 no-op）、`DeleteWorkflowRun`。节点完成对已终态尝试是 no-op，取消对已取消运行幂等。取消也接受 `pending` 运行（desktop 只接受 `running`，其余返回 `NotActive`）：v2 的取消是用户可重试的操作，执行桥确认停止前重复调用必须返回同一个已取消运行，排队中的运行也要能直接从页面撤掉。
 - **事件流**：运行事件流订阅 `server.Options.WorkflowRunEvents`，`main` 注入执行桥的 `workflowhost.Hub`。节点会话事件流以节点尝试为键（重试是新的尝试和新的会话），按当前用户的 scope 读公共执行服务：会话属于启动运行的人（定时触发时是任务的创建者），同租户其他成员读到 `404 workflow_node_session_not_found`，页面退回尝试记下的任务和回答。不跨用户读会话，所以也不需要持久化发起者。
-- **尚未包含**：`failedAttempts`、变量与 condition 决策投影、整次运行 restart/resume 仍由执行桥的后续 PR 提供；它们依赖节点 payload 的键，这一层不解释、不编造。删除运行时对节点 session 的检查与清理等执行桥绑定 chat session。重启中断由执行桥提供，见下文“工作流执行”。
+- **变量与失败尝试投影**：运行 payload 的其余部分不公开；除了 Condition 的 `conditionDecisions`，详情再投影 desktop `GetWorkflowRunResponse` 里的两项。`variables` 读 `variablePool` 的 catalog（`<节点>.<名字>`，按键排序），`sourceNodeId` 取 `writer`，没赋值的不带 `value`，赋了 `null` 的带 `null`；跳过旧的 `selected_branch_id` 路由项，键不合法的项跳过而不让整个详情失败（desktop 在这里报 payload 损坏）。运行开始前没有变量池，读出空列表。`failedAttempts` 是被软删的 `failed` 节点行（desktop 的 `list_failed_attempts`），取各行 `payload.error_detail`，没有的跳过；只有重试、续跑和整次重跑会软删失败行，v2 三者都没有，所以目前总是空的，当前失败的尝试就是节点自己的行。
+- **尚未包含**：整次运行 restart/resume 仍由执行桥的后续 PR 提供。删除运行时对节点 session 的检查与清理等执行桥绑定 chat session。重启中断由执行桥提供，见下文“工作流执行”。
 
 ### 对话
 
