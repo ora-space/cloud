@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
-import { catalog, type Catalog, formatTime, nextTimes, projectName, ruleText, type Task } from './schedule-model'
+import { catalog, type Catalog, formatTime, isWorkflowTarget, nextTimes, projectName, ruleText, type Task } from './schedule-model'
 import { RunStatus } from './schedule-detail'
 
 export function ScheduleTable({ data = catalog, tasks, now, onOpen, onToggle, toggling = false }: { data?: Catalog; tasks: Task[]; now: Date; onOpen: (task: Task, tab?: 'config' | 'history') => void; onToggle: (task: Task) => void; toggling?: boolean }) {
@@ -19,7 +19,7 @@ export function ScheduleTable({ data = catalog, tasks, now, onOpen, onToggle, to
       return <TableRow key={task.id} className="sp-task-row" data-paused={!task.enabled}>
         <TableCell><button className="sp-task-cell" onClick={() => onOpen(task)}>
           <span className={cn('sp-task-icon', target.kind !== 'chat' && 'sp-task-icon-workflow')}><Icon size={17} /></span>
-          <span><strong>{task.name}</strong><small>{target.kind === 'chat' ? '每次创建独立对话' : target.kind === 'task' ? '已有任务待接入' : '工作流待接入'}</small></span>
+          <span><strong>{task.name}</strong><small>{target.kind === 'chat' ? '每次创建独立对话' : target.kind === 'task' ? '已有任务待接入' : isWorkflowTarget(target) ? '每次新建一次工作流运行' : '旧的工作流引用，仅供查看'}</small></span>
         </button></TableCell>
         <TableCell><Badge variant="outline"><Icon data-icon="inline-start" />{label}</Badge></TableCell>
         <TableCell><span className={cn('sp-project-label', !task.projectId && 'muted')}>{task.projectId && <Folder size={14} />}{projectName(task.projectId,data)}</span></TableCell>

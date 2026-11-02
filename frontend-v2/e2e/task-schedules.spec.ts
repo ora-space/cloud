@@ -2,12 +2,12 @@
 import { expect, test } from '@playwright/test'
 import { signIn } from './login.ts'
 
-test('unwired target kinds stay disabled, real Fixture model is selectable, and no sample project is presented', async ({ page }) => {
+test('workflows are offered, the unwired task target stays disabled, real Fixture model is selectable, and no sample project is presented', async ({ page }) => {
   await page.goto('/schedules')
   await signIn(page)
   await page.locator('header').getByRole('button', { name: '新建任务', exact: true }).click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByRole('button', { name: /运行工作流/ })).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: /运行工作流/ })).toBeEnabled()
   await expect(dialog.getByRole('button', { name: /已有任务/ })).toBeDisabled()
   // The assembled runtime exposes the credential-free Fixture model and seeded Demo project,
   // while CI without Node assets keeps the Agent executor list empty.

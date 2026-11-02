@@ -7,13 +7,15 @@ import * as api from './api/generated'
 import * as actions from './api/actions/generated'
 import * as history from './api/history/generated'
 import { compareOccurrences, compareTimestampsDesc, emptyResources } from './runtime'
+import * as workflowRuns from '@/lib/workflows/api/generated'
 
 vi.mock('@/app/auth/user',()=>({useUser:()=>({id:'user'})}))
 vi.mock('@/api/me/me',()=>({useGetApiV1MeTenants:()=>({data:{items:[{id:'tenant'}]},isLoading:false,isError:false})}))
 vi.mock('./api/generated',()=>({listScheduleConfigs:vi.fn(),createScheduleConfig:vi.fn(),updateScheduleConfig:vi.fn(),setScheduleConfigEnabled:vi.fn(),getScheduleResources:vi.fn()}))
 vi.mock('./api/actions/generated',()=>({runScheduleNow:vi.fn(),cancelScheduleRun:vi.fn()}))
 vi.mock('./api/history/generated',()=>({listScheduleHistory:vi.fn(),getScheduleHistoryItem:vi.fn(),getScheduleExecutionResult:vi.fn()}))
-const resources={projects:[{id:'project-id',name:'真实项目',description:''}],models:[{id:'fixture',name:'固定模型'}],executors:[{id:'executor-id',name:'项目执行器',agentName:'Agent',modelId:'fixture'}],available:{projects:true,models:true,executors:true}}
+vi.mock('@/lib/workflows/api/generated',()=>({getWorkflowRun:vi.fn()}))
+const resources={projects:[{id:'project-id',name:'真实项目',description:''}],models:[{id:'fixture',name:'固定模型'}],executors:[{id:'executor-id',name:'项目执行器',agentName:'Agent',modelId:'fixture'}],workflows:[{id:'wf-1',name:'周报流程',version:'v2',snapshotId:'snap-2'}],available:{projects:true,models:true,executors:true,workflows:true}}
 const item={id:'task-1',name:'早报',projectId:'',target:{kind:'chat' as const,prompt:'摘要',agent:'',model:'fixture'},rule:{kind:'daily' as const,time:'09:00',days:[1],hours:6,timezone:'Asia/Shanghai'},enabled:true,version:1,createdAt:'2026-10-01T00:00:00Z',updatedAt:'2026-10-01T00:00:00Z',runs:[]}
 const occurrence:history.Occurrence={id:'run-1',scheduleId:item.id,key:'key',kind:'manual',status:'running',reason:'',executionRef:'ref',scheduledAt:item.createdAt,recordedAt:item.createdAt,configVersion:1,snapshot:{},released:false,version:1}
 function mount(client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})){return render(<QueryClientProvider client={client}><Page/></QueryClientProvider>)}
@@ -35,6 +37,39 @@ it('uses shared real IDs and persists the project/model/executor binding',async(
  await userEvent.click(screen.getByRole('button',{name:'创建并启用'}))
  await waitFor(()=>expect(api.createScheduleConfig).toHaveBeenCalledWith('tenant',expect.objectContaining({projectId:'project-id',target:{kind:'chat',prompt:'检查代码',model:'fixture',agent:'Agent',executorId:'executor-id'}})))
  expect(screen.queryByRole('option',{name:'Ora 官网'})).not.toBeInTheDocument()
+})
+
+it('creates a workflow schedule in a project, freezing the version published now',async()=>{
+ vi.mocked(api.createScheduleConfig).mockResolvedValue({...item,name:'周报',projectId:'project-id',target:{kind:'workflow',workflowId:'wf-1',snapshotId:'snap-2',input:'整理本周'}})
+ mount();await screen.findByText('早报');await userEvent.click(screen.getByRole('button',{name:'新建任务'}))
+ fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'周报'}})
+ await userEvent.click(screen.getByRole('button',{name:/运行工作流/}))
+ // A workflow runs its own Agents: no model or executor to pick.
+ expect(screen.queryByLabelText('模型')).not.toBeInTheDocument();expect(screen.queryByLabelText('执行器')).not.toBeInTheDocument()
+ await userEvent.click(screen.getByRole('button',{name:'创建并启用'}))
+ expect(await screen.findByText('请选择要运行的工作流')).toBeInTheDocument();expect(screen.getByText('工作流要在项目中运行，请选择项目')).toBeInTheDocument()
+ await userEvent.selectOptions(screen.getByLabelText('工作流'),'wf-1');await userEvent.selectOptions(screen.getByLabelText('关联项目'),'project-id')
+ expect(screen.getByText(/保存时固定生效版本 v2/)).toBeInTheDocument()
+ fireEvent.change(screen.getByLabelText('初始输入'),{target:{value:'整理本周'}})
+ await userEvent.click(screen.getByRole('button',{name:'创建并启用'}))
+ await waitFor(()=>expect(api.createScheduleConfig).toHaveBeenCalledWith('tenant',expect.objectContaining({projectId:'project-id',target:{kind:'workflow',workflowId:'wf-1',snapshotId:'snap-2',input:'整理本周'}})))
+})
+
+it("says when a workflow schedule still runs an older version, and shows an occurrence's run",async()=>{
+ const scheduled={...item,projectId:'project-id',target:{kind:'workflow' as const,workflowId:'wf-1',snapshotId:'snap-1',input:'整理本周'}}
+ vi.mocked(api.listScheduleConfigs).mockResolvedValue({items:[scheduled],nextCursor:''})
+ vi.mocked(history.listScheduleHistory).mockResolvedValue({items:[{...occurrence,status:'succeeded',released:true,executionRef:'{"workflowRunId":"run-9"}'}],nextCursor:''})
+ vi.mocked(workflowRuns.getWorkflowRun).mockResolvedValue({run:{id:'run-9',workflowId:'wf-1',snapshotId:'snap-1',projectId:'project-id',name:'早报',status:'succeeded',state:null,input:'整理本周',output:'{"summary":"本周合并了 3 个改动"}',error:null,startedAt:1,finishedAt:2,createdAt:1,updatedAt:2},nodes:[],scopes:[],variables:[],failedAttempts:[]} as never)
+ mount();const dialog=await detail()
+ expect(within(dialog).getByText('运行工作流')).toBeInTheDocument()
+ expect(within(dialog).getByText('周报流程（固定的旧版本；生效版本已是 v2，编辑保存后改用）')).toBeInTheDocument()
+ expect(within(dialog).getByRole('button',{name:'立即运行'})).toBeEnabled()
+ await userEvent.click(within(dialog).getByRole('button',{name:'运行历史'}))
+ expect(await within(dialog).findByText('工作流运行 · 成功')).toBeInTheDocument()
+ expect(within(dialog).getByText('{"summary":"本周合并了 3 个改动"}')).toBeInTheDocument()
+ expect(workflowRuns.getWorkflowRun).toHaveBeenCalledWith('tenant','run-9',undefined,expect.anything())
+ // The schedule's own result route is for conversations; a workflow's result is its run.
+ expect(history.getScheduleExecutionResult).not.toHaveBeenCalled()
 })
 
 it('shows unavailable resources, keeps reference modes disabled and allows unbound text configuration',async()=>{

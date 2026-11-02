@@ -40,6 +40,24 @@ export interface ScheduleChatTarget {
   executorId?: string;
 }
 
+export type ScheduleWorkflowTargetKind = typeof ScheduleWorkflowTargetKind[keyof typeof ScheduleWorkflowTargetKind];
+
+
+export const ScheduleWorkflowTargetKind = {
+  workflow: 'workflow',
+} as const;
+
+/**
+ * A workflow run in the schedule's project: one published snapshot of the workflow, frozen when the schedule is saved, and the kickoff input (may be empty). Each trigger creates and starts one run whose stable identity is the occurrence.
+ */
+export interface ScheduleWorkflowTarget {
+  kind: ScheduleWorkflowTargetKind;
+  workflowId: string;
+  snapshotId: string;
+  /** @maxLength 32000 */
+  input: string;
+}
+
 export type ScheduleLegacyTargetKind = typeof ScheduleLegacyTargetKind[keyof typeof ScheduleLegacyTargetKind];
 
 
@@ -49,14 +67,14 @@ export const ScheduleLegacyTargetKind = {
 } as const;
 
 /**
- * Read-only compatibility for previously stored references. Provider fields are preserved without interpretation; no write API is defined.
+ * Read-only compatibility for previously stored references. Provider fields are preserved without interpretation; only the workflow target above can be written.
  */
 export interface ScheduleLegacyTarget {
   kind: ScheduleLegacyTargetKind;
   [key: string]: unknown;
  }
 
-export type ScheduleTarget = ScheduleChatTarget | ScheduleLegacyTarget;
+export type ScheduleTarget = ScheduleChatTarget | ScheduleWorkflowTarget | ScheduleLegacyTarget;
 
 export type ScheduleRuleKind = typeof ScheduleRuleKind[keyof typeof ScheduleRuleKind];
 
@@ -83,14 +101,14 @@ export interface ScheduleRule {
 export interface ScheduleInput {
   name: string;
   projectId: string;
-  target: ScheduleChatTarget;
+  target: ScheduleChatTarget | ScheduleWorkflowTarget;
   rule: ScheduleRule;
 }
 
 export interface ScheduleUpdate {
   name: string;
   projectId: string;
-  target: ScheduleChatTarget;
+  target: ScheduleChatTarget | ScheduleWorkflowTarget;
   rule: ScheduleRule;
   /** @minimum 1 */
   version: number;
@@ -148,16 +166,26 @@ export type ScheduleResourcesExecutorsItem = {
   modelId: string;
 };
 
+export type ScheduleResourcesWorkflowsItem = {
+  id: string;
+  name: string;
+  version: string;
+  snapshotId: string;
+};
+
 export type ScheduleResourcesAvailable = {
   projects: boolean;
   models: boolean;
   executors: boolean;
+  workflows: boolean;
 };
 
 export interface ScheduleResources {
   projects: ScheduleResourcesProjectsItem[];
   models: ScheduleResourcesModelsItem[];
   executors: ScheduleResourcesExecutorsItem[];
+  /** Workflows with a published version, each with the snapshot a schedule would freeze. */
+  workflows: ScheduleResourcesWorkflowsItem[];
   available: ScheduleResourcesAvailable;
 }
 
