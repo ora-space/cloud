@@ -112,3 +112,76 @@ test('workflow runs: v2-server executes a published workflow started from chat',
   await screenshot(page, testInfo.outputPath('3-review-session.png'))
   await runAgain()
 })
+
+/** Start → 判断 → 加急处理 | 常规处理 → 汇合 → 输出: the Condition takes one branch by the kickoff text. */
+const branches = JSON.stringify({
+  nodes: [
+    { id: 'start', type: 'workflow', position: { x: 0, y: 120 }, data: { kind: 'start', title: '开始' } },
+    {
+      id: 'triage', type: 'workflow', position: { x: 300, y: 120 },
+      data: { kind: 'condition', title: '判断', cases: [{ id: 'urgent', logic: 'and', conditions: [{ variableSelector: ['start', 'input'], operator: 'contains', value: '紧急' }] }] },
+    },
+    { id: 'rush', type: 'workflow', position: { x: 620, y: 0 }, data: { kind: 'agent', title: '加急处理', agentConfig: { executor: { agentCli: 'official/ora-space.opencode', modelId: 'fixture' }, prompt: '加急处理：{{#start.input#}}' } } },
+    { id: 'normal', type: 'workflow', position: { x: 620, y: 240 }, data: { kind: 'agent', title: '常规处理', agentConfig: { executor: { agentCli: 'official/ora-space.opencode', modelId: 'fixture' }, prompt: '常规处理：{{#start.input#}}' } } },
+    { id: 'join', type: 'workflow', position: { x: 940, y: 120 }, data: { kind: 'aggregator', title: '汇合', aggregatorConfig: { variables: [['rush', 'output'], ['normal', 'output']] } } },
+    { id: 'out', type: 'workflow', position: { x: 1240, y: 120 }, data: { kind: 'output', title: '输出', outputs: [{ name: 'result', variableSelector: ['join', 'output'] }] } },
+  ],
+  edges: [
+    { id: 'e1', source: 'start', target: 'triage' },
+    { id: 'e2', source: 'triage', sourceHandle: 'urgent', target: 'rush' },
+    { id: 'e3', source: 'triage', sourceHandle: 'else', target: 'normal' },
+    { id: 'e4', source: 'rush', target: 'join' },
+    { id: 'e5', source: 'normal', target: 'join' },
+    { id: 'e6', source: 'join', target: 'out' },
+  ],
+})
+
+test('workflow runs: a Condition takes one branch and the other shows as inactive', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  await page.goto('/chat')
+  await signIn(page)
+  const tenantId = ((await (await page.request.get('/api/v1/me/tenants')).json()) as { items: { id: string }[] }).items[0]!.id
+  const suffix = Date.now().toString(36)
+  const name = `分支汇合 ${suffix}`
+  const runName = `工单分流 ${suffix}`
+  const created = await page.request.post(`/api/v2/tenants/${tenantId}/workflows`, { data: { name, graph: branches } })
+  expect(created.status()).toBe(201)
+  const workflowId = ((await created.json()) as { draft: { workflowId: string } }).draft.workflowId
+  expect((await page.request.post(`/api/v2/tenants/${tenantId}/workflows/${workflowId}/publish`, { data: { version: 'v1' } })).ok()).toBe(true)
+
+  await page.reload()
+  const demo = page.getByRole('complementary', { name: '聊天记录' }).getByRole('region', { name: '项目 Demo' })
+  await demo.getByRole('button', { name: '在 Demo 新建对话' }).click()
+  await page.getByRole('menuitem', { name: '运行工作流' }).hover()
+  await page.getByRole('menuitem', { name: new RegExp(name) }).click()
+  const dialog = page.getByRole('dialog', { name: '运行工作流' })
+  await dialog.getByLabel('运行名称').fill(runName)
+  await dialog.getByRole('button', { name: '创建运行' }).click()
+  const pane = page.getByRole('region', { name: '工作流运行' })
+  await expect(pane.getByRole('heading', { name: runName })).toBeVisible()
+  const row = (status: string) => demo.getByRole('button', { name: `工作流运行 ${runName}（${status}）` })
+
+  // The kickoff text is not urgent, so the Condition takes else: 常规处理 runs, 加急处理 never does.
+  await pane.getByRole('button', { name: '启动' }).click()
+  const start = page.getByRole('dialog')
+  await start.getByLabel('初始 Prompt').fill('客户反馈导出按钮偶尔无响应')
+  await start.getByRole('button', { name: '启动' }).click()
+  await expect(row(realAgents ? '成功' : '失败')).toBeVisible({ timeout: 150_000 })
+
+  await pane.getByRole('button', { name: '全图', exact: true }).click()
+  const overview = pane.getByLabel('工作流全图俯瞰')
+  const card = (title: string) => overview.locator('.react-flow__node').filter({ has: page.getByText(title, { exact: true }) })
+  await expect(card('加急处理').getByText('未激活分支')).toBeVisible()
+  await expect(card('判断').getByText('成功', { exact: true })).toBeVisible()
+  if (!realAgents) {
+    // No Agent is installed: the taken branch's Agent fails, and the join after it never runs.
+    await expect(card('常规处理').getByText('失败', { exact: true })).toBeVisible()
+    return
+  }
+  await expect(card('常规处理').getByText('成功', { exact: true })).toBeVisible()
+  await expect(card('汇合').getByText('成功', { exact: true })).toBeVisible()
+  await screenshot(page, testInfo.outputPath('s2-branch-overview.png'))
+  await pane.getByRole('button', { name: '舞台', exact: true }).click()
+  await expect(pane.getByText('运行完成')).toBeVisible()
+  await screenshot(page, testInfo.outputPath('s2-branch-result.png'))
+})
