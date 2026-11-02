@@ -16,8 +16,9 @@ ID。`members/` 与 `data/marketplace.ts` 不使用它。初次读取创建示�
 
 - 插件复用生成的 `PluginCatalogEntry` 与 `SpacePlugin`；目录、安装和卸载全部走
   `frontend-v2/src/api` 的生成客户端。以 `sourceNamespace/identifier` 对应，写入带
-  `Idempotency-Key` 和当前选择 version。只管理工作区市场包；Agent 插件继续由 Node
-  运行时链路管理，合集暂不可安装。目录来自 v2-server 对
+  `Idempotency-Key` 和当前选择 version。Skill 与市场 Agent 可安装/移除；Agent 只保存空间
+  选择，不触发下载或执行。系统预装的 OpenCode、Claude Code 显示“运行时预装”且只读。
+  合集暂不可安装。目录来自 v2-server 对
   `ora-space/marketplace` 的真实 Git 同步，而不是前端内置数据。目录把来源发布的明暗主题
   图标嵌入快照；页面按插件类型分组，未发布图标的条目使用对应的类型图标。owner 可写，
   member 只读。MCP 与 Hook 的安装选择保存在 `plugins/demo-state.ts` 的浏览器存储中，
@@ -42,8 +43,9 @@ ID。`members/` 与 `data/marketplace.ts` 不使用它。初次读取创建示�
 
 `npm run check` 检查类型、Oxlint、单元测试、客户端一致性与构建。`e2e/login.ts` 提供邮箱
 登录辅助，`e2e/settings.spec.ts` 覆盖五页路由、成员页的 owner/member 两种视角、插件和技能
-安装/卸载、刷新与新浏览器上下文读取服务端状态、错误恢复、主题、375/768/1440 布局与截图；
+安装/卸载、Agent 选择生命周期、刷新与新浏览器上下文读取服务端状态、错误恢复、主题、
+375/768/1440 布局与截图；
 `e2e/multiuser.spec.ts` 覆盖 owner 邀请（含邀请入队）、被邀请者登录、未邀请邮箱被拒与
 member 被服务端拒绝。模型连接与自建技能的资源操作仍是本机演示。
 
-插件市场区分空间选择与项目实际结果。来源管理使用临时市场契约生成的客户端；空间选择供插件和技能页面共享。当前可执行的市场类型是 Skill；MCP 与 Hook 只在浏览器演示安装/卸载。插件详情列出各项目等待、成功或失败的状态。移除市场仅隐藏可安装目录，不移除空间中已有选择。
+插件市场区分空间选择与项目实际结果。来源管理使用临时市场契约生成的客户端；空间选择供插件和技能页面共享。当前会进入项目运行时的市场类型是 Skill；Agent 选择只保存空间状态，可执行 Agent 仍只有系统预装的 OpenCode 和 Claude Code；MCP 与 Hook 只在浏览器演示安装/卸载。插件详情列出各项目等待、成功或失败的状态。移除市场仅隐藏可安装目录，不移除空间中已有选择。

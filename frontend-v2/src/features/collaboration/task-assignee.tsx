@@ -4,6 +4,7 @@ import { NativeSelect, NativeSelectOptGroup, NativeSelectOption } from '@/compon
 import type { SquadSummary } from './api/generated'
 import { pluginLabel } from './member-model'
 import type { TaskAssigneeRef } from './tasks-api/generated'
+import { isRunnableAgent } from '@/lib/plugin-runtime'
 
 /** The select value for one typed reference; '' means unassigned. */
 const encode = (value: TaskAssigneeRef | null): string => (value ? `${value.type}:${value.id}` : '')
@@ -36,7 +37,7 @@ export function TaskAssigneePicker({ tenantId, squads, value, disabled, onAssign
   const spaceId = spaces.data?.items[0]?.id ?? ''
   const plugins = useGetApiV1TenantsTidSpacesSpaceIdPlugins(tenantId, spaceId, { query: { enabled: !!tenantId && !!spaceId } })
   const people = (roster.data?.items ?? []).filter(member => member.status === 'active')
-  const agents = (plugins.data?.items ?? []).filter(plugin => plugin.kind === 'agent' && plugin.observedState === 'installed')
+  const agents = (plugins.data?.items ?? []).filter(isRunnableAgent)
   const label = roster.isLoading || plugins.isLoading ? '正在加载指派候选…' : roster.isError || plugins.isError ? '候选加载失败，请关闭后重试。' : ''
 
   return <div className="mc-assignee">

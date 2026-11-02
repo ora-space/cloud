@@ -28,9 +28,10 @@ export function marketplaceEntry(
       .split('-')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ')
+  const sourceNamespace = overrides.sourceNamespace ?? 'demo'
   return {
-    id: `demo/${identifier}`,
-    sourceNamespace: 'demo',
+    id: `${sourceNamespace}/${identifier}`,
+    sourceNamespace,
     identifier,
     title,
     kind: 'mcp',
@@ -216,6 +217,8 @@ export function installMarketplaceBackend({
       const current = state.selections[index]
       if (!current || current.version !== body.version)
         return { status: 409, data: { code: 'version_conflict', params: {} } }
+      if (current.kind === 'agent' && current.requestedByUserId == null)
+        return { status: 409, data: { code: 'plugin_runtime_managed', params: {} } }
       const resource = marketplaceSelection(entry, {
         ...current,
         desiredState: 'removed',
@@ -226,12 +229,14 @@ export function installMarketplaceBackend({
       state.selections[index] = resource
       return { status: 200, data: { resource } }
     }
-    if (entry.kind === 'pack' || entry.kind === 'agent')
+    if (entry.kind === 'pack')
       return {
         status: 400,
         data: { code: 'plugin_kind_not_installable', params: {} },
       }
     const current = index < 0 ? undefined : state.selections[index]
+    if (current?.kind === 'agent' && current.requestedByUserId == null)
+      return { status: 409, data: { code: 'plugin_runtime_managed', params: {} } }
     if ((current?.version ?? 0) !== body.version)
       return { status: 409, data: { code: 'version_conflict', params: {} } }
     const resource = marketplaceSelection(entry, {
@@ -240,6 +245,7 @@ export function installMarketplaceBackend({
       desiredVersion: body.pluginVersion ?? entry.version,
       observedState: 'installed',
       observedVersion: body.pluginVersion ?? entry.version,
+      requestedByUserId: demoUser.id,
       version: (current?.version ?? 0) + 1,
     })
     if (index < 0) state.selections.push(resource)

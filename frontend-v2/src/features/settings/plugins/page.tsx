@@ -33,6 +33,7 @@ import {
 } from './demo-state'
 import { pluginKind, pluginKindOrder } from './plugin-kind'
 import { PluginMark } from './plugin-mark'
+import { isPreinstalledAgent } from '@/lib/plugin-runtime'
 
 const stateLabels: Record<string, string> = {
   installed: '已安装',
@@ -53,11 +54,11 @@ function StateBadge({
   if (demoSelected) return <Badge variant="secondary">已安装（演示）</Badge>
   const state = selection?.observedState ?? 'removed'
   const label =
-    selection?.kind === 'agent'
-      ? '运行时管理'
-      : selection?.kind !== 'skill' && selection?.desiredState === 'installed'
-        ? '仅空间选择'
-        : (stateLabels[state] ?? state)
+    selection?.kind !== 'skill' &&
+    selection?.kind !== 'agent' &&
+    selection?.desiredState === 'installed'
+      ? '仅空间选择'
+      : (stateLabels[state] ?? state)
   return (
     <Badge
       variant={
@@ -145,14 +146,13 @@ export default function PluginsPage() {
     ...market.installations
       .filter(
         (s) =>
-          s.kind !== 'agent' &&
           (s.desiredState === 'installed' ||
             s.observedState === 'removing' ||
             s.observedState === 'failed') &&
           !available.has(pluginKey(s)),
       )
       .map(missingEntry),
-  ].filter((entry) => entry.kind !== 'agent')
+  ]
   const selected = catalog.find(
     (entry) => pluginKey(entry) === params.get('plugin'),
   )
@@ -197,9 +197,7 @@ export default function PluginsPage() {
     }))
     .filter((group) => group.items.length > 0)
   const installedSelections = market.installations.filter(pluginInstalled)
-  const installedMarketPackages = installedSelections.filter(
-    (selection) => selection.kind !== 'agent',
-  )
+  const installedServerPackages = installedSelections
   const installedKeys = new Set([
     ...installedSelections.map(pluginKey),
     ...catalog.filter(demoSelected).map(pluginKey),
@@ -253,10 +251,6 @@ export default function PluginsPage() {
   }
   function actions(entry: PluginCatalogEntry) {
     const selection = market.selection(entry)
-    if (entry.kind === 'agent')
-      return (
-        <span className="text-xs text-muted-foreground">由项目运行时管理</span>
-      )
     if (demoPlugin(entry))
       return demoSelected(entry) ? (
         <Button
@@ -278,6 +272,8 @@ export default function PluginsPage() {
           安装
         </Button>
       )
+    if (selection && isPreinstalledAgent(selection))
+      return <span className="text-xs text-muted-foreground">运行时预装</span>
     if (
       selection?.desiredState === 'removed' &&
       selection.observedState === 'failed'
@@ -314,7 +310,11 @@ export default function PluginsPage() {
       market.mutating ||
       selection?.observedState === 'installing' ||
       selection?.observedState === 'removing'
-    if (entry.kind !== 'skill' && selection?.desiredState !== 'installed')
+    if (
+      entry.kind !== 'skill' &&
+      entry.kind !== 'agent' &&
+      selection?.desiredState !== 'installed'
+    )
       return (
         <span className="text-xs text-muted-foreground">
           当前节点不支持此类型
@@ -362,7 +362,7 @@ export default function PluginsPage() {
     <section>
       <PageHeader
         title="Plugins"
-        description="浏览并管理空间插件；Skill 安装状态保存在服务端，MCP 与 Hook 可在当前浏览器中演示安装和卸载。"
+        description="浏览并管理空间插件；Skill 与 Agent 安装状态保存在服务端，MCP 与 Hook 可在当前浏览器中演示安装和卸载。"
         count={catalog.length}
         actions={
           <>
@@ -392,7 +392,7 @@ export default function PluginsPage() {
           </p>
         )}
         <p className="text-sm text-muted-foreground">
-          MCP 与 Hook 的安装状态仅保存在当前浏览器，用于演示，不会下载或执行插件包。
+          MCP 与 Hook 的安装状态仅保存在当前浏览器，用于演示；Agent 安装只记录空间选择，不会下载或启动插件。
         </p>
         <div className="settings-toolbar">
           {market.spaces.length > 1 && (
@@ -530,9 +530,11 @@ export default function PluginsPage() {
           <span>
             显示 {filtered.length} / {catalog.length} 个插件 · 共{' '}
             {installedKeys.size} 个已安装或已选择 · 其中{' '}
-            {installedMarketPackages.length} 个服务端市场包
+            {installedServerPackages.length} 个服务端插件
           </span>
-          <span>Skill 由项目节点确认安装结果；MCP/Hook 为本地演示</span>
+          <span>
+            Skill 由项目节点确认；MCP/Hook 为本地演示；Agent 仅保存空间选择
+          </span>
         </div>
       </DataState>
       {params.has('plugin') && !market.pending && !selected && (

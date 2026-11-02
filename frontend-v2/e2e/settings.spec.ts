@@ -11,6 +11,12 @@ async function theme(page: Page, name: '浅色' | '深色' | '跟随系统') {
   await page.goto('/settings/theme')
   await page.getByRole('button', { name, exact: true }).click()
 }
+async function resetScroll(page: Page) {
+  await page.evaluate(() => {
+    window.scrollTo(0, 0)
+    document.querySelector('main')?.scrollTo(0, 0)
+  })
+}
 const titles = [
   ['members', '成员'],
   ['model-connections', '模型连接'],
@@ -151,13 +157,61 @@ test('server-backed plugin and skill install lifecycle survives reload and a new
   await expect(hooks.getByText('已安装（演示）', { exact: true })).toBeVisible()
 })
 
+test('Agent cards install and remove while preinstalled Agents stay read-only', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  await login(page, '/settings/plugins')
+  const opencode = page.getByRole('article', { name: 'OpenCode' })
+  const codex = page.getByRole('article', { name: 'Codex' })
+  await expect(opencode.getByText('运行时预装')).toBeVisible()
+  await expect(opencode.getByRole('button', { name: '移除' })).toHaveCount(0)
+  await expect(
+    page
+      .getByRole('article', { name: 'Claude Code' })
+      .getByText('运行时预装'),
+  ).toBeVisible()
+
+  const remove = codex.getByRole('button', { name: '移除' })
+  if (await remove.count()) {
+    await remove.click()
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: '移除' })
+      .click()
+    await expect(codex.getByText('未安装', { exact: true })).toBeVisible()
+  }
+  await codex.getByRole('button', { name: '安装' }).click()
+  await expect(codex.getByText('已安装', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(codex.getByText('已安装', { exact: true })).toBeVisible()
+
+  const other = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  const otherPage = await other.newPage()
+  await login(otherPage, '/settings/plugins')
+  await expect(
+    otherPage
+      .getByRole('article', { name: 'Codex' })
+      .getByText('已安装', { exact: true }),
+  ).toBeVisible()
+  await other.close()
+
+  await codex.getByRole('button', { name: '移除' }).click()
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: '移除' })
+    .click()
+  await expect(codex.getByText('未安装', { exact: true })).toBeVisible()
+})
+
 test('owner manages a space market while the official catalog stays shared', async ({
   page,
 }) => {
   test.setTimeout(180_000)
   await login(page, '/settings/plugins')
   for (const agent of ['OpenCode', 'Claude Code', 'Codex']) {
-    await expect(page.getByRole('article', { name: agent })).toHaveCount(0)
+    await expect(page.getByRole('article', { name: agent })).toBeVisible()
   }
   await page.getByRole('button', { name: '管理市场' }).click()
   const dialog = page.getByRole('dialog')
@@ -333,6 +387,7 @@ test('five desktop pages and keyboard-accessible details', async ({
         ),
       ).toBeVisible()
     }
+    await resetScroll(page)
     await page.screenshot({
       path: info.outputPath(path + '-light.png'),
       fullPage: true,
@@ -357,11 +412,39 @@ test('dark plugin and skill screenshots', async ({ page }, info) => {
   for (const path of ['plugins', 'skills']) {
     await page.goto('/settings/' + path)
     await expect(page.getByRole('article').first()).toBeVisible()
+    await resetScroll(page)
     await page.screenshot({
       path: info.outputPath(path + '-dark.png'),
       fullPage: true,
     })
   }
+})
+
+test('Agent plugin screenshots', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await login(page, '/settings/plugins')
+  await theme(page, '浅色')
+  await page.goto('/settings/plugins')
+  await expect(page.getByRole('heading', { name: 'Agent' })).toBeVisible()
+  await page.screenshot({
+    path: info.outputPath('plugins-agent-light-1440.png'),
+  })
+
+  await theme(page, '深色')
+  await page.goto('/settings/plugins')
+  await expect(page.getByRole('heading', { name: 'Agent' })).toBeVisible()
+  await page.screenshot({
+    path: info.outputPath('plugins-agent-dark-1440.png'),
+  })
+
+  await page.setViewportSize({ width: 375, height: 900 })
+  await theme(page, '浅色')
+  await page.goto('/settings/plugins')
+  await expect(page.getByRole('heading', { name: 'Agent' })).toBeVisible()
+  await page.screenshot({
+    path: info.outputPath('plugins-agent-light-375.png'),
+    fullPage: true,
+  })
 })
 
 for (const width of [768, 375]) {
@@ -392,6 +475,7 @@ for (const width of [768, 375]) {
       await expect(active).toBeInViewport({ ratio: 1 })
       if (width === 375 && ['plugins', 'skills'].includes(path)) {
         await expect(page.getByRole('article').first()).toBeVisible()
+        await resetScroll(page)
         await page.screenshot({
           path: info.outputPath(path + '-mobile.png'),
           fullPage: true,

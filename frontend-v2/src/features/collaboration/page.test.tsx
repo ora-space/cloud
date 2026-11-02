@@ -48,7 +48,7 @@ const third: MemberListItem = {
 const opencode: SpacePlugin = {
   id: 'plugin-1', spaceId: 'space-1', tenantId: 'tenant', sourceNamespace: 'official', identifier: 'ora-space.opencode',
   kind: 'agent', desiredState: 'installed', desiredVersion: '0.6.11', observedState: 'installed', observedVersion: '0.6.11',
-  requestedByUserId: me.id, installError: null, version: 1, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
+  requestedByUserId: null, installError: null, version: 1, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
 }
 
 beforeEach(() => {

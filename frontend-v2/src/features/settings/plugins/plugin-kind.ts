@@ -21,7 +21,7 @@ interface CatalogKind {
 const catalogKinds: Record<string, CatalogKind> = {
   agent: {
     label: 'Agent',
-    groupDescription: '可直接运行任务的智能体',
+    groupDescription: '安装到空间的智能体插件',
     icon: Bot,
   },
   webview: {
