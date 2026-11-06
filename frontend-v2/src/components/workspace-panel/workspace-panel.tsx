@@ -131,9 +131,9 @@ export function WorkspacePanel({
 /** The header button that shows or hides a page's workspace panel. */
 export function WorkspaceToggle({ open, toggle }: { open: boolean; toggle: () => void }) {
   return (
-    <Button size="sm" variant={open ? 'secondary' : 'ghost'} className="h-7 gap-1.5 px-2 text-xs" aria-pressed={open} onClick={toggle}>
+    <Button size="sm" variant={open ? 'secondary' : 'ghost'} className="h-7 gap-1.5 px-2 text-xs" aria-pressed={open} aria-label="工作区" onClick={toggle}>
       <PanelRightIcon className="size-3.5" />
-      工作区
+      <span className="hidden sm:inline">工作区</span>
     </Button>
   )
 }

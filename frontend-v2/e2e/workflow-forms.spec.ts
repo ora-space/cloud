@@ -28,8 +28,10 @@ test('inspection form persists a draft, creates a real task once and survives re
   await page.goto(`/chat?run=${run}`)
   const form = page.getByRole('region', { name: '报告与问题确认' })
   await expect(form.getByText('验收磁盘异常', { exact: true })).toBeVisible()
-  await form.getByLabel('是否为问题').selectOption('confirmed')
+  // One click on the visible control, not a select that hides the two real answers.
+  await form.getByRole('group', { name: '是否为问题' }).getByRole('button', { name: '是问题', exact: true }).click()
   await form.getByLabel('指派给', { exact: true }).selectOption({ label: ownerName })
+  await form.getByRole('button', { name: '添加备注' }).click()
   await form.getByLabel('备注', { exact: true }).fill('请清理并核对增长来源')
   await form.getByRole('button', { name: '保存草稿' }).click()
   await expect(form.getByText('草稿已保存。')).toBeVisible()

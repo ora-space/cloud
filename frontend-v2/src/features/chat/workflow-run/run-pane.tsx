@@ -1,4 +1,3 @@
-import { RunForm } from './run-form'
 import { QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MapIcon, MessageSquareIcon, PlayIcon, RotateCcwIcon, SquareIcon, TheaterIcon, WorkflowIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -119,9 +118,14 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
   const artifacts = noArtifacts
   const revealedArtifactId: string | null = null
   const selectRun = useChatStore((s) => s.selectRun)
+  const formNode = run.definitionSnapshot.nodes.find((node) =>
+    node.data.kind === 'form' && ['awaiting_input', 'succeeded', 'cancelled'].includes(run.nodeStates[node.id]?.status ?? ''),
+  )
   // A live run opens on its Theater; a pending or finished one on Overview, as desktop primes it.
-  const [viewMode, setViewMode] = useState<ViewMode>(run.status === 'running' || run.status === 'awaiting_input' || run.definitionSnapshot.nodes.some(n=>n.data.kind==='form') ? 'theater' : 'overview')
-  const [focusNodeId, setFocusNodeId] = useState<string | null>(null)
+  // A confirmation node is the run's result surface: open it on load, but keep every other node
+  // reachable from the path rail.
+  const [viewMode, setViewMode] = useState<ViewMode>(run.status === 'running' || run.status === 'awaiting_input' || formNode !== undefined ? 'theater' : 'overview')
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(formNode?.id ?? null)
   /** Node whose conversation is open; it pins the act until closed. */
   const [conversationNodeId, setConversationNodeId] = useState<string | null>(null)
   const [openInspectorOnTheaterEnter, setOpenInspectorOnTheaterEnter] = useState(false)
@@ -152,7 +156,7 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
   if (previousStatus !== run.status) {
     setPreviousStatus(run.status)
     if (finished && !isTerminalRunStatus(previousStatus)) {
-      setFocusNodeId(null)
+      setFocusNodeId(formNode?.id ?? null)
       setConversationNodeId(null)
     }
   }
@@ -186,8 +190,10 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
   }, [freshHitl, t])
 
   // Live pin release: once the focused act itself finishes, Theater follows the run again.
+  // Form and task results stay pinned: they own the run's outcome and must remain readable.
   useEffect(() => {
-    if (focusNodeId === null || isLoopHistoryNode(run, focusNodeId)) {
+    const focusKind = focusNodeId === null ? undefined : nodes.find((node) => node.id === focusNodeId)?.data.kind
+    if (focusNodeId === null || isLoopHistoryNode(run, focusNodeId) || focusKind === 'form' || focusKind === 'createTasks') {
       focusStatusSampleRef.current = null
       return
     }
@@ -198,7 +204,7 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
       return
     }
     if (status !== undefined) focusStatusSampleRef.current = { nodeId: focusNodeId, status }
-  }, [run, focusNodeId, conversationNodeId])
+  }, [run, focusNodeId, conversationNodeId, nodes])
 
   // A new artifact moves Theater to the act that produced it, unless the reader is elsewhere on purpose.
   const [handledReveal, setHandledReveal] = useState<string | null>(null)
@@ -247,8 +253,9 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
     setConversationNodeId(null)
     setFocusNodeId(nodeId)
     const waiting = run.nodeStates[nodeId]?.status === 'awaiting_input'
+    const kind = nodes.find((node) => node.id === nodeId)?.data.kind
     const stageWidth = stageAreaRef.current?.getBoundingClientRect().width ?? Number.POSITIVE_INFINITY
-    setOpenInspectorOnTheaterEnter(!waiting && stageWidth >= NARROW_THEATER_INSPECTOR_AUTO_OPEN_WIDTH)
+    setOpenInspectorOnTheaterEnter(!waiting && kind !== 'form' && kind !== 'createTasks' && stageWidth >= NARROW_THEATER_INSPECTOR_AUTO_OPEN_WIDTH)
     setViewMode('theater')
   }
 
@@ -265,10 +272,10 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
 
   return (
     <WorkspaceNavigationProvider value={workspace.navigation}>
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:h-12 sm:flex-nowrap sm:px-4 sm:py-0">
         <ShowSidebarButton />
         <WorkflowIcon className="size-4 shrink-0 text-muted-foreground" />
-        <h2 className="flex min-w-0 text-sm font-medium">
+        <h2 className="flex min-w-0 flex-1 text-sm font-medium">
           <FadeText text={run.name} />
         </h2>
         <Badge variant="outline" className={cn('gap-1.5', tone.badge)}>
@@ -277,15 +284,16 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
         </Badge>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <div role="group" aria-label={t('workflowRun.viewMode.label')} className="inline-flex rounded-lg border p-0.5">
-            <Button size="sm" variant={viewMode === 'theater' ? 'secondary' : 'ghost'} className="h-7 gap-1.5 px-2.5 text-xs" aria-pressed={viewMode === 'theater'} onClick={enterTheaterFromHeader}>
+            <Button size="sm" variant={viewMode === 'theater' ? 'secondary' : 'ghost'} className="h-7 gap-1.5 px-2.5 text-xs" aria-pressed={viewMode === 'theater'} aria-label={t('workflowRun.viewMode.theater')} onClick={enterTheaterFromHeader}>
               <TheaterIcon className="size-3.5" />
-              {t('workflowRun.viewMode.theater')}
+              <span className="hidden sm:inline">{t('workflowRun.viewMode.theater')}</span>
             </Button>
             <Button
               size="sm"
               variant={viewMode === 'overview' ? 'secondary' : 'ghost'}
               className="h-7 gap-1.5 px-2.5 text-xs"
               aria-pressed={viewMode === 'overview'}
+              aria-label={t('workflowRun.viewMode.overview')}
               onClick={() => {
                 setOpenInspectorOnTheaterEnter(false)
                 setViewMode('overview')
@@ -293,19 +301,19 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
               }}
             >
               <MapIcon className="size-3.5" />
-              {t('workflowRun.viewMode.overview')}
+              <span className="hidden sm:inline">{t('workflowRun.viewMode.overview')}</span>
             </Button>
           </div>
           {run.status === 'pending' && (
-            <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setStartOpen(true)} disabled={busy}>
+            <Button size="sm" className="h-7 px-2.5 text-xs" aria-label="启动" onClick={() => setStartOpen(true)} disabled={busy}>
               <PlayIcon />
-              启动
+              <span className="hidden sm:inline">启动</span>
             </Button>
           )}
           {(run.status === 'running' || run.status === 'awaiting_input') && (
-            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => act(() => cancelRun(tenantId, run.id))} disabled={busy}>
+            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" aria-label="停止" onClick={() => act(() => cancelRun(tenantId, run.id))} disabled={busy}>
               <SquareIcon />
-              停止
+              <span className="hidden sm:inline">停止</span>
             </Button>
           )}
           {finished && (
@@ -313,6 +321,7 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
               variant="outline"
               size="sm"
               className="h-7 px-2.5 text-xs"
+              aria-label="再跑一次"
               disabled={busy}
               onClick={() =>
                 act(async () => {
@@ -323,11 +332,11 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
               }
             >
               <RotateCcwIcon />
-              再跑一次
+              <span className="hidden sm:inline">再跑一次</span>
             </Button>
           )}
           {run.status === 'succeeded' && run.finalOutput && (
-            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => {
+            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" aria-label="在对话中追问" onClick={() => {
               const store = useChatStore.getState()
               const draft = store.drafts[newChatKey] ?? emptyDraft
               store.startNewChat({ projectId: run.projectId })
@@ -337,7 +346,7 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
               })
             }}>
               <MessageSquareIcon />
-              在对话中追问
+              <span className="hidden sm:inline">在对话中追问</span>
             </Button>
           )}
           <WorkspaceToggle open={workspace.open} toggle={() => workspace.setOpen(!workspace.open)} />
@@ -355,8 +364,9 @@ function RunWorkspace({ tenantId, run, refreshProjectRuns }: { tenantId: string;
               还没开始：点右上角「启动」，填写输入后运行
             </p>
           )}
-          {viewMode === 'theater' && run.definitionSnapshot.nodes.some(n => n.data.kind === 'form' && ['awaiting_input','succeeded','cancelled'].includes(run.nodeStates[n.id]?.status ?? '')) ? <RunForm tenantId={tenantId} runId={run.id} runStatus={run.status} /> : viewMode === 'theater' ? (
+          {viewMode === 'theater' ? (
             <RunTheater
+              tenantId={tenantId}
               run={run}
               focusNodeId={stageFocusNodeId}
               onFocusNode={focusNode}
