@@ -68,6 +68,16 @@ describe('applySessionEvent with previews', () => {
     v = applySessionEvent(v, event({ history: { records: [], incomplete: false } }))
     expect(v.records).toEqual([user(1, 'hi'), say(2, '定稿')])
   })
+
+  it('keeps position order when a pending record sits before a newly settled one', () => {
+    let sequence = 0
+    const event = (e: Partial<ChatEvent>): ChatEvent => ({ sequence: ++sequence, occurredAt: at(0), kind: 'history_preview', turnId: 't1', ...e })
+    const thought = pending(2, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: '先想想' } })
+    // Record 3 settled while record 2, which Node no longer previews, is still pending.
+    let v = applySessionEvent(emptySessionView('s1'), event({ kind: 'history_snapshot', history: { records: [user(1, 'hi'), thought, say(3, '答')], incomplete: false } }))
+    v = applySessionEvent(v, event({ history: { records: [thought], incomplete: false } }))
+    expect(v.records).toEqual([user(1, 'hi'), thought, say(3, '答')])
+  })
 })
 
 describe('reasoning durations from retained events', () => {

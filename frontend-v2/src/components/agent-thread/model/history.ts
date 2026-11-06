@@ -57,11 +57,14 @@ export function applySessionEvent(base: SessionView, event: ChatEvent): SessionV
   }
 }
 
-/** Swaps a history's pending records for newer ones; a settled record at the same position wins. */
+/**
+ * Swaps a history's pending records for newer ones; a settled record at the same position wins.
+ * A pending record can sit before a settled one, so the result is put back in position order.
+ */
 function withPending(records: ChatHistoryRecord[], pending: ChatHistoryRecord[]): ChatHistoryRecord[] {
   const settled = records.filter((r) => !r.preview)
   const positions = new Set(settled.map((r) => r.sequence))
-  return [...settled, ...pending.filter((r) => !positions.has(r.sequence))]
+  return [...settled, ...pending.filter((r) => !positions.has(r.sequence))].sort((a, b) => a.sequence - b.sequence)
 }
 
 /**
