@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { UserContext } from '@/app/auth/user'
@@ -31,6 +32,10 @@ vi.mock('./tasks-api/generated', () => ({
   listTasks: vi.fn(), listTaskDecompositions: vi.fn(), startTaskDecomposition: vi.fn(),
 }))
 vi.mock('@/lib/workflows/api/generated', () => ({ listWorkflows: vi.fn() }))
+// The run view has its own tests; here it shows which run the page opened and how.
+vi.mock('@/features/chat/workflow-run/run-pane', () => ({
+  default: ({ runId, tenantId, readOnly, leading }: { runId: string; tenantId: string; readOnly: boolean; leading: ReactNode }) => <div>{leading}<p>运行视图 {runId} {tenantId} {readOnly ? '只读' : '可写'}</p></div>,
+}))
 
 const me: User = { id: 'user-me', displayName: '演示用户', status: 'active', version: 1, createdAt: '2026-10-01T00:00:00Z', deletedAt: null }
 const agent = { type: 'agent' as const, id: 'agent-1', displayName: 'Claude Code', identifier: 'official/ora-space.claude' }
@@ -249,8 +254,76 @@ it('splits a requirement with the 需求拆分 workflow and lists the subtasks i
   await waitFor(() => expect(api.startTaskDecomposition).toHaveBeenCalledWith('tenant', 'task-1', { workflowId: 'wf-split' },
     expect.objectContaining({ headers: { 'Idempotency-Key': expect.any(String) } })))
   expect(await screen.findByText(/「需求拆分」拆出了 2 个子任务/)).toBeInTheDocument()
+  // The run is open, so the subtasks stay folded until asked for.
+  expect(await screen.findByText('运行视图 wr-1 tenant 只读')).toBeInTheDocument()
+  expect(screen.queryByRole('list', { name: '子任务' })).not.toBeInTheDocument()
+  await userEvent.click(await screen.findByRole('button', { name: '展开子任务' }))
   const subtasks = await screen.findByRole('list', { name: '子任务' })
   expect(within(subtasks).getAllByRole('link').map(a => a.textContent)).toEqual(['登录页', '注册页'])
+  await userEvent.click(screen.getByRole('button', { name: '收起子任务' }))
+  expect(screen.queryByRole('list', { name: '子任务' })).not.toBeInTheDocument()
+})
+
+it('keeps the subtasks open outside a run, and the workflow tab between the other two', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(api.listTaskDecompositions).mockResolvedValue({ items: [decomposition({ status: 'succeeded', createdCount: 1 })] })
+  vi.mocked(api.listTasks).mockResolvedValue({ nextCursor: '', items: [requirement, task({ id: 'sub-1', title: '登录页', parentId: 'task-1', assignee: null })] })
+  renderPage()
+  expect(await screen.findByRole('list', { name: '子任务' })).toBeInTheDocument()
+  expect(screen.getAllByRole('tab', { name: /Agent 运行|工作流|讨论/ }).map(t => t.textContent?.replace(/\s*\d+$/, ''))).toEqual(['Agent 运行', '工作流', '讨论'])
+})
+
+it('opens the run as soon as a split starts, read-only, and goes back to the list', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(workflowsApi.listWorkflows).mockResolvedValue({ workflows: [{ id: 'wf-split', namespace: 'local', name: '需求拆分', publishedVersion: 'v1', createdAt: 0, updatedAt: 0 }] })
+  let started = false
+  vi.mocked(api.startTaskDecomposition).mockImplementation(async () => { started = true; return decomposition() })
+  vi.mocked(api.listTaskDecompositions).mockImplementation(async () => ({ items: started ? [decomposition()] : [] }))
+  renderPage()
+  await userEvent.click(await screen.findByRole('button', { name: '拆分' }))
+  expect(screen.queryByRole('tab', { name: /工作流/ })).not.toBeInTheDocument()
+  const dialog = await screen.findByRole('dialog')
+  await waitFor(() => expect(within(dialog).getByLabelText('工作流')).toHaveValue('wf-split'))
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始拆分' }))
+  expect(await screen.findByText('运行视图 wr-1 tenant 只读')).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: '工作流 1' })).toHaveAttribute('aria-selected', 'true')
+  // The run takes the room the composer would.
+  expect(screen.queryByLabelText('评论或给 Agent 的消息')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: '返回工作流列表' }))
+  expect(await screen.findByRole('list', { name: '工作流运行记录' })).toHaveTextContent('正在拆分')
+  expect(screen.getByLabelText('评论或给 Agent 的消息')).toBeInTheDocument()
+})
+
+it('lists every workflow the task ran and opens the one picked', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(api.listTaskDecompositions).mockResolvedValue({ items: [
+    decomposition({ id: 'split-3', workflowRunId: 'wr-3', status: 'succeeded', createdCount: 4 }),
+    decomposition({ id: 'split-2', workflowRunId: 'wr-2', status: 'failed', failure: '工作流的输出里没有 tasks 数组。' }),
+    decomposition({ id: 'split-1', workflowRunId: '', status: 'failed', failure: '工作流启动被拒绝。' }),
+  ] })
+  renderPage()
+  await userEvent.click(await screen.findByRole('tab', { name: '工作流 3' }))
+  const list = await screen.findByRole('list', { name: '工作流运行记录' })
+  expect(within(list).getAllByRole('listitem').map(row => row.textContent)).toEqual([
+    expect.stringContaining('拆出 4 个子任务'), expect.stringContaining('工作流的输出里没有 tasks 数组。'), expect.stringContaining('工作流启动被拒绝。'),
+  ])
+  // A run the host refused has nothing to open.
+  expect(within(list).getAllByRole('button')).toHaveLength(2)
+  await userEvent.click(within(list).getAllByRole('button')[1]!)
+  expect(await screen.findByText('运行视图 wr-2 tenant 只读')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('tab', { name: /讨论/ }))
+  await userEvent.click(screen.getByRole('tab', { name: /工作流/ }))
+  expect(await screen.findByRole('list', { name: '工作流运行记录' })).toBeInTheDocument()
+})
+
+it('opens a shared link on its run, and on the list when the run is gone', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(api.listTaskDecompositions).mockResolvedValue({ items: [decomposition({ status: 'succeeded', createdCount: 2 })] })
+  const { unmount } = renderPage('?tab=workflows&workflow=wr-1')
+  expect(await screen.findByText('运行视图 wr-1 tenant 只读')).toBeInTheDocument()
+  unmount()
+  renderPage('?tab=workflows&workflow=gone')
+  expect(await screen.findByRole('list', { name: '工作流运行记录' })).toBeInTheDocument()
 })
 
 it('shows a running split and holds the button', async () => {

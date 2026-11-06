@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { GraphWorkflowNodeStatus, WorkflowNodeConversationItem } from '@/lib/workflows/runtime'
 import { FirstTurnWait } from '@/components/agent-thread/preparation'
 import { Thread } from '@/components/agent-thread/thread'
-import { useChatStore } from '../store'
+import { useRunTenant } from './run-tenant'
 import { nodeConversationTurns } from './conversation-turns'
 import { useNodeSession } from './node-session'
 import { isNodeWorking } from './run-status-style'
@@ -33,7 +33,7 @@ export function RunNodeSessionChat({
   session?: { runId: string; nodeRunId: string }
 }) {
   const { t } = useTranslation()
-  const tenantId = useChatStore((s) => s.tenantId) ?? ''
+  const tenantId = useRunTenant()
   const { conversation: followed, refused } = useNodeSession(tenantId, session?.runId, session?.nodeRunId)
   const recorded = useMemo(() => nodeConversationTurns(conversation, status, errorMessage), [conversation, status, errorMessage])
   const thread = followed !== null && followed.turns.length > 0 ? followed : recorded

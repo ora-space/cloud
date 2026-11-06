@@ -1,6 +1,6 @@
 import '@/lib/workflows/test/dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -11,6 +11,7 @@ import Page from '../page'
 import { newChatKey, resetChatStore, useChatStore } from '../store'
 import { chatBackend, FakeEventSource, line, tenantId } from '../test-backend'
 import { sampleWorkflowBackend, serveWorkflows, type WorkflowServer } from '@/lib/workflows/test/workflow-server'
+import RunPane from './run-pane'
 import { runRefreshMs } from './server-runs'
 import { serveRuns, type RunServer } from './test-run-server'
 
@@ -74,6 +75,22 @@ describe('workflow runs in chat', () => {
     await waitFor(() => expect([...runs.runs.values()]).toHaveLength(1))
     expect([...runs.runs.values()][0]!.detail.run.projectId).toBe('p-desktop')
     expect(screen.queryByRole('dialog', { name: '运行工作流' })).not.toBeInTheDocument()
+  })
+
+  it('shows a run read-only on a page outside chat, on the tenant it is given', async () => {
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '任务页的运行')
+    await screen.findByRole('region', { name: '工作流运行' })
+    await waitFor(() => expect(runs.runs.size).toBe(1))
+    const runId = [...runs.runs.keys()][0]!
+    cleanup()
+    resetChatStore()
+
+    render(<MemoryRouter><QueryClientProvider client={new QueryClient()}><TooltipProvider><RunPane runId={runId} tenantId={tenantId} readOnly /></TooltipProvider></QueryClientProvider></MemoryRouter>)
+    expect(await screen.findByRole('heading', { level: 2, name: '任务页的运行' })).toBeInTheDocument()
+    for (const name of ['启动', '停止', '再跑一次', '在对话中追问', '工作区']) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    expect(screen.getByRole('group', { name: '运行视图' })).toBeInTheDocument()
   })
 
   it('runs a published workflow on v2-server and follows it on the Theater', async () => {

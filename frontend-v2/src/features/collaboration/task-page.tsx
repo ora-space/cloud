@@ -13,6 +13,7 @@ import { DecomposeDialog, TaskFamily } from './task-decomposition'
 import { TaskDetailView } from './task-detail'
 import { TaskDiscussion } from './task-discussion'
 import { TaskForm, type TaskDraft } from './task-form'
+import { TaskWorkflows } from './task-workflows'
 import { projectLabel, taskMessageFor, taskMoveMessageFor, taskRunMessageFor, taskStatusLabel } from './task-model'
 import {
   createTaskComment, getTask, getTaskTimeline, listTaskExecutors, setTaskAssignee, setTaskStatus, startTaskRun, stopTaskRun, updateTask,
@@ -35,7 +36,8 @@ export default function TaskPage() {
   const { tenantId, role } = useWorkspace()
   const client = useQueryClient()
   const [params, setParams] = useSearchParams()
-  const tab = params.get('tab') === 'discussion' ? 'discussion' : 'runs'
+  const rawTab = params.get('tab')
+  const tab = rawTab === 'discussion' || rawTab === 'workflows' ? rawTab : 'runs'
   const pickedRun=params.get("run")
   const [error, setError] = useState('')
   const [composeError, setComposeError] = useState('')
@@ -78,6 +80,8 @@ export default function TaskPage() {
   const runs = timeline.data?.runs ?? []
   const comments = timeline.data?.comments ?? []
   const selected = pickedRun ? runs.find(r=>r.id===pickedRun) : runs.at(-1)
+  // A link to a run the task no longer lists falls back to the list.
+  const openedWorkflow = tab === 'workflows' ? decompositions.items.find(d => d.workflowRunId && d.workflowRunId === params.get('workflow')) : undefined
   const refresh = async () => {
     await Promise.all([
       client.invalidateQueries({ queryKey: ['task', tenantId, taskId] }),
@@ -88,12 +92,20 @@ export default function TaskPage() {
   }
   const showTab = (next: 'runs' | 'discussion', id?:string) => {
     const p = new URLSearchParams(params)
+    p.delete('workflow')
     if(id)p.set('run',id)
     if (next === 'runs') p.delete('tab')
     else p.set('tab', next)
     setParams(p, { replace: true })
   }
   const showRun = (id: string) => showTab('runs',id)
+  const showWorkflows = (runId?: string) => {
+    const p = new URLSearchParams(params)
+    p.set('tab', 'workflows')
+    if (runId) p.set('workflow', runId)
+    else p.delete('workflow')
+    setParams(p, { replace: true })
+  }
 
   const settle = (updated: Task) => {
     client.setQueryData(['task', tenantId, updated.id], updated)
@@ -159,20 +171,23 @@ export default function TaskPage() {
       <section className="mc-task-main-col" aria-label="运行与讨论">
         {task.description && <p className="mc-description">{task.description}</p>}
         {task.workflowSources?.map(source=><p key={source.runId}><Link className="underline" to={`/chat?run=${source.runId}`}>查看来源巡检报告 · {source.name}{source.submittedAt ? ` · ${new Date(source.submittedAt).toLocaleString()}` : ''}</Link></p>)}
-        <TaskFamily tenantId={tenantId} task={task} latest={decompositions.latest} onRetry={() => setDecomposing(true)} />
+        <TaskFamily tenantId={tenantId} task={task} latest={decompositions.latest} folded={!!openedWorkflow} onRetry={() => setDecomposing(true)} />
         <div className="mc-tabs" role="tablist" aria-label="任务内容">
           <button type="button" role="tab" aria-selected={tab === 'runs'} onClick={() => showTab('runs')}>Agent 运行 <b>{runs.length}</b></button>
+          {(decompositions.items.length > 0 || tab === 'workflows') && <button type="button" role="tab" aria-selected={tab === 'workflows'} onClick={() => showWorkflows()}>工作流 <b>{decompositions.items.length}</b></button>}
           <button type="button" role="tab" aria-selected={tab === 'discussion'} onClick={() => showTab('discussion')}>讨论 <b>{comments.length}</b></button>
         </div>
         <div className="mc-tab-body">
-          {timeline.isError
+          {tab === 'workflows'
+            ? <TaskWorkflows tenantId={tenantId} decompositions={decompositions.items} selected={openedWorkflow} onSelect={showWorkflows} />
+            : timeline.isError
             ? <p role="alert">运行与讨论加载失败，请刷新重试。</p>
             : tab === 'runs'
               ? pickedRun&&!selected&&!timeline.isPending ? <p role="status">这次运行已不存在或不可见。</p> : <RunPane tenantId={tenantId} taskId={task.id} runs={runs} selected={selected} onSelect={showRun} />
               : <TaskDiscussion comments={comments} runs={runs} onRun={showRun} />}
         </div>
-        <TaskComposer tenantId={tenantId} task={task} me={me.id} inSquad={inSquad} sending={comment.isPending} error={composeError}
-          onSend={async draft => { try { await comment.mutateAsync(draft); return true } catch { return false } }} />
+        {!openedWorkflow && <TaskComposer tenantId={tenantId} task={task} me={me.id} inSquad={inSquad} sending={comment.isPending} error={composeError}
+          onSend={async draft => { try { await comment.mutateAsync(draft); return true } catch { return false } }} />}
       </section>
       <aside className="mc-task-side-col" aria-label="任务属性">
         <TaskDetailView task={task} me={me.id} inSquad={inSquad} canClose={canCloseTask(task, me.id, role)} projectName={projectLabel(projectList, task.projectId)} squads={squads.data?.items ?? []}
@@ -188,7 +203,7 @@ export default function TaskPage() {
       </aside>
     </div>
 
-    {decomposing && <DecomposeDialog tenantId={tenantId} task={task} onClose={() => setDecomposing(false)} onStarted={() => setDecomposing(false)} />}
+    {decomposing && <DecomposeDialog tenantId={tenantId} task={task} onClose={() => setDecomposing(false)} onStarted={created => { setDecomposing(false); showWorkflows(created.status === 'running' ? created.workflowRunId : undefined) }} />}
 
     {editing && <PanelDialog icon={<ClipboardList size={14} />} eyebrow="任务" title={`编辑 ${task.title}`} subtitle="修改标题、描述与所属项目；状态与指派有各自的入口。" onClose={() => setEditing(false)}>
       <TaskForm initial={{ title: task.title, description: task.description, projectId: task.projectId }} projects={projectList} projectsLoading={projects.isLoading} submitLabel="保存修改" saving={save.isPending} error={error} onSave={draft => save.mutate({ draft, target: task })} onCancel={() => setEditing(false)} />
