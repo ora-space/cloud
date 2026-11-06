@@ -181,7 +181,7 @@ export const workflowRunTranslations = {
     "workflowRun.result.title.failed": "运行失败",
     "workflowRun.result.title.cancelled": "已取消",
     "workflowRun.result.body.succeeded":
-      "本轮工作流已成功结束。可在路径中回顾各步骤，或从顶栏再跑一次。",
+      "本轮工作流已成功结束。可在路径中回顾各步骤。",
     "workflowRun.result.body.failed":
       "运行在某个步骤失败后结束。打开路径查看失败节点与详情。",
     "workflowRun.result.body.cancelled":
@@ -189,7 +189,7 @@ export const workflowRunTranslations = {
     "workflowRun.result.showOverview": "查看全图",
     "workflowRun.result.openArtifacts": "打开最近成果",
     "workflowRun.result.pathHint":
-      "点路径上的「结果」或步骤可切换回顾；再跑一次请用顶栏按钮。",
+      "点路径上的「结果」或步骤可切换回顾。",
     "workflowRun.result.pathChip": "结果",
     "workflowRun.result.finishedToastTitle": "运行已结束",
     "workflowRun.result.finishedToastDescription": "可切到舞台查看结果摘要。",

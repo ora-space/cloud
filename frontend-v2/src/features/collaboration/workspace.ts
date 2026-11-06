@@ -89,5 +89,5 @@ export function useDecompositions(tenantId: string, taskId: string) {
   useEffect(() => {
     if (settled) void client.invalidateQueries({ queryKey: ['tasks', tenantId] })
   }, [settled, client, tenantId])
-  return { latest, isError: query.isError }
+  return { items: query.data?.items ?? [], latest, isError: query.isError }
 }

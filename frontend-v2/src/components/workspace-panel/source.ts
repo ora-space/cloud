@@ -4,6 +4,10 @@ import {
   getChatWorkspaceDiff,
   getChatWorkspaceEntries,
   getChatWorkspaceFile,
+  getTaskRunWorkspaceChanges,
+  getTaskRunWorkspaceDiff,
+  getTaskRunWorkspaceEntries,
+  getTaskRunWorkspaceFile,
   getWorkflowRunWorkspaceChanges,
   getWorkflowRunWorkspaceDiff,
   getWorkflowRunWorkspaceEntries,
@@ -15,10 +19,11 @@ import {
   type WorkspaceFile,
 } from '@/lib/workspace-api/generated'
 
-/** Whose checkout the panel shows: a conversation's, or the one a workflow run's Agents share. */
+/** Whose checkout the panel shows: a conversation's, a task run's, or the one a workflow run's Agents share. */
 export type WorkspaceSource =
   | { kind: 'chat'; tenantId: string; conversationId: string }
   | { kind: 'run'; tenantId: string; runId: string }
+  | { kind: 'task'; tenantId: string; taskId: string; runId: string }
 
 /** The four read-only views of one checkout, and the query-key prefix every one of them shares. */
 export interface WorkspaceReader {
@@ -39,6 +44,16 @@ export function workspaceReader(source: WorkspaceSource): WorkspaceReader {
       file: (path) => getChatWorkspaceFile(t, c, { path }),
       changes: () => getChatWorkspaceChanges(t, c),
       diff: (path) => getChatWorkspaceDiff(t, c, { path }),
+    }
+  }
+  if (source.kind === 'task') {
+    const { tenantId: t, taskId: k, runId: r } = source
+    return {
+      key: ['workspace', 'task', t, k, r],
+      entries: (path) => getTaskRunWorkspaceEntries(t, k, r, path ? { path } : undefined),
+      file: (path) => getTaskRunWorkspaceFile(t, k, r, { path }),
+      changes: () => getTaskRunWorkspaceChanges(t, k, r),
+      diff: (path) => getTaskRunWorkspaceDiff(t, k, r, { path }),
     }
   }
   const { tenantId: t, runId: r } = source

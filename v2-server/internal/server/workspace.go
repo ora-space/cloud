@@ -10,11 +10,13 @@ import (
 )
 
 // The workspace routes are outside api/openapi.json; workspace.openapi.json describes them. They
-// read the checkout behind a conversation or a workflow run, read-only, for the side panel.
+// read the checkout behind a conversation, a workflow run or a task run, read-only, for the side
+// panel.
 type workspaceStore interface {
 	ChatConversation(ctx context.Context, tenant, user, id string) (store.ChatConversation, error)
 	ChatWorkspace(ctx context.Context, tenant, user, conversationID string) (store.WorkspaceLocation, error)
 	WorkflowRunWorkspace(ctx context.Context, tenant, runID string) (store.WorkspaceLocation, error)
+	TaskRunWorkspace(ctx context.Context, tenant, taskID, runID string) (store.WorkspaceLocation, error)
 }
 
 // locate finds the checkout a request names, after its own authorization checks. It writes the
@@ -28,6 +30,7 @@ func (h *handler) workspaceRoutes(mux *http.ServeMux) {
 	}{
 		{chatBase + "/conversations/{cid}/workspace", h.chatWorkspace},
 		{"/api/v2/tenants/{tid}/workflow-runs/{rid}/workspace", h.workflowRunWorkspace},
+		{"/api/v2/tenants/{tid}/tasks/{taskid}/runs/{rid}/workspace", h.taskRunWorkspace},
 	} {
 		mux.HandleFunc("GET "+r.base+"/entries", workspaceRead(r.find, func(_ context.Context, w workspacefs.Workspace, p string) (any, error) { return w.List(p) }))
 		mux.HandleFunc("GET "+r.base+"/file", workspaceRead(r.find, func(_ context.Context, w workspacefs.Workspace, p string) (any, error) { return w.Read(p) }))
@@ -89,6 +92,28 @@ func (h *handler) workflowRunWorkspace(w http.ResponseWriter, r *http.Request) (
 			return
 		}
 		at, e := s.WorkflowRunWorkspace(r.Context(), tenant, runID)
+		ws, found = workspaceAt(w, at, e)
+	})(w, r)
+	return ws, found
+}
+
+func (h *handler) taskRunWorkspace(w http.ResponseWriter, r *http.Request) (ws workspacefs.Workspace, found bool) {
+	h.authed(func(w http.ResponseWriter, r *http.Request, u store.User) {
+		host, scope, id, ok := h.taskRunScope(w, r, u)
+		if !ok {
+			return
+		}
+		s, ok := h.store.(workspaceStore)
+		if !ok {
+			fault(w, http.StatusServiceUnavailable, "workspace_unavailable")
+			return
+		}
+		runID := r.PathValue("rid")
+		if _, e := host.Run(r.Context(), scope, id, runID); e != nil {
+			taskRunFault(w, "task run workspace", e)
+			return
+		}
+		at, e := s.TaskRunWorkspace(r.Context(), scope.TenantID, id, runID)
 		ws, found = workspaceAt(w, at, e)
 	})(w, r)
 	return ws, found

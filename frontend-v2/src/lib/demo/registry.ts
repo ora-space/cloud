@@ -27,4 +27,10 @@ export const demoMocks: readonly DemoMock[] = [
   },
   { module: 'cdase.ts', scene: 'newcomer', covers: 'SFMEA review workflow and report recording fixture', replacedBy: 'Installed cdase workflow with real Agent execution and persisted review artifacts' },
  {module:'dts.ts',scene:'ops',covers:'DTS simulated receipts after real Cloud task creation',replacedBy:'An authenticated DTS connector with durable external delivery receipts'},
+  {
+    module: 'task-workflows.ts',
+    scene: 'lead',
+    covers: 'Handling a task with a workflow: the entry, the requirement, and the run belonging to the task',
+    replacedBy: 'Task-owned workflow runs: start one on a task with a requirement, list them, and move the task when they end',
+  },
 ]

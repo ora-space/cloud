@@ -3,7 +3,7 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { localizeContractError } from '@/lib/workflows/host/contract-error'
 import { toast } from '@/lib/workflows/host/ui'
-import { useChatStore } from '../store'
+import { useRunTenant } from './run-tenant'
 import { useWorkspaceNavigation } from '@/components/workspace-panel/navigation'
 import { updateRunInput } from './server-runs'
 
@@ -27,7 +27,7 @@ export function useContractErrorToast(): (error: unknown, title?: string) => voi
 
 /** Saves the Start node's prompt and values edited in Theater's inspector. */
 export function useUpdateWorkflowRunInput() {
-  const tenantId = useChatStore((s) => s.tenantId) ?? ''
+  const tenantId = useRunTenant()
   return useMutation({
     mutationFn: ({ runId, input, variables }: { runId: string; input: string; variables?: Record<string, unknown> }) =>
       updateRunInput(tenantId, runId, input, variables),

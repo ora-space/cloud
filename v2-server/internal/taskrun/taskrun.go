@@ -621,6 +621,14 @@ func (h *Host) Events(ctx context.Context, scope execution.Scope, taskID, runID 
 	return stream, run, e
 }
 
+// Run reads one run of a task the caller can see.
+func (h *Host) Run(ctx context.Context, scope execution.Scope, taskID, runID string) (store.TaskRun, error) {
+	if _, e := h.store.Task(ctx, scope.TenantID, scope.UserID, taskID); e != nil {
+		return store.TaskRun{}, e
+	}
+	return h.store.TaskRun(ctx, scope.TenantID, taskID, runID)
+}
+
 // Owner is the scope a run's session belongs to.
 func Owner(run store.TaskRun) execution.Scope {
 	return execution.Scope{TenantID: run.TenantID, UserID: run.StartedBy}

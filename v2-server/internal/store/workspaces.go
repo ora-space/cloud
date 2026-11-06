@@ -54,6 +54,17 @@ func (s *Store) WorkflowRunWorkspace(ctx context.Context, tenant, runID string) 
 		LIMIT 1`, tenant, runID)
 }
 
+// TaskRunWorkspace returns the checkout of one run of a task; each run has its own. Runs are
+// readable by every tenant member, so this is scoped by tenant only, like the run itself.
+func (s *Store) TaskRunWorkspace(ctx context.Context, tenant, taskID, runID string) (WorkspaceLocation, error) {
+	return s.workspace(ctx, `
+		SELECT w.path, w.base_commit
+		FROM v2_task_runs r
+		JOIN v2_execution_sessions e ON e.id = r.session_id AND e.tenant_id = r.tenant_id
+		JOIN v2_workspaces w ON w.id = e.data->>'WorkspaceID'
+		WHERE r.tenant_id = $1 AND r.task_id = $2 AND r.id = $3`, tenant, taskID, runID)
+}
+
 func (s *Store) workspace(ctx context.Context, query string, args ...any) (WorkspaceLocation, error) {
 	var at WorkspaceLocation
 	e := s.pool.QueryRow(ctx, query, args...).Scan(&at.Path, &at.BaseCommit)

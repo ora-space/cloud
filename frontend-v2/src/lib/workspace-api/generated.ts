@@ -128,6 +128,27 @@ export type GetWorkflowRunWorkspaceDiffParams = {
 path: string;
 };
 
+export type GetTaskRunWorkspaceEntriesParams = {
+/**
+ * Path relative to the checkout, with forward slashes; empty or omitted is the root
+ */
+path?: string;
+};
+
+export type GetTaskRunWorkspaceFileParams = {
+/**
+ * Path relative to the checkout, with forward slashes
+ */
+path: string;
+};
+
+export type GetTaskRunWorkspaceDiffParams = {
+/**
+ * Path relative to the checkout, with forward slashes
+ */
+path: string;
+};
+
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
@@ -983,6 +1004,458 @@ export function useGetWorkflowRunWorkspaceDiff<TData = Awaited<ReturnType<typeof
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetWorkflowRunWorkspaceDiffQueryOptions(tid,rid,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * @summary List one directory of the checkout (the checkout of this run)
+ */
+export const getTaskRunWorkspaceEntries = (
+    tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<WorkspaceDirectory>(
+      {url: `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/entries`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTaskRunWorkspaceEntriesQueryKey = (tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams,) => {
+    return [
+    `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/entries`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetTaskRunWorkspaceEntriesQueryOptions = <TData = Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError = ErrorType<WorkspaceError>>(tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTaskRunWorkspaceEntriesQueryKey(tid,taskid,rid,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>> = ({ signal }) => getTaskRunWorkspaceEntries(tid,taskid,rid,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && taskid !== null && taskid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTaskRunWorkspaceEntriesQueryResult = NonNullable<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>>
+export type GetTaskRunWorkspaceEntriesQueryError = ErrorType<WorkspaceError>
+
+
+export function useGetTaskRunWorkspaceEntries<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: undefined |  GetTaskRunWorkspaceEntriesParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceEntries<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceEntries<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List one directory of the checkout (the checkout of this run)
+ */
+
+export function useGetTaskRunWorkspaceEntries<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceEntriesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceEntries>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTaskRunWorkspaceEntriesQueryOptions(tid,taskid,rid,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * @summary Read one text file of the checkout (the checkout of this run)
+ */
+export const getTaskRunWorkspaceFile = (
+    tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<WorkspaceFile>(
+      {url: `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/file`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTaskRunWorkspaceFileQueryKey = (tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceFileParams,) => {
+    return [
+    `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/file`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetTaskRunWorkspaceFileQueryOptions = <TData = Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError = ErrorType<WorkspaceError>>(tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTaskRunWorkspaceFileQueryKey(tid,taskid,rid,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>> = ({ signal }) => getTaskRunWorkspaceFile(tid,taskid,rid,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && taskid !== null && taskid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTaskRunWorkspaceFileQueryResult = NonNullable<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>>
+export type GetTaskRunWorkspaceFileQueryError = ErrorType<WorkspaceError>
+
+
+export function useGetTaskRunWorkspaceFile<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceFile<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceFile<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Read one text file of the checkout (the checkout of this run)
+ */
+
+export function useGetTaskRunWorkspaceFile<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceFileParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceFile>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTaskRunWorkspaceFileQueryOptions(tid,taskid,rid,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * @summary Files that differ from the commit the checkout started at, untracked included (the checkout of this run)
+ */
+export const getTaskRunWorkspaceChanges = (
+    tid: string,
+    taskid: string,
+    rid: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<WorkspaceChanges>(
+      {url: `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/changes`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTaskRunWorkspaceChangesQueryKey = (tid: string,
+    taskid: string,
+    rid: string,) => {
+    return [
+    `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/changes`
+    ] as const;
+    }
+
+
+export const getGetTaskRunWorkspaceChangesQueryOptions = <TData = Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError = ErrorType<WorkspaceError>>(tid: string,
+    taskid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTaskRunWorkspaceChangesQueryKey(tid,taskid,rid);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>> = ({ signal }) => getTaskRunWorkspaceChanges(tid,taskid,rid, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && taskid !== null && taskid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTaskRunWorkspaceChangesQueryResult = NonNullable<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>>
+export type GetTaskRunWorkspaceChangesQueryError = ErrorType<WorkspaceError>
+
+
+export function useGetTaskRunWorkspaceChanges<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceChanges<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceChanges<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Files that differ from the commit the checkout started at, untracked included (the checkout of this run)
+ */
+
+export function useGetTaskRunWorkspaceChanges<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceChanges>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTaskRunWorkspaceChangesQueryOptions(tid,taskid,rid,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+/**
+ * @summary One file's unified diff against that commit (the checkout of this run)
+ */
+export const getTaskRunWorkspaceDiff = (
+    tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<WorkspaceDiff>(
+      {url: `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/diff`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTaskRunWorkspaceDiffQueryKey = (tid: string,
+    taskid: string,
+    rid: string,
+    params?: GetTaskRunWorkspaceDiffParams,) => {
+    return [
+    `/api/v2/tenants/${tid}/tasks/${taskid}/runs/${rid}/workspace/diff`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetTaskRunWorkspaceDiffQueryOptions = <TData = Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError = ErrorType<WorkspaceError>>(tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTaskRunWorkspaceDiffQueryKey(tid,taskid,rid,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>> = ({ signal }) => getTaskRunWorkspaceDiff(tid,taskid,rid,params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: tid !== null && tid !== undefined && taskid !== null && taskid !== undefined && rid !== null && rid !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTaskRunWorkspaceDiffQueryResult = NonNullable<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>>
+export type GetTaskRunWorkspaceDiffQueryError = ErrorType<WorkspaceError>
+
+
+export function useGetTaskRunWorkspaceDiff<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceDiff<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTaskRunWorkspaceDiff<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary One file's unified diff against that commit (the checkout of this run)
+ */
+
+export function useGetTaskRunWorkspaceDiff<TData = Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError = ErrorType<WorkspaceError>>(
+ tid: string,
+    taskid: string,
+    rid: string,
+    params: GetTaskRunWorkspaceDiffParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTaskRunWorkspaceDiff>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTaskRunWorkspaceDiffQueryOptions(tid,taskid,rid,params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

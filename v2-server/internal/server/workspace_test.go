@@ -195,3 +195,64 @@ func TestWorkflowRunWorkspaceBeforeAnyAgentNode(t *testing.T) {
 		t.Fatalf("unknown run = %d %v", status, body)
 	}
 }
+
+func TestTaskRunWorkspaceReadsTheRunCheckout(t *testing.T) {
+	ctx := context.Background()
+	f := newSquadServer(t)
+	f.taskRunServer(t)
+	tid := f.tenant(t)
+	f.project(t)
+	c := f.taskClient()
+	c.login()
+	_, targets := c.do("GET", "/api/v1/tenants/"+tid+"/collaboration/targets", nil)
+	var agentID string
+	for _, item := range targets["items"].([]any) {
+		if target := item.(map[string]any); target["description"] == "official/ora-space.opencode" {
+			agentID = target["id"].(string)
+		}
+	}
+	base := "/api/v2/tenants/" + tid + "/tasks"
+	newTask := func(title string) string {
+		status, created := c.do("POST", base, map[string]any{"title": title, "projectId": taskProjectID, "assignee": map[string]any{"type": "agent", "id": agentID}})
+		if status != 201 {
+			t.Fatalf("create = %d %v", status, created)
+		}
+		return created["id"].(string)
+	}
+	task, other := newTask("修复登录页"), newTask("别的任务")
+	status, run := c.doHeaders("POST", base+"/"+task+"/runs", map[string]any{}, map[string]string{"Idempotency-Key": "start-1"})
+	if status != 201 {
+		t.Fatalf("start = %d %v", status, run)
+	}
+	runID := run["id"].(string)
+	get := func(path string) (int, map[string]any) {
+		return workspaceGet(t, c.http, c.base, base+"/"+task+"/runs/"+runID+"/workspace"+path)
+	}
+
+	if status, body := get("/changes"); status != 404 || body["code"] != "workspace_not_ready" {
+		t.Fatalf("before the checkout = %d %v", status, body)
+	}
+	_, me := c.do("GET", "/api/v1/me", nil)
+	scope := execution.Scope{TenantID: tid, UserID: me["id"].(string)}
+	root, commit := agentCheckout(t)
+	turn := execution.Turn{Ref: execution.Ref{SessionID: "session-1", TurnID: "turn-1"}, Caller: execution.Caller{Kind: execution.CallerTask, ID: runID, AttemptID: "start-1"}, Prompt: execution.TextPrompt("修复"), StartedAt: time.Now()}
+	if e := f.store.CreateExecutionSession(ctx, scope, execution.Session{ID: "session-1", WorkspaceID: "w1", Model: execution.Model{ID: "fixture"}}, turn); e != nil {
+		t.Fatal(e)
+	}
+	if e := f.store.RecordWorkspace(ctx, "w1", store.WorkspaceLocation{Path: root, BaseCommit: commit}); e != nil {
+		t.Fatal(e)
+	}
+
+	status, changes := get("/changes")
+	if files, _ := changes["files"].([]any); status != 200 || changes["baseCommit"] != commit || len(files) != 2 {
+		t.Fatalf("changes = %d %v", status, changes)
+	}
+	if status, diff := get("/diff?path=README.md"); status != 200 || !strings.Contains(diff["patch"].(string), "+agent") {
+		t.Fatalf("diff = %d %v", status, diff)
+	}
+	// A run belongs to its task: it cannot be read through another one.
+	wrong := base + "/" + other + "/runs/" + runID + "/workspace/changes"
+	if status, body := workspaceGet(t, c.http, c.base, wrong); status != 404 || body["code"] != "not_found" {
+		t.Fatalf("run of another task = %d %v", status, body)
+	}
+}

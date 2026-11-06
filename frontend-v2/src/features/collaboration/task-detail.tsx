@@ -1,4 +1,4 @@
-import { Bot, CirclePlay, CircleStop, RotateCcw, Users } from 'lucide-react'
+import { Bot, CirclePlay, CircleStop, RotateCcw, Users, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import type { SquadSummary } from '@/lib/squads-api/generated'
@@ -26,7 +26,7 @@ export interface RunControls {
  * One task's facts and the moves on it: who owns it, running its Agent, and the manual status
  * moves. While the Agent runs a turn, the run owns the status, so manual moves wait for it.
  */
-export function TaskDetailView({ task, me, inSquad, canClose, projectName, squads, busy, error, run, onStatus, onAssign }: {
+export function TaskDetailView({ task, me, inSquad, canClose, projectName, squads, busy, error, run, onWorkflow, onStatus, onAssign }: {
   task: Task
   /** The caller's user id: a person's task runs an Agent only for that person. */
   me: string
@@ -43,6 +43,8 @@ export function TaskDetailView({ task, me, inSquad, canClose, projectName, squad
   /** Error from the last write attempt. */
   error: string
   run: RunControls
+  /** Opens handling the task with a workflow; only the demo offers it, on a person's task. */
+  onWorkflow?: () => void
   onStatus: (status: TaskStatusProperty) => void
   onAssign: (next: TaskAssigneeRef | null) => void
 }) {
@@ -85,6 +87,9 @@ export function TaskDetailView({ task, me, inSquad, canClose, projectName, squad
               {run.hasRuns ? <RotateCcw data-icon="inline-start" /> : <CirclePlay data-icon="inline-start" />}
               {run.starting ? '正在启动…' : run.hasRuns ? '重新执行' : personal ? '用 Agent 处理' : '开始处理'}
             </Button>
+            {personal && onWorkflow && <Button type="button" size="sm" variant="outline" disabled={running} onClick={onWorkflow}>
+              <Workflow data-icon="inline-start" />用工作流处理
+            </Button>}
             {task.activeRun && <Button type="button" size="sm" variant="outline" disabled={run.stopping} onClick={run.onStop}>
               <CircleStop data-icon="inline-start" />{running ? '停止' : '结束会话'}
             </Button>}

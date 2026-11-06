@@ -38,3 +38,6 @@ export function useWorkspacePanel() {
   )
   return { open, setOpen, request, navigation }
 }
+
+/** A page's workspace panel, for a host that keeps the toggle outside the view showing the panel. */
+export type WorkspacePanelState = ReturnType<typeof useWorkspacePanel>

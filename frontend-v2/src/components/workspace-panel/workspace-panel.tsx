@@ -28,11 +28,14 @@ export interface OpenRequest {
  */
 export function WorkspacePanel({
   source,
+  caption,
   revision,
   request,
   onClose,
 }: {
   source: WorkspaceSource
+  /** Names whose checkout this is, on a page where several could be shown. */
+  caption?: string
   revision: string
   request?: OpenRequest
   onClose: () => void
@@ -88,6 +91,7 @@ export function WorkspacePanel({
             </Button>
           ))}
         </div>
+        {caption && <span className="min-w-0 truncate text-xs text-muted-foreground" title={caption}>{caption}</span>}
         <div className="ml-auto flex items-center gap-0.5">
           <Button size="icon-sm" variant="ghost" aria-label="刷新" onClick={() => void queryClient.invalidateQueries({ queryKey: reader.key })}>
             <RefreshCwIcon />

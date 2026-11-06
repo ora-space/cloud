@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { CircleAlert, CornerDownRight, ListTree, LoaderCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleAlert, CornerDownRight, ListTree, LoaderCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
@@ -19,7 +19,8 @@ export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
   tenantId: string
   task: Task
   onClose: () => void
-  onStarted: () => void
+  /** The split started; `created` says which run is doing it. */
+  onStarted: (created: TaskDecomposition) => void
 }) {
   const client = useQueryClient()
   const workflows = useQuery({ queryKey: ['workflows', tenantId], queryFn: () => listWorkflows(tenantId), enabled: !!tenantId })
@@ -33,7 +34,7 @@ export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
     onSuccess: created => {
       client.setQueryData(['task-decompositions', tenantId, task.id], (before?: { items: TaskDecomposition[] }) => ({ items: [created, ...(before?.items ?? []).filter(d => d.id !== created.id)] }))
       void client.invalidateQueries({ queryKey: ['task-decompositions', tenantId, task.id] })
-      onStarted()
+      onStarted(created)
     },
     onError: e => setError(decompositionMessageFor(e)),
   })
@@ -67,10 +68,13 @@ export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
 
 /**
  * The task's family on its page: for a big requirement, its latest decomposition and the subtasks
- * it wrote; for a subtask, the requirement it came from.
+ * it wrote; for a subtask, the requirement it came from. The subtasks fold away, and start folded
+ * when `folded` says the page needs the room; a person's own choice then holds.
  */
-export function TaskFamily({ tenantId, task, latest, onRetry }: { tenantId: string; task: Task; latest?: TaskDecomposition; onRetry: () => void }) {
+export function TaskFamily({ tenantId, task, latest, folded = false, onRetry }: { tenantId: string; task: Task; latest?: TaskDecomposition; folded?: boolean; onRetry: () => void }) {
   const list = useTaskList(tenantId)
+  const [picked, setPicked] = useState<boolean>()
+  const open = picked ?? !folded
   const all = list.data?.items ?? []
   if (task.parentId) {
     const parent = all.find(t => t.id === task.parentId)
@@ -81,8 +85,13 @@ export function TaskFamily({ tenantId, task, latest, onRetry }: { tenantId: stri
   const subtasks = all.filter(t => t.parentId === task.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   if (!latest && subtasks.length === 0) return null
   return <section className="mc-family" aria-label="拆分">
-    {latest && <DecompositionStatus decomposition={latest} onRetry={onRetry} />}
-    {subtasks.length > 0 && <ul className="mc-subtasks" aria-label="子任务">
+    <div className="mc-family-head">
+      {latest && <DecompositionStatus decomposition={latest} onRetry={onRetry} />}
+      {subtasks.length > 0 && <button type="button" className="mc-family-toggle" aria-expanded={open} onClick={() => setPicked(!open)}>
+        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}{open ? '收起子任务' : '展开子任务'}
+      </button>}
+    </div>
+    {open && subtasks.length > 0 && <ul className="mc-subtasks" aria-label="子任务">
       {subtasks.map(sub => <li key={sub.id}>
         <span className={`mc-status ${sub.status}`}>{taskStatusLabel(sub.status)}</span>
         <Link to={`/collaboration/tasks/${sub.id}`}>{sub.title}</Link>
