@@ -117,6 +117,10 @@ func TestWorkflowRunSummaryKeepsNullableFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.run["deliveryState"] = "pending"
+			tt.run["workspaceReleaseState"] = "pending"
+			tt.want["delivery"] = Object{"state": "pending", "error": "", "revisionId": nil, "startedAt": nil, "settledAt": nil}
+			tt.want["workspaceRelease"] = Object{"state": "pending", "error": "", "releasedAt": nil}
 			if got := workflowRunSummary(tt.run); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("workflowRunSummary() = %#v, want %#v", got, tt.want)
 			}

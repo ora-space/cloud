@@ -39,7 +39,7 @@ func runtimeControlCommand(t *transaction, r *ControlRequest) Object {
 			t.exec("UPDATE runtime_controls SET input_closed=$2,binding_confirmed=false,bound_sandbox_id=$3 WHERE workspace_id=$1", c.S("workspaceId"), len(unfinished) == 0, n.S("sandboxInstanceId"))
 			reconcileRuntimeControls(t)
 		} else {
-			require(!closed && len(unfinished) == 0, 409, "resource_in_use")
+			require(!closed && (len(unfinished) == 0 || workflowDeliveryRuntimeResume(t, c, n, unfinished)), 409, "resource_in_use")
 			require(c.S("state") == "maintenance" || ((c.S("state") == "acquiring" || c.S("state") == "held") && c.B("valid")), 409, "stale_runtime_control")
 			t.exec("UPDATE runtime_controls SET state=CASE WHEN state='acquiring' THEN 'held' ELSE state END,binding_confirmed=true,bound_sandbox_id=$2 WHERE workspace_id=$1", c.S("workspaceId"), n.S("sandboxInstanceId"))
 		}

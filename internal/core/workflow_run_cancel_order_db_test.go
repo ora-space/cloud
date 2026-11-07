@@ -35,8 +35,8 @@ func commitSessionResult(store *Store, runID, execution, nodeService, reason str
 func assertWorkflowRunReleaseDeclared(t *testing.T, store *Store, runID string) {
 	t.Helper()
 	release := readWorkflowRelease(t, store, runID)
-	if release.state != workflowReleaseReleasing || release.reason != "" || release.releasedAt.Valid {
-		t.Fatalf("terminal release = state %q reason %q released_at %v; want releasing with no reason and no released_at",
+	if release.state != workflowReleasePending || release.reason != "" || release.releasedAt.Valid {
+		t.Fatalf("unsaved terminal release = state %q reason %q released_at %v; want pending with no released_at",
 			release.state, release.reason, release.releasedAt)
 	}
 }
@@ -262,6 +262,11 @@ func TestWorkflowRunCancelWindowAndALateCallbackRace(t *testing.T) {
 			t.Fatalf("attempt %d: report the late callback: %v", attempt, callbackErr)
 		}
 
+		// Drain the independent save barrier once both racing facts are committed. Execution and
+		// node conclusions stay immutable; late stop evidence may settle delivery from pending.
+		if err := store.AdvanceWorkflowRunsOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 		status, runErr, states, version := readWorkflowRun(t, store, runID)
 		agent, _ := asWorkflowObject(states["a"])
 		if status != "cancelled" || runErr != "" {

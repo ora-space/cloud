@@ -314,9 +314,9 @@ func TestWorkflowRunCancelEndWindowSettlesCancelled(t *testing.T) {
 	// the terminal run is not rewritten.
 	reportSessionEnd(t, store, runID, execution, nodeService, "idle_timeout")
 	afterStatus, afterErr, afterStates, afterVersion := readWorkflowRun(t, store, runID)
-	if afterStatus != status || afterErr != runErr || afterVersion != version {
+	if afterStatus != status || afterErr != runErr || afterVersion != version+1 {
 		t.Fatalf("the late result moved the run to %q error %q version %d; want %q error %q version %d",
-			afterStatus, afterErr, afterVersion, status, runErr, version)
+			afterStatus, afterErr, afterVersion, status, runErr, version+1)
 	}
 	if afterAgent, _ := asWorkflowObject(afterStates["a"]); afterAgent == nil || afterAgent.S("status") != "cancelled" {
 		t.Fatalf("the late result rewrote node a to %v; want cancelled", afterStates["a"])

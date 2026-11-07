@@ -62,8 +62,11 @@ const workflowReleaseAbandonedReason = "workspace_unavailable"
 // reconciliation pass re-declares it later. The state stays `releasing` either way, because the
 // intent is already durable.
 func declareWorkflowRunWorkspaceRelease(t *transaction, runID string) {
-	run := t.one("SELECT status, workspace_release_state FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID)
+	run := t.one("SELECT status, workspace_release_state, delivery_state FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID)
 	if run == nil {
+		return
+	}
+	if state := run.S("deliveryState"); state != "saved" && state != "unchanged" && state != "not_required" {
 		return
 	}
 	switch run.S("status") {
@@ -204,6 +207,7 @@ func (s *Store) giveUpWorkflowRunWorkspaceReleases(ctx context.Context) error {
 		JOIN workspaces w ON w.workflow_run_id=r.id
 		WHERE r.status IN ('succeeded','failed','cancelled') AND r.deleted_at IS NULL
 		  AND r.workspace_release_state IN ('pending','releasing')
+		  AND r.delivery_state IN ('saved','unchanged','not_required')
 		  AND w.deleted_at IS NULL
 		ORDER BY r.updated_at, r.id
 		LIMIT $1`, workflowAdvanceBatchSize)
@@ -337,6 +341,7 @@ func (s *Store) scanWorkflowRunReleasesNeedingDeclaration(ctx context.Context) (
 		JOIN workspaces w ON w.workflow_run_id=r.id
 		WHERE r.status IN ('failed','cancelled','succeeded') AND r.deleted_at IS NULL
 		  AND r.workspace_release_state IN ('pending','releasing')
+		  AND r.delivery_state IN ('saved','unchanged','not_required')
 		  AND w.deleted_at IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.workspace_id=w.id AND o.kind='delete_workspace'
 		   AND o.state IN ('queued','running','retry_wait','blocked','succeeded'))

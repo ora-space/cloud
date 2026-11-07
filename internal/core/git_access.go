@@ -77,6 +77,9 @@ func gitAccess(t *transaction, scope GitRuntimeScope, executionID, projectID str
 	 AND r.deleted_at IS NULL AND w.deleted_at IS NULL AND w.desired_state='running' AND w.observed_state='ready' AND w.admission_open
 	 AND p.deleted_at IS NULL AND p.lifecycle='active'`, executionID, scope.TenantID, scope.WorkspaceID, scope.Generation, projectID)
 	// Plugin executions never reach the repository: the kind filter above leaves them unmatched.
+	if e == nil {
+		return workflowGitAccess(t, scope, executionID, projectID)
+	}
 	require(e != nil, 403, "git_access_denied")
 	access := GitGrant{TenantID: scope.TenantID, ProjectID: projectID}
 	switch e.S("kind") {

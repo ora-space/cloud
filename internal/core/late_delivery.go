@@ -4,6 +4,15 @@ package core
 // race D5, but accepting an original fact never grants a new dispatch or business settlement.
 // Ordinary deliveries still pass the unchanged liveDelivery fence.
 func deliveryFactIsLate(t *transaction, e Object) bool {
+	if len(e.O("input").O("workflow")) > 0 {
+		workflowDeliveryIdentity(t, e)
+		run := t.one("SELECT delivery_state FROM workflow_runs WHERE id=$1", e.S("operationId"))
+		if run.S("deliveryState") != "delivering" {
+			return true
+		}
+		liveWorkflowDelivery(t, e)
+		return false
+	}
 	if residualExecutionIdentity(t, e) != nil {
 		return true
 	}

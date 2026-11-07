@@ -2,6 +2,8 @@
 
 English | [中文](controller-integration.md)
 
+Whole-workflow delivery retains its original run, Node, sandbox, generation and fixed input across Node restart. Same-owner maintenance reattachment may report that registered delivery as unfinished; Cloud verifies every identity before confirming the binding, without claiming an empty slot. Node allows this only when every session has durable stop proof and all unfinished responsibilities are that workflow delivery. Original permits and frozen plans remain unchanged. Narrow Git/upload delivery eligibility is rechecked against original registration; sessions still require current confirmed admission.
+
 The Controller (`ora-controller` in the desktop repository) is the only execution channel between
 Cloud and the Nodes inside sandboxes. It only dials out to Cloud's control listener; Cloud is the
 server for every RPC and owns the authoritative persistence. The Controller exposes no service to

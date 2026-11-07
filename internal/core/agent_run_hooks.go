@@ -36,6 +36,10 @@ func runWorkspaceDeleted(t *transaction, run string) {
 }
 
 func deliverySettled(t *transaction, run, execution string, settled Object) {
+	if t.one("SELECT id FROM workflow_runs WHERE id=$1", run) != nil {
+		settleWorkflowDelivery(t, run, execution, settled)
+		return
+	}
 	if t.onDeliverySettled != nil {
 		if err := t.onDeliverySettled(t.ctx, t.tx, run, execution, settled); err != nil {
 			reject(409, "business_hook_failed")
