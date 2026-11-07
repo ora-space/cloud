@@ -43,6 +43,16 @@ cluster 的 Compose 让 Repo Executor 与 Credential Store 都以只读根文件
 部署时挂载自己的配置文件、公钥、证书和密钥文件。设置 `GATEWAY_WEB_DIST_DIR=/app/web` 后，Gateway 在与 `/auth`、`/api` 相同的 origin 上
 提供前端。
 
+## 华为 IDaaS 现场配置
+
+认证地址与 Client ID 由包外配置提供，Client Secret 通过 `GATEWAY_IDAAS_CLIENT_SECRET_FILE` 指定的只读挂载文件提供。
+配置项和端点校验规则见 [配置参考](configuration.md#gateway)。
+
+1. 生产配置关闭 `GATEWAY_PUBLIC_DEVELOPMENT` 和 `GATEWAY_LOGIN_DEVELOPMENT_PROVIDER`，设置 HTTPS public origin，
+   并在 IDaaS 平台登记完全一致的 `<public origin>/auth/callback/huawei-idaas`。
+2. 更换端点或 Client ID 后，用更新后的配置重新创建 Gateway 容器；不需要重新构建镜像。所有副本使用一致的客户端配置。
+3. 原子替换 Client Secret 文件后，重新创建所有 Gateway 容器以刷新文件挂载并读取新 secret；仅替换文件不代表运行进程已生效。
+
 ## 网络
 
 cluster 的 Compose 把服务分在四个网络上，生产部署应保持同样的隔离：

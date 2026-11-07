@@ -189,7 +189,7 @@ func buildProvider(cfg *gateway.Config) (gateway.Authenticator, error) {
 		if e != nil {
 			return nil, e
 		}
-		return idaas.New(&idaas.Options{BaseURL: cfg.IDaaS.BaseURL, ClientID: cfg.IDaaS.ClientID, ClientSecret: secret, DisplayNameField: cfg.IDaaS.DisplayNameField, HTTP: idaas.NewHTTPClient(cfg.IDaaS.Timeout)})
+		return idaas.New(&idaas.Options{BaseURL: cfg.IDaaS.BaseURL, AuthorizeURL: cfg.IDaaS.AuthorizeURL, TokenURL: cfg.IDaaS.TokenURL, UserInfoURL: cfg.IDaaS.UserInfoURL, ClientID: cfg.IDaaS.ClientID, ClientSecret: secret, DisplayNameField: cfg.IDaaS.DisplayNameField, HTTP: idaas.NewHTTPClient(cfg.IDaaS.Timeout)})
 	default:
 		return nil, fmt.Errorf("unsupported login provider %q", cfg.Login.Provider)
 	}

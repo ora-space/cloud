@@ -88,8 +88,14 @@ Store、Git Server），不发起任何网络请求。
 | `tokens.lifetime` | `1m` | 不超过 5 分钟 |
 | `github.client_id`、`client_secret_file` | — | GitHub OAuth App；`authorize_url`、`token_url`、`user_url`、`source` 可指向 GitHub Enterprise Server |
 | `idaas.base_url`、`client_id`、`client_secret_file`、`display_name_field`、`timeout` | —、—、—、—、`10s` | 华为 IDaaS |
+| `idaas.authorize_url`、`token_url`、`userinfo_url` | 空 | 独立覆盖完整 HTTPS 端点；不允许 URL 用户凭据、query 或 fragment |
 | `web.dist_dir` | 空 | 前端构建产物目录；为空时不提供前端 |
 | `model_credentials.upstream`、`ca_file` | 空 | 固定的 HTTPS model-gateway 地址与它的 CA；二者必须同时设置 |
+
+`GATEWAY_IDAAS_AUTHORIZE_URL`、`GATEWAY_IDAAS_TOKEN_URL`、`GATEWAY_IDAAS_USERINFO_URL` 分别覆盖上述三个端点。
+每个未配置的端点沿用 `GATEWAY_IDAAS_BASE_URL` 加 `/saaslogin1/oauth2/v1/authorize`、`token` 或 `userinfo` 路径。
+这些值由部署管理员设置，不能由浏览器选择；认证协议与身份映射见 [Gateway](../identity/gateway.md)。
+更改配置和轮换 secret 的操作见 [部署与运维](deployment.md#华为-idaas-现场配置)。
 
 ## model-gateway
 

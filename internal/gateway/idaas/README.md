@@ -8,8 +8,14 @@ authorize、表单 token 交换、userinfo 解析、provider 错误分类和响�
 
 | 文件 | 职责 |
 | --- | --- |
-| `idaas.go` | 固定端点和 scope、生成 authorize URL、交换 code、读取并最小化 profile。 |
+| `idaas.go` | 解析部署端点（缺省保留原路径）和固定 scope、生成 authorize URL、交换 code、读取并最小化 profile。 |
 | `idaas_test.go` | 验证 client_secret_post 表单、身份映射、字段回退、错误分类、取消和秘密不泄漏。 |
+| `endpoints_test.go` | 验证完整 HTTPS 端点覆盖、既有表单协议与不安全 URL 拒绝。 |
+
+部署可分别设置 authorize/token/userinfo 的完整 HTTPS URL；省略时沿用 BaseURL 与原有路径。
+端点不接受 URL 用户凭据、query 或 fragment，错误不回显配置值。凭据仍由文件注入，
+不能由浏览器选择目标地址；更换端点必须保持同一企业身份权威、来源、scope 与 UUID 语义。
+配置应用与 secret 轮换见 [部署与运维](../../../docs/operations/deployment.md#华为-idaas-现场配置)。
 
 `uuid` 是唯一身份键（对应员工工号而非工号明文或 W3 账号），读取时去掉首尾空白（文档成功示例
 含尾部空格）；去掉后为空则拒绝。可配置的顶层显示字段仅用于首次 JIT 展示，缺失时回退 `uuid`
