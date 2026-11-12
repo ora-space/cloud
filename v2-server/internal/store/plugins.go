@@ -146,13 +146,13 @@ func (s *Store) PluginCatalog(ctx context.Context, tenant, space string) ([]Plug
 	rows, e := s.pool.Query(ctx, `
 		SELECT data, synced_at
 		FROM v2_plugin_catalog
-		WHERE (data->>'marketplaceVisible')::boolean
+		WHERE (data->>'marketplaceVisible')::boolean AND (NOT $2 OR source_namespace <> 'official')
 		UNION ALL
 		SELECT item, synced_at
 		FROM v2_market_sources CROSS JOIN LATERAL jsonb_array_elements(snapshot) item
-		WHERE space_id = $1 AND enabled
+		WHERE space_id = $1 AND enabled AND (NOT $2 OR namespace <> 'official')
 			AND COALESCE((item->>'marketplaceVisible')::boolean, false)
-		ORDER BY 2 DESC`, space)
+		ORDER BY 2 DESC`, space, s.officialDisabled)
 	if e != nil {
 		return nil, time.Time{}, fmt.Errorf("list plugin catalog: %w", e)
 	}
@@ -199,7 +199,7 @@ func (s *Store) PluginPackageSource(ctx context.Context, tenant, space, id strin
 	if !ok {
 		return PluginPackageSource{}, ErrInvalidPluginID
 	}
-	kind, _, raw, e := pluginCatalogRow(ctx, s.pool, space, namespace, identifier)
+	kind, _, raw, e := pluginCatalogRow(ctx, s.pool, space, namespace, identifier, s.officialDisabled)
 	if e != nil {
 		return PluginPackageSource{}, e
 	}
@@ -301,7 +301,7 @@ func (s *Store) installSpacePlugin(
 		if _, e := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,1))`, space+"/"+in.Identifier); e != nil {
 			return e
 		}
-		kind, version, raw, e := pluginCatalogRow(ctx, tx, space, namespace, identifier)
+		kind, version, raw, e := pluginCatalogRow(ctx, tx, space, namespace, identifier, s.officialDisabled)
 		if e != nil {
 			return e
 		}
@@ -412,7 +412,10 @@ func (s *Store) installSpacePlugin(
 	return out, e
 }
 
-func pluginCatalogRow(ctx context.Context, q dbTX, space, namespace, identifier string) (kind, version string, raw []byte, e error) {
+func pluginCatalogRow(ctx context.Context, q dbTX, space, namespace, identifier string, officialDisabled bool) (kind, version string, raw []byte, e error) {
+	if officialDisabled && namespace == "official" {
+		return "", "", nil, ErrPluginNotFound
+	}
 	e = q.QueryRow(ctx, `
 		SELECT kind, version, data FROM v2_plugin_catalog
 		WHERE source_namespace = $1 AND identifier = $2

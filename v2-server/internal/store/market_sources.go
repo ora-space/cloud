@@ -44,7 +44,9 @@ func (s *Store) MarketSources(ctx context.Context, tenant, space string) ([]Mark
 		if e := rows.Scan(&m.Namespace, &m.URL, &m.Branch, &m.Enabled, &m.SyncedAt, &m.Failure, &m.Retrieval, &m.GitConfigured); e != nil {
 			return nil, e
 		}
-		out = append(out, m)
+		if m.Namespace != "official" || !s.officialDisabled {
+			out = append(out, m)
+		}
 	}
 	return out, rows.Err()
 }
@@ -53,6 +55,9 @@ func (s *Store) ChangeMarket(ctx context.Context, tenant, space, id, action stri
 		return e
 	}
 	if id == "official" {
+		if s.officialDisabled {
+			return ErrNotFound
+		}
 		if action == "sync" {
 			return nil
 		}

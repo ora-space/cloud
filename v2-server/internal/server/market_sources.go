@@ -19,7 +19,7 @@ func (h *handler) marketSources(w http.ResponseWriter, r *http.Request, a access
 			pluginError(w, "list markets", e)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"items": items})
+		writeJSON(w, 200, map[string]any{"items": items, "officialEnabled": h.store.OfficialMarketEnabled()})
 		return
 	}
 	var in store.MarketSource

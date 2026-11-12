@@ -4,6 +4,7 @@
 # environments run side by side and a rerun always starts over. Run it through `task v2:demo[:...]`,
 # which checks the model key and starts PostgreSQL first.
 set -euo pipefail
+export V2_LOGIN=email
 cd "$(dirname "$0")/.."
 name=${1:?usage: scripts/demo.sh newcomer|lead|ops|all}
 

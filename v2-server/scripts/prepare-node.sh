@@ -37,7 +37,7 @@ case $profile in
   debug) profile_flag= ;;
   *) echo 'V2_NODE_PROFILE must be release or debug.' >&2; exit 1 ;;
 esac
-(cd "$source_dir" && cargo +1.95.0 build --locked $profile_flag -p ora-node -p ora-reaper)
+(cd "$source_dir" && cargo +1.95.0 build -j 2 --locked $profile_flag -p ora-node -p ora-reaper)
 # Fixed modes, so the result does not depend on the caller's umask.
 install -d -m 0755 "$assets_dir" "$assets_dir/bin"
 for binary in ora-node ora-reaper; do
@@ -68,7 +68,7 @@ if declaration != sys.argv[3]:
 def asset(path):
     with path.open('rb') as source:
         digest = hashlib.file_digest(source, 'sha256').hexdigest()
-    return {'Path': str(path), 'SHA256': digest}
+    return {'Path': str(path.relative_to(root)), 'SHA256': digest}
 manifest = {'version': 1, 'sourceCommit': sys.argv[2], 'profile': sys.argv[4],
             'node': asset(root/'bin'/'ora-node'),
             'reaper': asset(root/'bin'/'ora-reaper'),

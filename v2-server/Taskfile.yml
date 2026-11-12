@@ -1,6 +1,9 @@
 version: '3'
 # Included by the root Taskfile as `v2`; paths are relative to this directory.
 tasks:
+  offline:build:
+    desc: Build a relocatable offline Linux package on an online build host
+    cmds: [bash scripts/build-offline.sh]
   execution:test:
     desc: Verify public Service with real Node, tool output, PostgreSQL and restart history
     preconditions:
@@ -35,6 +38,7 @@ tasks:
   server:
     desc: Run v2-server on :8090 against the compose PostgreSQL
     deps: [db]
+    env: {V2_LOGIN: email}
     cmds: [go run .]
   web:
     desc: Run the frontend-v2 dev server on :5173 (proxies /api and /auth to :8090)

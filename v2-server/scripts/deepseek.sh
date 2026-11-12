@@ -3,6 +3,7 @@
 # repository so every checkout and worktree shares it and worktree cleanup never deletes it.
 # `--check` only validates the configuration, so `task v2:deepseek` can stop before starting anything.
 set -euo pipefail
+export V2_LOGIN=email
 cd "$(dirname "$0")/.."
 
 env_file=$HOME/ora-demo/.env

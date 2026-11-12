@@ -30,6 +30,7 @@ const SessionCookie = "ora_session"
 type Store interface {
 	// TenantAccess is the single tenant authorization decision (see router).
 	TenantAccess(ctx context.Context, tenant, user string) (store.Access, error)
+	OfficialMarketEnabled() bool
 	SkillProgress(context.Context, string, string, string, string) ([]store.SkillProgress, error)
 	MarketSources(context.Context, string, string) ([]store.MarketSource, error)
 	ChangeMarket(context.Context, string, string, string, string, store.MarketSource) error

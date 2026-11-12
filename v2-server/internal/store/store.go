@@ -20,7 +20,17 @@ var schema string
 var ErrNotFound = errors.New("not found")
 
 // Store is the v2-server database.
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool             *pgxpool.Pool
+	officialDisabled bool
+}
+
+// DisableOfficialMarket configures catalog visibility before the store is shared with workers.
+// It retains durable snapshots for a later re-enable, while preventing new installs from them.
+func (s *Store) DisableOfficialMarket(disabled bool) { s.officialDisabled = disabled }
+
+// OfficialMarketEnabled reports deployment configuration independently of saved catalog entries.
+func (s *Store) OfficialMarketEnabled() bool { return !s.officialDisabled }
 
 // Open connects to url, creating its database when missing, and applies the schema.
 func Open(ctx context.Context, url string) (*Store, error) {
