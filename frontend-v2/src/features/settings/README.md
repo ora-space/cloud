@@ -68,3 +68,5 @@ localStorage，再更新 TanStack Query 缓存。schema 2、3、4 的旧快照�
 member 被服务端拒绝。模型连接和角色的资源操作仍只保存在当前浏览器。
 
 插件市场区分空间选择与项目实际结果。来源管理使用临时市场契约生成的客户端；空间选择供插件和技能页面共享。当前会进入项目运行时的市场类型是 Skill；可执行 Agent 仍只有系统预装的 OpenCode 和 Claude Code；市场 Agent、Hook、MCP 与合集只浏览，服务端拒绝新建或更新这些选择。默认构建里没有任何预装或演示安装：`VITE_DEMO_MOCK=1` 时 `lib/demo/plugin-installs.ts` 才为市场 Agent、Hook、MCP 和预装 Agent 提供浏览器本地演示安装（3–5 秒等待，只写 localStorage，不发请求）。插件详情列出各项目等待、成功或失败的状态。移除市场仅隐藏可安装目录，不移除空间中已有选择。
+
+官方市场由服务端配置控制：`V2_PLUGIN_MARKETPLACE_URL` 显式为空时，后端隐藏旧官方快照，设置页不显示官方来源；自定义来源仍可管理。来源列表响应的 `officialEnabled` 独立于目录内容，手动同步据此决定是否请求官方来源，并同步已启用的自定义来源；空目录不影响官方来源手动重试。

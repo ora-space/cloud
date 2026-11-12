@@ -94,7 +94,7 @@ export function MarketSources({
           </Button>
         </p>
       )}
-      {officialUrl && (
+      {list.data?.officialEnabled && officialUrl && (
         <article
           aria-label="官方市场"
           className="space-y-2 rounded-lg border p-3"

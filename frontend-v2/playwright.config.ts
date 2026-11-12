@@ -30,6 +30,7 @@ export default defineConfig({
           cwd: '../v2-server',
           url: `${server}/healthz`,
           env: {
+            V2_LOGIN: 'email',
             V2_ADDR: `127.0.0.1:${serverPort}`,
             V2_DATABASE_URL: database,
             // Opt-in real Agent acceptance: forward the prepared Node assets and an isolated data directory

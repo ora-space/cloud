@@ -83,6 +83,8 @@ export interface SkillProgress {
 
 export type ListMarketSources200 = {
   items: MarketSource[];
+  /** Whether the deployment enables the shared official source, independent of catalog contents. Official sources are not included in items. */
+  officialEnabled: boolean;
 };
 
 export type GetSkillProgress200 = {
