@@ -57,8 +57,7 @@ Node 工作。
 | `agent_session` | `starting` 或 `running`，未请求取消，Thread 未在结束 | `refs/heads/workspaces/<证书里的 workspaceId>/` 下的分支（快进规则）；前缀取自证书，从不取自请求 |
 | `deliver_revision` | `delivering` | 新建输入固定的交付 ref `refs/ora/deliveries/<交付工作项 ID>`；另可把输入的 `workspaceRef` 新建或快进，前提是它属于证书里的 Workspace |
 
-插件执行一律拒绝，不能访问仓库。WorkflowRun 的 Agent 会话第一阶段同样拒绝：授权只认 IssueRun 的运行 Workspace 上的执行，WorkflowRun
-的 Workspace 上的 `agent_session` 得到同一个 `403`。
+插件执行一律拒绝，不能访问仓库。WorkflowRun 会话按当前运行、图节点和尝试逐请求复核：仅运行中的当前尝试可读本 Project 仓库、快进本 Workspace 分支；结束请求、取消、换尝试或换代次立即撤销。整次交付使用独立资格，只新建自己固定的交付 ref，参见[工作流成果保存](../workflows/workflows.md#成果保存与历史归档)。
 
 **clone 执行的授权。** Workspace 操作 `clone` 步骤的 clone 执行只读，并且只在操作仍处于 `running` 的 `clone` 步骤时有效：执行
 没有结果、未被强停；Workspace 处于证书里的代次、未删除；Project 处于 `provisioning` 或 `active`（main Workspace 在 Project 创建中
