@@ -40,7 +40,8 @@ func TestProjectRepositoryLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	storetest.SignIn(t, s, "project-owner", "Owner", store.RoleOwner)
-	serverOptions := server.Options{SessionTTL: time.Hour, Projects: projects}
+	var createdProjects []store.Project
+	serverOptions := server.Options{SessionTTL: time.Hour, Projects: projects, ProjectCreated: func(p store.Project) { createdProjects = append(createdProjects, p) }}
 	srv := httptest.NewServer(server.New(s, serverOptions))
 	defer func() { srv.Close() }()
 	jar, _ := cookiejar.New(nil)
@@ -129,6 +130,10 @@ func TestProjectRepositoryLifecycle(t *testing.T) {
 	}
 	if stored.MirrorPath != filepath.Join(root, id+".git") || stored.SnapshotRef != projectrepos.SnapshotRef(id, commit) {
 		t.Fatalf("stored repository=%+v", stored)
+	}
+	// Only the stored project is announced (to prewarm its Node); failed creations are not.
+	if len(createdProjects) != 1 || createdProjects[0] != stored {
+		t.Fatalf("announced projects=%+v want %+v", createdProjects, stored)
 	}
 	if got := projectGit(t, stored.MirrorPath, "rev-parse", stored.SnapshotRef); got != commit {
 		t.Fatalf("snapshot=%q want=%q", got, commit)

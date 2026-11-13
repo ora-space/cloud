@@ -47,7 +47,20 @@ type Options struct {
 	// RecordWorkspace remembers where a workspace's checkout is, once it is ready and before the
 	// Agent starts, so pages can read its files later. Nil records nothing.
 	RecordWorkspace func(ctx context.Context, workspaceID string, checkout Checkout) error
+	// IdleTimeout is how long a project's Node may sit idle before it is stopped; zero means
+	// DefaultIdleTimeout. MaxIdle caps how many idle Nodes stay up, least recently used stopped
+	// first; zero means DefaultMaxIdle. The bootstrapped Demo's Node is exempt from both.
+	IdleTimeout time.Duration
+	MaxIdle     int
 }
+
+// Idle reclaim defaults: a demo segment with its pauses stays warm, and three idle Nodes cover a
+// segment's projects plus one created on stage. An idle Node costs about 7% of a core and 145 MB,
+// mostly guardians left by the workspace checkouts it prepared, so the cap stays small.
+const (
+	DefaultIdleTimeout = 60 * time.Minute
+	DefaultMaxIdle     = 3
+)
 
 // Checkout is a workspace's directory on this host and the commit it was cloned at.
 type Checkout struct {
@@ -70,6 +83,10 @@ type Driver struct {
 	serial         atomic.Uint64
 	controlTimeout time.Duration
 	startProject   func(*projectRuntime) error
+	now            func() time.Time // nil reads the process clock
+	waiting        func(string)     // test seam: an acquire is about to wait for a starting Node
+	stopReclaim    chan struct{}
+	reclaimOnce    sync.Once
 }
 
 // New validates deployment wiring. Processes start lazily for an already-admitted project turn.
@@ -106,7 +123,12 @@ func New(opts Options) (*Driver, error) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, execution.ErrUnavailable
 	}
-	return &Driver{opts: opts, boot: hex.EncodeToString(nonce[:]), projects: map[string]*projectRuntime{}, sessions: map[string]*agentSession{}, controlTimeout: 2 * time.Minute}, nil
+	if opts.IdleTimeout < 0 || opts.MaxIdle < 0 {
+		return nil, errors.New("invalid Agent runtime idle reclaim configuration")
+	}
+	d := &Driver{opts: opts, boot: hex.EncodeToString(nonce[:]), projects: map[string]*projectRuntime{}, sessions: map[string]*agentSession{}, controlTimeout: 2 * time.Minute, stopReclaim: make(chan struct{})}
+	go d.reclaimLoop()
+	return d, nil
 }
 
 // Run executes the admitted turn. Normal Append reuses its original live Agent conversation.
@@ -239,6 +261,9 @@ func (d *Driver) End(ctx context.Context, sid string) error {
 func (d *Driver) Close(ctx context.Context) error {
 	d.mu.Lock()
 	d.closed = true
+	if d.stopReclaim != nil {
+		d.reclaimOnce.Do(func() { close(d.stopReclaim) })
+	}
 	projects := make([]*projectRuntime, 0, len(d.projects))
 	for _, p := range d.projects {
 		projects = append(projects, p)

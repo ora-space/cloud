@@ -33,6 +33,8 @@ go run .                               # 监听 127.0.0.1:8090
 | `V2_MARKET_SOCKS_PROXY` | 未设置 | 自定义来源启用代理时使用的部署级 SOCKS5 地址；Git 与 Skill 包下载都使用，客户端只把已校验的公网 IP 交给代理 |
 | `V2_MARKET_CREDENTIAL_KEY` | 未设置 | S3 来源凭据的 AES-256-GCM 密钥（Base64 编码的 32 字节）；启用 S3 来源时必须持久提供 |
 | `V2_NODE_ASSETS_DIR` | 未设置 | `task v2:node:prepare` 生成的固定 Node、host、guardian、Deno、OpenCode 和 Claude Code 资源；未设置时只启用纯模型路径 |
+| `V2_NODE_IDLE_TIMEOUT` | `60m` | 项目 Node 空闲多久后停止；必须为正 duration。空闲指没有进行中的会话和 Node 命令，见下文「项目 Node 的预热与回收」 |
+| `V2_NODE_IDLE_MAX` | `3` | 最多保留几个空闲的项目 Node，超出时先停最久没用的；必须为正整数。Demo 项目的 Node 不计入 |
 | `V2_MODEL_BASE_URL` / `V2_MODEL_API_KEY` / `V2_MODEL_NAME` | 未设置 | 可选的一组 HTTPS OpenAI 兼容 provider；必须同时设置，OpenCode 与纯模型共用，清单只公开模型名称与版本 |
 | `V2_ANTHROPIC_MODEL_BASE_URL` / `V2_ANTHROPIC_MODEL_API_KEY` / `V2_ANTHROPIC_MODEL_NAME` | 未设置 | 可选的一组 HTTPS Anthropic 兼容 provider（Messages API，base URL 写到 `/v1`，如 `https://api.anthropic.com/v1`）；必须同时提供地址、凭据和模型名，只供 Claude Code 使用。使用 Bearer 网关时以 `V2_ANTHROPIC_MODEL_AUTH_TOKEN` 代替 `V2_ANTHROPIC_MODEL_API_KEY`，二者不能同时配置；Claude Code 的 base URL 若以 `/compatible` 结尾，这里填 `/compatible/v1` |
 
@@ -480,6 +482,18 @@ V2_NODE_ASSETS_DIR=/absolute/path/to/assets TEST_DATABASE_URL='postgres://ora:or
 首次安装要解压和校验，明显慢于之后的启动；安装结果留在 `V2_DATA_DIR` 的项目 Node 目录里，
 之后重启服务再用只需约一秒。演示前先在每个演示项目里跑一轮 Claude Code，可避开这次等待。
 
+### 项目 Node 的预热与回收
+
+每个项目一个 Node，项目下的对话、工作流和任务共用它，各自只有独立的 checkout。为省掉新对话等 Node 启动（SSE `preparation` 的 `runtime` 段，约 3–4 秒），Node 在有人用之前就起好：
+
+- **预热**：项目经 API 创建成功后，后台为它起 Node，创建请求不等待。服务启动时先起 Demo（另备一份 checkout），再按最近活动（最新对话的创建时间，没有对话时取项目创建时间）依次起最多 `V2_NODE_IDLE_MAX` 个项目的 Node，一次一个，避免占满演示机的 CPU。
+- **复用**：会话来时 Node 已经在跑，`runtime` 段标为 `reused`；Node 还在启动，会话等同一个 Node，不另起。
+- **失败**：预热失败只记日志，不影响项目创建。会话正在等的预热失败时，会话先确认失败的 Node 已经停止，再自己冷启动一次；会话自己发起的冷启动失败照旧不重试。
+- **回收**：没有会话占用工作目录、没有进行中的 Node 命令（插件安装、clone、Skill 变更）、也没有调用方正要占用时，Node 才算空闲。空闲超过 `V2_NODE_IDLE_TIMEOUT` 的停止；空闲的超过 `V2_NODE_IDLE_MAX` 个时，先停最久没用的。还在启动的不计入，Demo 不回收。停止得不到确认时 Node 保持登记，同一目录不会起第二个 Node，下一轮回收或下一个会话再试。回收后不自动重起，下一个会话冷启动。
+- 对话会话在对话删除或服务重启前一直存在，所以有未删对话的项目，Node 不会被回收；回收主要作用于预热后没人用的、对话都删了的、只跑过工作流或任务的项目。一个空闲 Node 实测约占 7% 个 CPU 核和 145 MB 内存，大头是它准备过的工作目录留下的 guardian 进程（每次准备 16 个，Node 停止时才退出），所以上限取得较小。
+
+正式 Cloud 按运行准备沙盒，没有这套按项目常驻、按空闲回收的 Node。
+
 End 和重启不自动删除目录。停止服务后 `go run . -cleanup` 只删除确认停止后的登记 Node 与对话目录，
 保留项目 mirror 和数据库历史；命令拒绝与持有同一数据目录的服务并行运行。
 外部 provider 的显式验收入口与配置见执行服务包 README；默认 skip 不代表外部 provider 验收通过。
@@ -626,7 +640,7 @@ npm run e2e -- e2e/workflow-runs.spec.ts e2e/workflow-containers.spec.ts e2e/sch
 与 Desktop 的差异：
 
 - Desktop 从 Agent 插件声明中发现 Skill 目录，复制到工作区并写 ownership marker；v2 固定使用 `.opencode/skills`、`.claude/skills`，以 symlink 指向该项目的 Node 内部安装目录，因此依赖当前 Node 的目录布局。
-- Desktop 会先让 Agent 停下，再在会话进行中应用变化；v2 只在项目 Node 已在线且项目空闲时安装或移除。新选择要等该项目有一个会话结束后才生效，服务启动后的第一个会话也拿不到尚未应用的 Skill。
+- Desktop 会先让 Agent 停下，再在会话进行中应用变化；v2 只在项目 Node 已在线且项目空闲时安装或移除。新选择要等该项目有一个会话结束后才生效；Node 预热上线后、第一个会话开始前项目是空闲的，这时也会应用。Node 被回收后项目离线，选择等它下次上线再应用。
 
 测试真实 Node 时设置 `V2_NODE_ASSETS_DIR`、`V2_TEST_SKILL_ARCHIVE`（官方 Matt Pocock Skills 1.3.1）和可选的 `V2_TEST_SKILL_UPDATE_ARCHIVE`（1.3.2），在 Linux 原生、路径足够短的用户目录下运行 `go test -run TestRealMarketSkillNode ./internal/agentruntime`。该测试用真实 OpenCode 读取插件 Skill 和工作流所选个人 Skill，并验证下一节点清除两者；模型响应仍为 fixture，不验证真实模型的指令遵循能力。
 

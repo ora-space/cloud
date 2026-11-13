@@ -67,9 +67,10 @@ func (d *Driver) ApplySkill(ctx context.Context, project, id, version, file, dig
 	p.skillsMu.Lock()
 	defer p.skillsMu.Unlock()
 	p.mu.Lock()
-	active := len(p.owners) > 0
+	// Idle reclaim may have retired the Node while this call waited for skillsMu.
+	active, retired := len(p.owners) > 0, p.fatal
 	p.mu.Unlock()
-	if active {
+	if active || retired {
 		return ErrOfflineSkillNode
 	}
 	command, outcome := "remove_plugins", "removed"

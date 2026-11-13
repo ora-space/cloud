@@ -95,11 +95,16 @@ func (d *Driver) session(ctx context.Context, scope execution.Scope, session exe
 			prepare, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			timing.enter(stageRuntime, time.Now())
-			p, err := d.project(prepare, session.Target.ProjectID, config)
+			p, reused, err := d.acquire(prepare, session.Target.ProjectID, config, true)
 			a.project = p
 			if err != nil {
 				a.prepareErr = err
 				return
+			}
+			// Owning a workspace (or failing) ends the pin; until then idle reclaim must wait.
+			defer p.unpin()
+			if reused {
+				timing.reused()
 			}
 			if p.configuration.MirrorPath != config.MirrorPath {
 				a.prepareErr = execution.ErrUnavailable
@@ -252,6 +257,7 @@ func (a *agentSession) markStopped() {
 			a.project.mu.Lock()
 			if a.project.owners[a.frozen.WorkspaceID] == a.frozen.ID {
 				delete(a.project.owners, a.frozen.WorkspaceID)
+				a.project.usedAt = a.project.driver.clock()
 			}
 			a.project.mu.Unlock()
 		}

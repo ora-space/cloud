@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
@@ -40,5 +41,25 @@ func TestProjectsSharedOnlyWithinTheirTenant(t *testing.T) {
 	}
 	if items, err := f.s.ListProjects(ctx, other); err != nil || len(items) != 0 {
 		t.Fatalf("cross tenant projects=%+v err=%v", items, err)
+	}
+}
+
+func TestRecentProjectsOrdersByLatestConversationThenCreation(t *testing.T) {
+	f := executionDatabase(t)
+	ctx := t.Context()
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for i, id := range []string{"old", "middle", "new"} {
+		if _, err := f.s.CreateProject(ctx, f.scope, store.Project{ID: id, Name: id, RepositoryURL: "https://example.com/" + id + ".git", Commit: "fixed", MirrorPath: "/private/" + id + ".git", CreatedAt: base.Add(time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A conversation makes the oldest project the most recently active one.
+	if _, err := f.admin.Exec(ctx, `INSERT INTO v2_chat_conversations(tenant_id,user_id,create_key,project_id,executor_id,title,created_at)
+		VALUES($1,$2,'k','old','opencode','t',$3)`, f.scope.TenantID, f.scope.UserID, base.Add(5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.s.RecentProjects(ctx, 2)
+	if err != nil || len(got) != 2 || got[0].ID != "old" || got[1].ID != "new" || got[0].MirrorPath != "/private/old.git" {
+		t.Fatalf("recent=%+v err=%v", got, err)
 	}
 }

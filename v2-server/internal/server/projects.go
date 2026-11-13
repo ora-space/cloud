@@ -59,6 +59,9 @@ func (h *handler) projects(w http.ResponseWriter, r *http.Request, a access) {
 			projectFault(w, err)
 			return
 		}
+		if h.opts.ProjectCreated != nil {
+			h.opts.ProjectCreated(project)
+		}
 		writeJSON(w, http.StatusCreated, projectResponse(scope, project))
 		return
 	}

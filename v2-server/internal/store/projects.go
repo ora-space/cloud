@@ -84,3 +84,32 @@ func (s *Store) ListProjects(ctx context.Context, scope execution.Scope) ([]Proj
 	}
 	return projects, rows.Err()
 }
+
+// RecentProjects lists up to limit projects across tenants, most recently active first: a
+// project's activity is its latest chat conversation, or its creation when it has none. It is
+// backend-only (it picks which Nodes to start ahead of use) and never reaches an HTTP response.
+func (s *Store) RecentProjects(ctx context.Context, limit int) ([]Project, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.data FROM v2_projects p
+		LEFT JOIN LATERAL (SELECT max(c.created_at) AS at FROM v2_chat_conversations c
+			WHERE c.tenant_id=p.tenant_id AND c.project_id=p.id) c ON true
+		ORDER BY greatest(c.at, (p.data->>'CreatedAt')::timestamptz) DESC NULLS LAST, p.id
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	projects := []Project{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var project Project
+		if err := json.Unmarshal(raw, &project); err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	return projects, rows.Err()
+}

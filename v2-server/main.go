@@ -123,6 +123,10 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 	if fixture || testFixtures {
 		models = executionruntime.WithFixtureModels(models)
 	}
+	idleTimeout, idleMax, e := nodeIdlePolicy(os.Getenv)
+	if e != nil {
+		return e
+	}
 	var driver *agentruntime.Driver
 	if assets := os.Getenv("V2_NODE_ASSETS_DIR"); assets != "" && len(models) > 0 {
 		if e := checkReleaseNodeDataDirectory(assets, base); e != nil {
@@ -136,7 +140,7 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 		for id, choice := range models {
 			bindings[id] = choice.Binding
 		}
-		driver, e = agentruntime.New(agentruntime.Options{Root: filepath.Join(base, "nodes"), AssetsDirectory: assets, GitBackend: filepath.Join(strings.TrimSpace(string(gitDir)), "git-http-backend"), Bindings: bindings, ObserveProvider: func(ref execution.Ref, binding nodeservices.Binding) nodeservices.Provider {
+		driver, e = agentruntime.New(agentruntime.Options{Root: filepath.Join(base, "nodes"), AssetsDirectory: assets, GitBackend: filepath.Join(strings.TrimSpace(string(gitDir)), "git-http-backend"), Bindings: bindings, IdleTimeout: idleTimeout, MaxIdle: idleMax, ObserveProvider: func(ref execution.Ref, binding nodeservices.Binding) nodeservices.Provider {
 			return requestmetrics.Wrap(db, ref, binding)
 		}, ResolveProject: func(c context.Context, scope execution.Scope, id string) (agentruntime.Project, error) {
 			p, e := db.GetProject(c, scope, id)
@@ -199,7 +203,7 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 		return checkFixture(ctx, runtime, scope, demo.ID, filepath.Join(base, "nodes"))
 	}
 	if driver != nil {
-		go driver.WarmDemo(ctx, demo.ID, agentruntime.Project{MirrorPath: demo.MirrorPath, Commit: demo.Commit, SnapshotRef: demo.SnapshotRef})
+		go prewarmAtStartup(ctx, db, driver, demo, idleMax)
 	}
 	marketURL, e := pluginmarket.NormalizeSourceURL(envOr(
 		"V2_PLUGIN_MARKETPLACE_URL",
@@ -271,6 +275,9 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 		TaskRuns:           taskRuns,
 		TaskDecompositions: decompositions,
 	}, workflowRuns)
+	if driver != nil {
+		options.ProjectCreated = warmCreated(ctx, driver)
+	}
 	coordinator, e := server.NewScheduleCoordinator(db, options, time.Now)
 	if e != nil {
 		return e

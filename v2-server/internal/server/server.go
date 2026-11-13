@@ -67,6 +67,9 @@ type Options struct {
 	SessionTTL time.Duration
 	// Projects prepares fixed repository mirrors; nil leaves project operations unavailable.
 	Projects *projectrepos.Service
+	// ProjectCreated is told about each project created through the API, after it is stored and
+	// before the response is written; it must return at once. Nil does nothing.
+	ProjectCreated func(store.Project)
 	// Execution is the shared backend for page-owned conversations and runs.
 	// Nil uses an unavailable Stub; an explicitly supplied backend is kept unchanged.
 	Execution execution.Service

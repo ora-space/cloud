@@ -53,6 +53,9 @@ type nodeClient interface {
 // no per-turn goroutine may call Client.Receive or close the project's shared transport.
 type projectRuntime struct {
 	warmDemo       bool
+	prewarm        bool      // Started by Warm, not by a session.
+	pins           int       // Callers between finding this Node and owning a workspace.
+	usedAt         time.Time // When it last stopped serving someone; idle reclaim counts from here.
 	spare          *checkout // Unclaimed Demo checkout, never contains user skills.
 	skillsMu       sync.Mutex
 	driver         *Driver
@@ -107,46 +110,89 @@ func (d *Driver) dropProject(p *projectRuntime) {
 }
 
 func (d *Driver) project(ctx context.Context, id string, config Project) (*projectRuntime, error) {
+	p, _, err := d.acquire(ctx, id, config, false)
+	return p, err
+}
+
+// newProjectLocked registers a Node incarnation for id and starts it. Caller holds d.mu.
+func (d *Driver) newProjectLocked(id string, config Project, prewarm bool) *projectRuntime {
+	lifetime, cancel := context.WithCancel(context.Background())
+	p := &projectRuntime{driver: d, id: id, root: filepath.Join(d.opts.Root, digest(id)[:16]), configuration: config, prewarm: prewarm, usedAt: d.clock(),
+		ready: make(chan struct{}), ctx: lifetime, cancel: cancel, loopDone: make(chan struct{}), dead: make(chan struct{}),
+		controls: map[string]*controlWait{}, agents: map[string]*agentSession{}, checkouts: map[string]*checkout{}, installs: map[string]*installation{}, owners: map[string]string{}, acknowledged: map[string]uint64{}}
+	d.projects[id] = p
+	go p.initialize()
+	return p
+}
+
+// acquire returns the project's live Node, starting one when none is registered. With pin, idle
+// reclaim leaves the Node alone until the caller calls unpin, which a session does once it owns
+// its workspace. reused reports that the Node was already up, so the caller waited for nothing.
+func (d *Driver) acquire(ctx context.Context, id string, config Project, pin bool) (*projectRuntime, bool, error) {
+	fellBack := false
 	for {
 		d.mu.Lock()
 		if d.closed {
 			d.mu.Unlock()
-			return nil, execution.ErrUnavailable
+			return nil, false, execution.ErrUnavailable
 		}
 		p := d.projects[id]
+		reused := p != nil
 		if p == nil {
-			lifetime, cancel := context.WithCancel(context.Background())
-			p = &projectRuntime{driver: d, id: id, root: filepath.Join(d.opts.Root, digest(id)[:16]), configuration: config,
-				ready: make(chan struct{}), ctx: lifetime, cancel: cancel, loopDone: make(chan struct{}), dead: make(chan struct{}),
-				controls: map[string]*controlWait{}, agents: map[string]*agentSession{}, checkouts: map[string]*checkout{}, installs: map[string]*installation{}, owners: map[string]string{}, acknowledged: map[string]uint64{}}
-			d.projects[id] = p
-			go p.initialize()
+			p = d.newProjectLocked(id, config, false)
 		}
 		d.mu.Unlock()
 		select {
 		case <-p.ready:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		default:
+			reused = false
+			if d.waiting != nil {
+				d.waiting(id)
+			}
+			select {
+			case <-p.ready:
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			}
 		}
 		if p.initErr != nil {
 			// The failed initializer has already attempted cleanup. A later caller may retry
 			// cleanup, but must never spawn another incarnation without stop confirmation.
-			if p.close(ctx) == nil {
-				d.dropProject(p)
+			if p.close(ctx) != nil {
+				return nil, false, execution.ErrUnavailable
 			}
-			return nil, execution.ErrUnavailable
+			d.dropProject(p)
+			// A failed prewarm was nobody's request: start this caller's own Node once, the
+			// cold start it would have had without prewarming.
+			if p.prewarm && !fellBack {
+				fellBack = true
+				continue
+			}
+			return nil, false, execution.ErrUnavailable
 		}
 		p.mu.Lock()
 		fatal := p.fatal
+		if !fatal && pin {
+			p.pins++
+		}
 		p.mu.Unlock()
 		if !fatal {
-			return p, nil
+			return p, reused, nil
 		}
+		// Dead or retired by idle reclaim: stop it for good, then start a fresh incarnation.
 		if p.close(ctx) != nil {
-			return nil, execution.ErrUnavailable
+			return nil, false, execution.ErrUnavailable
 		}
 		d.dropProject(p)
 	}
+}
+
+// unpin releases an acquire pin; the Node counts as used now.
+func (p *projectRuntime) unpin() {
+	p.mu.Lock()
+	p.pins--
+	p.usedAt = p.driver.clock()
+	p.mu.Unlock()
 }
 
 func (p *projectRuntime) initialize() {
@@ -168,6 +214,10 @@ func (p *projectRuntime) initialize() {
 			p.unlockClose()
 		}
 		cancel()
+	} else {
+		p.mu.Lock()
+		p.usedAt = p.driver.clock()
+		p.mu.Unlock()
 	}
 	close(p.ready)
 }
