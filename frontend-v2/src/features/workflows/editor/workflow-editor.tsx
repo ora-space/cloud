@@ -479,6 +479,12 @@ function WorkflowEditorContent({
    * so a fast click cannot land on the workflow the user just left.
    */
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
+  /**
+   * Monotonic token for workflow switches. It only lets the last pick apply: an older switch's
+   * flush may resolve after a newer pick, so it must not change the selection or lift `inert` while
+   * the newer switch is still saving.
+   */
+  const workflowSwitchGeneration = useRef(0);
   /** Selected workflow id whose draft is currently mounted in the editor. */
   const [hydratedWorkflowId, setHydratedWorkflowId] = useState<string | null>(
     null,
@@ -1137,11 +1143,23 @@ function WorkflowEditorContent({
 
   /** Switches the active workflow after flushing any pending draft write. */
   async function selectWorkflow(workflowId: string): Promise<void> {
+    // Claim the switch before checking the target: when the user picks B and then picks A (the
+    // current row) again, the second pick must cancel the in-flight switch to B, not return early
+    // and let B apply. Only the latest pick wins.
+    const generation = ++workflowSwitchGeneration.current;
+    const isLatest = () => generation === workflowSwitchGeneration.current;
     if (workflowId === resolvedWorkflowId) {
+      // Back on the row already open: cancel any in-flight switch and stay put. The generation
+      // bump above makes the older switch's flush stale, so it will not re-apply its selection.
+      setSwitchingWorkflow(false);
       return;
     }
     setSwitchingWorkflow(true);
     const saved = await autosave.flush({ force: true }).catch(() => false);
+    if (!isLatest()) {
+      // A newer pick owns the switch; leave the selection and `inert` to it.
+      return;
+    }
     if (!saved) {
       // Stay on the current draft so a failed write cannot drop unsaved edits.
       setSwitchingWorkflow(false);
@@ -1169,6 +1187,9 @@ function WorkflowEditorContent({
       // Skip selectWorkflow's forced flush — the previous draft was already written
       // above, and flushing again would race the newly created workflow's hydrate.
       autosave.cancel();
+      // A create wins over any in-flight switch: bump the token so the older switch's flush,
+      // when it returns, does not overwrite this selection.
+      workflowSwitchGeneration.current += 1;
       setPreviewedVersion(null);
       setHydratedWorkflowId(null);
       setWorkflow(null);
@@ -1193,6 +1214,7 @@ function WorkflowEditorContent({
         copyName: (name) => t("settings.workflow.copyName", { name }),
       });
       autosave.cancel();
+      workflowSwitchGeneration.current += 1;
       setPreviewedVersion(null);
       setSelectedWorkflowId(result.workflow.id);
       toast.success(
@@ -1391,6 +1413,7 @@ function WorkflowEditorContent({
         }),
       });
       autosave.cancel();
+      workflowSwitchGeneration.current += 1;
       setPreviewedVersion(null);
       setHydratedWorkflowId(null);
       setWorkflow(null);
