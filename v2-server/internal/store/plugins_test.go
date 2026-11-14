@@ -410,3 +410,34 @@ func TestHookInstallIsRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledOfficialCatalogRetainsSnapshotWithoutOfferingInstall(t *testing.T) {
+	f := newSquadFixture(t)
+	owner := f.login(t, "owner", "owner")
+	spaces, e := f.store.TenantSpaces(f.ctx, storetest.Access(t, f.store, f.tenant, owner))
+	if e != nil || len(spaces) != 1 {
+		t.Fatalf("spaces=%v %v", spaces, e)
+	}
+	space := spaces[0].ID
+	entry := pluginmarket.Entry{Namespace: "official", Identifier: "saved.skill", Kind: "skill", Version: "1.0.0", MarketplaceVisible: true}
+	if e := f.store.ReplacePluginCatalog(f.ctx, []pluginmarket.Entry{entry}, time.Now()); e != nil {
+		t.Fatal(e)
+	}
+	f.store.DisableOfficialMarket(true)
+	catalog, stamp, e := f.store.PluginCatalog(f.ctx, f.tenant, space)
+	if e != nil || len(catalog) != 0 || !stamp.IsZero() {
+		t.Fatalf("disabled catalog=%v %v %v", catalog, stamp, e)
+	}
+	if e := f.store.ChangeMarket(f.ctx, f.tenant, space, "official", "sync", store.MarketSource{}); !errors.Is(e, store.ErrNotFound) {
+		t.Fatalf("sync=%v", e)
+	}
+	_, e = f.store.PluginPackageSource(f.ctx, f.tenant, space, "official/saved.skill")
+	if !errors.Is(e, store.ErrPluginNotFound) {
+		t.Fatalf("package=%v", e)
+	}
+	f.store.DisableOfficialMarket(false)
+	catalog, _, e = f.store.PluginCatalog(f.ctx, f.tenant, space)
+	if e != nil || len(catalog) != 1 {
+		t.Fatalf("retained snapshot=%v %v", catalog, e)
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/executionruntime"
 	"github.com/wanglongan587/cloud/v2-server/internal/nodeservices"
 	"github.com/wanglongan587/cloud/v2-server/internal/pluginmarket"
+	"github.com/wanglongan587/cloud/v2-server/internal/preparedassets"
 	"github.com/wanglongan587/cloud/v2-server/internal/projectrepos"
 	"github.com/wanglongan587/cloud/v2-server/internal/requestmetrics"
 	"github.com/wanglongan587/cloud/v2-server/internal/scheduler"
@@ -54,6 +55,10 @@ func main() {
 }
 
 func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr error) {
+	login := os.Getenv("V2_LOGIN")
+	if e := validateLogin(login, fixture || testFixtures || cleanup); e != nil {
+		return e
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	base, e := dataDirectory()
@@ -73,33 +78,40 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 	if e != nil {
 		return e
 	}
-	preset, e := store.LoadPreset(envOr("V2_USERS_FILE", "users.json"))
-	if e != nil {
-		db.Close()
-		return e
-	}
-	if e := db.SeedUsers(ctx, preset); e != nil {
-		db.Close()
-		return e
-	}
-	if e := db.MigrateStarterSkillNames(ctx); e != nil {
-		db.Close()
-		return e
-	}
-	if e := db.RetireLegacyDemoUser(ctx); e != nil {
-		db.Close()
-		return e
-	}
-	if e := db.RetireUsers(ctx, preset.Retired); e != nil {
-		db.Close()
-		return e
+	db.DisableOfficialMarket(envDefault("V2_PLUGIN_MARKETPLACE_URL", "https://github.com/ora-space/marketplace") == "")
+	var preset store.Preset
+	if login == "email" {
+		preset, e = store.LoadPreset(envOr("V2_USERS_FILE", "users.json"))
+		if e != nil {
+			db.Close()
+			return e
+		}
+		if e := db.SeedUsers(ctx, preset); e != nil {
+			db.Close()
+			return e
+		}
+		if e := db.MigrateStarterSkillNames(ctx); e != nil {
+			db.Close()
+			return e
+		}
+		if e := db.RetireLegacyDemoUser(ctx); e != nil {
+			db.Close()
+			return e
+		}
+		if e := db.RetireUsers(ctx, preset.Retired); e != nil {
+			db.Close()
+			return e
+		}
 	}
 	if e := db.EndDeletedSquadMembers(ctx); e != nil {
 		db.Close()
 		return e
 	}
 	// The demo project is owned by the first preset owner; it seeds shared content, not a login.
-	bootstrap := preset.Users[0].Email
+	bootstrap := ""
+	if len(preset.Users) > 0 {
+		bootstrap = preset.Users[0].Email
+	}
 	for _, u := range preset.Users {
 		if u.Role == store.RoleOwner {
 			bootstrap = u.Email
@@ -125,6 +137,9 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 	}
 	var driver *agentruntime.Driver
 	if assets := os.Getenv("V2_NODE_ASSETS_DIR"); assets != "" && len(models) > 0 {
+		if e := preparedassets.Verify(assets); e != nil {
+			return e
+		}
 		if e := checkReleaseNodeDataDirectory(assets, base); e != nil {
 			return e
 		}
@@ -188,54 +203,60 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 	if e := db.InterruptEndedChatSessions(ctx); e != nil {
 		return e
 	}
-	scope, demo, e := prepareDemo(ctx, db, projects, bootstrap)
-	if e != nil {
-		return e
-	}
-	if fixture {
-		if driver == nil {
-			return errors.New("fixture-check requires V2_NODE_ASSETS_DIR; run task v2:node:prepare first")
+	var scope execution.Scope
+	var demo store.Project
+	if login == "email" {
+		scope, demo, e = prepareDemo(ctx, db, projects, bootstrap)
+		if e != nil {
+			return e
 		}
-		return checkFixture(ctx, runtime, scope, demo.ID, filepath.Join(base, "nodes"))
-	}
-	if driver != nil {
-		go driver.WarmDemo(ctx, demo.ID, agentruntime.Project{MirrorPath: demo.MirrorPath, Commit: demo.Commit, SnapshotRef: demo.SnapshotRef})
-	}
-	marketURL, e := pluginmarket.NormalizeSourceURL(envOr(
-		"V2_PLUGIN_MARKETPLACE_URL",
-		"https://github.com/ora-space/marketplace",
-	))
-	if e != nil {
-		return e
-	}
-	marketBranch := envOr("V2_PLUGIN_MARKETPLACE_BRANCH", "main")
-	if !pluginmarket.ValidBranch(marketBranch) {
-		return fmt.Errorf("V2_PLUGIN_MARKETPLACE_BRANCH is not a supported Git branch")
-	}
-	marketInterval, e := time.ParseDuration(envOr("V2_PLUGIN_MARKETPLACE_INTERVAL", "5m"))
-	if e != nil || marketInterval <= 0 {
-		return fmt.Errorf("V2_PLUGIN_MARKETPLACE_INTERVAL must be a positive duration")
-	}
-	market := &pluginmarket.Syncer{
-		Source: pluginmarket.Source{
-			Namespace: "official", URL: marketURL, Branch: marketBranch,
-		},
-		WorkDir: filepath.Join(base, "marketplace"),
-	}
-	marketCtx, cancelMarket := context.WithCancel(ctx)
-	marketDone := make(chan struct{})
-	go func() {
-		defer close(marketDone)
-		if e := market.Sync(marketCtx, db, time.Now()); e != nil {
-			slog.Warn("initial plugin marketplace sync failed; retaining previous snapshot", "error", e)
+		if fixture {
+			if driver == nil {
+				return errors.New("fixture-check requires V2_NODE_ASSETS_DIR; run task v2:node:prepare first")
+			}
+			return checkFixture(ctx, runtime, scope, demo.ID, filepath.Join(base, "nodes"))
 		}
-		market.Loop(marketCtx, marketInterval, db)
-	}()
-	defer func() {
-		cancelMarket()
-		<-marketDone
-	}()
+		if driver != nil {
+			go driver.WarmDemo(ctx, demo.ID, agentruntime.Project{MirrorPath: demo.MirrorPath, Commit: demo.Commit, SnapshotRef: demo.SnapshotRef})
+		}
+	}
+	marketValue := envDefault("V2_PLUGIN_MARKETPLACE_URL", "https://github.com/ora-space/marketplace")
+	var refreshOfficial func(context.Context) error
+	if marketValue != "" {
+		marketURL, e := pluginmarket.NormalizeSourceURL(marketValue)
+		if e != nil {
+			return e
+		}
+		marketBranch := envOr("V2_PLUGIN_MARKETPLACE_BRANCH", "main")
+		if !pluginmarket.ValidBranch(marketBranch) {
+			return fmt.Errorf("V2_PLUGIN_MARKETPLACE_BRANCH is not a supported Git branch")
+		}
+		marketInterval, e := time.ParseDuration(envOr("V2_PLUGIN_MARKETPLACE_INTERVAL", "5m"))
+		if e != nil || marketInterval <= 0 {
+			return fmt.Errorf("V2_PLUGIN_MARKETPLACE_INTERVAL must be a positive duration")
+		}
+		market := &pluginmarket.Syncer{
+			Source: pluginmarket.Source{
+				Namespace: "official", URL: marketURL, Branch: marketBranch,
+			},
+			WorkDir: filepath.Join(base, "marketplace"),
+		}
+		marketCtx, cancelMarket := context.WithCancel(ctx)
+		marketDone := make(chan struct{})
+		go func() {
+			defer close(marketDone)
+			if e := market.Sync(marketCtx, db, time.Now()); e != nil {
+				slog.Warn("initial plugin marketplace sync failed; retaining previous snapshot", "error", e)
+			}
+			market.Loop(marketCtx, marketInterval, db)
+		}()
+		defer func() {
+			cancelMarket()
+			<-marketDone
+		}()
 
+		refreshOfficial = func(ctx context.Context) error { return market.Refresh(ctx, db, time.Now()) }
+	}
 	skillCtx, cancelSkills := context.WithCancel(ctx)
 	skillDone := make(chan struct{})
 	go func() { defer close(skillDone); runSkillReconciler(skillCtx, db, driver) }()
@@ -263,7 +284,7 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 		return e
 	}
 	options := withWorkflowDomain(server.Options{
-		RefreshOfficial:    func(ctx context.Context) error { return market.Refresh(ctx, db, time.Now()) },
+		RefreshOfficial:    refreshOfficial,
 		SessionTTL:         7 * 24 * time.Hour,
 		Projects:           projects,
 		Execution:          runtime,
@@ -290,7 +311,11 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 	}()
 	<-schedules.Ready()
 	options.Schedules = schedules
-	srv := newHTTPServer(ctx, addr, server.New(db, options))
+	handler, e := server.WithFrontend(server.New(db, options), os.Getenv("V2_FRONTEND_DIR"))
+	if e != nil {
+		return e
+	}
+	srv := newHTTPServer(ctx, addr, handler)
 	errs := make(chan error, 1)
 	go func() { errs <- srv.ListenAndServe() }()
 	slog.Info("v2-server listening", "addr", addr)

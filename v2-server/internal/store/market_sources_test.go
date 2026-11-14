@@ -14,6 +14,8 @@ import (
 
 func TestCustomMarketKeepsSelectionsAndIsolatesSpaces(t *testing.T) {
 	f := newSquadFixture(t)
+	// Disabling the official source must leave custom Git snapshots and S3 credentials usable.
+	f.store.DisableOfficialMarket(true)
 	owner := f.login(t, "owner", "owner")
 	spaces, e := f.store.TenantSpaces(f.ctx, storetest.Access(t, f.store, f.tenant, owner))
 	if e != nil {
@@ -330,5 +332,20 @@ func TestMarketSourceURLChangeNeedsNewGitCredentials(t *testing.T) {
 	}
 	if got := only(t); got.Namespace != before.Namespace || !got.GitConfigured {
 		t.Fatalf("moving with new credentials: %+v", got)
+	}
+}
+
+func TestOfficialMarketCapabilityUsesConfiguration(t *testing.T) {
+	s := &store.Store{}
+	if !s.OfficialMarketEnabled() {
+		t.Fatal("development default must enable official source")
+	}
+	s.DisableOfficialMarket(true)
+	if s.OfficialMarketEnabled() {
+		t.Fatal("disabled official source reported enabled")
+	}
+	s.DisableOfficialMarket(false)
+	if !s.OfficialMarketEnabled() {
+		t.Fatal("re-enabled official source reported disabled")
 	}
 }

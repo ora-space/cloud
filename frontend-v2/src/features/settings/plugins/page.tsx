@@ -116,12 +116,12 @@ export default function PluginsPage() {
   const synchronize = async () => {
     setSyncing(true)
     try {
-      const { items } = await listMarketSources(market.tenantId, market.spaceId)
+      const { items, officialEnabled } = await listMarketSources(market.tenantId, market.spaceId)
       const failures: string[] = []
-      for (const source of [
-        'official',
+      for (const source of new Set([
+        ...(officialEnabled ? ['official'] : []),
         ...items.filter((s) => s.enabled).map((s) => s.namespace),
-      ]) {
+      ])) {
         try {
           await syncMarketSource(market.tenantId, market.spaceId, source)
         } catch {

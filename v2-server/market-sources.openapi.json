@@ -39,10 +39,15 @@
                       "items": {
                         "$ref": "#/components/schemas/MarketSource"
                       }
+                    },
+                    "officialEnabled": {
+                      "type": "boolean",
+                      "description": "Whether the deployment enables the shared official source, independent of catalog contents. Official sources are not included in items."
                     }
                   },
                   "required": [
-                    "items"
+                    "items",
+                    "officialEnabled"
                   ]
                 }
               }

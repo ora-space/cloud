@@ -83,6 +83,7 @@ export function marketplaceSelection(
  */
 export function installMarketplaceBackend({
   role = 'owner',
+  officialEnabled = true,
   catalog = [],
   selections = [],
   marketSources = [],
@@ -90,6 +91,7 @@ export function installMarketplaceBackend({
   progress = [],
 }: {
   role?: 'owner' | 'member'
+  officialEnabled?: boolean
   catalog?: PluginCatalogEntry[]
   selections?: SpacePlugin[]
   marketSources?: MarketSource[]
@@ -279,7 +281,7 @@ export function installMarketplaceBackend({
       }
     }
     if (url === sourceBase && method === 'GET')
-      return { status: 200, data: { items: state.marketSources } }
+      return { status: 200, data: { items: state.marketSources, officialEnabled } }
     if (url === sourceBase && method === 'POST') {
       if (role !== 'owner')
         return { status: 403, data: { code: 'forbidden', params: {} } }
@@ -308,6 +310,7 @@ export function installMarketplaceBackend({
       const index = state.marketSources.findIndex(
         (source) => source.namespace === namespace,
       )
+      if (namespace === 'official' && action === 'sync' && officialEnabled) return { status: 204 }
       if (index < 0)
         return { status: 404, data: { code: 'not_found', params: {} } }
       if (action === 'sync') return { status: 204 }

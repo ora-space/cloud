@@ -1,8 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { toast } from 'sonner'
 import type { PluginCatalogEntry } from '@/api/generated.schemas'
 import {
+  MARKET_SPACE,
+  MARKET_TENANT,
   installMarketplaceBackend,
   marketplaceEntry,
   marketplaceSelection,
@@ -245,7 +248,7 @@ it('shows the shared official market and manages space sources', async () => {
   renderSettingsPage(<PluginsPage />)
   await user.click(screen.getByRole('button', { name: '管理市场' }))
   const dialog = await screen.findByRole('dialog')
-  const officialRow = within(dialog).getByRole('article', {
+  const officialRow = await within(dialog).findByRole('article', {
     name: '官方市场',
   })
   expect(officialRow).toHaveTextContent('https://github.com/ora-space/marketplace')
@@ -490,4 +493,61 @@ it('keeps the demo runtime-preinstalled Agent install browser-only', async () =>
     expect(within(row).getByRole('button', { name: '移除' })).toBeInTheDocument(),
   )
   expect(backend.bodies).toHaveLength(0)
+})
+
+it('hides the official source when the server disables it', async () => {
+  const url = 'https://market.example.org/plugins.git'
+  installMarketplaceBackend({
+    officialEnabled: false,
+    catalog: [official],
+    marketSources: [{
+      namespace: 'custom-market', url, branch: 'main', enabled: true,
+      syncedAt: null, failure: '',
+      retrieval: { mode: 'direct_https', useProxy: false },
+    }],
+  })
+  const user = userEvent.setup()
+  renderSettingsPage(<PluginsPage />)
+  await user.click(screen.getByRole('button', { name: '管理市场' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(await within(dialog).findByText(url, { selector: 'strong' })).toBeVisible()
+  expect(within(dialog).queryByRole('article', { name: '官方市场' })).not.toBeInTheDocument()
+})
+
+it.each([
+  { name: 'enabled official with empty catalog', officialEnabled: true, catalog: [] },
+  { name: 'disabled official with empty catalog', officialEnabled: false, catalog: [] },
+  { name: 'disabled official with cached catalog', officialEnabled: false, catalog: [official] },
+])('synchronizes authoritative enabled sources: $name', async ({ officialEnabled, catalog }) => {
+  const success = vi.spyOn(toast, 'success').mockImplementation(() => 'success')
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => 'error')
+  try {
+    const source = {
+      url: 'https://market.example.org/plugins.git', branch: 'main',
+      syncedAt: null, failure: '',
+      retrieval: { mode: 'direct_https' as const, useProxy: false },
+    }
+    const backend = installMarketplaceBackend({
+      officialEnabled, catalog,
+      marketSources: [
+        { ...source, namespace: 'custom-market', enabled: true },
+        { ...source, namespace: 'disabled-market', enabled: false },
+      ],
+    })
+    const user = userEvent.setup()
+    renderSettingsPage(<PluginsPage />)
+    const sync = await screen.findByRole('button', { name: /^同步$/ })
+    await waitFor(() => expect(sync).toBeEnabled())
+    await user.click(sync)
+    await waitFor(() => expect(success).toHaveBeenCalledWith('市场目录已同步'))
+    const base = `POST /api/v1/tenants/${MARKET_TENANT}/spaces/${MARKET_SPACE}/plugins/sources`
+    expect(backend.seen.filter((request) => request.endsWith('/sync'))).toEqual([
+      ...(officialEnabled ? [`${base}/official/sync`] : []),
+      `${base}/custom-market/sync`,
+    ])
+    expect(error).not.toHaveBeenCalled()
+  } finally {
+    success.mockRestore()
+    error.mockRestore()
+  }
 })
