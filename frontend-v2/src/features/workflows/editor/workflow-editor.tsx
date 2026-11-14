@@ -4,6 +4,7 @@ import { insertOnCanvasEdge } from "./workflow-canvas-graph";
 import { insertLoopMember } from "./workflow-loop-graph";
 import {
   excludedWorkflowNodeIds,
+  unappliedWorkflowSettings,
   unrecognizedWorkflowKinds,
   useWorkflowAnalysis,
 } from "@/lib/workflows/data/workflow-analysis";
@@ -2872,6 +2873,10 @@ function WorkflowEditorContent({
             >
               <WorkflowInspector
                 node={selectedNode}
+                unappliedSettings={unappliedWorkflowSettings(
+                  analysis.data,
+                  selectedNode?.id,
+                )}
                 capabilities={capabilities}
                 variableCatalog={variableCatalog}
                 graphNodes={workflow?.nodes ?? []}

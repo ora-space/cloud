@@ -268,9 +268,23 @@ export interface WorkflowAnalyze {
   graph: string;
 }
 
+export interface WorkflowUnappliedSettings {
+  nodeId: string;
+  settings: string[];
+}
+
+export interface WorkflowUnsupportedNode {
+  nodeId: string;
+  kind: string;
+}
+
 export interface WorkflowAnalysis {
   unusedNodeIds: string[];
   unrecognizedNodes: WorkflowUnrecognizedNode[];
+  /** Agent nodes, reachable or spare, with the settings a run saves but does not apply; the same names a finished attempt records as `unapplied`. Nodes with none are omitted. */
+  unappliedSettings: WorkflowUnappliedSettings[];
+  /** Reachable nodes of a known kind that run start refuses (`400 workflow_run_start_failed`, like every other start refusal; desktop does not execute them either). Empty when the root has no Start. */
+  unsupportedNodes: WorkflowUnsupportedNode[];
 }
 
 export type WorkflowRunStatus = typeof WorkflowRunStatus[keyof typeof WorkflowRunStatus];

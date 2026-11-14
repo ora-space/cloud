@@ -23,12 +23,13 @@ import { FadeText } from '../components/fade-text'
 import { ShowSidebarButton } from '../components/sidebar'
 import { emptyDraft, newChatKey, useChatStore } from '../store'
 import { useRunInvalidations } from './run-events'
-import { cancelRun, rerun, runKeys, runQuery, runSnapshotQuery, startRun } from './server-runs'
+import { cancelRun, rerun, runKeys, runQuery, runSnapshotQuery, startRun, useRunStartPreflight, useRunUnappliedSettings } from './server-runs'
 import { isLoopHistoryNode } from './loop-round-state'
 import { resolveStageFocusNodeId, resolveTheaterFocus, shouldReleaseLivePinToFollow, shouldStealFocusForArtifactReveal, type TheaterFocusStatusSample } from './run-focus'
 import { RunOverviewCanvas } from './run-overview-canvas'
 import { runStatusLabel, runStatusTone } from './run-status-style'
 import { RunTenantContext } from './run-tenant'
+import { RunAnalyzedUnappliedContext } from './run-analysis-context'
 import { RunTheater } from './run-theater'
 import { workflowRunTranslations } from './translations'
 import { WorkflowRunStartDialog } from './workflow-run-start-dialog'
@@ -102,7 +103,7 @@ function LoadedRun({ tenantId, runId, readOnly, workspace, leading, refreshProje
     connected: setFollowed,
   })
   const error = snapshot.error ?? run.error
-  if (run.data) return <RunWorkspace tenantId={tenantId} run={run.data} readOnly={readOnly} hostedWorkspace={workspace} leading={leading} refreshProjectRuns={refreshProjectRuns} />
+  if (run.data) return <RunAnalyzedUnapplied tenantId={tenantId} runId={runId}><RunWorkspace tenantId={tenantId} run={run.data} readOnly={readOnly} hostedWorkspace={workspace} leading={leading} refreshProjectRuns={refreshProjectRuns} /></RunAnalyzedUnapplied>
   return (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       <p>{error === null ? '正在读取运行…' : isMissing(error) ? '这次运行已经不在了。' : localizeContractError(error, t)}</p>
@@ -153,6 +154,17 @@ function RunWorkspace({ tenantId, run, readOnly, hostedWorkspace, leading, refre
 
   const nodes = run.definitionSnapshot.nodes
   const startNode = nodes.find((n) => n.data.kind === 'start')
+  // Only a run that can still be started needs to know what start would refuse.
+  // The run's one analysis of its frozen graph (see RunAnalyzedUnapplied); start reads its preflight.
+  const preflight = useRunStartPreflight(tenantId, run.id)
+  const unsupportedNodes = useMemo(
+    () =>
+      preflight.unsupported.map((node) => ({
+        ...node,
+        title: nodes.find((candidate) => candidate.id === node.nodeId)?.data.title?.trim() || node.nodeId,
+      })),
+    [preflight.unsupported, nodes],
+  )
   const tone = runStatusTone(run.status)
   const finished = isTerminalRunStatus(run.status)
   const stageFocusNodeId = resolveStageFocusNodeId(conversationNodeId, focusNodeId)
@@ -408,6 +420,9 @@ function RunWorkspace({ tenantId, run, readOnly, hostedWorkspace, leading, refre
         runName={run.name}
         initialPrompt={startNode?.data.input ?? ''}
         variables={startNode?.data.inputVariables ?? []}
+        unsupportedNodes={unsupportedNodes}
+        analyzing={preflight.analyzing}
+        analysisFailed={preflight.failed}
         busy={busy}
         onOpenChange={setStartOpen}
         onStart={async (prompt, variables) => {
@@ -427,4 +442,13 @@ function useConversationByNode(items: WorkflowNodeConversationItem[] | undefined
     for (const item of items ?? []) byNode.set(item.nodeId, [...(byNode.get(item.nodeId) ?? []), item])
     return byNode
   }, [items])
+}
+
+/**
+ * Analyzes the shown run's frozen graph once per run, for every run the pane shows, and hands the
+ * inspector the unapplied settings it lists for attempts that recorded none.
+ */
+function RunAnalyzedUnapplied({ tenantId, runId, children }: { tenantId: string; runId: string; children: ReactNode }) {
+  const analyzed = useRunUnappliedSettings(tenantId, runId)
+  return <RunAnalyzedUnappliedContext.Provider value={analyzed}>{children}</RunAnalyzedUnappliedContext.Provider>
 }

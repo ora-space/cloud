@@ -41,6 +41,9 @@ type document struct {
 	active   map[string]bool
 	unused   map[string]bool
 	analysis Analysis
+
+	// rooted reports a root Start; without one every node is marked active for publication.
+	rooted bool
 }
 
 func knownKind(kind string) bool {
@@ -168,6 +171,7 @@ func project(source string) (*document, error) {
 		}
 		return d, nil
 	}
+	d.rooted = true
 	frontier := []string{starts[""]}
 	for len(frontier) != 0 {
 		id := frontier[len(frontier)-1]

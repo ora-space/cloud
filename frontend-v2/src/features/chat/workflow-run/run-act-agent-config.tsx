@@ -20,6 +20,8 @@ import { RunBriefPopover } from "./run-brief-popover";
 import { shouldPreviewBrief } from "./should-preview-brief";
 
 interface RunActAgentConfigProps {
+  /** The Agent node, for the run analysis's unapplied settings when the attempt recorded none. */
+  nodeId?: string;
   config: WorkflowAgentConfig;
   /** The node's attempt, for what v2 actually ran it on and the settings it did not apply. */
   attempt?: Pick<GraphWorkflowNodeState, "executor" | "model" | "unapplied">;
@@ -34,6 +36,7 @@ interface RunActAgentConfigProps {
  * v2 adds the executor and model the attempt ran on and the settings it did not apply.
  */
 export function RunActAgentConfig({
+  nodeId,
   config: rawConfig,
   attempt = {},
 }: RunActAgentConfigProps) {
@@ -108,7 +111,7 @@ export function RunActAgentConfig({
         </div>
       </div>
 
-      <RunActV2Execution config={config} attempt={attempt} />
+      <RunActV2Execution nodeId={nodeId} attempt={attempt} />
 
       <div className="space-y-1">
         <p className="text-[11px] text-muted-foreground">

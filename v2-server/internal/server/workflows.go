@@ -32,10 +32,25 @@ type WorkflowStore interface {
 }
 
 // WorkflowAnalysis is the authoring participation the canvas explains: nodes the execution path
-// never reaches, and node kinds this version cannot run.
+// never reaches, node kinds this version cannot run, Agent settings a run saves but does not
+// apply, and reachable nodes run start refuses.
 type WorkflowAnalysis struct {
 	UnusedNodeIDs     []string
 	UnrecognizedNodes []UnrecognizedWorkflowNode
+	UnappliedSettings []UnappliedWorkflowSettings
+	UnsupportedNodes  []UnsupportedWorkflowNode
+}
+
+// UnappliedWorkflowSettings names the settings of one Agent node a run records as unapplied.
+type UnappliedWorkflowSettings struct {
+	NodeID   string
+	Settings []string
+}
+
+// UnsupportedWorkflowNode names a reachable node whose known kind run start refuses.
+type UnsupportedWorkflowNode struct {
+	NodeID string
+	Kind   string
 }
 
 // UnrecognizedWorkflowNode names a node whose kind the canvas or engine does not register.
@@ -89,6 +104,16 @@ type workflowVersionView struct {
 type unrecognizedWorkflowNodeView struct {
 	NodeID string `json:"nodeId"`
 	Kind   string `json:"kind"`
+}
+
+type unsupportedWorkflowNodeView struct {
+	NodeID string `json:"nodeId"`
+	Kind   string `json:"kind"`
+}
+
+type unappliedWorkflowSettingsView struct {
+	NodeID   string   `json:"nodeId"`
+	Settings []string `json:"settings"`
 }
 
 func toWorkflowView(w store.Workflow) workflowView {

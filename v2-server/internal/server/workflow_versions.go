@@ -254,9 +254,19 @@ func (h *handler) analyzeWorkflowGraph(w http.ResponseWriter, r *http.Request, a
 	for _, node := range analysis.UnrecognizedNodes {
 		unrecognized = append(unrecognized, unrecognizedWorkflowNodeView{NodeID: node.NodeID, Kind: node.Kind})
 	}
+	unapplied := make([]unappliedWorkflowSettingsView, 0, len(analysis.UnappliedSettings))
+	for _, node := range analysis.UnappliedSettings {
+		unapplied = append(unapplied, unappliedWorkflowSettingsView{NodeID: node.NodeID, Settings: node.Settings})
+	}
+	unsupported := make([]unsupportedWorkflowNodeView, 0, len(analysis.UnsupportedNodes))
+	for _, node := range analysis.UnsupportedNodes {
+		unsupported = append(unsupported, unsupportedWorkflowNodeView{NodeID: node.NodeID, Kind: node.Kind})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"unusedNodeIds":     unused,
 		"unrecognizedNodes": unrecognized,
+		"unappliedSettings": unapplied,
+		"unsupportedNodes":  unsupported,
 	})
 }
 

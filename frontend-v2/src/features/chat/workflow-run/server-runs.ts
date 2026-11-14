@@ -1,7 +1,9 @@
 import { cdaseWorkflow, cdaseDefinition, createCdaseRun, readCdaseRun, cdaseProjectRuns, isCdaseRun, startCdaseRun, updateCdaseInput, endCdaseRun } from '@/lib/demo/cdase'
 import { demoMockEnabled } from '@/lib/demo/flags'
-import { queryOptions } from '@tanstack/react-query'
+import { queryOptions, useQuery } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import {
+  analyzeWorkflow,
   cancelWorkflowRun,
   createWorkflowRun,
   deleteWorkflowRun,
@@ -11,6 +13,8 @@ import {
   startWorkflowRun,
   updateWorkflowRunInput,
   type WorkflowRunSummary,
+  type WorkflowAnalysis,
+  type WorkflowUnsupportedNode,
 } from '@/lib/workflows/api/generated'
 import { ContractError } from '@/lib/workflows/contracts'
 import { contractError, type WorkflowContracts } from '@/lib/workflows/data/contracts-client'
@@ -97,16 +101,93 @@ export const runKeys = {
   project: (tenantId: string, projectId: string) => ['workflow-runs', tenantId, 'project', projectId] as const,
   run: (tenantId: string, runId: string) => ['workflow-runs', tenantId, 'run', runId] as const,
   snapshot: (tenantId: string, runId: string) => ['workflow-runs', tenantId, 'snapshot', runId] as const,
+  // A frozen snapshot and its analysis never change, so they live outside the 'workflow-runs'
+  // prefix that run mutations (form saves, starts) invalidate wholesale.
+  frozen: (tenantId: string, runId: string) => ['workflow-run-frozen', tenantId, 'snapshot', runId] as const,
+  analysis: (tenantId: string, runId: string) => ['workflow-run-frozen', tenantId, 'analysis', runId] as const,
 }
 
-/** A run's frozen graph. It never changes, so it is read once per run. */
+/** What v2-server's analysis says about a run's frozen graph. */
+export type RunAnalysis = Pick<WorkflowAnalysis, 'unsupportedNodes' | 'unappliedSettings'>
+
+const noAnalysis: RunAnalysis = { unsupportedNodes: [], unappliedSettings: [] }
+
+/**
+ * v2-server's analysis of a run's frozen graph: the reachable nodes start will refuse (prompt and
+ * tool, which desktop does not execute either; spare nodes are never listed) and, per Agent, the
+ * settings a run saves but does not apply. The snapshot is analyzed as stored, since the editor's
+ * parsed model does not round-trip it. A frozen snapshot never changes, so it is analyzed once per
+ * run and never refetched.
+ */
+export function runAnalysisQuery(tenantId: string, runId: string) {
+  return queryOptions({
+    queryKey: runKeys.analysis(tenantId, runId),
+    enabled: tenantId !== '',
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: async ({ client, signal }): Promise<RunAnalysis> => {
+      if (isCdaseRun(runId)) return noAnalysis
+      // The pane has already read the snapshot; reuse it rather than downloading it again.
+      const snapshot = await client.ensureQueryData(runFrozenSnapshotQuery(tenantId, runId))
+      const { unsupportedNodes, unappliedSettings } = await call(() => analyzeWorkflow(tenantId, { graph: snapshot.graph }, undefined, signal))
+      return { unsupportedNodes, unappliedSettings }
+    },
+  })
+}
+
+/**
+ * The settings v2-server's analysis of the run's frozen graph lists as unapplied, by Agent node id;
+ * empty while the analysis is unknown. The run inspector falls back to it for an attempt that
+ * recorded no list of its own (still running, failed, cancelled, interrupted, or from an old run).
+ */
+export function useRunUnappliedSettings(tenantId: string, runId: string): ReadonlyMap<string, readonly string[]> {
+  const { data } = useQuery(runAnalysisQuery(tenantId, runId))
+  return useMemo(() => new Map((data?.unappliedSettings ?? []).map((entry) => [entry.nodeId, entry.settings])), [data])
+}
+
+/** What the start dialog knows about a run's execution path before start. */
+export interface RunStartPreflight {
+  /** Reachable nodes start will refuse; empty while unknown. */
+  unsupported: readonly WorkflowUnsupportedNode[]
+  /** The analysis is in flight, so submitting would skip its warning. */
+  analyzing: boolean
+  /** The analysis failed; server start stays the only check. */
+  failed: boolean
+}
+
+/**
+ * The start dialog's view of the run's analysis. An analysis that cannot be asked for (no tenant)
+ * counts as none rather than as in flight, so the dialog never waits on a request that will not be
+ * made; server start validates either way.
+ */
+export function useRunStartPreflight(tenantId: string, runId: string): RunStartPreflight {
+  // isLoading, not isPending: a disabled query stays pending forever without fetching.
+  const { data, isLoading, isError } = useQuery(runAnalysisQuery(tenantId, runId))
+  return { unsupported: data?.unsupportedNodes ?? noUnsupportedNodes, analyzing: isLoading, failed: isError }
+}
+
+const noUnsupportedNodes: readonly WorkflowUnsupportedNode[] = []
+
+/**
+ * A run's frozen snapshot as stored. It never changes, so it is downloaded once per run and shared
+ * by the editor model below and the run analysis.
+ */
+function runFrozenSnapshotQuery(tenantId: string, runId: string) {
+  return queryOptions({
+    queryKey: runKeys.frozen(tenantId, runId),
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: async ({ signal }) => (await call(() => getWorkflowRunSnapshot(tenantId, runId, undefined, signal))).snapshot,
+  })
+}
+
+/** A run's frozen graph, as the editor's definition model. */
 export function runSnapshotQuery(tenantId: string, runId: string) {
   return queryOptions({
     queryKey: runKeys.snapshot(tenantId, runId),
     staleTime: Number.POSITIVE_INFINITY,
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ client }) => {
       if (isCdaseRun(runId)) { readCdaseRun(tenantId, runId); return cdaseDefinition() }
-      const { snapshot } = await call(() => getWorkflowRunSnapshot(tenantId, runId, undefined, signal))
+      const snapshot = await client.ensureQueryData(runFrozenSnapshotQuery(tenantId, runId))
       return definitionOf(snapshot.workflowId, snapshot.version, snapshot.graph, snapshot.updatedAt ?? snapshot.createdAt)
     },
   })

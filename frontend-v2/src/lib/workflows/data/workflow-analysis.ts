@@ -32,6 +32,29 @@ export function unrecognizedWorkflowKinds(
   ].join(", ");
 }
 
+/**
+ * The settings of one Agent node v2-server says a run saves but does not apply, in its order.
+ * Empty for any other node, and while no analysis has arrived.
+ */
+export function unappliedWorkflowSettings(
+  analysis:
+    | {
+        unappliedSettings: readonly {
+          nodeId: string;
+          settings: readonly string[];
+        }[];
+      }
+    | undefined,
+  nodeId: string | undefined,
+): readonly string[] {
+  return (
+    analysis?.unappliedSettings.find((entry) => entry.nodeId === nodeId)
+      ?.settings ?? noSettings
+  );
+}
+
+const noSettings: readonly string[] = [];
+
 /** Document identity prevents stale responses crossing edits or workspace switches. */
 export function useWorkflowAnalysis(ownerId: string, graph: string) {
   const client = useContractsClient();

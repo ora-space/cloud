@@ -212,6 +212,8 @@ describe("LocalWorkflowBackend", () => {
     expect(instance.analyze({ graph })).toEqual({
       unusedNodeIds: ["spare"],
       unrecognizedNodes: [{ nodeId: "mystery", kind: "teleport" }],
+      unappliedSettings: [],
+      unsupportedNodes: [],
     });
   });
 });

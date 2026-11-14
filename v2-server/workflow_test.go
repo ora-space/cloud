@@ -67,9 +67,24 @@ func TestWorkflowDomainServesAnalyzeAndPublish(t *testing.T) {
 	spareChain := string(raw)
 
 	status, analysis := call("POST", base+"/analyze", map[string]any{"graph": spareChain})
-	want := map[string]any{"unusedNodeIds": []any{"other", "spare"}, "unrecognizedNodes": []any{}}
+	want := map[string]any{"unusedNodeIds": []any{"other", "spare"}, "unrecognizedNodes": []any{}, "unsupportedNodes": []any{},
+		// The spare Agent has no retry policy, so desktop's default retry is listed as unapplied.
+		"unappliedSettings": []any{map[string]any{"nodeId": "spare", "settings": []any{"retry"}}}}
 	if status != http.StatusOK || !reflect.DeepEqual(analysis, want) {
 		t.Fatalf("analyze spare chain = %d %v, want %v", status, analysis, want)
+	}
+	// Role is the setting v2 is not working on applying; prompt and tool stay unsupported, as on desktop.
+	unapplied := `{"nodes":[{"id":"start","data":{"kind":"start"}},
+		{"id":"writer","data":{"kind":"agent","agentConfig":{"prompt":"x","roleId":"reviewer",
+			"retry":{"enabled":false,"maxRetries":2,"initialDelaySeconds":10}}}},
+		{"id":"tool","data":{"kind":"tool"}},{"id":"spare","data":{"kind":"prompt"}}],
+		"edges":[{"source":"start","target":"writer"},{"source":"writer","target":"tool"}]}`
+	status, analysis = call("POST", base+"/analyze", map[string]any{"graph": unapplied})
+	want = map[string]any{"unusedNodeIds": []any{"spare"}, "unrecognizedNodes": []any{},
+		"unappliedSettings": []any{map[string]any{"nodeId": "writer", "settings": []any{"role"}}},
+		"unsupportedNodes":  []any{map[string]any{"nodeId": "tool", "kind": "tool"}}}
+	if status != http.StatusOK || !reflect.DeepEqual(analysis, want) {
+		t.Fatalf("analyze unapplied and unsupported = %d %v, want %v", status, analysis, want)
 	}
 	status, failure := call("POST", base+"/analyze", map[string]any{"graph": "{}"})
 	if status != http.StatusBadRequest || failure["code"] != "workflow_run_graph_parse" {

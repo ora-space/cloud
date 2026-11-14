@@ -4,8 +4,7 @@ import type { ReactElement } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { describe, expect, it } from 'vitest'
 import { createWorkflowI18n } from '@/lib/workflows/host/i18n'
-import type { WorkflowAgentConfig } from '@/lib/workflows/runtime'
-import { unappliedAgentSettings } from './agent-unapplied'
+import { RunAnalyzedUnappliedContext } from './run-analysis-context'
 import { RunActV2Execution } from './run-act-v2-execution'
 import { workflowRunTranslations } from './translations'
 
@@ -13,51 +12,9 @@ import { workflowRunTranslations } from './translations'
 const runI18n = createWorkflowI18n(['zh-CN'], { 'zh-CN': workflowRunTranslations['zh-CN'] })
 const view = (ui: ReactElement) => render(<I18nextProvider i18n={runI18n}>{ui}</I18nextProvider>)
 
-const config = (over: Partial<WorkflowAgentConfig> = {}): WorkflowAgentConfig => ({
-  schemaVersion: 3,
-  executor: { agentCli: 'ora/opencode', modelId: 'claude-sonnet-5-5' },
-  roleId: '',
-  skills: [],
-  mcps: [],
-  prompt: '起草',
-  interactive: false,
-  retry: { enabled: false, maxRetries: 0, initialDelaySeconds: 0 },
-  ...over,
-})
-
-describe('unappliedAgentSettings', () => {
-  it('names nothing for a node that configures nothing v2 skips', () => {
-    expect(unappliedAgentSettings(config())).toEqual([])
-  })
-
-  it('names every configured setting v2 skips, in a fixed order', () => {
-    const configured = config({
-      roleId: 'reviewer',
-      skills: [{ skillId: 'lint', enabled: true }],
-      mcps: [{ mcpId: 'github', enabled: true }],
-      interactive: true,
-    })
-    expect(unappliedAgentSettings(configured)).toEqual(['role', 'mcp', 'interactive'])
-  })
-
-  it('ignores turned-off bindings and a blank role', () => {
-    const configured = config({ roleId: '  ', skills: [{ skillId: 'lint', enabled: false }], mcps: [{ mcpId: 'github', enabled: false }] })
-    expect(unappliedAgentSettings(configured)).toEqual([])
-  })
-
-  it('counts the default retry policy, since v2 never retries', () => {
-    expect(unappliedAgentSettings(config({ retry: undefined }))).toEqual(['retry'])
-    expect(unappliedAgentSettings(config({ retry: { enabled: true, maxRetries: 0, initialDelaySeconds: 5 } }))).toEqual([])
-  })
-
-  it('keeps what the attempt recorded', () => {
-    expect(unappliedAgentSettings(config(), ['mcp', 'role'])).toEqual(['role', 'mcp'])
-  })
-})
-
 describe('RunActV2Execution', () => {
   it('shows the persisted model for a matched executor without a fallback notice', () => {
-    view(<RunActV2Execution config={config()} attempt={{
+    view(<RunActV2Execution attempt={{
       executor: { id: 'selected', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '' },
       model: { id: 'actual-model', name: 'Actual Model', requested: 'actual-model', fallback: false },
     }} />)
@@ -69,11 +26,10 @@ describe('RunActV2Execution', () => {
   it('shows the executor and model the attempt ran on and what v2 did not apply', () => {
     view(
       <RunActV2Execution
-        config={config({ roleId: 'reviewer', retry: undefined })}
         attempt={{
           executor: { id: 'opencode:fixture', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '1.4.0' },
           model: { id: 'fixture', name: 'Fixture', requested: 'claude-sonnet-5-5', fallback: true },
-          unapplied: ['role'],
+          unapplied: ['role', 'retry'],
         }}
       />,
     )
@@ -87,7 +43,6 @@ describe('RunActV2Execution', () => {
   it('says a node without a model ran on the default one', () => {
     view(
       <RunActV2Execution
-        config={config()}
         attempt={{
           executor: { id: 'opencode:fixture', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '' },
           model: { id: 'fixture', name: 'Fixture', requested: '', fallback: true },
@@ -99,9 +54,55 @@ describe('RunActV2Execution', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 
-  it('shows nothing about execution before the Agent has run', () => {
-    view(<RunActV2Execution config={config({ mcps: [{ mcpId: 'github', enabled: true }] })} attempt={{}} />)
-    expect(screen.queryByLabelText('实际执行')).not.toBeInTheDocument()
+  it('names exactly what the attempt recorded, in the server order', () => {
+    view(<RunActV2Execution attempt={{ unapplied: ['mcp', 'interactive', 'role'] }} />)
+    expect(screen.getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent('v2 未应用：MCP、交互模式、角色')
+  })
+
+  it('names nothing the attempt did not record', () => {
+    view(<RunActV2Execution attempt={{ executor: { id: 'e', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '' }, model: { id: 'm', name: 'M', requested: 'm', fallback: false }, unapplied: [] }} />)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the run analysis for a failed attempt that recorded no list', () => {
+    const analyzed = new Map([['writer', ['role', 'retry']], ['other', ['mcp']]])
+    view(
+      <RunAnalyzedUnappliedContext.Provider value={analyzed}>
+        <RunActV2Execution nodeId="writer" attempt={{}} />
+      </RunAnalyzedUnappliedContext.Provider>,
+    )
+    expect(screen.getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent('v2 未应用：角色、自动重试')
+  })
+
+  it('prefers the list the attempt recorded over the run analysis, even an empty one', () => {
+    const analyzed = new Map([['writer', ['role', 'retry']]])
+    const { unmount } = view(
+      <RunAnalyzedUnappliedContext.Provider value={analyzed}>
+        <RunActV2Execution nodeId="writer" attempt={{ unapplied: ['mcp'] }} />
+      </RunAnalyzedUnappliedContext.Provider>,
+    )
     expect(screen.getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent('v2 未应用：MCP')
+    unmount()
+    view(
+      <RunAnalyzedUnappliedContext.Provider value={analyzed}>
+        <RunActV2Execution nodeId="writer" attempt={{ unapplied: [] }} />
+      </RunAnalyzedUnappliedContext.Provider>,
+    )
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('names a setting it has no label for as the server spells it', () => {
+    view(
+      <RunAnalyzedUnappliedContext.Provider value={new Map([['writer', ['sandbox']]])}>
+        <RunActV2Execution nodeId="writer" attempt={{}} />
+      </RunAnalyzedUnappliedContext.Provider>,
+    )
+    expect(screen.getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent('v2 未应用：sandbox')
+  })
+
+  it('shows nothing about execution or unapplied settings without a record or an analysis', () => {
+    view(<RunActV2Execution nodeId="writer" attempt={{}} />)
+    expect(screen.queryByLabelText('实际执行')).not.toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 })

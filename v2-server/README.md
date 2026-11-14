@@ -357,6 +357,27 @@ snapshot ref。
 每个 Agent 只用自己协议的绑定：OpenCode 走 OpenAI chat completions，Claude Code 走 Anthropic Messages；
 Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不能选它。清单里 OpenCode 排在前面，默认选择不变。
 
+### Workflow analysis additions (English)
+
+The v2-only `POST …/workflows/analyze` response adds `unappliedSettings` and `unsupportedNodes`
+in `workflows.openapi.json`. Analysis does not save or rewrite the graph. For each Agent,
+including spare nodes, `unappliedSettings` calls the same decision as `Node.Agent().Unapplied`, the
+exact source of attempt payloads (`unappliedAgentSettings` in `internal/workflow`); both pass the
+node's Iteration or Loop, and a spare node is placed by the container it is authored in. Configured
+role, enabled MCP, interactive mode and retry are currently saved but unapplied, in that order. Retry
+follows desktop's effective policy (`crates/application/src/workflow_run/engine/retry.rs:66-74` at
+`ebd5b725`): an absent `retry` is the default policy (enabled, 2 retries) and is listed; only
+`enabled: false` or `maxRetries: 0` means no retry and is not listed. Desktop never retries an
+interactive node, which a person drives (`node_runtime.rs:373-379`), so an interactive Agent never
+lists `retry`; settings no longer listed lose their editor hint automatically.
+
+`unsupportedNodes` uses the engine’s `runtimes` table and execution projection to name reachable
+`prompt` and `tool` nodes, including reachable Loop bodies. Spare nodes are omitted; without a
+root Start the list is empty because start fails for the missing entry first. The frontend warns
+before start; the server still rejects with `400 workflow_run_start_failed`. Desktop also does
+not execute these kinds: `crates/application/src/workflow_run/engine/node_type.rs:56` at
+`ebd5b725a8a21d72ecf5e6fb7ced10d007b72dfe`. No setting application or execution behavior changes.
+
 ### 工作流定义
 
 工作流定义按 desktop 的编辑模型提供，使用独立候选契约 [`workflows.openapi.json`](workflows.openapi.json)，不修改正式 Cloud 的 workflow 路由（其 snapshot/publish 语义与 desktop 不同，等 #827 收口后再谈收敛）。每个定义恰好有一个可变的草稿快照（`version` 为保留字 `draft`），发布时把草稿冻结成不可变版本并把它设为活跃版本；回滚只把历史图灌回草稿，激活才移动活跃指针。时间戳按 desktop 契约用 Unix 毫秒，`graph` 按编辑器的原始字符串存取，不重新序列化。
@@ -365,7 +386,7 @@ Messages 绑定只给 Agent，不出现在模型清单里，纯模型对话不�
 |---|---|
 | `GET …/workflows` | 租户内未删除定义，最新创建在前；只带发布版本号，不带图 |
 | `POST …/workflows` | 创建定义与草稿，返回 201；名字 trim 后非空且同租户不重名（不区分 ASCII 大小写） |
-| `POST …/workflows/analyze` | 分析编辑器提交的图：未参与执行的节点与无法识别的节点类型，不保存 |
+| `POST …/workflows/analyze` | 分析编辑器提交的图，不保存：未参与执行的节点、无法识别的节点类型，以及 v2 新增的两项——`unappliedSettings`（每个 Agent 节点保存了但运行不应用的设置，可达和备用节点都列）与 `unsupportedNodes`（执行路径上启动会拒绝的已知类型节点，即 `prompt` / `tool`；没有根 Start 时为空） |
 | `GET …/workflows/{wid}` | 定义、草稿与当前活跃版本（未发布为 `null`） |
 | `PUT …/workflows/{wid}` | 改名，保留身份与快照 |
 | `DELETE …/workflows/{wid}` | 软删定义及其所有版本，之后名字可复用 |
@@ -532,7 +553,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 演示范围（#827 的结论）：
 
 - **只做核心执行**：启动、取消、历史和刷新；普通节点失败使运行失败，Iteration 内失败由其 `errorStrategy` 决定停止或继续。不做自动重试、续跑、快照接管、checkpoint/回滚、AI 诊断和交互式节点。节点上的 retry、interactive 配置照常保存，执行时不生效。
-- **节点**：执行 Start、Agent、Output、Condition、Aggregator、Loop、LoopExit、Iteration。历史 `prompt` / `tool` 节点仍可解析，但启动返回 `400 workflow_run_start_failed`。
+- **节点**：执行 Start、Agent、Output、Condition、Aggregator、Loop、LoopExit、Iteration。历史 `prompt` / `tool` 节点仍可解析，但启动返回 `400 workflow_run_start_failed`（desktop `NodeType::supported` 同样不执行它们）。analyze 的 `unsupportedNodes` 与启动用同一张已执行类型表（`internal/workflow` 的 `runtimes`），只列执行路径上的节点（含可达 Loop 的循环体），前端在启动对话框里据此提前说明；备用节点不列，启动也不拒绝它们。
 - **Loop**：轮次从 1 开始、最多 100 轮，每轮重新建独立变量池，只导入上游、全局与显式携带值。反馈值从同一完成快照读取，随后检查 `until`；最后一轮满足条件仍成功，未满足时按 `maxIterationsBehavior` 失败或导出。父节点行保存 JSON 结果，变量池只发布配置过的命名输出，不隐式赋值 `{loop}.output`；`stop_reason` 区分 `loop_succeeded`、`loop_max_iterations`。轮次关闭与下一轮入口同事务提交。
 - **LoopExit**：同一 ready wave 优先退出，先冻结导出结果、将同轮未完成子节点取消，再由 host 停止活动 turn 并确认 session End。确认前父 Loop 保持运行；停止未确认时失败，不启动下游。成功原因为 `loop_exit`，不读取下一轮反馈。取消后的回调不能改写变量池或冻结输出；进程重启直接中断，不重放。
 - **Iteration**：串行遍历数组，节点 `iteration` 为 0 基，默认 `maxIterations=50`，可显式设置更大值。空数组直接成功，超限在首轮前失败。每轮必须有 collect 节点成功记录，未执行 collect 不能借用上一轮的值。`fail` 停在失败轮；`continue` 保留失败并继续。父节点输出 `output`（成功值）、`entries`（每项成功或失败）和 `failed_count`；ledger 与下一轮或父节点终态原子提交。成员始终留在原 scope，不复用 Loop scope 作为数组下标。
@@ -541,7 +562,7 @@ ConversationAdapter 按冻结配置分流：无项目文本对话用公共 Start
 - **Agent 结构化输出**：`outputContract.type` 为 `structured` 的 Agent，prompt 末尾追加 desktop 的输出约定（示例和 Schema）；回答按 desktop 的顺序提取 JSON 对象（整段 → 代码块 → 文中第一个完整对象），再按 Schema 子集（`type`、`properties`、`required`、`additionalProperties`、`items`）校验。通过时原回答仍是 `{node}.output`，对象写入 `{node}.structured_output`；不通过时节点以 `structured_output` 失败并保留原回答。
 - **节点 Skill**：启用的个人 Skill 按启动运行的用户读取，在节点开始时冻结文档；插件 Skill 使用 `namespace/identifier`，必须有目标项目当前安装版本的成功回执。启动 Agent 前，仅将所选导入放到运行目录的 `.opencode/skills`、`.claude/skills`，并在 prompt 中要求读取。插件选择包含该包内全部 Skill；下一节点替换上一个节点的投影，未选择的导入不会自动继承。项目自带的技能保留，同名冲突、已修改的投影文档、缺失包或失效回执会让节点失败，不覆盖或静默略过。节点 payload 的 `skills` 记录所选标识，执行会话保留冻结的文档和插件版本。
 - **MCP 尚不支持**：当前固定 Node 的 `AgentSessionSpec` 不接收 MCP 服务配置，v2 没有凭据交付、服务生命周期和工具调用回执链路。Agent 可以选择并启用 MCP，运行时忽略 MCP 绑定照常执行，并在节点结果 `payload.unapplied` 中记录 `mcp`；禁用的绑定不记为未应用，不会声称成功调用工具。
-- **角色、重试与交互模式不应用**：节点 payload 的 `unapplied` 列出被忽略的配置（`role`、`retry`、`interactive`）。历史运行保存的 `skill`、`mcp` 标记仍按原样展示。
+- **角色、MCP、交互模式与重试不应用**：节点 payload 的 `unapplied` 按顺序列出被忽略的配置：`role`、`mcp`（见上一条）、`interactive`、`retry`。`retry` 按 desktop 的实际重试策略判断（`crates/application/src/workflow_run/engine/retry.rs:66-74`@`ebd5b725`）：没写 `retry` 即默认策略（开启、重试 2 次），会被列出；只有 `enabled: false` 或 `maxRetries: 0` 时不会重试，也就不列。交互模式的节点由人推进，desktop 从不自动重试它（`node_runtime.rs:373-379`），所以开启交互模式时不列 `retry`。历史运行保存的 `skill` 标记仍按原样展示。analyze 的 `unappliedSettings` 与运行调用同一个判断（`internal/workflow` 的 `unappliedAgentSettings`），两边都传入节点所在的 Iteration 或 Loop，备用节点按它所属的容器算，编辑器据此在 Agent 设置旁标「暂不生效」；某项设置开始应用后从这份列表里去掉，编辑器的提示随之消失，前端不需要改。
 - **执行器映射**：节点的 `executor.agentCli` 匹配执行目录里执行器的 `AgentID`（`official/ora-space.opencode`、`official/ora-space.claude`），找不到时节点以 `missing_agent_ref` 失败；`modelId` 匹配该 Agent 执行器的模型 ID 或名称，为空或找不到时节点以 `workflow_model_not_found` 失败，消息为 `model {model_id} is not advertised by agent {agent_ref}`（空模型使用 `model is not advertised by agent {agent_ref}`，去掉 desktop 字面格式中的双空格），不启动会话，也不退回默认执行器。成功节点的 payload 写入 `stop_reason`、实际使用的 `executor`（`id`、`agentId`、`name`、`pluginVersion`）、`model`（`id`、`name`、`requested`、`fallback`，新运行始终为 `false`），以及按变量池渲染后的任务要求 `task`（节点尝试的 `input` 保留模板原文）。
 - **Executor mapping (English)**: The node’s `executor.agentCli` matches executor `AgentID` in the execution catalog (`official/ora-space.opencode`, `official/ora-space.claude`); if none is found, the node fails with `missing_agent_ref`. `modelId` matches that Agent executor’s model ID or name; if blank or unmatched, the node fails with `workflow_model_not_found` and the message `model {model_id} is not advertised by agent {agent_ref}` (blank models use `model is not advertised by agent {agent_ref}`, removing the double space in desktop’s literal format), without starting a session or falling back to a default executor. Successful node payloads record `stop_reason`, the actual `executor` (`id`, `agentId`, `name`, `pluginVersion`), `model` (`id`, `name`, `requested`, `fallback`, always `false` for new runs), and the task instruction `task` rendered from the variable pool (the node attempt’s `input` retains the original template).
 - **编辑器模型修复**：编辑器加载草稿时，若目录非空且未覆盖能力配置，会将失效或空白模型替换为同一 Agent 的第一个可用模型；没有该 Agent 的模型时保留原值。此投影不标记草稿为未保存，后续保存才写入；已有发布版本不会改变。目录为空时，新 Agent 节点保留 desktop 的基础执行器默认值，不创建空白模型。

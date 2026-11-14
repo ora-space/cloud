@@ -17,6 +17,7 @@ import {
   updateWorkflow,
   updateWorkflowDraft,
   type Workflow as WireWorkflow,
+  type WorkflowAnalysis,
   type WorkflowSnapshot as WireSnapshot,
   type WorkflowSummary as WireSummary,
   type WorkflowVersion as WireVersion,
@@ -25,7 +26,6 @@ import type {
   ActivateWorkflowRequest,
   ActivateWorkflowResponse,
   AnalyzeWorkflowRequest,
-  AnalyzeWorkflowResponse,
   CreateWorkflowRequest,
   CreateWorkflowResponse,
   DeleteSnapshotRequest,
@@ -67,7 +67,11 @@ type Operation<Request, Response> = (
 /** Desktop's workflow definition operations the editor and the run menu call. */
 export interface WorkflowContracts {
   activate: Operation<ActivateWorkflowRequest, ActivateWorkflowResponse>;
-  analyze: Operation<AnalyzeWorkflowRequest, AnalyzeWorkflowResponse>;
+  /**
+   * Desktop's analysis plus what v2-server adds: Agent settings a run saves but does not apply,
+   * and reachable nodes run start refuses. Both come from the server, never a frontend list.
+   */
+  analyze: Operation<AnalyzeWorkflowRequest, WorkflowAnalysis>;
   create: Operation<CreateWorkflowRequest, CreateWorkflowResponse>;
   delete: Operation<DeleteWorkflowRequest, DeleteWorkflowResponse>;
   deleteSnapshot: Operation<DeleteSnapshotRequest, DeleteSnapshotResponse>;

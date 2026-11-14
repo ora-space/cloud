@@ -298,4 +298,84 @@ describe("workflow page", () => {
       await within(library()).findByRole("button", { name: "留存" }),
     ).toBeInTheDocument();
   });
+
+  it("marks the Agent settings the server says a run does not apply, and drops a hint it stops listing", async () => {
+    const user = userEvent.setup();
+    let listed = ["role", "mcp", "interactive", "retry", "sandbox"];
+    // Stands in for v2-server's policy: the page must show exactly what the analysis lists.
+    server.runPolicy = (graph) => ({
+      unappliedSettings: (JSON.parse(graph) as { nodes: { id: string; data: { kind: string } }[] }).nodes
+        .filter((node) => node.data.kind === "agent")
+        .map((node) => ({ nodeId: node.id, settings: node.id === "agent" ? listed : ["mcp"] })),
+      unsupportedNodes: [],
+    });
+    const graph = JSON.stringify({
+      nodes: [
+        { id: "start", type: "workflow", position: { x: 0, y: 0 }, data: { kind: "start", title: "开始" } },
+        // Another Agent, listed first with a different list: the inspector shows the selected node's.
+        {
+          id: "other",
+          type: "workflow",
+          position: { x: 320, y: 200 },
+          data: {
+            kind: "agent",
+            title: "旁路",
+            agentConfig: {
+              executor: { agentCli: "official/ora-space.opencode", modelId: "fixture" },
+              prompt: "旁路",
+              skills: [],
+              mcps: [],
+            },
+          },
+        },
+        {
+          id: "agent",
+          type: "workflow",
+          position: { x: 320, y: 0 },
+          selected: true,
+          data: {
+            kind: "agent",
+            title: "审阅",
+            agentConfig: {
+              executor: { agentCli: "official/ora-space.opencode", modelId: "fixture" },
+              prompt: "审阅",
+              roleId: "reviewer",
+              skills: [],
+              mcps: [],
+              retry: { enabled: true, maxRetries: 2, initialDelaySeconds: 10 },
+            },
+          },
+        },
+      ],
+      edges: [
+        { id: "a", source: "start", target: "agent" },
+        { id: "b", source: "start", target: "other" },
+      ],
+    });
+    server.backend.create({ name: "暂不生效", graph });
+    await renderPage();
+    fireEvent.click(await within(library()).findByRole("button", { name: "暂不生效" }));
+    const inspector = await waitFor(() => {
+      const aside = document.querySelector<HTMLElement>("[data-workflow-inspector]");
+      expect(aside).not.toBeNull();
+      return aside!;
+    });
+    for (const setting of ["role", "mcp", "interactive", "retry"]) {
+      expect(await within(inspector).findByTestId(`workflow-unapplied-${setting}`)).toHaveTextContent("暂不生效");
+    }
+    // A setting the inspector has no field for is still named.
+    expect(within(inspector).getByTestId("workflow-unapplied-other")).toHaveTextContent("sandbox");
+
+    // The server stops listing retry (and the unknown one); the next analysis takes their hints away.
+    listed = ["role", "mcp", "interactive"];
+    await user.click(within(inspector).getByRole("switch", { name: "失败自动重试" }));
+    await waitFor(() => expect(within(inspector).queryByTestId("workflow-unapplied-retry")).toBeNull());
+    expect(within(inspector).queryByTestId("workflow-unapplied-other")).toBeNull();
+    expect(within(inspector).getByTestId("workflow-unapplied-role")).toBeInTheDocument();
+
+    listed = [];
+    await user.click(within(inspector).getByRole("switch", { name: "交互模式" }));
+    // The other Agent still lists MCP; none of its hints reach the selected Agent.
+    await waitFor(() => expect(within(inspector).queryByText("暂不生效")).toBeNull());
+  });
 });

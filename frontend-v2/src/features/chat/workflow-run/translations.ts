@@ -363,6 +363,14 @@ export const workflowRunTranslations = {
     "workflowRun.startInputsDescription":
       "填写 Start 节点声明的变量，然后开始本次运行。",
     "workflowRun.startInputsEmpty": "此工作流没有需要填写的启动变量。",
+    "workflowRun.unsupportedNodes.checking": "正在检查执行路径…",
+    "workflowRun.unsupportedNodes.failed": "暂时无法检查执行路径，启动时将由服务端校验。",
+    "workflowRun.unsupportedNodes.title": "有节点暂不支持运行",
+    "workflowRun.unsupportedNodes.description":
+      "下列节点在执行路径上，但当前版本不执行这类节点（desktop 同样不执行），启动会被拒绝。请删除或断开这些节点后发布新版本。",
+    "workflowRun.unsupportedNodes.item": "「{{title}}」（{{kind}}节点）",
+    "workflowRun.unsupportedNodes.kind.prompt": "提示词",
+    "workflowRun.unsupportedNodes.kind.tool": "工具",
     "workflowRun.inputOptional": "可选",
     "workflowRun.inputRequired": "必填",
     "workflowRun.inputRequiredError": "请填写此项。",
@@ -873,6 +881,14 @@ export const workflowRunTranslations = {
       "Fill in the variables declared by the Start node, then begin this run.",
     "workflowRun.startInputsEmpty":
       "This workflow has no Start variables to fill in.",
+    "workflowRun.unsupportedNodes.checking": "Checking the execution path…",
+    "workflowRun.unsupportedNodes.failed": "The execution path could not be checked. The server will validate it when starting.",
+    "workflowRun.unsupportedNodes.title": "Some nodes cannot run yet",
+    "workflowRun.unsupportedNodes.description":
+      "These nodes are on the execution path, but this version does not execute their kind (desktop does not either), so starting will be refused. Remove or disconnect them and publish a new version.",
+    "workflowRun.unsupportedNodes.item": "“{{title}}” ({{kind}} node)",
+    "workflowRun.unsupportedNodes.kind.prompt": "Prompt",
+    "workflowRun.unsupportedNodes.kind.tool": "Tool",
     "workflowRun.inputOptional": "Optional",
     "workflowRun.inputRequired": "Required",
     "workflowRun.inputRequiredError": "This field is required.",

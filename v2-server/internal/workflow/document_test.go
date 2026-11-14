@@ -86,15 +86,23 @@ func TestDesktopExecutionProjection(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		unused []string
+		// Agents without a retry policy have desktop's default, which v2 does not apply.
+		defaultRetry []string
 	}{
-		{"spare-chain", []string{"other", "spare"}}, {"iteration", []string{"spare"}}, {"loop", []string{}},
+		{"spare-chain", []string{"other", "spare"}, []string{"spare"}},
+		{"iteration", []string{"spare"}, []string{"fix", "spare"}},
+		{"loop", []string{}, []string{"writer"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			source := encode(t, fixture(t, test.name))
 			original := strings.Clone(source)
 			got, err := workflow.AnalyzeWorkflow(source)
-			want := workflow.Analysis{UnusedNodeIDs: test.unused, UnrecognizedNodes: []workflow.UnrecognizedNode{}}
+			want := workflow.Analysis{UnusedNodeIDs: test.unused, UnrecognizedNodes: []workflow.UnrecognizedNode{},
+				UnappliedSettings: []workflow.UnappliedSetting{}, UnsupportedNodes: []workflow.UnsupportedNode{}}
+			for _, id := range test.defaultRetry {
+				want.UnappliedSettings = append(want.UnappliedSettings, workflow.UnappliedSetting{NodeID: id, Settings: []string{"retry"}})
+			}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("analysis = %#v, %v; want %#v", got, err, want)
 			}
@@ -123,7 +131,8 @@ func TestUnknownKindsAreNotSpareNodes(t *testing.T) {
 	addNode(g, "z", "agent", nil)
 	addNode(g, "weird", "hologram", nil)
 	addNode(g, "a", "prompt", nil)
-	want := workflow.Analysis{UnusedNodeIDs: []string{"a", "z"}, UnrecognizedNodes: []workflow.UnrecognizedNode{{NodeID: "weird", Kind: "hologram"}}}
+	want := workflow.Analysis{UnusedNodeIDs: []string{"a", "z"}, UnrecognizedNodes: []workflow.UnrecognizedNode{{NodeID: "weird", Kind: "hologram"}},
+		UnappliedSettings: []workflow.UnappliedSetting{{NodeID: "z", Settings: []string{"retry"}}}, UnsupportedNodes: []workflow.UnsupportedNode{}}
 	got, err := workflow.AnalyzeWorkflow(encode(t, g))
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%#v %v", got, err)
@@ -228,7 +237,8 @@ func FuzzDocumentValidation(f *testing.F) {
 		if validated == nil && err != nil {
 			t.Fatal("validated a structurally invalid graph")
 		}
-		if err == nil && (analysis.UnusedNodeIDs == nil || analysis.UnrecognizedNodes == nil) {
+		if err == nil && (analysis.UnusedNodeIDs == nil || analysis.UnrecognizedNodes == nil ||
+			analysis.UnappliedSettings == nil || analysis.UnsupportedNodes == nil) {
 			t.Fatal("successful analysis must expose arrays")
 		}
 		again, againErr := workflow.AnalyzeWorkflow(source)

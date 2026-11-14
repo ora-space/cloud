@@ -8,6 +8,7 @@ import {
   type WorkflowBackendStorage,
 } from "../data/local-workflow-backend";
 import { addSampleWorkflows } from "../samples/seed";
+import type { WorkflowAnalysis } from "../api/generated";
 
 /** Storage that lives as long as the test that made it. */
 export function memoryWorkflowStorage(): WorkflowBackendStorage {
@@ -58,6 +59,13 @@ export interface WorkflowServer {
   seen: string[];
   /** Makes every request whose "METHOD /path" matches answer this instead. */
   refuse?: { match: RegExp; status: number; data: unknown };
+  /** Holds every request whose "METHOD /path" matches until `until` settles, then answers it. */
+  hold?: { match: RegExp; until: Promise<void> };
+  /**
+   * v2-server's run policy for an analyzed graph: the Agent settings it would not apply and the
+   * reachable nodes start refuses. The local backend reports neither, as it runs nothing.
+   */
+  runPolicy?: (graph: string) => Pick<WorkflowAnalysis, "unappliedSettings" | "unsupportedNodes">;
 }
 
 /**
@@ -80,11 +88,13 @@ export function serveWorkflows(
     }
     const method = config.method?.toUpperCase() ?? "GET";
     server.seen.push(`${method} ${url}`);
+    const held = server.hold;
+    if (held && held.match.test(`${method} ${url}`)) await held.until;
     const refused = server.refuse;
     const answer =
       refused && refused.match.test(`${method} ${url}`)
         ? { status: refused.status, data: refused.data }
-        : route(backend, method, url.slice(base.length), body(config));
+        : route(server, method, url.slice(base.length), body(config));
     const response: AxiosResponse = {
       status: answer.status,
       statusText: String(answer.status),
@@ -107,17 +117,20 @@ function body(config: InternalAxiosRequestConfig): Record<string, unknown> {
 }
 
 function route(
-  backend: LocalWorkflowBackend,
+  { backend, runPolicy }: WorkflowServer,
   method: string,
   path: string,
   request: Record<string, unknown>,
 ): { status: number; data: unknown } {
   const ok = (data: unknown, status = 200) => ({ status, data: wire(data) });
   try {
+    if (path === "/analyze") {
+      const { graph } = request as { graph: string };
+      return ok({ ...backend.analyze({ graph }), ...runPolicy?.(graph) });
+    }
     if (path === "" && method === "GET") return ok(backend.list());
     if (path === "" && method === "POST")
       return ok(backend.create(request as { name: string; graph: string | null }), 201);
-    if (path === "/analyze") return ok(backend.analyze(request as { graph: string }));
     const [, workflowId, rest = ""] = path.match(/^\/([^/]+)(\/.*)?$/) ?? [];
     if (!workflowId) return notFound();
     if (rest === "" && method === "GET") return ok(backend.get({ workflowId }));

@@ -1,6 +1,10 @@
 import { WorkflowMcpFields } from "./workflow-mcp-fields";
 import { WorkflowAgentRetryFields } from "./workflow-agent-retry-fields";
 import { WorkflowAgentInactivityField } from "./workflow-agent-inactivity-field";
+import {
+  WorkflowOtherUnappliedSettings,
+  WorkflowUnappliedSettingHint,
+} from "./workflow-unapplied-setting-hint";
 import type { WorkflowMcpCatalogStatus } from "./mcp-catalog";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -86,7 +90,11 @@ interface WorkflowInspectorProps {
   graphNodes?: Node<WorkflowNodeData, "workflow">[];
   /** Workflow-wide declarations used by graph-aware detail panels. */
   globalVariables?: WorkflowGlobalVariable[];
+  /** Settings of the selected Agent that v2-server's analysis says a run saves but does not apply. */
+  unappliedSettings?: readonly string[];
 }
+
+const noUnappliedSettings: readonly string[] = [];
 
 /** Right-rail editor for the selected workflow node (definition only). */
 export function WorkflowInspector(props: WorkflowInspectorProps) {
@@ -113,6 +121,7 @@ export function WorkflowInspector(props: WorkflowInspectorProps) {
       onClose={props.onCloseNode}
       graphNodes={props.graphNodes}
       globalVariables={props.globalVariables}
+      unappliedSettings={props.unappliedSettings ?? noUnappliedSettings}
     />
   );
 }
@@ -165,6 +174,7 @@ function WorkflowNodeInspector({
   onClose,
   graphNodes,
   globalVariables,
+  unappliedSettings,
 }: {
   node: Node<WorkflowNodeData, "workflow">;
   capabilities: WorkflowCapabilities;
@@ -185,6 +195,7 @@ function WorkflowNodeInspector({
   /** Whole-graph nodes, for detail panels whose configuration reads graph structure. */
   graphNodes?: Node<WorkflowNodeData, "workflow">[];
   globalVariables?: WorkflowGlobalVariable[];
+  unappliedSettings: readonly string[];
 }) {
   const { t } = useTranslation();
   const nodeType = capabilities.nodeTypes.find(
@@ -247,6 +258,7 @@ function WorkflowNodeInspector({
                   catalogsError={agentCatalogsError}
                   onRetryCatalogs={onRetryAgentCatalogs}
                   iterationMember={node.parentId !== undefined}
+                  unapplied={unappliedSettings}
                   onChange={(config) =>
                     onUpdate({
                       ...node,
@@ -437,6 +449,7 @@ function AgentConfigurationFields({
   catalogsError,
   onRetryCatalogs,
   iterationMember,
+  unapplied,
   onChange,
 }: {
   config: WorkflowAgentConfig;
@@ -453,6 +466,7 @@ function AgentConfigurationFields({
   catalogsError: boolean;
   onRetryCatalogs?: () => void;
   iterationMember: boolean;
+  unapplied: readonly string[];
   onChange: (config: WorkflowAgentConfig) => void;
 }) {
   const { t } = useTranslation();
@@ -813,6 +827,7 @@ function AgentConfigurationFields({
             </Command>
           </PopoverContent>
         </Popover>
+        <WorkflowUnappliedSettingHint setting="role" unapplied={unapplied} />
       </InspectorField>
       <fieldset className="min-w-0 space-y-2">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -959,6 +974,7 @@ function AgentConfigurationFields({
         catalog={mcpCatalog}
         onChange={onChange}
       />
+      <WorkflowUnappliedSettingHint setting="mcp" unapplied={unapplied} />
       <InspectorField
         label={t("settings.workflow.field.interactive")}
         htmlFor="workflow-agent-interactive"
@@ -982,6 +998,10 @@ function AgentConfigurationFields({
               }
             />
           </div>
+          <WorkflowUnappliedSettingHint
+            setting="interactive"
+            unapplied={unapplied}
+          />
           {iterationMember && config.interactive === true && (
             <div
               role="alert"
@@ -1051,10 +1071,15 @@ function AgentConfigurationFields({
           </div>
         )}
       </div>
-      {/* Interactive nodes wait for a person instead of rerunning, so the setting would be inert. */}
-      {workflowAgentRetryApplies(config) && (
-        <WorkflowAgentRetryFields config={config} onChange={onChange} />
-      )}
+      <div>
+        {/* Interactive nodes wait for a person instead of rerunning, so the fields would be inert. */}
+        {workflowAgentRetryApplies(config) && (
+          <WorkflowAgentRetryFields config={config} onChange={onChange} />
+        )}
+        {/* The server's list alone decides, so a listed retry is explained even with its fields hidden. */}
+        <WorkflowUnappliedSettingHint setting="retry" unapplied={unapplied} />
+      </div>
+      <WorkflowOtherUnappliedSettings unapplied={unapplied} />
     </>
   );
 }

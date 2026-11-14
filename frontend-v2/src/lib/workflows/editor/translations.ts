@@ -449,7 +449,7 @@ export const workflowEditorTranslations = {
     "settings.workflow.mcp.loading": "正在加载已安装的 MCP…",
     "settings.workflow.mcp.loadError": "无法加载已安装的 MCP，已有配置已保留。",
     "settings.workflow.mcp.retry": "重新加载 MCP",
-    "settings.workflow.mcp.installHint": "请先在设置中安装 MCP。已有绑定可保留并启用，运行时会标记为未应用。",
+    "settings.workflow.mcp.installHint": "请先在设置中安装 MCP。已有绑定可保留并启用。",
     "settings.workflow.mcp.missing": "插件未安装或不可用",
     "settings.workflow.mcp.configurationIncomplete": "插件配置未完成",
     "settings.workflow.mcp.configurationUnavailable": "无法读取插件配置",
@@ -461,7 +461,7 @@ export const workflowEditorTranslations = {
     "settings.workflow.toggleMcp": "启用或禁用 {{name}}",
     "settings.workflow.removeMcp": "移除 {{name}}",
     "settings.workflow.mcpAuthorizationHint":
-      "可选择设置中已安装的 MCP；启用后 Agent 照常运行，MCP 不参与执行，结果标记为“未应用”。",
+      "可选择设置中已安装的 MCP，并为本节点启用。",
     "settings.workflow.field.prompt": "自定义 Prompt",
     "settings.workflow.field.insertVariable": "插入变量",
     "settings.workflow.field.promptCharacterCount": "{{count}} 个字符",
@@ -475,6 +475,17 @@ export const workflowEditorTranslations = {
       "持续等待时，不会因长时间未收到 Agent 进展而取消当前执行，可手动停止。实际执行错误仍按失败自动重试设置处理。",
     "settings.workflow.field.interactiveDescription":
       "开启后节点首轮结束会停在等待人工输入，可在节点内持续对话。",
+    "settings.workflow.unapplied.badge": "暂不生效",
+    "settings.workflow.unapplied.role":
+      "已保存，运行时暂不按角色设定执行。",
+    "settings.workflow.unapplied.mcp":
+      "已保存，运行时暂不连接已启用的 MCP，节点照常执行。",
+    "settings.workflow.unapplied.interactive":
+      "已保存，运行时节点暂不等待人工输入，首轮结束即完成。",
+    "settings.workflow.unapplied.retry":
+      "已保存，运行失败时暂不自动重试。",
+    "settings.workflow.unapplied.other":
+      "已保存，运行时暂不生效：{{settings}}",
     "settings.workflow.field.structuredOutput": "结构化输出",
     "settings.workflow.field.retry": "失败自动重试",
     "settings.workflow.field.retryMaxRetries": "最多重试次数",
@@ -1044,7 +1055,7 @@ export const workflowEditorTranslations = {
       "Could not load installed MCPs. Existing bindings are preserved.",
     "settings.workflow.mcp.retry": "Reload MCPs",
     "settings.workflow.mcp.installHint":
-      "Install MCPs in Settings first. Existing bindings may stay enabled and are reported as unapplied when running.",
+      "Install MCPs in Settings first. Existing bindings may stay enabled.",
     "settings.workflow.mcp.missing": "Plugin is not installed or unavailable",
     "settings.workflow.mcp.configurationIncomplete":
       "Plugin configuration is incomplete",
@@ -1059,7 +1070,7 @@ export const workflowEditorTranslations = {
     "settings.workflow.toggleMcp": "Enable or disable {{name}}",
     "settings.workflow.removeMcp": "Remove {{name}}",
     "settings.workflow.mcpAuthorizationHint":
-      "Choose MCPs installed in Settings. The Agent runs normally with MCP enabled, but MCPs are not used and are reported as unapplied.",
+      "Choose MCPs installed in Settings and enable them for this node.",
     "settings.workflow.field.prompt": "Custom prompt",
     "settings.workflow.field.insertVariable": "Insert variable",
     "settings.workflow.field.promptCharacterCount": "{{count}} characters",
@@ -1074,6 +1085,17 @@ export const workflowEditorTranslations = {
       "Keep waiting prevents cancellation when the agent has not reported progress for a long time. You can stop it manually. Execution errors still follow the retry-on-failure setting.",
     "settings.workflow.field.interactiveDescription":
       "When enabled the node pauses for human input after its first turn, so you can keep conversing inside the node.",
+    "settings.workflow.unapplied.badge": "Not applied yet",
+    "settings.workflow.unapplied.role":
+      "Saved, but runs do not apply the role yet.",
+    "settings.workflow.unapplied.mcp":
+      "Saved, but runs do not connect the enabled MCPs yet; the node still runs.",
+    "settings.workflow.unapplied.interactive":
+      "Saved, but runs do not wait for human input yet; the node finishes after its first turn.",
+    "settings.workflow.unapplied.retry":
+      "Saved, but failed runs are not retried automatically yet.",
+    "settings.workflow.unapplied.other":
+      "Saved, but runs do not apply these yet: {{settings}}",
     "settings.workflow.field.structuredOutput": "Structured output",
     "settings.workflow.field.retry": "Retry on failure",
     "settings.workflow.field.retryMaxRetries": "Max retries",

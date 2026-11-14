@@ -218,10 +218,12 @@ function StatefulInspectorHarness({
       valueType: "string",
     },
   ],
+  unappliedSettings,
 }: {
   node: Node<WorkflowNodeData, "workflow">;
   capabilities: ReturnType<typeof createMockWorkflowCapabilities>;
   variableCatalog?: WorkflowVariableCatalogEntry[];
+  unappliedSettings?: readonly string[];
 }) {
   const [current, setCurrent] = useState(node);
   return (
@@ -233,6 +235,7 @@ function StatefulInspectorHarness({
         onUpdate={setCurrent}
         onDelete={() => undefined}
         onCloseNode={() => undefined}
+        unappliedSettings={unappliedSettings}
       />
     </AppI18nProvider>
   );
@@ -861,5 +864,41 @@ describe("WorkflowInspector empty iteration selectors", () => {
 
     await user.click(screen.getByRole("combobox", { name: "收集目标" }));
     expect(screen.getAllByText("暂无可用变量")).toHaveLength(2);
+  });
+});
+
+describe("WorkflowInspector unapplied-setting hints", () => {
+  it("explains a listed retry even while interactive mode hides the retry fields", async () => {
+    await appI18n.changeLanguage("zh-CN");
+    const agent = createAgentNode();
+    const interactiveRetry: Node<WorkflowNodeData, "workflow"> = {
+      ...agent,
+      data: {
+        ...agent.data,
+        agentConfig: {
+          ...agent.data.agentConfig!,
+          interactive: true,
+          retry: { enabled: true, maxRetries: 2, initialDelaySeconds: 5 },
+        },
+      },
+    };
+    render(
+      <StatefulInspectorHarness
+        node={interactiveRetry}
+        capabilities={createMockWorkflowCapabilities("zh-CN")}
+        unappliedSettings={["interactive", "retry"]}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("switch", { name: "失败自动重试" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("workflow-unapplied-interactive")).toHaveTextContent(
+      "暂不生效",
+    );
+    expect(screen.getByTestId("workflow-unapplied-retry")).toHaveTextContent(
+      "运行失败时暂不自动重试",
+    );
+    expect(screen.queryByTestId("workflow-unapplied-other")).toBeNull();
   });
 });

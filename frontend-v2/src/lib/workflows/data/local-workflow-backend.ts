@@ -2,7 +2,6 @@ import type {
   ActivateWorkflowRequest,
   ActivateWorkflowResponse,
   AnalyzeWorkflowRequest,
-  AnalyzeWorkflowResponse,
   CreateWorkflowRequest,
   CreateWorkflowResponse,
   DeleteSnapshotRequest,
@@ -33,6 +32,7 @@ import type {
   WorkflowSnapshot,
 } from "../contracts";
 import { ContractError } from "../contracts";
+import type { WorkflowAnalysis } from "../api/generated";
 
 /**
  * Desktop's workflow definition backend (`crates/application/src/workflow`) kept in one browser
@@ -348,7 +348,7 @@ export class LocalWorkflowBackend {
     return { snapshotId: snapshot.id, version: snapshot.version };
   }
 
-  analyze(request: AnalyzeWorkflowRequest): AnalyzeWorkflowResponse {
+  analyze(request: AnalyzeWorkflowRequest): WorkflowAnalysis {
     const projection = projectAuthoringDocument(request.graph, {
       requireExecutable: false,
     });
@@ -360,6 +360,10 @@ export class LocalWorkflowBackend {
         (nodeId) => !unrecognized.has(nodeId),
       ),
       unrecognizedNodes: projection.unrecognizedNodes,
+      // What a run skips or refuses is v2-server's policy; this library runs nothing, so it
+      // reports none rather than keep a second copy of that policy.
+      unappliedSettings: [],
+      unsupportedNodes: [],
     };
   }
 

@@ -10,7 +10,11 @@ err = workflow.ValidateWorkflow(graph)
 
 `AnalyzeWorkflow` 先检查节点身份、边与容器归属，再沿根 Start 和可达 Loop 的入口计算参与集合。
 `Analysis.UnusedNodeIDs` 是排序后的已知类型备用节点 ID；`UnrecognizedNodes` 按原始节点顺序列出
-所有未知类型，包括可达的未知节点。成功时两个列表都非 nil。根图缺少 Start 时保留全图参与校验。
+所有未知类型，包括可达的未知节点。`UnappliedSettings` 按节点顺序列出每个 Agent（可达或备用）未应用的设置，
+与 `Node.Agent().Unapplied` 调用同一个 `unappliedAgentSettings`，并传入相同的节点位置（所在 Iteration 或 Loop，
+备用节点按所属容器），空列表的节点不出现；`UnsupportedNodes` 列出参与集合里已知但不在 `runtimes`
+里的节点（`prompt` / `tool`），与启动时 `workflow_run_unsupported_node_type` 的判断同源。成功时四个
+列表都非 nil。根图缺少 Start 时保留全图参与校验，但 `UnsupportedNodes` 为空：启动会先因缺少入口失败。
 
 `ValidateWorkflow` 继续检查可达图的节点配置、DAG、Start 和全局声明、Aggregator / Iteration 派生类型、
 Loop 配置及作用域，以及对被排除节点的变量引用。备用节点配置不参与检查，但无效身份、边和归属不能被过滤隐藏。
@@ -56,3 +60,21 @@ go test ./internal/workflow -run='^$' -fuzz=FuzzDocumentValidation -fuzztime=10s
 
 夹具和变体表验证固定基线的接受 / 拒绝语义，不启动 desktop，也不替代运行时和界面端到端验收。
 模糊测试检查无 panic、分析确定性、结果数组非 null，以及两个接口对结构失败的一致性。
+
+## Analysis policy (English)
+
+`AnalyzeWorkflow` validates identities, edges and ownership, then projects participation from the
+root Start and reachable Loop entries. `UnusedNodeIDs` contains sorted known spare IDs;
+`UnrecognizedNodes` contains unknown kinds in document order, including reachable ones.
+`UnappliedSettings` lists each Agent’s unapplied settings in document order, including spare
+Agents and omitting empty lists. It calls the same `unappliedAgentSettings` as `Node.Agent().Unapplied`
+with the same placement (the enclosing Iteration or Loop; spare nodes use their authored container). `UnsupportedNodes` lists reachable known kinds absent from
+`runtimes`, sharing start’s unsupported-type decision. All four arrays are non-nil. Without a root
+Start, publication checks the whole graph but `UnsupportedNodes` is empty; start first rejects the
+missing entry. Analysis neither rewrites nor persists the graph and changes no execution behavior.
+
+Prompt and tool remain parseable but unsupported, matching desktop
+`crates/application/src/workflow_run/engine/node_type.rs:56` at
+`ebd5b725a8a21d72ecf5e6fb7ced10d007b72dfe`. `analysis_test.go` covers configured and disabled
+settings, spare Agents, reachable/spare unsupported nodes and Loop bodies;
+`analysis_start_test.go` checks agreement with actual start refusal.

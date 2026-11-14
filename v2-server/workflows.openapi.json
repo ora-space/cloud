@@ -1113,11 +1113,39 @@
       },
       "WorkflowAnalysis": {
         "type": "object",
-        "required": ["unusedNodeIds", "unrecognizedNodes"],
+        "required": ["unusedNodeIds", "unrecognizedNodes", "unappliedSettings", "unsupportedNodes"],
         "additionalProperties": false,
         "properties": {
           "unusedNodeIds": {"type": "array", "items": {"type": "string"}},
-          "unrecognizedNodes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowUnrecognizedNode"}}
+          "unrecognizedNodes": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowUnrecognizedNode"}},
+          "unappliedSettings": {
+            "description": "Agent nodes, reachable or spare, with the settings a run saves but does not apply; the same names a finished attempt records as `unapplied`. Nodes with none are omitted.",
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/WorkflowUnappliedSettings"}
+          },
+          "unsupportedNodes": {
+            "description": "Reachable nodes of a known kind that run start refuses (`400 workflow_run_start_failed`, like every other start refusal; desktop does not execute them either). Empty when the root has no Start.",
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/WorkflowUnsupportedNode"}
+          }
+        }
+      },
+      "WorkflowUnsupportedNode": {
+        "type": "object",
+        "required": ["nodeId", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "nodeId": {"type": "string"},
+          "kind": {"type": "string"}
+        }
+      },
+      "WorkflowUnappliedSettings": {
+        "type": "object",
+        "required": ["nodeId", "settings"],
+        "additionalProperties": false,
+        "properties": {
+          "nodeId": {"type": "string"},
+          "settings": {"type": "array", "items": {"type": "string"}}
         }
       },
       "WorkflowRun": {

@@ -35,5 +35,18 @@ func analyzeWorkflow(graph string) (server.WorkflowAnalysis, error) {
 	for _, node := range analysis.UnrecognizedNodes {
 		unrecognized = append(unrecognized, server.UnrecognizedWorkflowNode{NodeID: node.NodeID, Kind: node.Kind})
 	}
-	return server.WorkflowAnalysis{UnusedNodeIDs: analysis.UnusedNodeIDs, UnrecognizedNodes: unrecognized}, nil
+	unapplied := make([]server.UnappliedWorkflowSettings, 0, len(analysis.UnappliedSettings))
+	for _, node := range analysis.UnappliedSettings {
+		unapplied = append(unapplied, server.UnappliedWorkflowSettings{NodeID: node.NodeID, Settings: node.Settings})
+	}
+	unsupported := make([]server.UnsupportedWorkflowNode, 0, len(analysis.UnsupportedNodes))
+	for _, node := range analysis.UnsupportedNodes {
+		unsupported = append(unsupported, server.UnsupportedWorkflowNode{NodeID: node.NodeID, Kind: node.Kind})
+	}
+	return server.WorkflowAnalysis{
+		UnusedNodeIDs:     analysis.UnusedNodeIDs,
+		UnrecognizedNodes: unrecognized,
+		UnappliedSettings: unapplied,
+		UnsupportedNodes:  unsupported,
+	}, nil
 }

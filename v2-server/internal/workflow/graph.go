@@ -24,6 +24,7 @@ type Node struct {
 	Description string
 	// RegionOwner is the Iteration that contains this node, or empty for outer nodes.
 	RegionOwner string
+	at          placement
 	data        object
 	bindings    [][]string
 }
@@ -54,11 +55,8 @@ func ParseGraph(source string) (*Graph, error) {
 func (g *Graph) view(n *node) Node {
 	title, _ := n.data["title"].(string)
 	description, _ := n.data["description"].(string)
-	owner := ""
-	if !n.container {
-		owner = n.owner
-	}
-	return Node{ID: n.id, Kind: n.kind, Title: title, Description: description, RegionOwner: owner, data: n.data, bindings: n.bindings}
+	at := placementOf(n)
+	return Node{ID: n.id, Kind: n.kind, Title: title, Description: description, RegionOwner: at.region, at: at, data: n.data, bindings: n.bindings}
 }
 
 // Nodes lists the root graph in document order, the order desktop schedules a ready wave in.
@@ -243,33 +241,8 @@ func (n Node) Agent() AgentConfig {
 	executor, _ := c["executor"].(object)
 	cli, _ := executor["agentCli"].(string)
 	model, _ := executor["modelId"].(string)
-	cfg := AgentConfig{Prompt: prompt, AgentCLI: cli, ModelID: model}
-	if role, _ := c["roleId"].(string); strings.TrimSpace(role) != "" {
-		cfg.Unapplied = append(cfg.Unapplied, "role")
-	}
-	for _, key := range []string{"skills", "mcps"} {
-		items, _ := c[key].([]any)
-		for _, item := range items {
-			if v, _ := item.(object); v["enabled"] != false {
-				if key == "skills" {
-					id, _ := v["skillId"].(string)
-					cfg.Skills = append(cfg.Skills, id)
-				} else {
-					id, _ := v["mcpId"].(string)
-					cfg.MCPs = append(cfg.MCPs, id)
-				}
-			}
-		}
-	}
-	if len(cfg.MCPs) > 0 {
-		cfg.Unapplied = append(cfg.Unapplied, "mcp")
-	}
-	if interactive, _ := c["interactive"].(bool); interactive {
-		cfg.Unapplied = append(cfg.Unapplied, "interactive")
-	}
-	if retry, _ := c["retry"].(object); retry["enabled"] == true {
-		cfg.Unapplied = append(cfg.Unapplied, "retry")
-	}
+	cfg := AgentConfig{Prompt: prompt, AgentCLI: cli, ModelID: model, Unapplied: unappliedAgentSettings(c, n.at),
+		Skills: enabledBindings(c, "skills", "skillId"), MCPs: enabledBindings(c, "mcps", "mcpId")}
 	if contract, _ := c["outputContract"].(object); contract["type"] == "structured" {
 		cfg.Structured, _ = contract["schema"].(object)
 	}

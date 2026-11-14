@@ -133,12 +133,17 @@ describe('workflow runs in chat', () => {
     expect(within(pane).getByRole('button', { name: '全图' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(project()).getByRole('button', { name: '工作流运行 审查 cloud#210（未运行）' })).toHaveAttribute('aria-current', 'page')
 
-    // Starting moves to the Theater, which ends on the result act.
+    // Starting moves to the Theater, which ends on the result act. Nothing on the path is
+    // unsupported, so once the frozen graph has been analyzed the dialog warns about nothing.
     await user.click(within(pane).getByRole('button', { name: '启动' }))
     const start = await screen.findByRole('dialog')
+    await waitFor(() => expect(workflows.seen).toContain(`POST /api/v2/tenants/${tenantId}/workflows/analyze`))
+    expect(within(start).queryByRole('alert')).not.toBeInTheDocument()
     await user.click(within(start).getByRole('button', { name: '启动' }))
     expect(within(pane).getByRole('button', { name: '舞台' })).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(within(project()).getByRole('button', { name: '工作流运行 审查 cloud#210（成功）' })).toBeInTheDocument(), { timeout: 25_000 })
+    // The run went pending → running → succeeded under polling; its frozen graph was analyzed once.
+    expect(workflows.seen.filter((request) => request.endsWith('/workflows/analyze'))).toHaveLength(1)
     expect(await within(pane).findByText('运行完成')).toBeInTheDocument()
     expect(within(pane).getByRole('button', { name: '再跑一次' })).toBeInTheDocument()
 
@@ -156,7 +161,7 @@ describe('workflow runs in chat', () => {
     expect(within(pane).getByText('请完成：Agent：审查改动', { selector: '[data-slot="bubble-content"]' })).toBeInTheDocument()
     expect(within(pane).getAllByText('回答：Agent：审查改动').length).toBeGreaterThan(0)
 
-    // Its details say what it actually ran on, and that v2 did not retry it as desktop would.
+    // Its details say what it actually ran on, and name the settings the attempt recorded as not applied.
     await user.click(within(pane).getByRole('button', { name: '打开节点详情' }))
     const details = await within(pane).findByLabelText('阶段详情')
     expect(within(details).getByLabelText('实际执行')).toHaveTextContent('Claude Code · Fixture')
@@ -171,6 +176,134 @@ describe('workflow runs in chat', () => {
     expect(followup).toContain('独立沙盒')
     expect(screen.getByRole('textbox', { name: '消息' })).toHaveValue(followup)
   }, 30_000)
+
+  it('names the reachable nodes the server says start will refuse, before starting', async () => {
+    let reported: { nodeId: string; title: string } | undefined
+    // Stands in for v2-server's analysis of the frozen graph: it reports one reachable node.
+    workflows.runPolicy = (graph) => {
+      const node = (JSON.parse(graph) as { nodes: { id: string; data: { kind: string; title?: string } }[] }).nodes.find((n) => n.data.kind === 'agent')!
+      reported = { nodeId: node.id, title: node.data.title ?? node.id }
+      return { unappliedSettings: [], unsupportedNodes: [{ nodeId: node.id, kind: 'tool' }] }
+    }
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '含不支持节点')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    expect(await within(pane).findByRole('heading', { level: 2, name: '含不支持节点' }, { timeout: 10_000 })).toBeInTheDocument()
+
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    const start = await screen.findByRole('dialog')
+    const warning = await within(start).findByRole('alert')
+    expect(warning).toHaveTextContent('有节点暂不支持运行')
+    expect(warning).toHaveTextContent(`「${reported!.title}」（工具节点）`)
+    expect(warning).toHaveTextContent('desktop 同样不执行')
+    // The warning informs; start stays enabled and the refusal stays the server's.
+    expect(within(start).getByRole('button', { name: '启动' })).toBeEnabled()
+  }, 20_000)
+
+  it('explains an analysis failure and leaves validation to server start', async () => {
+    workflows.refuse = { match: /\/workflows\/analyze$/, status: 503, data: { code: 'workflow_domain_unavailable' } }
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '分析暂不可用')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    const start = await screen.findByRole('dialog')
+    expect(await within(start).findByRole('alert')).toHaveTextContent('暂时无法检查执行路径，启动时将由服务端校验。')
+    expect(within(start).getByRole('button', { name: '启动' })).toBeEnabled()
+  })
+
+  it('keeps Start disabled until the frozen graph has been analyzed', async () => {
+    let release = () => {}
+    workflows.hold = { match: /\/workflows\/analyze$/, until: new Promise<void>((resolve) => { release = resolve }) }
+    workflows.runPolicy = () => ({ unappliedSettings: [], unsupportedNodes: [] })
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '等待分析')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    expect(await within(pane).findByRole('heading', { level: 2, name: '等待分析' }, { timeout: 10_000 })).toBeInTheDocument()
+
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    const start = await screen.findByRole('dialog')
+    await waitFor(() => expect(workflows.seen).toContain(`POST /api/v2/tenants/${tenantId}/workflows/analyze`))
+    // A fast click must not start before the dialog knows what start would refuse.
+    expect(within(start).getByText('正在检查执行路径…')).toBeInTheDocument()
+    expect(within(start).getByRole('button', { name: '启动' })).toBeDisabled()
+    release()
+    await waitFor(() => expect(within(start).getByRole('button', { name: '启动' })).toBeEnabled())
+    expect(within(start).queryByText('正在检查执行路径…')).not.toBeInTheDocument()
+  }, 20_000)
+
+  it('analyzes each pending run on its own, so one run never shows another run\'s warning', async () => {
+    // The first analysis (run A) reports an unsupported node; any later one (run B) reports none.
+    let analyses = 0
+    workflows.runPolicy = (graph) => {
+      analyses += 1
+      const agent = (JSON.parse(graph) as { nodes: { id: string; data: { kind: string } }[] }).nodes.find((n) => n.data.kind === 'agent')!
+      return { unappliedSettings: [], unsupportedNodes: analyses === 1 ? [{ nodeId: agent.id, kind: 'tool' }] : [] }
+    }
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '运行甲')
+    const pane = await screen.findByRole('region', { name: '工作流运行' })
+    expect(await within(pane).findByRole('heading', { level: 2, name: '运行甲' }, { timeout: 10_000 })).toBeInTheDocument()
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    const first = await screen.findByRole('dialog')
+    expect(await within(first).findByRole('alert')).toHaveTextContent('有节点暂不支持运行')
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await createRun(user, '运行乙')
+    expect(await within(pane).findByRole('heading', { level: 2, name: '运行乙' }, { timeout: 10_000 })).toBeInTheDocument()
+    await user.click(within(pane).getByRole('button', { name: '启动' }))
+    const second = await screen.findByRole('dialog')
+    await waitFor(() => expect(analyses).toBe(2))
+    await waitFor(() => expect(within(second).getByRole('button', { name: '启动' })).toBeEnabled())
+    expect(within(second).queryByRole('alert')).not.toBeInTheDocument()
+  }, 30_000)
+
+  it('analyzes a finished run once and explains each Agent from that analysis with its own list', async () => {
+    // Two Agents with different lists: each node's details must show only its own.
+    workflows.runPolicy = (graph) => {
+      const [first, second] = (JSON.parse(graph) as { nodes: { id: string; data: { kind: string } }[] }).nodes.filter((n) => n.data.kind === 'agent')
+      return { unappliedSettings: [{ nodeId: first!.id, settings: ['role', 'retry'] }, { nodeId: second!.id, settings: ['mcp'] }], unsupportedNodes: [] }
+    }
+    const user = userEvent.setup()
+    await renderPage()
+    await createRun(user, '失败的运行')
+    await waitFor(() => expect(runs.runs.size).toBe(1))
+    const [runId, entry] = [...runs.runs.entries()][0]!
+    cleanup()
+    resetChatStore()
+    // The Agent failed: v2-server writes no `unapplied` into a failure payload.
+    const agent = (JSON.parse(entry.graph) as { nodes: { id: string; data: { kind: string; title?: string } }[] }).nodes.find((n) => n.data.kind === 'agent')!
+    const at = entry.detail.run.createdAt
+    entry.detail.nodes.push({
+      id: 'node-run-failed', runId, scopeId: `root:${runId}`, nodeId: agent.id, nodeType: 'agent', sessionId: null, status: 'failed', input: null, output: null,
+      error: 'model unavailable', payload: null, iteration: null, startedAt: at, finishedAt: at, createdAt: at, updatedAt: at,
+    })
+    Object.assign(entry.detail.run, { status: 'failed', startedAt: at, finishedAt: at, error: 'model unavailable' })
+    const analyses = () => workflows.seen.filter((request) => request.endsWith('/workflows/analyze')).length
+    const before = analyses()
+
+    const workspace = { open: false, setOpen: () => {}, request: undefined, navigation: { openDiff: () => {} } }
+    render(<MemoryRouter><QueryClientProvider client={new QueryClient()}><UserContext.Provider value={demoUser}><TooltipProvider><RunPane runId={runId} tenantId={tenantId} readOnly workspace={workspace} /></TooltipProvider></UserContext.Provider></QueryClientProvider></MemoryRouter>)
+    expect(await screen.findByRole('heading', { level: 2, name: '失败的运行' })).toBeInTheDocument()
+    await waitFor(() => expect(analyses()).toBe(before + 1))
+
+    await user.click(screen.getByRole('button', { name: '舞台' }))
+    await user.click(await screen.findByRole('button', { name: `${agent.data.title}: 失败` }))
+    await user.click(await screen.findByRole('button', { name: '打开节点详情' }))
+    const details = await screen.findByLabelText('阶段详情')
+    expect(await within(details).findByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent(/^v2 未应用：角色、自动重试/)
+    // The second Agent has not run; its details show its own analysis list, not the first Agent's.
+    const second = (JSON.parse(entry.graph) as { nodes: { id: string; data: { kind: string; title?: string } }[] }).nodes.filter((n) => n.data.kind === 'agent')[1]!
+    await user.click(screen.getByRole('button', { name: `${second.data.title}: 未执行` }))
+    await waitFor(() => expect(within(screen.getByLabelText('阶段详情')).getByRole('note', { name: 'v2 未应用的设置' })).toHaveTextContent(/^v2 未应用：MCP/))
+    // The frozen graph never changes: switching views and reading details asks for no second analysis.
+    await user.click(screen.getByRole('button', { name: '全图' }))
+    await expect(waitFor(() => expect(analyses()).toBeGreaterThan(before + 1), { timeout: 300 })).rejects.toThrow()
+  }, 20_000)
 
   it('keeps every node reachable when a run contains a form node', async () => {
     const graph = {

@@ -42,6 +42,8 @@ describe("addSampleWorkflows", () => {
       expect(backend.analyze({ graph: draft.graph }), id).toEqual({
         unusedNodeIds: [],
         unrecognizedNodes: [],
+        unappliedSettings: [],
+        unsupportedNodes: [],
       });
     }
     expect([...kinds].sort()).toEqual(

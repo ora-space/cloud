@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -92,7 +93,7 @@ func TestTwoAgentChainHandsTheAnswerDownstream(t *testing.T) {
 	_ = json.Unmarshal(node(nodes, "a").Payload, &payloadA)
 	_ = json.Unmarshal(node(nodes, "b").Payload, &payloadB)
 	if payloadA["stop_reason"] != "end_turn" || payloadA["executor"].(map[string]any)["id"] != "opencode:other" ||
-		payloadA["model"].(map[string]any)["fallback"] != false || len(payloadA["unapplied"].([]any)) != 1 || payloadA["unapplied"].([]any)[0] != "role" {
+		payloadA["model"].(map[string]any)["fallback"] != false || !reflect.DeepEqual(payloadA["unapplied"], []any{"role", "retry"}) {
 		t.Fatalf("A payload = %v", payloadA)
 	}
 	if payloadB["task"] != "审阅这段初稿：初稿：先拆网关" {

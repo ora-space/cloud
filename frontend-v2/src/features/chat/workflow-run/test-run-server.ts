@@ -73,7 +73,8 @@ export function serveRuns(tenantId: string, backend: LocalWorkflowBackend): RunS
           task: `请完成：${node.data.title ?? id}`,
           executor: { id: 'claude-code:fixture', agentId: 'ora/claude-code', name: 'Claude Code', pluginVersion: '0.4.0' },
           model: { id: 'fixture', name: 'Fixture', requested: node.data.agentConfig?.executor?.modelId ?? '', fallback: true },
-          unapplied: [],
+          // A fixed record standing in for v2-server's: the run page shows what the attempt recorded.
+          unapplied: ['retry'],
         })
         answers[id] = row.output
       }

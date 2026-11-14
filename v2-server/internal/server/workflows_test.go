@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -55,7 +56,11 @@ func workflowServerWithClient(t *testing.T, mutate func(*server.Options)) (workf
 		SessionTTL: time.Hour,
 		Now:        func() time.Time { return now },
 		AnalyzeWorkflow: func(string) (server.WorkflowAnalysis, error) {
-			return server.WorkflowAnalysis{UnusedNodeIDs: []string{"spare"}}, nil
+			return server.WorkflowAnalysis{
+				UnusedNodeIDs:     []string{"spare"},
+				UnappliedSettings: []server.UnappliedWorkflowSettings{{NodeID: "writer", Settings: []string{"role", "mcp"}}},
+				UnsupportedNodes:  []server.UnsupportedWorkflowNode{{NodeID: "tool", Kind: "tool"}},
+			}, nil
 		},
 		ValidateWorkflow: func(graph string) error {
 			if strings.Contains(graph, "unrunnable") {
@@ -309,8 +314,14 @@ func TestWorkflowAnalysisAndPublishValidation(t *testing.T) {
 	base := "/api/v2/tenants/" + tid + "/workflows"
 
 	status, analysis := call("POST", base+"/analyze", map[string]any{"graph": "{}"})
-	if status != 200 || len(analysis["unusedNodeIds"].([]any)) != 1 {
-		t.Fatalf("analyze = %d %v", status, analysis)
+	want := map[string]any{
+		"unusedNodeIds":     []any{"spare"},
+		"unrecognizedNodes": []any{},
+		"unappliedSettings": []any{map[string]any{"nodeId": "writer", "settings": []any{"role", "mcp"}}},
+		"unsupportedNodes":  []any{map[string]any{"nodeId": "tool", "kind": "tool"}},
+	}
+	if status != 200 || !reflect.DeepEqual(analysis, want) {
+		t.Fatalf("analyze = %d %v, want %v", status, analysis, want)
 	}
 
 	_, created := call("POST", base, map[string]any{"name": "不可执行", "graph": "unrunnable"})

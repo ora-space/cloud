@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
-import { IconLoader2 } from "@tabler/icons-react";
+import { IconAlertTriangle, IconLoader2 } from "@tabler/icons-react";
 import {
   Button,
   Checkbox,
@@ -27,12 +27,28 @@ import {
   type WorkflowInputVariable,
 } from "@/lib/workflows/mock";
 
+/** A reachable node start will refuse, named as the author titled it. */
+export interface WorkflowRunUnsupportedNode {
+  nodeId: string;
+  kind: string;
+  title: string;
+}
+
 interface WorkflowRunStartDialogProps {
   open: boolean;
   runName: string;
   /** The free-text run instruction, edited here as the workflow's "initial prompt". */
   initialPrompt: string;
   variables: WorkflowInputVariable[];
+  /**
+   * Reachable nodes v2-server's analysis says start will refuse. The dialog warns but still lets
+   * the author start, so the refusal stays the server's.
+   */
+  unsupportedNodes?: readonly WorkflowRunUnsupportedNode[];
+  /** Prevents submission until the server has checked the frozen execution path. */
+  analyzing?: boolean;
+  /** Keeps a failed preflight visible while server start remains the authority. */
+  analysisFailed?: boolean;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onStart: (
@@ -47,6 +63,9 @@ export function WorkflowRunStartDialog({
   runName,
   initialPrompt,
   variables,
+  unsupportedNodes = [],
+  analyzing = false,
+  analysisFailed = false,
   busy,
   onOpenChange,
   onStart,
@@ -58,6 +77,9 @@ export function WorkflowRunStartDialog({
           runName={runName}
           initialPrompt={initialPrompt}
           variables={variables}
+          unsupportedNodes={unsupportedNodes}
+          analyzing={analyzing}
+          analysisFailed={analysisFailed}
           busy={busy}
           onCancel={() => onOpenChange(false)}
           onStart={onStart}
@@ -72,10 +94,17 @@ function WorkflowRunStartDialogContent({
   runName,
   initialPrompt,
   variables,
+  unsupportedNodes,
+  analyzing,
+  analysisFailed,
   busy,
   onCancel,
   onStart,
-}: Omit<WorkflowRunStartDialogProps, "open" | "onOpenChange"> & {
+}: Omit<
+  WorkflowRunStartDialogProps,
+  "open" | "onOpenChange" | "unsupportedNodes"
+> & {
+  unsupportedNodes: readonly WorkflowRunUnsupportedNode[];
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -137,6 +166,19 @@ function WorkflowRunStartDialogContent({
         </DialogDescription>
       </DialogHeader>
       <div className="max-h-[min(62vh,560px)] space-y-4 overflow-y-auto px-5 py-5">
+        {analyzing && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {t("workflowRun.unsupportedNodes.checking")}
+          </p>
+        )}
+        {analysisFailed && (
+          <p role="alert" className="text-xs text-muted-foreground">
+            {t("workflowRun.unsupportedNodes.failed")}
+          </p>
+        )}
+        {unsupportedNodes.length > 0 && (
+          <UnsupportedNodesWarning nodes={unsupportedNodes} />
+        )}
         {variables.length === 0 ? (
           <p className="rounded-lg bg-muted/45 px-3 py-5 text-center text-xs text-muted-foreground">
             {t("workflowRun.startInputsEmpty")}
@@ -295,7 +337,7 @@ function WorkflowRunStartDialogContent({
         <Button
           type="button"
           className="min-w-28"
-          disabled={busy}
+          disabled={busy || analyzing}
           onClick={() => void submit()}
         >
           {busy ? (
@@ -309,6 +351,41 @@ function WorkflowRunStartDialogContent({
         </Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+/** Names each reachable node start will refuse, before the author tries. */
+function UnsupportedNodesWarning({
+  nodes,
+}: {
+  nodes: readonly WorkflowRunUnsupportedNode[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-900 dark:text-amber-200"
+    >
+      <p className="flex items-center gap-1.5 font-medium">
+        <IconAlertTriangle aria-hidden className="size-3.5 shrink-0" />
+        {t("workflowRun.unsupportedNodes.title")}
+      </p>
+      <p className="mt-1 leading-5">
+        {t("workflowRun.unsupportedNodes.description")}
+      </p>
+      <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+        {nodes.map((node) => (
+          <li key={node.nodeId}>
+            {t("workflowRun.unsupportedNodes.item", {
+              title: node.title,
+              kind: t(`workflowRun.unsupportedNodes.kind.${node.kind}`, {
+                defaultValue: node.kind,
+              }),
+            })}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
