@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -329,5 +330,100 @@ func TestWorkflowAutoVersionsStayDistinctUnderConcurrency(t *testing.T) {
 	saves.Wait()
 	if _, err := s.WorkflowDraft(ctx, tenant, w.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestWorkflowSnapshotGraphReadsOneLiveSnapshot covers the graph-only read the decomposition
+// catalog judges: it is scoped by tenant and workflow, and a deleted version reads as not found so
+// the catalog refuses it without caching a verdict.
+func TestWorkflowSnapshotGraphReadsOneLiveSnapshot(t *testing.T) {
+	s := storetest.Open(t)
+	_, tenant := storetest.Login(t, s, "graph-owner")
+	const other = "00000000-0000-0000-0000-000000000000"
+	ctx := context.Background()
+	w, _, err := s.CreateWorkflow(ctx, tenant, "只读图", graphA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, err := s.PublishWorkflow(ctx, tenant, w.ID, "v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PublishWorkflow(ctx, tenant, w.ID, "v2", nil); err != nil {
+		t.Fatal(err)
+	}
+	if graph, err := s.WorkflowSnapshotGraph(ctx, tenant, w.ID, v1.ID); err != nil || graph != v1.Graph {
+		t.Fatalf("graph = %q %v, want the published document", graph, err)
+	}
+	for name, read := range map[string]func() (string, error){
+		"other tenant":   func() (string, error) { return s.WorkflowSnapshotGraph(ctx, other, w.ID, v1.ID) },
+		"other workflow": func() (string, error) { return s.WorkflowSnapshotGraph(ctx, tenant, v1.ID, v1.ID) },
+	} {
+		if _, err := read(); !errors.Is(err, store.ErrWorkflowSnapshotNotFound) {
+			t.Fatalf("%s = %v, want ErrWorkflowSnapshotNotFound", name, err)
+		}
+	}
+	if _, err := s.DeleteWorkflowSnapshot(ctx, tenant, w.ID, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WorkflowSnapshotGraph(ctx, tenant, w.ID, v1.ID); !errors.Is(err, store.ErrWorkflowSnapshotNotFound) {
+		t.Fatalf("deleted version = %v, want ErrWorkflowSnapshotNotFound", err)
+	}
+}
+
+// TestWorkflowRefsListsLiveTenantWorkflowsNewestFirst covers what the decomposition picker lists:
+// the tenant's live definitions in the same order as Workflows (newest first), each with the id
+// of its live published snapshot or none, never a deleted definition or another tenant's.
+func TestWorkflowRefsListsLiveTenantWorkflowsNewestFirst(t *testing.T) {
+	f := newSquadFixture(t)
+	_, tenant := storetest.Login(t, f.store, "refs-owner")
+	var other string
+	if err := f.db.QueryRow(f.ctx, `INSERT INTO tenants (name) VALUES ('别的工作区') RETURNING id::text`).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.CreateWorkflow(f.ctx, other, "别人的", graphA); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, name := range []string{"最早", "已删除", "已发布", "最新"} {
+		w, _, err := f.store.CreateWorkflow(f.ctx, tenant, name, graphA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = w.ID
+	}
+	published, err := f.store.PublishWorkflow(f.ctx, tenant, ids["已发布"], "v1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.DeleteWorkflow(f.ctx, tenant, ids["已删除"]); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := f.store.WorkflowRefs(f.ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := f.store.Workflows(f.ctx, tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names, summaryNames []string
+	for _, r := range refs {
+		names = append(names, r.Name)
+	}
+	for _, w := range summaries {
+		summaryNames = append(summaryNames, w.Name)
+	}
+	if want := []string{"最新", "已发布", "最早"}; !slices.Equal(names, want) || !slices.Equal(summaryNames, want) {
+		t.Fatalf("refs %v, workflows %v, want %v", names, summaryNames, want)
+	}
+	for _, r := range refs {
+		if r.Name == "已发布" {
+			if r.PublishedSnapshotID == nil || *r.PublishedSnapshotID != published.ID || r.PublishedVersion == nil || *r.PublishedVersion != "v1" {
+				t.Fatalf("published ref = %+v, want snapshot %s v1", r, published.ID)
+			}
+		} else if r.PublishedSnapshotID != nil || r.PublishedVersion != nil {
+			t.Fatalf("unpublished ref %s = %+v", r.Name, r)
+		}
 	}
 }

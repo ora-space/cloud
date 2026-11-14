@@ -28,6 +28,8 @@ import (
 var (
 	// ErrInvalidWorkflow reports a workflow that does not exist in the workspace or has no published version.
 	ErrInvalidWorkflow = errors.New("workflow cannot decompose")
+	// ErrWorkflowOutputRequired reports a published workflow without the tasks output Subtasks consumes.
+	ErrWorkflowOutputRequired = errors.New("workflow output does not support decomposition")
 	// ErrTaskClosed reports a decomposition of a task that is done or cancelled.
 	ErrTaskClosed = errors.New("task closed")
 	// ErrSubtask reports a decomposition of a subtask: only one level exists.
@@ -45,6 +47,7 @@ const (
 // Store is the persistence a Host needs; *store.Store implements it.
 type Store interface {
 	Task(ctx context.Context, tenant, id string) (store.Task, error)
+	PublishedWorkflowSnapshot(ctx context.Context, tenant, workflowID string) (store.WorkflowSnapshot, error)
 	CreateWorkflowRun(ctx context.Context, tenant, workflowID, snapshotID string, in store.WorkflowRunInput) (store.WorkflowRun, error)
 	WorkflowRun(ctx context.Context, tenant, runID string) (store.WorkflowRun, error)
 	TaskDecompositions(ctx context.Context, tenant, taskID string) ([]store.TaskDecomposition, error)
@@ -108,7 +111,8 @@ func (h *Host) lock(taskID string) func() {
 }
 
 // Start runs the workflow over the task as the caller and returns the running decomposition. The
-// same key returns the decomposition it already started. A run the workflow host refuses to start
+// same key returns the decomposition it already started. A published snapshot that fails
+// CanDecompose is rejected before any run is created. A run the workflow host refuses to start
 // fails the decomposition at once, with the reason, rather than leaving it running.
 func (h *Host) Start(ctx context.Context, tenant, user, taskID, workflowID, key string) (store.TaskDecomposition, error) {
 	task, e := h.store.Task(ctx, tenant, taskID)
@@ -133,11 +137,23 @@ func (h *Host) Start(ctx context.Context, tenant, user, taskID, workflowID, key 
 		}
 		return store.TaskDecomposition{}, e
 	}
+	snapshot, e := h.store.PublishedWorkflowSnapshot(ctx, tenant, workflowID)
+	switch {
+	case errors.Is(e, store.ErrNotFound), errors.Is(e, store.ErrWorkflowNoPublishedSnapshot),
+		errors.Is(e, store.ErrWorkflowSnapshotNotFound):
+		return store.TaskDecomposition{}, ErrInvalidWorkflow
+	case e != nil:
+		return store.TaskDecomposition{}, fmt.Errorf("read decomposition workflow: %w", e)
+	}
+	if !CanDecompose(snapshot.Graph) {
+		return store.TaskDecomposition{}, ErrWorkflowOutputRequired
+	}
 	input := task.Title
 	if desc := strings.TrimSpace(task.Description); desc != "" {
 		input += "\n\n" + desc
 	}
-	run, e := h.store.CreateWorkflowRun(ctx, tenant, workflowID, "", store.WorkflowRunInput{ProjectID: task.ProjectID, Input: &input})
+	// Freeze exactly the snapshot checked above, even if another version is published now.
+	run, e := h.store.CreateWorkflowRun(ctx, tenant, workflowID, snapshot.ID, store.WorkflowRunInput{ProjectID: task.ProjectID, Input: &input})
 	switch {
 	case errors.Is(e, store.ErrNotFound), errors.Is(e, store.ErrWorkflowNoPublishedSnapshot),
 		errors.Is(e, store.ErrWorkflowSnapshotNotFound), errors.Is(e, store.ErrWorkflowDraftSnapshot):
@@ -263,14 +279,14 @@ func (h *Host) settle(ctx context.Context, d store.TaskDecomposition) (store.Tas
 // Subtasks reads a run's output as subtasks: an object whose `tasks` is an array of items with a
 // non-empty `title` and an optional `description`, trimmed to the task limits. The array may also
 // arrive as a JSON string, as an Agent's unstructured answer does. Otherwise it returns no subtasks
-// and the reason, in the page's words.
+// and the reason, in the page's words, followed by the workflow's declared-output requirement.
 func Subtasks(output *string) ([]store.Subtask, string) {
 	if output == nil || strings.TrimSpace(*output) == "" {
-		return nil, "工作流没有输出。"
+		return nil, outputFailure("工作流没有输出。")
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal([]byte(*output), &fields) != nil || fields["tasks"] == nil {
-		return nil, "工作流的输出里没有 tasks 数组。"
+		return nil, outputFailure("工作流的输出里没有 tasks 数组。")
 	}
 	raw := fields["tasks"]
 	var text string
@@ -282,18 +298,18 @@ func Subtasks(output *string) ([]store.Subtask, string) {
 		Description *string `json:"description"`
 	}
 	if json.Unmarshal(raw, &items) != nil {
-		return nil, "工作流输出的 tasks 不是数组。"
+		return nil, outputFailure("工作流输出的 tasks 不是数组。")
 	}
 	if len(items) == 0 {
-		return nil, "工作流没有拆出子任务。"
+		return nil, outputFailure("工作流没有拆出子任务。")
 	}
 	if len(items) > maxSubtasks {
-		return nil, fmt.Sprintf("工作流拆出了 %d 个子任务，一次最多 %d 个。", len(items), maxSubtasks)
+		return nil, outputFailure(fmt.Sprintf("工作流拆出了 %d 个子任务，一次最多 %d 个。", len(items), maxSubtasks))
 	}
 	out := make([]store.Subtask, 0, len(items))
 	for i, item := range items {
 		if item.Title == nil || strings.TrimSpace(*item.Title) == "" {
-			return nil, fmt.Sprintf("第 %d 个子任务没有标题。", i+1)
+			return nil, outputFailure(fmt.Sprintf("第 %d 个子任务没有标题。", i+1))
 		}
 		sub := store.Subtask{Title: truncate(strings.TrimSpace(*item.Title), maxTitle)}
 		if item.Description != nil {
@@ -302,6 +318,10 @@ func Subtasks(output *string) ([]store.Subtask, string) {
 		out = append(out, sub)
 	}
 	return out, ""
+}
+
+func outputFailure(reason string) string {
+	return reason + OutputRequirement
 }
 
 func truncate(s string, runes int) string {

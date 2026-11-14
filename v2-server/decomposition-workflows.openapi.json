@@ -1,0 +1,68 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Temporary v2 decomposition workflow catalog",
+    "version": "1.0.0",
+    "description": "Server-derived task-decomposition compatibility for the collaboration picker. A published workflow is eligible when its Output node declares tasks as array, array[object], string (a JSON-encoded array), or untyped/any. Starting a non-conforming workflow returns 400 decomposition_output_required with params.message in Chinese; missing or unpublished workflows keep invalid_workflow."
+  },
+  "paths": {
+    "/api/v2/tenants/{tid}/decomposition-workflows": {
+      "get": {
+        "operationId": "listDecompositionWorkflows",
+        "tags": ["tasks"],
+        "parameters": [
+          {"name": "tid", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow summaries with their current published-snapshot verdicts",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DecompositionWorkflowList"}}}
+          },
+          "401": {"$ref": "#/components/responses/TaskError"},
+          "404": {"$ref": "#/components/responses/TaskError"},
+          "500": {"$ref": "#/components/responses/TaskError"},
+          "503": {"$ref": "#/components/responses/TaskError"}
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "TaskError": {
+        "description": "Response",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskError"}}}
+      }
+    },
+    "schemas": {
+      "TaskError": {
+        "type": "object",
+        "required": ["code", "params", "requestId"],
+        "properties": {
+          "code": {"type": "string"},
+          "params": {"type": "object", "additionalProperties": true},
+          "requestId": {"type": "string"}
+        }
+      },
+      "DecompositionWorkflow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "publishedVersion", "canDecompose", "decompositionBlockedReason"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "publishedVersion": {"type": "string", "nullable": true},
+          "canDecompose": {"type": "boolean"},
+          "decompositionBlockedReason": {"type": "string", "description": "Chinese reason shown by the picker; empty when canDecompose is true."}
+        }
+      },
+      "DecompositionWorkflowList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/DecompositionWorkflow"}}
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Task } from './tasks-api/generated'
 import {
   assigneeKindLabel, assigneeLabel, isTaskFinished, MAX_TASK_TITLE, projectLabel, taskActions,
-  boardMoveMessageFor, taskMessageFor, taskStatusLabel, validateTask,
+  boardMoveMessageFor, decompositionMessageFor, taskMessageFor, taskStatusLabel, validateTask,
 } from './task-model'
 
 const task = (overrides: Partial<Task> = {}): Task => ({
@@ -81,5 +81,21 @@ describe('task errors', () => {
     expect(boardMoveMessageFor(http(409, 'version_conflict'))).toBe('任务刚被其他人改过，看板已刷新，请再拖一次。')
     expect(boardMoveMessageFor(http(400, 'invalid_transition'))).toContain('待处理 → 进行中 → 待验收 → 已完成')
     expect(boardMoveMessageFor(http(403, 'forbidden'))).toBe('只有任务创建人或工作区管理员能确认完成或取消任务。')
+  })
+})
+
+describe('decomposition refusals', () => {
+  const fault = (code: string, params: Record<string, unknown> = {}) =>
+    ({ isAxiosError: true, response: { status: 400, data: { code, params, requestId: 'r' } } })
+
+  it('shows the server\'s own output requirement', () => {
+    const message = '服务端说明：输出节点需要 tasks。'
+    expect(decompositionMessageFor(fault('decomposition_output_required', { message }))).toBe(message)
+  })
+
+  it('still names the problem when the server sends no message', () => {
+    expect(decompositionMessageFor(fault('decomposition_output_required'))).toBe('所选工作流的输出不满足拆分要求，请修改后重新发布。')
+    expect(decompositionMessageFor(fault('decomposition_output_required', { message: 7 }))).toBe('所选工作流的输出不满足拆分要求，请修改后重新发布。')
+    expect(decompositionMessageFor(fault('invalid_workflow'))).toBe('所选工作流不存在或还没有发布，请重新选择。')
   })
 })

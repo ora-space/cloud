@@ -12,6 +12,7 @@ func (h *handler) taskDecompositionRoutes(rt *router) {
 	base := "/api/v2/tenants/{tid}/tasks/{taskid}/decompositions"
 	rt.tenant("GET "+base, h.listTaskDecompositions)
 	rt.tenant("POST "+base, h.startTaskDecomposition)
+	rt.tenant("GET /api/v2/tenants/{tid}/decomposition-workflows", h.listDecompositionWorkflows)
 }
 
 // taskDecompositionScope checks the task id and that decompositions are wired.
@@ -35,6 +36,8 @@ func taskDecompositionFault(w http.ResponseWriter, op string, e error) {
 		fault(w, http.StatusConflict, "decomposition_active")
 	case errors.Is(e, taskdecomp.ErrInvalidWorkflow):
 		fault(w, http.StatusBadRequest, "invalid_workflow")
+	case errors.Is(e, taskdecomp.ErrWorkflowOutputRequired):
+		faultWithParams(w, http.StatusBadRequest, "decomposition_output_required", map[string]string{"message": taskdecomp.OutputRequirement})
 	case errors.Is(e, taskdecomp.ErrTaskClosed):
 		fault(w, http.StatusConflict, "task_closed")
 	case errors.Is(e, taskdecomp.ErrSubtask):

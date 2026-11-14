@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios'
 import { codeOf, statusOf } from '@/lib/api-client'
 import type { Task } from './tasks-api/generated'
 
@@ -138,11 +139,22 @@ export function boardMoveMessageFor(error: unknown): string {
 /** The workflow the demo seeds for 「拆分」; the dialog picks it when the workspace has it. */
 export const DEMO_DECOMPOSITION_WORKFLOW = '需求拆分'
 
+/**
+ * The server's own wording of a refusal, from the fault's `params.message`. The server owns the
+ * decomposition output requirement, so its text is shown as is instead of a frontend copy.
+ */
+function serverMessageOf(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined
+  const message = (error.response?.data as { params?: { message?: unknown } } | undefined)?.params?.message
+  return typeof message === 'string' && message ? message : undefined
+}
+
 /** A user-facing reason for a refused decomposition. */
 export function decompositionMessageFor(error: unknown): string {
   switch (codeOf(error)) {
     case 'decomposition_active': return '这个任务正在拆分，等这次跑完再拆。'
     case 'invalid_workflow': return '所选工作流不存在或还没有发布，请重新选择。'
+    case 'decomposition_output_required': return serverMessageOf(error) ?? '所选工作流的输出不满足拆分要求，请修改后重新发布。'
     case 'task_closed': return '任务已结束，不能再拆分。'
     case 'subtask_not_decomposable': return '子任务不能再拆分。'
     case 'invalid_project': return '任务所属项目不可用。'

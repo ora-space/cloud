@@ -672,6 +672,9 @@ describe("WorkflowInspector kind-specific layouts", () => {
       ),
     ).toHaveTextContent("text");
     expect(screen.queryByLabelText("执行指令")).not.toBeInTheDocument();
+    expect(screen.getByText(/用于「拆分」时，输出节点需要名为 tasks 的输出/)).toBeInTheDocument();
+    expect(screen.getByText(/\{tasks: \[\{title, description\}\]\}/)).toBeInTheDocument();
+    expect(screen.getByText(/绑定到 Agent 的 structured_output\.tasks/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "添加结果" }));
     expect(screen.getByLabelText("结果名 2")).toHaveValue("result-2");

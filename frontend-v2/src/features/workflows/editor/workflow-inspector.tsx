@@ -387,6 +387,11 @@ function WorkflowNodeInspector({
                 </div>
               </InspectorField>
             )}
+            {node.data.kind === "output" && (
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                用于「拆分」时，输出节点需要名为 tasks 的输出。建议将 Agent 的结构化输出约束为 {"{tasks: [{title, description}]}"}，并把输出 tasks 绑定到 Agent 的 structured_output.tasks（不是整个 structured_output）。
+              </p>
+            )}
           </div>
         </>
       ) : (

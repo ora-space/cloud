@@ -273,6 +273,8 @@ func run(addr, dbURL string, cleanup, fixture, testFixtures bool) (resultErr err
 		Catalog:            runtime,
 		TaskRuns:           taskRuns,
 		TaskDecompositions: decompositions,
+		// The signal context ends with the process, before the database pool is closed.
+		Context: ctx,
 	}, workflowRuns)
 	coordinator, e := server.NewScheduleCoordinator(db, options, time.Now)
 	if e != nil {

@@ -97,6 +97,10 @@ type Options struct {
 	// DownloadPluginPackage stages a workflow package before import. Nil uses the public
 	// marketplace downloader.
 	DownloadPluginPackage PluginPackageDownloader
+	// Context is the server's lifetime: work the handler runs beyond any one request, such as a
+	// decomposition verdict other requests share, stops when it ends. Nil uses
+	// context.Background(), for tests and callers whose handler lives as long as the process.
+	Context context.Context
 }
 
 // New returns the handler for every route v2-server serves.
@@ -211,6 +215,9 @@ type handler struct {
 	// chats runs the chat routes on the injected execution service and catalog; nil when the store
 	// cannot keep conversations.
 	chats *chat.Service
+	// verdicts judges and caches the decomposition picker's verdict per immutable published
+	// snapshot, shared by every request this handler serves.
+	verdicts *decompositionVerdicts
 }
 
 // newHandler makes omitted dependencies safe without inferring one interface from another.
@@ -222,7 +229,11 @@ func newHandler(s Store, o Options) *handler {
 	if o.Catalog == nil {
 		o.Catalog = unavailable
 	}
-	h := &handler{store: s, opts: o}
+	lifetime := o.Context
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
+	h := &handler{store: s, opts: o, verdicts: newDecompositionVerdicts(lifetime)}
 	if cs, ok := s.(chat.Store); ok {
 		h.chats = chat.New(cs, o.Execution, o.Catalog, chat.Options{})
 	}
@@ -358,7 +369,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // fault writes Cloud's Error shape.
 func fault(w http.ResponseWriter, status int, code string) {
-	writeJSON(w, status, map[string]any{"code": code, "params": map[string]any{}, "requestId": requestID()})
+	faultWithParams(w, status, code, map[string]any{})
+}
+
+func faultWithParams(w http.ResponseWriter, status int, code string, params any) {
+	writeJSON(w, status, map[string]any{"code": code, "params": params, "requestId": requestID()})
 }
 
 func internal(w http.ResponseWriter, op string, e error) {

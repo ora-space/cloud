@@ -8,6 +8,7 @@ import { UserContext } from '@/app/auth/user'
 import type { CollaborationTarget, User } from '@/api/generated.schemas'
 import { type Conversation, emptyConversation } from '@/components/agent-thread/model/types'
 import * as workflowsApi from '@/lib/workflows/api/generated'
+import * as decompositionApi from './decomposition-api/generated'
 import * as workspaceApi from '@/lib/workspace-api/generated'
 import * as api from './tasks-api/generated'
 import type { Task, TaskDecomposition, TaskRun, TaskTimeline } from './tasks-api/generated'
@@ -32,6 +33,7 @@ vi.mock('./tasks-api/generated', () => ({
   createTaskComment: vi.fn(), setTaskStatus: vi.fn(), setTaskAssignee: vi.fn(), updateTask: vi.fn(),
   listTasks: vi.fn(), listTaskDecompositions: vi.fn(), startTaskDecomposition: vi.fn(),
 }))
+vi.mock('./decomposition-api/generated', () => ({ listDecompositionWorkflows: vi.fn() }))
 vi.mock('@/lib/workflows/api/generated', () => ({
   listWorkflows: vi.fn(), listWorkflowRuns: vi.fn(), createWorkflowRun: vi.fn(), updateWorkflowRunInput: vi.fn(), startWorkflowRun: vi.fn(),
 }))
@@ -235,10 +237,10 @@ const requirement = task({ title: '账号体系', description: '登录、注册�
 
 it('splits a requirement with the 需求拆分 workflow and lists the subtasks it wrote', async () => {
   vi.mocked(api.getTask).mockResolvedValue(requirement)
-  vi.mocked(workflowsApi.listWorkflows).mockResolvedValue({ workflows: [
-    { id: 'wf-daily', namespace: 'local', name: '每日巡检', publishedVersion: 'v2', createdAt: 0, updatedAt: 0 },
-    { id: 'wf-draft', namespace: 'local', name: '草稿', publishedVersion: null, createdAt: 0, updatedAt: 0 },
-    { id: 'wf-split', namespace: 'local', name: '需求拆分', publishedVersion: 'v1', createdAt: 0, updatedAt: 0 },
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [
+    { id: 'wf-daily', name: '每日巡检', publishedVersion: 'v2', canDecompose: true, decompositionBlockedReason: '' },
+    { id: 'wf-draft', name: '草稿', publishedVersion: null, canDecompose: false, decompositionBlockedReason: '工作流尚未发布。' },
+    { id: 'wf-split', name: '需求拆分', publishedVersion: 'v1', canDecompose: true, decompositionBlockedReason: '' },
   ] })
   let started = false
   vi.mocked(api.startTaskDecomposition).mockImplementation(async () => { started = true; return decomposition() })
@@ -268,6 +270,81 @@ it('splits a requirement with the 需求拆分 workflow and lists the subtasks i
   expect(screen.queryByRole('list', { name: '子任务' })).not.toBeInTheDocument()
 })
 
+const REQUIREMENT = '用于拆分的工作流，输出节点必须声明名为 tasks 的输出，内容是 {title, description} 的数组。'
+const blockedWorkflow = (id: string, name: string) =>
+  ({ id, name, publishedVersion: 'v1', canDecompose: false, decompositionBlockedReason: REQUIREMENT })
+
+it('lists eligible workflows first, groups blocked ones, and states the requirement once', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [
+    blockedWorkflow('wf-blocked', '普通总结'),
+    { id: 'wf-split', name: '需求拆分', publishedVersion: 'v1', canDecompose: true, decompositionBlockedReason: '' },
+    blockedWorkflow('wf-blocked-2', '周报'),
+  ] })
+  vi.mocked(api.startTaskDecomposition).mockResolvedValue(decomposition())
+  renderPage()
+  await userEvent.click(await screen.findByRole('button', { name: '拆分' }))
+  const dialog = await screen.findByRole('dialog')
+  const select = within(dialog).getByLabelText('工作流')
+  await waitFor(() => expect(select).toHaveValue('wf-split'))
+  expect(within(select).getAllByRole('option').map(o => [o.textContent, (o as HTMLOptionElement).disabled]))
+    .toEqual([['需求拆分（v1）', false], ['普通总结（v1）', true], ['周报（v1）', true]])
+  const group = within(select).getByRole('group', { name: '不可拆分（缺少 tasks 输出）' })
+  expect(within(group).getAllByRole('option').map(o => o.textContent)).toEqual(['普通总结（v1）', '周报（v1）'])
+  expect(within(dialog).getByText('有 2 个已发布工作流不能用于拆分')).toBeInTheDocument()
+  expect(within(dialog).getAllByText(REQUIREMENT)).toHaveLength(1)
+  expect(within(dialog).getByText('普通总结、周报')).toBeInTheDocument()
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始拆分' }))
+  await waitFor(() => expect(api.startTaskDecomposition).toHaveBeenCalledWith('tenant', 'task-1', { workflowId: 'wf-split' }, expect.anything()))
+})
+
+it('defaults to the first eligible workflow when none is called 需求拆分 and the newest is blocked', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [
+    blockedWorkflow('wf-newest', '最新总结'),
+    { id: 'wf-ok', name: '按模块拆', publishedVersion: 'v3', canDecompose: true, decompositionBlockedReason: '' },
+  ] })
+  vi.mocked(api.startTaskDecomposition).mockResolvedValue(decomposition())
+  renderPage()
+  await userEvent.click(await screen.findByRole('button', { name: '拆分' }))
+  const dialog = await screen.findByRole('dialog')
+  await waitFor(() => expect(within(dialog).getByLabelText('工作流')).toHaveValue('wf-ok'))
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始拆分' }))
+  await waitFor(() => expect(api.startTaskDecomposition).toHaveBeenCalledWith('tenant', 'task-1', { workflowId: 'wf-ok' }, expect.anything()))
+})
+
+it('disables the picker and explains why when every published workflow is blocked', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [
+    blockedWorkflow('wf-a', '普通总结'), blockedWorkflow('wf-b', '周报'),
+  ] })
+  renderPage()
+  await userEvent.click(await screen.findByRole('button', { name: '拆分' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(await within(dialog).findByText('已发布的工作流都不满足拆分输出要求，请先修改并重新发布。')).toBeInTheDocument()
+  const select = within(dialog).getByLabelText('工作流')
+  expect(select).toBeDisabled()
+  expect(select).toHaveValue('')
+  expect(within(dialog).getByRole('button', { name: '开始拆分' })).toBeDisabled()
+  expect(api.startTaskDecomposition).not.toHaveBeenCalled()
+})
+
+it('shows the server\'s requirement when a start is refused for the tasks output', async () => {
+  vi.mocked(api.getTask).mockResolvedValue(requirement)
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [
+    { id: 'wf-split', name: '需求拆分', publishedVersion: 'v1', canDecompose: true, decompositionBlockedReason: '' },
+  ] })
+  vi.mocked(api.startTaskDecomposition).mockRejectedValue(Object.assign(new Error('refused'), {
+    isAxiosError: true, response: { status: 400, data: { code: 'decomposition_output_required', params: { message: '服务端：刚发布的版本缺少 tasks。' }, requestId: 'r' } },
+  }))
+  renderPage()
+  await userEvent.click(await screen.findByRole('button', { name: '拆分' }))
+  const dialog = await screen.findByRole('dialog')
+  await waitFor(() => expect(within(dialog).getByLabelText('工作流')).toHaveValue('wf-split'))
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始拆分' }))
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('服务端：刚发布的版本缺少 tasks。')
+})
+
 it('keeps the subtasks open outside a run, and the workflow tab between the other two', async () => {
   vi.mocked(api.getTask).mockResolvedValue(requirement)
   vi.mocked(api.listTaskDecompositions).mockResolvedValue({ items: [decomposition({ status: 'succeeded', createdCount: 1 })] })
@@ -279,7 +356,7 @@ it('keeps the subtasks open outside a run, and the workflow tab between the othe
 
 it('opens the run as soon as a split starts, read-only, and goes back to the list', async () => {
   vi.mocked(api.getTask).mockResolvedValue(requirement)
-  vi.mocked(workflowsApi.listWorkflows).mockResolvedValue({ workflows: [{ id: 'wf-split', namespace: 'local', name: '需求拆分', publishedVersion: 'v1', createdAt: 0, updatedAt: 0 }] })
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [{ id: 'wf-split', name: '需求拆分', publishedVersion: 'v1', canDecompose: true, decompositionBlockedReason: '' }] })
   let started = false
   vi.mocked(api.startTaskDecomposition).mockImplementation(async () => { started = true; return decomposition() })
   vi.mocked(api.listTaskDecompositions).mockImplementation(async () => ({ items: started ? [decomposition()] : [] }))
@@ -341,7 +418,7 @@ it('shows a running split and holds the button', async () => {
 it('explains a failed split and offers to split again', async () => {
   vi.mocked(api.getTask).mockResolvedValue(requirement)
   vi.mocked(api.listTaskDecompositions).mockResolvedValue({ items: [decomposition({ status: 'failed', failure: '工作流的输出里没有 tasks 数组。' })] })
-  vi.mocked(workflowsApi.listWorkflows).mockResolvedValue({ workflows: [] })
+  vi.mocked(decompositionApi.listDecompositionWorkflows).mockResolvedValue({ items: [] })
   renderPage()
   expect(await screen.findByRole('alert')).toHaveTextContent('拆分失败：工作流的输出里没有 tasks 数组。')
   await userEvent.click(screen.getByRole('button', { name: '重新拆分' }))

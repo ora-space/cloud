@@ -136,6 +136,40 @@ func (s *Store) Workflows(ctx context.Context, tenant string) ([]WorkflowSummary
 	return summaries, nil
 }
 
+// WorkflowRef names a live definition and its active published snapshot without loading any
+// document, so callers that only need a per-version verdict can fetch graphs on demand.
+type WorkflowRef struct {
+	ID                  string
+	Name                string
+	PublishedVersion    *string
+	PublishedSnapshotID *string
+}
+
+// WorkflowRefs lists the tenant's live definitions in the same order as Workflows, each with the id
+// of its live published snapshot (nil when unpublished). Graphs stay in the database: a published
+// snapshot is immutable, so a caller can cache whatever it derives from one by its id.
+func (s *Store) WorkflowRefs(ctx context.Context, tenant string) ([]WorkflowRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT w.id, w.name, published.version, published.id
+		FROM v2_workflows w
+		LEFT JOIN v2_workflow_snapshots published
+			ON published.id = w.published_snapshot_id AND published.deleted_at IS NULL
+		WHERE w.tenant_id = $1 AND w.deleted_at IS NULL
+		ORDER BY w.created_at DESC, w.id DESC`, tenant)
+	if err != nil {
+		return nil, workflowError("list workflow refs", err)
+	}
+	refs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (WorkflowRef, error) {
+		var w WorkflowRef
+		err := row.Scan(&w.ID, &w.Name, &w.PublishedVersion, &w.PublishedSnapshotID)
+		return w, err
+	})
+	if err != nil {
+		return nil, workflowError("list workflow refs", err)
+	}
+	return refs, nil
+}
+
 // Workflow reads one live definition in the tenant.
 func (s *Store) Workflow(ctx context.Context, tenant, id string) (Workflow, error) {
 	return scanWorkflow(s.pool.QueryRow(ctx, "SELECT "+workflowColumns+`
@@ -205,6 +239,34 @@ func (s *Store) WorkflowSnapshot(ctx context.Context, tenant, id, snapshotID str
 		FROM v2_workflow_snapshots
 		WHERE tenant_id = $1 AND workflow_id = $2 AND id = $3 AND deleted_at IS NULL`,
 		tenant, id, snapshotID))
+}
+
+// WorkflowSnapshotGraph reads only the document of one live snapshot. Callers that judge a large
+// graph and discard it use it instead of WorkflowSnapshot so the row carries nothing else.
+func (s *Store) WorkflowSnapshotGraph(ctx context.Context, tenant, id, snapshotID string) (string, error) {
+	var graph string
+	err := s.pool.QueryRow(ctx, `
+		SELECT graph FROM v2_workflow_snapshots
+		WHERE tenant_id = $1 AND workflow_id = $2 AND id = $3 AND deleted_at IS NULL`,
+		tenant, id, snapshotID).Scan(&graph)
+	err = workflowError("read workflow snapshot graph", err)
+	if errors.Is(err, ErrNotFound) {
+		return "", ErrWorkflowSnapshotNotFound
+	}
+	return graph, err
+}
+
+// PublishedWorkflowSnapshot reads the active published document a new run would freeze. A missing
+// definition and one without a published version stay distinct so callers can preserve their errors.
+func (s *Store) PublishedWorkflowSnapshot(ctx context.Context, tenant, id string) (WorkflowSnapshot, error) {
+	w, err := s.Workflow(ctx, tenant, id)
+	if err != nil {
+		return WorkflowSnapshot{}, err
+	}
+	if w.PublishedSnapshotID == nil {
+		return WorkflowSnapshot{}, ErrWorkflowNoPublishedSnapshot
+	}
+	return s.WorkflowSnapshot(ctx, tenant, id, *w.PublishedSnapshotID)
 }
 
 // PublishWorkflow freezes the draft as a new immutable version, makes it the published one, and

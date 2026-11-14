@@ -4,16 +4,21 @@ import { Link } from 'react-router'
 import { ChevronDown, ChevronRight, CircleAlert, CornerDownRight, ListTree, LoaderCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { listWorkflows } from '@/lib/workflows/api/generated'
+import { NativeSelect, NativeSelectOptGroup, NativeSelectOption } from '@/components/ui/native-select'
+import { listDecompositionWorkflows } from './decomposition-api/generated'
 import { PanelDialog } from '@/components/panel/panel-dialog'
 import { decompositionMessageFor, DEMO_DECOMPOSITION_WORKFLOW, taskStatusLabel } from './task-model'
 import { startTaskDecomposition, type Task, type TaskDecomposition } from './tasks-api/generated'
 import { useTaskList } from './workspace'
 
+/** The select's group label for published workflows the server says cannot split a task. */
+const BLOCKED_GROUP_LABEL = '不可拆分（缺少 tasks 输出）'
+
 /**
- * Pick the workflow that splits the task and start it. Only published workflows can run; the
- * demo's 「需求拆分」 is chosen when the workspace has it.
+ * Pick the workflow that splits the task and start it. Published workflows carry the server's
+ * compatibility verdict: eligible ones come first, incompatible ones sit disabled in one group at
+ * the end, and the details list states each server reason once followed by the names it blocks.
+ * The demo's 「需求拆分」 is chosen when the workspace has a compatible one.
  */
 export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
   tenantId: string
@@ -23,10 +28,16 @@ export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
   onStarted: (created: TaskDecomposition) => void
 }) {
   const client = useQueryClient()
-  const workflows = useQuery({ queryKey: ['workflows', tenantId], queryFn: () => listWorkflows(tenantId), enabled: !!tenantId })
-  const published = (workflows.data?.workflows ?? []).filter(w => w.publishedVersion)
+  const workflows = useQuery({ queryKey: ['decomposition-workflows', tenantId], queryFn: () => listDecompositionWorkflows(tenantId), enabled: !!tenantId })
+  const published = (workflows.data?.items ?? []).filter(w => w.publishedVersion)
+  const eligible = published.filter(w => w.canDecompose)
+  const blocked = published.filter(w => !w.canDecompose)
+  // Every published blocked workflow carries the same server requirement; group names by reason so
+  // the text appears once however many workflows it blocks.
+  const blockedByReason = new Map<string, string[]>()
+  for (const w of blocked) blockedByReason.set(w.decompositionBlockedReason, [...(blockedByReason.get(w.decompositionBlockedReason) ?? []), w.name])
   const [picked, setPicked] = useState('')
-  const workflowId = picked || (published.find(w => w.name === DEMO_DECOMPOSITION_WORKFLOW) ?? published[0])?.id || ''
+  const workflowId = picked || (eligible.find(w => w.name === DEMO_DECOMPOSITION_WORKFLOW) ?? eligible[0])?.id || ''
   const [key] = useState(() => crypto.randomUUID())
   const [error, setError] = useState('')
   const start = useMutation({
@@ -43,18 +54,34 @@ export function DecomposeDialog({ tenantId, task, onClose, onStarted }: {
     ? '正在加载工作流…'
     : workflows.isError
       ? '工作流加载失败，请关闭后重试。'
-      : published.length === 0 ? '工作区还没有已发布的工作流，先在工作流页发布一个。' : '工作流的输出 tasks 会变成这个任务的子任务。'
+      : published.length === 0
+        ? '工作区还没有已发布的工作流，先在工作流页发布一个。'
+        : eligible.length === 0
+          ? '已发布的工作流都不满足拆分输出要求，请先修改并重新发布。'
+          : '工作流的输出 tasks 会变成这个任务的子任务。'
   return <PanelDialog icon={<ListTree size={14} />} eyebrow="拆分" title={`拆分 ${task.title}`}
     subtitle="用工作流把大需求拆成子任务：任务的标题和描述是输入，跑完后子任务出现在看板上，再分给人和 Agent。" onClose={onClose}>
     <form className="mc-form" onSubmit={submit} noValidate>
       <div className="mc-form-scroll"><FieldGroup>
         <Field>
           <FieldLabel htmlFor="mc-decompose-workflow">工作流</FieldLabel>
-          <NativeSelect id="mc-decompose-workflow" value={workflowId} disabled={published.length === 0} onChange={e => setPicked(e.target.value)}>
-            {published.length === 0 && <NativeSelectOption value="">{workflows.isLoading ? '正在加载…' : '没有可用的工作流'}</NativeSelectOption>}
-            {published.map(w => <NativeSelectOption key={w.id} value={w.id}>{w.name}（{w.publishedVersion}）</NativeSelectOption>)}
+          <NativeSelect id="mc-decompose-workflow" value={workflowId} disabled={eligible.length === 0} onChange={e => setPicked(e.target.value)}>
+            {eligible.length === 0 && <NativeSelectOption value="">{workflows.isLoading ? '正在加载…' : '没有可拆分的工作流'}</NativeSelectOption>}
+            {eligible.map(w => <NativeSelectOption key={w.id} value={w.id}>{w.name}（{w.publishedVersion}）</NativeSelectOption>)}
+            {blocked.length > 0 && <NativeSelectOptGroup label={BLOCKED_GROUP_LABEL}>
+              {blocked.map(w => <NativeSelectOption key={w.id} value={w.id} disabled>{w.name}（{w.publishedVersion}）</NativeSelectOption>)}
+            </NativeSelectOptGroup>}
           </NativeSelect>
           <FieldDescription>{hint}</FieldDescription>
+          {blocked.length > 0 && <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">有 {blocked.length} 个已发布工作流不能用于拆分</summary>
+            <div className="mt-1 max-h-32 space-y-1 overflow-y-auto">
+              {[...blockedByReason].map(([reason, names]) => <div key={reason}>
+                <FieldDescription className="text-destructive">{reason}</FieldDescription>
+                <FieldDescription>{names.join('、')}</FieldDescription>
+              </div>)}
+            </div>
+          </details>}
         </Field>
       </FieldGroup></div>
       {error && <p role="alert" className="mc-form-error">{error}</p>}

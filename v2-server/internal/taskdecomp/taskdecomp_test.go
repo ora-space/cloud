@@ -14,7 +14,7 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/taskdecomp"
 )
 
-const startGraph = `{"nodes":[{"id":"start","type":"workflow","data":{"kind":"start"}}],"edges":[]}`
+const startGraph = `{"nodes":[{"id":"start","type":"workflow","data":{"kind":"start"}},{"id":"out","type":"workflow","data":{"kind":"output","outputs":[{"name":"tasks","variableSelector":["start","input"]}]}}],"edges":[{"id":"e","source":"start","target":"out"}]}`
 
 // runs is a workflow host that starts runs in the store and lets the test end them; every change is
 // published like the host's hub does.
@@ -257,6 +257,29 @@ func TestDecompositionStartRefusals(t *testing.T) {
 			t.Fatalf("workflow %s = %v", id, e)
 		}
 	}
+
+	incompatible, _, e := f.store.CreateWorkflow(f.ctx, f.tenant, "缺少 tasks 输出", `{"nodes":[{"id":"start","data":{"kind":"start"}}],"edges":[]}`)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := f.store.PublishWorkflow(f.ctx, f.tenant, incompatible.ID, "v1", nil); e != nil {
+		t.Fatal(e)
+	}
+	before, e := f.store.WorkflowRuns(f.ctx, f.tenant, "", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := f.host.Start(f.ctx, f.tenant, f.owner, parent.ID, incompatible.ID, "incompatible"); !errors.Is(e, taskdecomp.ErrWorkflowOutputRequired) {
+		t.Fatalf("incompatible workflow = %v", e)
+	}
+	after, e := f.store.WorkflowRuns(f.ctx, f.tenant, "", "")
+	if e != nil || len(after) != len(before) {
+		t.Fatalf("incompatible start created a run: before %d after %d, %v", len(before), len(after), e)
+	}
+	if items, e := f.store.TaskDecompositions(f.ctx, f.tenant, parent.ID); e != nil || len(items) != 0 {
+		t.Fatalf("incompatible start created a decomposition: %+v, %v", items, e)
+	}
+
 	// A run the workflow host refuses fails the decomposition at once, with the reason.
 	f.runs.refuse = errors.New("没有可用的 Agent")
 	d, e := f.host.Start(f.ctx, f.tenant, f.owner, parent.ID, f.workflow, "refused")
@@ -318,6 +341,47 @@ func TestSubtasksReadsTheOutput(t *testing.T) {
 	} {
 		if subs, failure := taskdecomp.Subtasks(c.in); subs != nil || !strings.Contains(failure, c.failure) {
 			t.Fatalf("%v = %+v %q", c.in, subs, failure)
+		} else if !strings.HasSuffix(failure, taskdecomp.OutputRequirement) {
+			t.Fatalf("%v failure lacks the workflow requirement: %q", c.in, failure)
 		}
+	}
+}
+
+// republishingStore deterministically moves the published pointer between validation and run creation.
+type republishingStore struct {
+	*store.Store
+	t *testing.T
+}
+
+func (s republishingStore) CreateWorkflowRun(ctx context.Context, tenant, workflowID, snapshotID string, in store.WorkflowRunInput) (store.WorkflowRun, error) {
+	s.t.Helper()
+	if _, err := s.UpdateWorkflowDraft(ctx, tenant, workflowID, `{"nodes":[{"id":"start","data":{"kind":"start"}}],"edges":[]}`); err != nil {
+		s.t.Fatal(err)
+	}
+	if _, err := s.PublishWorkflow(ctx, tenant, workflowID, "v2", nil); err != nil {
+		s.t.Fatal(err)
+	}
+	return s.Store.CreateWorkflowRun(ctx, tenant, workflowID, snapshotID, in)
+}
+
+func TestStartFreezesCheckedSnapshot(t *testing.T) {
+	f := newFixture(t)
+	task := f.task(t, "Snapshot race")
+	checked, err := f.store.PublishedWorkflowSnapshot(f.ctx, f.tenant, f.workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := taskdecomp.New(republishingStore{Store: f.store, t: t}, f.runs, nil)
+	t.Cleanup(host.Close)
+	d, err := host.Start(f.ctx, f.tenant, f.owner, task.ID, f.workflow, "snapshot-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.store.WorkflowRun(f.ctx, f.tenant, d.WorkflowRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SnapshotID != checked.ID {
+		t.Fatalf("run snapshot = %s, checked %s", run.SnapshotID, checked.ID)
 	}
 }
