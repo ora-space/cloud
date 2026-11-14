@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { signIn } from './login.ts'
 type Executor = { agentId: string; agentName: string; modelId: string; modelName: string }
 
-test('workflow agent: an empty directory never seeds a demo executor into a new node', async ({ page }) => {
+test('workflow agent: an empty directory retains desktop defaults for a new node', async ({ page }) => {
   await page.route('**/api/v2/tenants/*/chat/executors', (route) => route.fulfill({ json: { items: [] } }))
   await page.goto('/workflows')
   await signIn(page)
@@ -19,7 +19,7 @@ test('workflow agent: an empty directory never seeds a demo executor into a new 
   await expect.poll(async () => {
     const draft = (await (await page.request.get(`${base}/${wid}/draft`)).json()).snapshot
     return JSON.parse(draft.graph).nodes.find((n: { data: { kind: string } }) => n.data.kind === 'agent')?.data.agentConfig.executor
-  }).toEqual({ agentCli: '', modelId: '' })
+  }).toEqual({ agentCli: 'official/ora-space.codeagentcli', modelId: 'gpt-5' })
 })
 
 test('workflow agent: replace a legacy demo choice, persist real IDs, and execute the selected binding', async ({ page }, testInfo) => {

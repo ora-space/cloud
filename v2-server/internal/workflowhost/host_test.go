@@ -21,7 +21,7 @@ import (
 const twoAgents = `{"nodes":[
  {"id":"start","data":{"kind":"start","title":"开始"}},
  {"id":"a","data":{"kind":"agent","title":"起草","description":"写一段初稿","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"Other Model"},"prompt":"起草：{{#start.input#}}","roleId":"reviewer"}}},
- {"id":"b","data":{"kind":"agent","title":"审阅","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"missing-model"},"prompt":"审阅这段初稿：{{#a.output#}}"}}},
+ {"id":"b","data":{"kind":"agent","title":"审阅","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"审阅这段初稿：{{#a.output#}}"}}},
  {"id":"out","data":{"kind":"output","outputs":[{"name":"review","variableSelector":["b","output"]}]}}
 ],"edges":[{"source":"start","target":"a"},{"source":"a","target":"b"},{"source":"b","target":"out"}]}`
 
@@ -77,7 +77,7 @@ func TestTwoAgentChainHandsTheAnswerDownstream(t *testing.T) {
 	b := f.exec.awaitStart(t)
 	reqB := f.exec.request(b)
 	if reqB.ExecutorID != "opencode:fixture" {
-		t.Fatalf("B executor = %s, want the Agent's default", reqB.ExecutorID)
+		t.Fatalf("B executor = %s, want the requested model", reqB.ExecutorID)
 	}
 	if textB := promptText(t, reqB.Prompt); !strings.Contains(textB, "任务要求:\n审阅这段初稿：初稿：先拆网关") {
 		t.Fatalf("B did not read A's answer:\n%s", textB)
@@ -98,7 +98,7 @@ func TestTwoAgentChainHandsTheAnswerDownstream(t *testing.T) {
 	if payloadB["task"] != "审阅这段初稿：初稿：先拆网关" {
 		t.Fatalf("B task = %v, want the rendered template", payloadB["task"])
 	}
-	if m := payloadB["model"].(map[string]any); m["fallback"] != true || m["requested"] != "missing-model" || m["id"] != "fixture" {
+	if m := payloadB["model"].(map[string]any); m["fallback"] != false || m["requested"] != "fixture" || m["id"] != "fixture" {
 		t.Fatalf("B model = %v", m)
 	}
 	if len(f.exec.ended) != 2 {
@@ -162,7 +162,7 @@ func TestNodesFailBeforeStartingAnAgent(t *testing.T) {
 	cases := map[string]struct{ agent, kind string }{
 		"unknown agent":       {`{"executor":{"agentCli":"official/ora-space.codex","modelId":"x"},"prompt":"hi"}`, "missing_agent_ref"},
 		"no agent":            {`{"prompt":"hi"}`, "missing_agent_ref"},
-		"unassigned template": {`{"executor":{"agentCli":"official/ora-space.claude"},"prompt":"{{#start.topic#}}"}`, "prompt_template"},
+		"unassigned template": {`{"executor":{"agentCli":"official/ora-space.claude","modelId":"messages:fixture"},"prompt":"{{#start.topic#}}"}`, "prompt_template"},
 	}
 	f := newFixture(t)
 	for name, c := range cases {
@@ -400,8 +400,8 @@ func TestLifecycleAuthorizesAndTranslatesRefusals(t *testing.T) {
 // parallelAgents fans Start out to two Agents; v2 executes them one at a time.
 const parallelAgents = `{"nodes":[
  {"id":"start","data":{"kind":"start"}},
- {"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"A"}}},
- {"id":"b","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"B"}}}
+ {"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"A"}}},
+ {"id":"b","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"B"}}}
 ],"edges":[{"source":"start","target":"a"},{"source":"start","target":"b"}]}`
 
 func TestQueuedSiblingOfAFailedNodeNeverStarts(t *testing.T) {
@@ -433,7 +433,7 @@ func TestRefusedStartForgetsTheStarter(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	graph := `{"nodes":[{"id":"start","data":{"kind":"start","inputVariables":[{"name":"topic","valueType":"string","required":true}]}},` +
-		`{"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"{{#start.topic#}}"}}}],` +
+		`{"id":"a","data":{"kind":"agent","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"{{#start.topic#}}"}}}],` +
 		`"edges":[{"source":"start","target":"a"}]}`
 	runID := f.run(t, graph, nil)
 	var invalid *server.WorkflowRunInputInvalid
@@ -466,11 +466,11 @@ func TestRefusedStartForgetsTheStarter(t *testing.T) {
 // Aggregator joins whichever answered.
 const reviewBranches = `{"nodes":[
  {"id":"start","data":{"kind":"start"}},
- {"id":"review","data":{"kind":"agent","title":"评审","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"评审：{{#start.input#}}",
+ {"id":"review","data":{"kind":"agent","title":"评审","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"评审：{{#start.input#}}",
   "outputContract":{"type":"structured","schema":{"type":"object","properties":{"approved":{"type":"boolean"}},"required":["approved"]}}}}},
  {"id":"cond","data":{"kind":"condition","cases":[{"id":"ok","logic":"and","conditions":[{"variableSelector":["review","structured_output","approved"],"operator":"is","value":true}]}]}},
- {"id":"ship","data":{"kind":"agent","title":"发布","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"发布"}}},
- {"id":"fix","data":{"kind":"agent","title":"返工","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode"},"prompt":"返工"}}},
+ {"id":"ship","data":{"kind":"agent","title":"发布","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"发布"}}},
+ {"id":"fix","data":{"kind":"agent","title":"返工","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"返工"}}},
  {"id":"join","data":{"kind":"aggregator","aggregatorConfig":{"variables":[["ship","output"],["fix","output"]]}}},
  {"id":"out","data":{"kind":"output","outputs":[{"name":"result","variableSelector":["join","output"]}]}}
 ],"edges":[{"source":"start","target":"review"},{"source":"review","target":"cond"},

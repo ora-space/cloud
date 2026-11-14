@@ -56,6 +56,16 @@ describe('unappliedAgentSettings', () => {
 })
 
 describe('RunActV2Execution', () => {
+  it('shows the persisted model for a matched executor without a fallback notice', () => {
+    view(<RunActV2Execution config={config()} attempt={{
+      executor: { id: 'selected', agentId: 'ora/opencode', name: 'OpenCode', pluginVersion: '' },
+      model: { id: 'actual-model', name: 'Actual Model', requested: 'actual-model', fallback: false },
+    }} />)
+    expect(screen.getByLabelText('实际执行')).toHaveTextContent('OpenCode · Actual Model')
+    expect(screen.getByLabelText('实际执行')).not.toHaveTextContent('默认模型')
+    expect(screen.getByLabelText('实际执行')).not.toHaveTextContent('claude-sonnet-5-5')
+  })
+
   it('shows the executor and model the attempt ran on and what v2 did not apply', () => {
     view(
       <RunActV2Execution

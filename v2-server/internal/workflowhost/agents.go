@@ -363,7 +363,7 @@ func completionKeys(r execution.Result, ex resolvedExecutor, cfg workflow.AgentC
 		},
 		"model": map[string]any{
 			"id": ex.executor.Model.ID, "name": ex.executor.Model.Name,
-			"requested": cfg.ModelID, "fallback": ex.fallback,
+			"requested": cfg.ModelID, "fallback": false,
 		},
 		"unapplied": unapplied,
 		"skills":    cfg.Skills,
@@ -373,12 +373,11 @@ func completionKeys(r execution.Result, ex resolvedExecutor, cfg workflow.AgentC
 
 type resolvedExecutor struct {
 	executor execution.Executor
-	fallback bool
 }
 
 // resolveExecutor maps the node's agentCli to an installed executor's AgentID and its modelId to
-// one of that Agent's models by ID or name. An unknown model falls back to the Agent's first
-// (default) executor and says so; an unknown Agent fails the node like desktop's missing ref.
+// one of that Agent's models by ID or name. An unknown model fails with desktop's
+// model-not-found error; an unknown Agent keeps the existing missing-ref failure.
 func (h *Host) resolveExecutor(scope execution.Scope, cfg workflow.AgentConfig) (resolvedExecutor, *workflow.Failure) {
 	if cfg.AgentCLI == "" {
 		return resolvedExecutor{}, &workflow.Failure{Kind: workflow.FailureMissingAgentRef, Message: "the node selects no Agent"}
@@ -403,7 +402,11 @@ func (h *Host) resolveExecutor(scope execution.Scope, cfg workflow.AgentConfig) 
 	if first == nil {
 		return resolvedExecutor{}, &workflow.Failure{Kind: workflow.FailureMissingAgentRef, Message: fmt.Sprintf("agent %s is not available in v2", cfg.AgentCLI)}
 	}
-	return resolvedExecutor{executor: *first, fallback: true}, nil
+	modelLabel := "model"
+	if cfg.ModelID != "" {
+		modelLabel += " " + cfg.ModelID
+	}
+	return resolvedExecutor{}, &workflow.Failure{Kind: workflow.FailureWorkflowModelNotFound, Message: fmt.Sprintf("%s is not advertised by agent %s", modelLabel, cfg.AgentCLI)}
 }
 
 // publicReason names an execution error by its stable sentinel, never infrastructure detail.

@@ -413,10 +413,14 @@ function WorkflowEditorContent({
       mcps,
       defaultAgentConfig: {
         ...baseCapabilities.defaultAgentConfig,
-        executor: {
-          agentCli: defaultExecutor?.agentCli ?? "",
-          modelId: defaultExecutor?.modelId ?? "",
-        },
+        ...(defaultExecutor === undefined
+          ? {}
+          : {
+              executor: {
+                agentCli: defaultExecutor.agentCli,
+                modelId: defaultExecutor.modelId,
+              },
+            }),
         // Roles are optional; a new agent node starts with no role selected.
         roleId: "",
         mcps: [],
@@ -432,6 +436,7 @@ function WorkflowEditorContent({
   ]);
   const agentModelsLoading =
     capabilitiesOverride === undefined && agentModelsCatalog.isLoading;
+  const availableAgentModels = agentModelsCatalog.agentModels;
   const agentModelsError =
     capabilitiesOverride === undefined && agentModelsCatalog.isError;
   const agentCatalogsLoading = agentsQuery.isPending || skillsQuery.isPending;
@@ -607,8 +612,8 @@ function WorkflowEditorContent({
   ) {
     const parsed = parseWorkflowGraphWithReport(draftQuery.data.draft.graph);
     const envelope = parsed.envelope;
-    // Keep persisted choices intact, including unavailable models. The inspector asks
-    // the user to reselect instead of silently rewriting a saved executor.
+    // Persisted drafts may reference a model that is no longer available. Keep the
+    // selected CLI stable and only substitute a discovered model for that same CLI.
     // Agent nodes without a contract (legacy prompt/model graphs folded into Agent
     // on parse) get the default executor so the inspector stays editable.
     const nodes = normalizeWorkflowNodeAgentConfigs(
@@ -624,7 +629,41 @@ function WorkflowEditorContent({
           },
         };
       }),
-    );
+    ).map((node) => {
+      if (node.data.kind !== "agent" || node.data.agentConfig === undefined) {
+        return node;
+      }
+      if (
+        capabilitiesOverride !== undefined ||
+        availableAgentModels.length === 0
+      ) {
+        return node;
+      }
+      const { agentCli, modelId } = node.data.agentConfig.executor;
+      if (
+        availableAgentModels.some(
+          (model) => model.agentCli === agentCli && model.modelId === modelId,
+        )
+      ) {
+        return node;
+      }
+      const modelForCli = availableAgentModels.find(
+        (model) => model.agentCli === agentCli,
+      );
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          agentConfig: {
+            ...node.data.agentConfig,
+            executor: {
+              agentCli,
+              modelId: modelForCli?.modelId ?? modelId,
+            },
+          },
+        },
+      };
+    });
     const hydratedWorkflow: DemoWorkflow = {
       id: draftQuery.data.workflow.id,
       name: draftQuery.data.workflow.name,
