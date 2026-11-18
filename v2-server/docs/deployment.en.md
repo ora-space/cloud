@@ -50,8 +50,12 @@ Keep configuration and secrets in protected process-manager configuration, outsi
 - `V2_PUBLIC_URL`: public HTTPS address; configure `V2_IDAAS_BASE_URL`, `V2_IDAAS_CLIENT_ID` and
   `V2_IDAAS_CLIENT_SECRET` as specified by A6. This build does not yet support IDaaS login.
 - `V2_DATABASE_URL`: dedicated PostgreSQL connection with required TLS and least privilege.
-- `V2_ADDR`: HTTP listener, reachable only through the HTTPS termination entrypoint. HTTPS is
-  mandatory; this build does not provide HTTPS termination configuration.
+- `V2_ADDR`: plaintext HTTP listener reachable only from the enterprise HTTPS termination entrypoint.
+  Bind `127.0.0.1` (for example `127.0.0.1:8090`) when the entrypoint runs on the same host, or bind an
+  intranet address and restrict access with a host firewall so only the entrypoint host can connect when
+  they run on separate hosts. This intranet hop between the entrypoint and `V2_ADDR` is plaintext HTTP;
+  v2-server does not configure TLS itself, the offline archive bundles no reverse proxy, and `V2_ADDR`
+  must never be exposed directly as a user entrypoint.
 - `V2_DATA_DIR`: an absolute persistent directory such as `/srv/ora/data`. Neither it nor any parent
   may be writable by group or others. Do not use `/tmp`. Prefer mode `0700` owned by the service account.
 - `V2_MARKET_CREDENTIAL_KEY`: persist a stable 32-byte Base64-encoded key in the format required by
@@ -75,10 +79,21 @@ skips development presets, demo preparation and demo warming; this build blocks 
 because it does not provide IDaaS login.
 
 Install enterprise CAs in the host system trust store using your distribution's enterprise process.
-Git and Go HTTPS use system CAs. Never disable certificate verification. HTTPS termination belongs
-before the Cloud HTTP listener. Verify secure cookies and callback URLs for deployment. Derive
-public URLs only from configuration and do not trust forwarding headers. This guide does not
-choose a proxy or certificate management solution.
+Git and Go HTTPS use system CAs. Never disable certificate verification.
+
+HTTPS is terminated by the enterprise's existing entrypoint (gateway or reverse proxy); v2-server does
+not configure TLS itself and the offline archive bundles no reverse proxy. Derive public URLs only from
+`V2_PUBLIC_URL` and do not trust forwarding headers. The enterprise entrypoint must satisfy all of the following:
+
+- **Verbatim forwarding**: forward requests as-is per `V2_PUBLIC_URL` to `V2_ADDR` without rewriting
+  the `Host` header or path prefix.
+- **Unbuffered SSE and long-request timeouts**: disable response buffering on SSE endpoints (`v2-server`
+  serves chat, workflow, and node event streams as `text/event-stream`), and set the entrypoint idle
+  timeout and total request limit above the long model request limits (`V2_MODEL_IDLE_TIMEOUT` defaults
+  to `2m`, `V2_MODEL_MAX_DURATION` defaults to `30m`; see [the service README](../README.md)).
+- **Request body limit**: allow request bodies at least as large as `v2-server`'s own limits (for example
+  6 MiB for workflow graphs, 2 MiB for skill/role JSON, and 256 KiB for chat requests) without premature truncation.
+- **IDaaS callback consistency**: register the IDaaS callback URL using `V2_PUBLIC_URL`.
 
 ## First intranet acceptance
 
@@ -99,11 +114,12 @@ preflight only and cannot go live. Email login or model fixtures cannot substitu
    record a blocker; do not bypass TLS or relax address checks to proceed. Enter credentials only through
    protected configuration or settings, never in command lines, URLs, screenshots or logs.
 3. On the acceptance instance, migrate and bootstrap the IDaaS administrator according to the target
-   version's instructions, then invite the second employee to sign in and join the team. In the browser,
-   verify that web and `/api` share an origin, the IDaaS callback uses the registered public HTTPS address,
-   and the session cookie has `Secure`, `HttpOnly` and `SameSite=Lax`. Confirm there are no preset demo
-   accounts, projects or content. HTTPS termination connects before Cloud's HTTP listener; the deployment
-   must confirm its termination design. This procedure selects neither direct Cloud TLS nor a reverse proxy.
+   version's instructions, then invite the second employee to sign in and join the team. Access through
+   the enterprise HTTPS entrypoint in the browser and verify that web and `/api` share an origin, the
+   IDaaS callback uses the registered public HTTPS URL `V2_PUBLIC_URL`, and the session cookie carries
+   `Secure`, the `__Host-` prefix, `HttpOnly`, and `SameSite=Lax`. Confirm there are no preset demo
+   accounts, projects or content. Also verify that direct connections to `V2_ADDR` from hosts other than
+   the entrypoint are rejected by the host firewall.
 4. As administrator, add a custom internal HTTPS Git source under Settings → Plugins → Manage markets.
    Enter its exact current repository URL (no redirects), branch, Git username and read-only token.
    Select S3 signed downloads and separately enter the S3 endpoint, bucket, region and AK/SK.
@@ -118,8 +134,10 @@ preflight only and cannot go live. Email login or model fixtures cannot substitu
    repository requiring authentication must still fail explicitly and retain its catalog. Restore correct
    credentials and verify synchronization succeeds again. Leave the normal source untouched; do not change
    S3 keys to mask a Git failure.
-6. Run the installed workflow and complete a conversation on the real project. Verify the actual model,
-   package download and Node execution succeed and that results and history are readable. Record members,
+6. Run the installed workflow and complete a browser conversation (including a longer streaming response)
+   through the enterprise entrypoint on the real project. Verify the actual model, package download and
+   Node execution succeed, chat and node SSE streams render live without entrypoint buffering, long model
+   requests are not cut off by entrypoint timeouts, and results and history are readable. Record members,
    installed plugins, history and an acceptance file on the data volume, then restart only the acceptance
    instance. After login, verify those states and files remain, the key still decrypts source credentials,
    and synchronization succeeds again. Unfinished executions from before restart should be interrupted;
