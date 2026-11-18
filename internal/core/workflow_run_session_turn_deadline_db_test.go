@@ -168,8 +168,8 @@ func TestWorkflowSessionTurnDeadlineResultAfterTheNodeSettledIsKept(t *testing.T
 	if afterStatus != status || afterErr != runErr {
 		t.Fatalf("the late result moved the run to %q error %q; want %q error %q", afterStatus, afterErr, status, runErr)
 	}
-	if afterVersion != version {
-		t.Fatalf("the late result bumped the version to %d; want %d", afterVersion, version)
+	if afterVersion != version+1 {
+		t.Fatalf("the late stop evidence settles the independent skipped delivery once: version=%d want=%d", afterVersion, version+1)
 	}
 	if jsonText(afterStates) != jsonText(states) {
 		t.Fatalf("the late result rewrote the node states:\n got %v\nwant %v", afterStates, states)

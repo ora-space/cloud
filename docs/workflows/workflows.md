@@ -170,29 +170,35 @@ WorkflowRun 由 Cloud server 里的调度循环推进（`AdvanceWorkflowRunsOnce
   `workflow.session_turn_timeout`（默认 2 小时）后节点以 `session_turn_deadline_exceeded` 失败，运行进入终态。这也是 Cloud 自己下的
   判断，按执行行计时（重试产生的新执行行重新计时），只使用数据库时钟，回放、重启和副本推进都不会重置。判断顺序是结果优先：
   已提交的结果按它自己的原因结算，Node 不可达仍报 `node_unavailable`，两者都不成立时才轮到窗口；窗口把运行带入终态之后才到达的结果
-  保留在执行行上，不改写已经终态的运行。运行进入终态后，Cloud 声明删除这次运行的 Workspace。第一阶段这个会话没有 Git Server 访问（读写都返回 `403`），它的 Workspace 也不进 IssueRun 会话的 Workspace
-  目录，见 [Git Server](../repositories/git-server.md)。
+  保留在执行行上，不改写已经终态的运行。运行进入终态后先进入成果保存屏障，保存与释放分别记录，见下文。
 - **Agent 节点重试由冻结在节点上的 `agentConfig.retry` 决定。** 只有会话以 `agent_failed` 结束、策略启用且预算未用完时才重试：预算是
   `maxRetries + 1` 次尝试（`maxRetries` 取值 0–5，默认 2），下一次尝试在 `initialDelaySeconds × 2^(n-1)` 之后开始（`initialDelaySeconds`
   取值 0–300，默认 10，单次等待上限 600 秒）。等待期间节点提交 `retrying`：运行仍是 `running`，节点保留失败尝试的 `startedAt`、
   `error` 和 `sessionEndReason`，写入数据库时钟计算的 `retryAt` 并清空 `finishedAt`；它继续占用运行唯一的会话位置，直到 `retryAt` 到达才启动
   下一次尝试。新尝试使用自己的执行身份（`workflow_node_attempt`），上一次尝试的结果和结束请求不会被它复用。预算用完、策略关闭或原因不在
-  `agent_failed` 内时，节点以最后一次的原因失败，运行进入终态并释放 Workspace。发布时 `agentConfig.retry` 必须是完整对象，缺失或为 `null`
+  `agent_failed` 内时，节点以最后一次的原因失败，运行进入终态并进入成果保存屏障。发布时 `agentConfig.retry` 必须是完整对象，缺失或为 `null`
   表示默认策略，未知键忽略；已冻结的历史快照不重新校验，无法解析的策略按默认值执行。
 - **工作流会话是单回合的，结束由 Cloud 决定。** 初始回合的 `turnEnded` 回执（`stop_reason` 不是 `cancelled`）到达后，调度器通过既有的 `EndSession`
   命令让 Node 结束会话；Node 上报的会话执行结果仍是节点终态的唯一证据。结束请求放出后超过确认窗口仍没有会话终态时，节点以
-  `session_end_deadline_exceeded` 失败，运行进入终态并释放 Workspace——不会再有永久 `running` 的运行。
+  `session_end_deadline_exceeded` 失败，运行进入终态并进入成果保存屏障——不会再有永久 `running` 的运行。
 - **取消请求由调度器结算，并且有界。** 记录请求后，`pending` 的运行不再启动：不写 `started_at`、不校验图、不创建 Workspace，直接以 `cancelled` 结束；
   `running` 的运行不再派发新节点。正在执行的会话，已提交的结果保留为节点自己的终态（那个结果就是实际跑出来的东西），运行仍以 `cancelled` 结束；还没有结果时，
   调度器复用该节点已有的结束请求（没有就放出 `end_session{cancelled}`），等待上限仍是 `issue_runs.agent_end_confirm_timeout`，超过后节点和运行都以
-  `cancelled` 结束；Node 已不可达时取消优先于 `node_unavailable`，同样以 `cancelled` 收尾。每种终态都声明删除运行的 Workspace；请求记录之后才到达的结果
+  `cancelled` 结束；Node 已不可达时取消优先于 `node_unavailable`，同样以 `cancelled` 收尾。每种终态都先保存整次成果，再声明正常释放；请求记录之后才到达的结果
   保留在执行行上，不改写已经终态的运行。
-- **Workspace 的释放是终态之后的独立事实，并且有界。** 运行进入终态（`succeeded`/`failed`/`cancelled`）的同一个事务里，Cloud 在运行行上记录释放状态并声明
-  删除这次运行的 Workspace：没有 Workspace 的运行记为 `not_required`，其余记为 `releasing`。删除操作成功、Workspace 被软删除的同一个事务把它记为 `released`，
-  释放时刻就是那一刻；Workspace 被项目删除等其他路径直接删掉的，调度器按 Workspace 自己的 `deleted_at` 补记为 `released`，不会一直停在 `releasing`。
-  Workspace 仍有存活沙箱、而它的 Node 超过 `issue_runs.delivery_unreachable_after`（默认 30 分钟；未配置时不放弃）没有任何心跳时，调度器放弃这次释放：
-  未完成的删除操作以 `node_unavailable` 失败，运行记为 `abandoned` 并写明原因，Workspace 行保留可查，也不写释放时刻。**只有 `released` 表示 Cloud
-  观察到 Workspace 已被删除**；`abandoned` 永远不会被报告成释放成功，也不会被后续轮次重新声明或重试。重复的删除完成回执和重复的清扫都是无操作。
+- **Workspace 释放以成果保存为前提。** 未保存的工作区保留；保存、执行与实际释放分别记录，详见下节。
+
+## 成果保存与历史归档
+
+执行结果、`delivery` 和 `workspaceRelease` 分别记录，列表和详情均返回这三个事实。运行进入终态后，先撤销会话写资格并等待所有已登记会话停止；确认没有写入会话的运行记 `not_required`，不伪造 Revision。其余运行整次交付一份 Revision，保存成功或核验无改动后才声明正常释放；保存不改变原执行结果。
+
+交付输入冻结全部节点尝试、原 execution ID、同一 checkout、每个历史对象键和不可变交付 ref。Node 保存各会话的原始字节，在主历史对象里存储 `workflow_manifest_v1` 清单；Cloud 在事务外核验 ref、清单身份以及全部对象的大小和 SHA-256，再在一个短事务内登记 Revision、回执和交付结果。历史缺失、错误清单或上传失败不会被当作成功，也不会删除未保存的 Workspace。
+
+失败重试有独立交付工作项和 ref，但不创建第二个逻辑成果。达到已有交付时限后记 `failed` 并保留工作区；未配置存储或 Git Server 时记 `skipped` 并保留工作区。只有 `released` 表示实际删除完成。旧 Node 未声明 `workflow_history_delivery` 时保持等待，升级 Node/Controller 后才能派发新输入。
+
+工作流会话目录含同 Project 的工作流 Workspace、冻结运行名称和归属；目录不参与授权。任务调用和独立运行都从 Project 快照初始化，后续节点与重试复用本次 checkout，不恢复任务前序成果。完整节点日志界面和跨任务交接不属于此保存链路。
+
+契约依据：[整次成果与历史归档 ADR](https://github.com/ora-space/specs/blob/main/decisions/cloud/workflow/20261025-run-owned-git-delivery-and-history.md)。ADR 在实现和真实多节点验收完成前保持 `approved`。
 
 开发夹具（`collaboration.development_fixtures`）会装入一个确定性的运行模拟器，在创建运行时就填好执行轨迹，并在输出里说明没有真实执行；生产环境
 不装它。工作流 IssueRun 通过 `workflow_invocation_ref` 关联同一事务里创建的 WorkflowRun，执行由上面的调度循环推进。

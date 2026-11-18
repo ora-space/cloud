@@ -2,6 +2,8 @@
 
 [English](revisions.en.md) | 中文
 
+本文的单会话交付与续接规则适用于 Agent IssueRun。WorkflowRun 的 Revision 使用互斥的 `workflow_run_id` 归属和显式 `workflow_manifest_v1` 历史类型，完整规则见[工作流成果保存](../workflows/workflows.md#成果保存与历史归档)；不能把清单作为旧 JSONL 读取，也不启用跨任务前序恢复。
+
 Revision 是一次 Agent 运行保存下来的成果：最终提交（Agent 自己的提交之后，Node 可能为剩余未提交的改动追加一个内部快照提交）、
 Node 把最终提交推送到 Project 仓库后得到的**交付 ref**，以及会话 JSONL。代码只经 [Git Server](../repositories/git-server.md)
 交付，会话 JSONL 存在对象存储里。没有任何改动时也登记 Revision，同样推送并登记自己的交付 ref。

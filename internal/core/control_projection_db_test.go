@@ -16,8 +16,9 @@ import (
 // contract declares either: the proto ExecutionRecord has none, and the JSON binding's NodeExecution
 // schema is closed.
 var nodeExecutionInternalColumns = map[string]bool{
-	"workflow_node_id":      true,
-	"workflow_node_attempt": true,
+	"workflow_node_id":         true,
+	"workflow_node_attempt":    true,
+	"workflow_execution_order": true,
 }
 
 // TestControllerExecutionProjectionIsExplicit is the regression guard for the contract break

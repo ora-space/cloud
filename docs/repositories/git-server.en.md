@@ -73,9 +73,7 @@ to this sandbox. On top of that:
 | `agent_session` | `starting` or `running`, no cancellation requested, Thread not ending | Branches under `refs/heads/workspaces/<the certificate's workspaceId>/` (fast-forward rule); the prefix comes from the certificate, never from the request |
 | `deliver_revision` | `delivering` | Create the delivery ref its input fixed, `refs/ora/deliveries/<delivery work item ID>`; also create or fast-forward the input's `workspaceRef`, provided it belongs to the certificate's Workspace |
 
-Plugin executions are always refused and never reach the repository. A WorkflowRun's Agent session is refused too in
-the first phase: grants only cover executions on an IssueRun's run Workspace, so an `agent_session` on a WorkflowRun's
-Workspace gets the same `403`.
+Plugin executions are always refused. A WorkflowRun session is checked against the current run, graph node and attempt on every request: only the running attempt may read its Project repository and fast-forward its own Workspace branches. End requests, cancellation, replaced attempts and generations revoke that grant. Whole-run delivery has an independent create-only grant for its frozen delivery ref; see [workflow delivery](../workflows/workflows.en.md#delivery-and-history-archives).
 
 **Grants for clone executions.** The clone execution of a Workspace operation's `clone` step is read-only and
 valid only while the operation is `running` in the `clone` step: the execution has no result and is not
