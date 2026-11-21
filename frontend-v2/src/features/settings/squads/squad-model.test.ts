@@ -53,7 +53,7 @@ describe('squad members', () => {
     expect(canMaintain(squad({ members: [{ ...member({ userId: 'me', maintainer: true }), endedAt: '2026-10-02T00:00:00Z' }] }), 'me')).toBe(false)
     // Workspace administrators may edit any squad, matching the server's check.
     expect(canMaintain(detail, 'stranger', 'owner')).toBe(true)
-    expect(canMaintain(detail, 'stranger', 'admin')).toBe(true)
+    expect(canMaintain(detail, 'stranger', 'admin')).toBe(false)
     expect(canMaintain(detail, 'stranger', 'member')).toBe(false)
   })
 })

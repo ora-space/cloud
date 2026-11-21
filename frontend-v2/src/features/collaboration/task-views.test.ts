@@ -34,6 +34,14 @@ describe('task views', () => {
     expect(ids(filterTasks(all, 'todo', 'me', new Set(), handled))).not.toContain('squad')
   })
 
+  it('lists a task in review only for whoever can confirm it', () => {
+    const assignedReview = task({ id: 'assigned-review', status: 'review', createdBy: 'lead', assignee: { type: 'human', id: 'me', displayName: '我' } })
+    const ownReview = task({ id: 'own-review', status: 'review', createdBy: 'me', assignee: { type: 'human', id: 'me', displayName: '我' } })
+    const working = task({ id: 'working', status: 'running', createdBy: 'lead', assignee: { type: 'human', id: 'me', displayName: '我' } })
+    expect(ids(filterTasks([assignedReview, ownReview, working], 'todo', 'me'))).toEqual(['own-review', 'working'])
+    expect(ids(filterTasks([assignedReview], 'todo', 'lead'))).toEqual(['assigned-review'])
+  })
+
   it('reads an unknown view as everything', () => {
     expect(viewOf('todo')).toBe('todo')
     expect(viewOf('running')).toBe('all')
@@ -102,6 +110,8 @@ describe('who may send the Agent a turn', () => {
     expect(canCloseTask(assigned, 'me', 'owner')).toBe(true)
     expect(canCloseTask(assigned, 'me', 'member')).toBe(false)
     expect(canCloseTask(assigned, 'me', undefined)).toBe(false)
+    // v2 has no admin role; only the workspace owner stands in for the creator.
+    expect(canCloseTask(assigned, 'me', 'admin')).toBe(false)
 
     expect(boardMove(assigned, 'done', true).ok).toBe(true)
     const refused = boardMove(assigned, 'done', false)

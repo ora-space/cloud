@@ -153,8 +153,11 @@ func TestTaskWorkflowVersionFenceAndClosedDuringPrepare(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, _ := f.store.Task(f.ctx, f.tenant, task.ID)
-	if _, err := f.store.SetTaskStatus(f.ctx, storetest.Access(t, f.store, f.tenant, user), task.ID, "cancelled", current.Version); !errors.Is(err, store.ErrRunActive) {
+	if _, err := f.store.SetTaskStatus(f.ctx, storetest.Access(t, f.store, f.tenant, user), task.ID, "cancelled", current.Version); !errors.Is(err, store.ErrWorkflowActive) {
 		t.Fatalf("manual close while handling=%v", err)
+	}
+	if _, err := f.store.SetTaskStatus(f.ctx, storetest.Access(t, f.store, f.tenant, user), task.ID, "review", current.Version); !errors.Is(err, store.ErrWorkflowActive) {
+		t.Fatalf("submit for review while handling=%v", err)
 	}
 	for _, to := range []string{"pending", "running"} {
 		current, err = f.store.TransitionTaskStatus(f.ctx, f.tenant, task.ID, current.Status, to)

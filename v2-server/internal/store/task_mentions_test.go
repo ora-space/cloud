@@ -117,11 +117,38 @@ func TestMySquadTasks(t *testing.T) {
 		t.Fatalf("outsider in squad = %v %v", ok, e)
 	}
 
+	// Work in progress still waits on the member; once it reaches 待验收 only whoever can confirm it
+	// acts, so it no longer waits on a member who never took part.
+	review := createTask(t, f, owner, store.TaskInput{Title: "补登录页文案", Assignee: &store.TaskAssigneeRef{Type: store.AssigneeSquad, ID: squad.ID}})
+	ownerAccess := storetest.Access(t, f.store, f.tenant, owner)
+	if review, e = f.store.SetTaskStatus(ctx, ownerAccess, review.ID, store.TaskRunning, review.Version); e != nil {
+		t.Fatal(e)
+	}
+	waits := func(user, id string) bool {
+		t.Helper()
+		for _, m := range mine(user) {
+			if m.TaskID == id {
+				return m.Waiting
+			}
+		}
+		t.Fatalf("task %s missing for %s", id, user)
+		return false
+	}
+	if !waits(alice, review.ID) {
+		t.Fatal("a running squad task should wait on a member who has not acted")
+	}
+	if _, e = f.store.SetTaskStatus(ctx, ownerAccess, review.ID, store.TaskReview, review.Version); e != nil {
+		t.Fatal(e)
+	}
+	if waits(alice, review.ID) {
+		t.Fatal("a squad task in review must not wait on a member who cannot confirm it")
+	}
+
 	// A comment answers it for that member, and the task stays theirs.
 	if _, e := f.store.CreateTaskComment(ctx, store.NewTaskComment{TenantID: f.tenant, TaskID: task.ID, AuthorID: alice, CreateKey: "c1", Body: "我来看"}); e != nil {
 		t.Fatal(e)
 	}
-	if got := mine(alice); len(got) != 1 || got[0].Waiting {
-		t.Fatalf("after a comment = %+v", got)
+	if waits(alice, task.ID) {
+		t.Fatalf("after a comment = %+v", mine(alice))
 	}
 }

@@ -70,6 +70,8 @@ func taskFault(w http.ResponseWriter, e error) bool {
 		fault(w, http.StatusBadRequest, "invalid_transition")
 	case errors.Is(e, store.ErrRunActive):
 		fault(w, http.StatusConflict, "run_active")
+	case errors.Is(e, store.ErrWorkflowActive):
+		fault(w, http.StatusConflict, "workflow_active")
 	case errors.Is(e, store.ErrInvalidProject):
 		fault(w, http.StatusBadRequest, "invalid_project")
 	case errors.Is(e, store.ErrInvalidAssignee), errors.Is(e, store.ErrUserUnavailable),

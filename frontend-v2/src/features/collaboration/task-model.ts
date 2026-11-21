@@ -106,6 +106,7 @@ export const runResultLabel = (result: string): string =>
 export function taskRunMessageFor(error: unknown): string {
   switch (codeOf(error)) {
     case 'run_active': return 'Agent 正在执行，等这一轮结束或先停止。'
+    case 'workflow_active': return '工作流正在处理这个任务，结束后任务会自动推进，之后再改状态。'
     case 'run_owned': return '当前运行由别人发起，只有发起人能继续追问；你可以重新执行，用自己的身份开一次新运行。'
     case 'not_agent_task': return '任务还没有指派给 Agent，先在右侧把它指派给一个 Agent。'
     case 'not_assignee': return '任务派给了别人，只有负责人本人能用 Agent 处理。'
@@ -139,7 +140,7 @@ export function taskMoveMessageFor(error: unknown): string {
  * more drag instead of reopening a panel.
  */
 export function boardMoveMessageFor(error: unknown): string {
-  if (statusOf(error) === 409 && codeOf(error) !== 'run_active') return '任务刚被其他人改过，看板已刷新，请再拖一次。'
+  if (statusOf(error) === 409 && codeOf(error) !== 'run_active' && codeOf(error) !== 'workflow_active') return '任务刚被其他人改过，看板已刷新，请再拖一次。'
   return taskMoveMessageFor(error)
 }
 

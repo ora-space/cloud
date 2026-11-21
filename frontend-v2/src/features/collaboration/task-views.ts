@@ -10,7 +10,7 @@ export type TaskView = 'mine' | 'todo' | 'all'
 
 export const TASK_VIEWS: { id: TaskView; label: string; hint: string }[] = [
   { id: 'mine', label: '我的任务', hint: '指派给我和我所在小队的任务' },
-  { id: 'todo', label: '待我处理', hint: '指派给我且未结束的、小队新派来的、我建的等着验收的，以及有人 @ 我还没回复的' },
+  { id: 'todo', label: '待我处理', hint: '指派给我还在处理的、小队新派来的、我建的等着验收的，以及有人 @ 我还没回复的' },
   { id: 'all', label: '全部任务', hint: '工作区里所有任务，全团队可见' },
 ]
 
@@ -22,10 +22,14 @@ export const isAgentRunning = (task: Task): boolean => task.activeRun?.state ===
 
 const finished = (task: Task) => task.status === 'done' || task.status === 'cancelled'
 
+/** Work still in someone's hands: 待验收 waits on whoever can confirm it, not on whoever did it. */
+const inProgress = (task: Task) => task.status === 'pending' || task.status === 'running'
+
 /**
  * The tasks of a view, for the person `me`; a squad narrows any view to the tasks it owns.
  * `mentioned` holds the tasks where someone @-mentioned `me` and is still waiting on a reply;
- * `squadTasks` holds the tasks of `me`'s squads.
+ * `squadTasks` holds the tasks of `me`'s squads. 「待我处理」 lists a task in 待验收 only for its
+ * creator, who can confirm it; its assignee and squad cannot, so it leaves their list.
  */
 export function filterTasks(tasks: Task[], view: TaskView, me: string, mentioned: ReadonlySet<string> = new Set(), squadTasks: SquadTasks = new Map(), squadId?: string | null): Task[] {
   const scoped = squadId ? tasks.filter(t => t.assignee?.type === 'squad' && t.assignee.id === squadId) : tasks
@@ -33,7 +37,7 @@ export function filterTasks(tasks: Task[], view: TaskView, me: string, mentioned
     case 'mine':
       return scoped.filter(t => (t.assignee?.type === 'human' && t.assignee.id === me) || squadTasks.has(t.id))
     case 'todo':
-      return scoped.filter(t => (t.assignee?.type === 'human' && t.assignee.id === me && !finished(t)) || (t.status === 'review' && t.createdBy === me) || mentioned.has(t.id) || squadTasks.get(t.id)?.waiting)
+      return scoped.filter(t => (t.assignee?.type === 'human' && t.assignee.id === me && inProgress(t)) || (t.status === 'review' && t.createdBy === me) || mentioned.has(t.id) || squadTasks.get(t.id)?.waiting)
     default:
       return scoped
   }

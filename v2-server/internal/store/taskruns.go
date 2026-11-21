@@ -657,8 +657,9 @@ func inSquad(ctx context.Context, q dbTX, tenant, squad, user string) (bool, err
 }
 
 // MySquadTask is a task assigned to a squad the caller belongs to. Waiting says the caller has yet
-// to act on it: the task is open, someone else created it, and they have neither commented nor
-// started a run. It is how a squad task reaches each member: it waits on them until they do.
+// to act on it: the task is still being worked (待处理 or 进行中), someone else created it, and they
+// have neither commented nor started a run. It is how a squad task reaches each member: it waits on
+// them until they do. A task in 待验收 waits on whoever can confirm it, never on the squad.
 type MySquadTask struct {
 	TaskID    string `json:"taskId"`
 	SquadID   string `json:"squadId"`
@@ -670,7 +671,7 @@ type MySquadTask struct {
 func (s *Store) MySquadTasks(ctx context.Context, tenant, caller string) ([]MySquadTask, error) {
 	rows, e := s.pool.Query(ctx, `
 		SELECT t.id, q.id, q.name,
-			t.status NOT IN ('done', 'cancelled') AND t.created_by <> $2::uuid
+			t.status IN ('pending', 'running') AND t.created_by <> $2::uuid
 				AND NOT EXISTS (SELECT 1 FROM v2_task_comments c WHERE c.task_id = t.id AND c.author_id = $2::uuid)
 				AND NOT EXISTS (SELECT 1 FROM v2_task_runs r WHERE r.task_id = t.id AND r.started_by = $2::uuid)
 		FROM v2_tasks t

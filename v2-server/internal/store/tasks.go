@@ -35,6 +35,9 @@ var (
 	ErrInvalidAssignee = errors.New("invalid task assignee")
 	// ErrInvalidProject reports a project that does not belong to this workspace.
 	ErrInvalidProject = errors.New("unknown task project")
+	// ErrWorkflowActive reports a manual status move while a workflow is handling the task: the
+	// workflow's settlement owns the status until it ends.
+	ErrWorkflowActive = errors.New("task workflow active")
 )
 
 // TaskAssignee is one typed reference. Identifier carries the plugin identity for agents, in the
@@ -359,7 +362,8 @@ func (s *Store) UpdateTask(ctx context.Context, tenant, id string, in TaskInput)
 // SetTaskStatus moves a task by hand under a version check. Only the lifecycle's legal moves are
 // accepted, so 待验收 cannot be skipped and a finished task cannot silently reopen. Ending the task
 // is limited by canCloseTask; anyone else gets ErrForbidden. While an Agent turn runs the run owns
-// the status, and a manual move returns ErrRunActive.
+// the status, and a manual move returns ErrRunActive; while a workflow handles the task it returns
+// ErrWorkflowActive, so the page can say which of the two to wait for.
 func (s *Store) SetTaskStatus(ctx context.Context, a Access, id, status string, version int64) (Task, error) {
 	var out Task
 	e := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -377,7 +381,7 @@ func (s *Store) SetTaskStatus(ctx context.Context, a Access, id, status string, 
 			return err
 		}
 		if handling {
-			return ErrRunActive
+			return ErrWorkflowActive
 		}
 		if task.ActiveRun != nil && task.ActiveRun.State == TaskRunRunning {
 			return ErrRunActive

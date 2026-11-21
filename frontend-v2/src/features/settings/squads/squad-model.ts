@@ -25,7 +25,7 @@ export function ownMembership(squad: SquadDetail, userId: string): SquadMember |
 }
 
 /** Workspace roles that may edit any squad; they mirror the server's administrator check. */
-export const isWorkspaceAdministrator = (role: string | undefined): boolean => role === 'owner' || role === 'admin'
+export const isWorkspaceAdministrator = (role: string | undefined): boolean => role === 'owner'
 
 /**
  * Whether the signed-in user may edit this squad: workspace administrators may edit any squad,
