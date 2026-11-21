@@ -1,0 +1,268 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Temporary v2 desktop login",
+    "version": "1.0.0",
+    "description": "Ora desktop signs in through the system browser and a loopback redirect with PKCE S256 (RFC 8252). The browser page /desktop/authorize approves with the web session; the desktop exchanges the one-time code for a desktop token and sends it as a bearer token to every route that accepts a session. A request with an Authorization header is judged by that header alone."
+  },
+  "paths": {
+    "/auth/desktop/approve": {
+      "post": {
+        "operationId": "approveDesktopLogin",
+        "tags": [
+          "desktop-login"
+        ],
+        "description": "Approves a desktop login for the signed-in user. Requires the web session cookie and a same-origin Origin; a bearer token is refused. The code in redirectUrl is valid for 2 minutes, once.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopApproval"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send the browser: the loopback redirect URI with code and state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopApproved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_json, invalid_redirect_uri (not http://127.0.0.1:<port>/… or http://[::1]:<port>/…, or carries a query or fragment), invalid_code_challenge (method is not S256 or the challenge is not 43 base64url characters), invalid_state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "origin_mismatch, or web_session_required when called with a bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/desktop/token": {
+      "post": {
+        "operationId": "exchangeDesktopCode",
+        "tags": [
+          "desktop-login"
+        ],
+        "description": "Exchanges an approval's code for a desktop token. The first exchange spends the code whatever its outcome. The token expires after 30 days without use; there is no absolute limit and no rotation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopCodeExchange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The desktop token and the account it belongs to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_json, or invalid_grant: unknown, expired or spent code, wrong verifier or redirect URI, or an account disabled since the approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/desktop/logout": {
+      "post": {
+        "operationId": "logoutDesktop",
+        "tags": [
+          "desktop-login"
+        ],
+        "description": "Revokes the bearer token of this request and nothing else; web sessions and other devices stay signed in. A token already gone is not an error.",
+        "security": [
+          {
+            "desktopToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "401": {
+            "description": "unauthenticated: no well-formed bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "desktopToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "ora_dt_ followed by 43 base64url characters"
+      }
+    },
+    "schemas": {
+      "DesktopApproval": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "redirectUri",
+          "state",
+          "codeChallenge",
+          "codeChallengeMethod"
+        ],
+        "properties": {
+          "redirectUri": {
+            "type": "string",
+            "example": "http://127.0.0.1:53682/callback"
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "codeChallenge": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "enum": [
+              "S256"
+            ]
+          }
+        }
+      },
+      "DesktopApproved": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "redirectUrl"
+        ],
+        "properties": {
+          "redirectUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "DesktopCodeExchange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "codeVerifier",
+          "redirectUri"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "codeVerifier": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 128
+          },
+          "redirectUri": {
+            "type": "string"
+          }
+        }
+      },
+      "DesktopToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token",
+          "user"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^ora_dt_[A-Za-z0-9_-]{43}$"
+          },
+          "user": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "displayName"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "code",
+          "params",
+          "requestId"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

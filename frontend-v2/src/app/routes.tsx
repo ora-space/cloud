@@ -11,6 +11,13 @@ export const routes: RouteObject[] = [
     hydrateFallbackElement: <p className="p-4 text-sm text-muted-foreground">加载中…</p>,
     children: [{ index: true, lazy: async () => ({ Component: (await import('@/features/invite/page')).default }) }],
   },
+  // Ora desktop's sign-in lands here (A6 D6): it needs the browser's session, not a workspace.
+  {
+    path: '/desktop/authorize',
+    element: <SessionGate><Outlet /></SessionGate>,
+    hydrateFallbackElement: <p className="p-4 text-sm text-muted-foreground">加载中…</p>,
+    children: [{ index: true, lazy: async () => ({ Component: (await import('@/features/desktop-authorize/page')).default }) }],
+  },
   {
     path: '/',
     element: <Layout />,

@@ -149,10 +149,20 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// authed resolves the session cookie to a user, answering 401 like Cloud when there is none. A
-// write from another origin is refused before the session is read, whatever the route.
+// authed resolves the caller to a user, answering 401 like Cloud when there is none. A request
+// with an Authorization header is judged by that header alone (A6 D6): a desktop token or 401,
+// never a fallback to the cookie, so the cookie of whoever is signed in to the browser cannot stand
+// in for a missing or revoked token. Without the header, the session cookie decides, and a write
+// from another origin is refused before the session is read, whatever the route; a bearer request
+// needs no such check, because a browser attaches no bearer token on its own.
 func (h *handler) authed(next func(http.ResponseWriter, *http.Request, store.User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			if u, ok := h.bearerUser(w, r); ok {
+				next(w, r, u)
+			}
+			return
+		}
 		if !safeMethod(r.Method) && !h.sameOrigin(r) {
 			fault(w, http.StatusForbidden, "origin_mismatch")
 			return

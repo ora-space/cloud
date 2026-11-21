@@ -127,22 +127,24 @@ type Tenant struct {
 // DemoTenant is the tenant every development login joins.
 const DemoTenant = "演示团队"
 
-// Logout ends the session; ending an unknown one is not an error.
+// Logout ends the web session; ending an unknown one is not an error. It never ends a desktop
+// token, which only desktop logout revokes (A6 D6).
 func (s *Store) Logout(ctx context.Context, token string) error {
-	if _, e := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, hash(token)); e != nil {
+	if _, e := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1 AND kind = 'web'`, hash(token)); e != nil {
 		return fmt.Errorf("delete session: %w", e)
 	}
 	return nil
 }
 
-// SessionUser returns the active user behind a live session, or ErrNotFound. Disabling or
-// deleting the account ends every session at the next request.
+// SessionUser returns the active user behind a live web session, or ErrNotFound. Disabling or
+// deleting the account ends every session at the next request. A desktop token is not a web
+// session: presented as a cookie it is unknown.
 func (s *Store) SessionUser(ctx context.Context, token string) (User, error) {
 	var u User
 	e := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.display_name, u.status, u.version, u.created_at, u.deleted_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = $1 AND s.expires_at > now()
+		WHERE s.token_hash = $1 AND s.kind = 'web' AND s.expires_at > now()
 			AND u.status = 'active' AND u.deleted_at IS NULL`, hash(token)).
 		Scan(&u.ID, &u.DisplayName, &u.Status, &u.Version, &u.CreatedAt, &u.DeletedAt)
 	if errors.Is(e, pgx.ErrNoRows) {

@@ -46,6 +46,9 @@ type Store interface {
 	RemoveMember(ctx context.Context, tenant, user string) error
 	Logout(ctx context.Context, token string) error
 	SessionUser(ctx context.Context, token string) (store.User, error)
+	StartDesktopToken(ctx context.Context, userID string) (string, store.User, error)
+	DesktopTokenUser(ctx context.Context, token string) (store.User, error)
+	RevokeDesktopToken(ctx context.Context, token string) error
 	Tenants(ctx context.Context, userID string) ([]store.Tenant, error)
 	TenantMembers(ctx context.Context, tenant string) ([]store.Member, error)
 	TenantSpaces(ctx context.Context, a store.Access) ([]store.Space, error)
@@ -153,6 +156,9 @@ func newRouter(h *handler) *router {
 	rt.public("POST /auth/login", h.login)
 	rt.public("POST /auth/logout", h.logout)
 	rt.public("GET /auth/callback/{provider}", h.callback)
+	rt.session("POST /auth/desktop/approve", h.approveDesktop)
+	rt.public("POST /auth/desktop/token", h.desktopToken)
+	rt.public("POST /auth/desktop/logout", h.desktopLogout)
 	rt.session("GET /api/v1/me", h.me)
 	rt.session("GET /api/v1/me/tenants", h.tenants)
 	rt.tenant("GET /api/v1/tenants/{tid}/members", h.members)
@@ -285,6 +291,8 @@ type handler struct {
 	patchSlots chan struct{}
 	// attempts holds the redirect logins in flight, between POST /auth/login and the callback.
 	attempts *loginAttempts
+	// desktopCodes holds approved desktop logins until the desktop exchanges their code.
+	desktopCodes *desktopCodes
 }
 
 // newHandler makes omitted dependencies safe without inferring one interface from another.
@@ -300,7 +308,7 @@ func newHandler(s Store, o Options) *handler {
 	if lifetime == nil {
 		lifetime = context.Background()
 	}
-	h := &handler{store: s, opts: o, verdicts: newDecompositionVerdicts(lifetime), patchSlots: make(chan struct{}, maxConcurrentPatches), attempts: newLoginAttempts()}
+	h := &handler{store: s, opts: o, verdicts: newDecompositionVerdicts(lifetime), patchSlots: make(chan struct{}, maxConcurrentPatches), attempts: newLoginAttempts(), desktopCodes: newDesktopCodes()}
 	if cs, ok := s.(chat.Store); ok {
 		h.chats = chat.New(cs, o.Execution, o.Catalog, chat.Options{Reclaims: o.WorkspaceReclaims})
 	}

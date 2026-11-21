@@ -114,6 +114,7 @@ seed 在 [`demo/`](demo/README.md)：`env.go` 是上表和重置、准备本地 
 | `POST /auth/login` | Gateway | 邮箱登录：`email` 必须是预置文件或 owner 邀请过的账号，否则 `403 email_not_invited`，不会自动建用户；成功后设置会话 Cookie（`ora_session`，`V2_PUBLIC_URL` 为 https 时 `__Host-ora_session`），`authorizationUrl` 即 `returnTo`（只接受站内路径）。`V2_LOGIN` 没开的方式返回 `400 unknown_provider`；`Origin` 是别的站点时 `403 origin_mismatch`。只凭邮箱就能登录等于谁都能冒充谁，**仅用于演示环境** |
 | `GET /auth/callback/{provider}` | Gateway | 跳转式登录（`huawei-idaas`）回来的地址：核对登录尝试 Cookie（https 下为 `__Host-ora_login`、`Path=/`，防止兄弟子域种入别人的尝试；http 下为只发往这个路径的 `ora_login`）里的登录尝试（内存里，10 分钟、只能用一次；最多 10000 条，满了挤掉最早的，所以灌满它只会让别人未完成的登录重来，不会拒绝新登录）和 `state`，向提供方换取身份，按 `source`+`subject`（IDaaS 为 `huawei-corp`+`uuid`）找或建账号、刷新显示名，签会话后 303 回到发起登录时的 `returnTo`。失败一律 303 到 `/?login_error=failed\|unavailable\|disabled`，日志只记步骤和对方错误码。`POST /auth/login` 对跳转式方式返回提供方的登录地址，`returnTo` 不出现在其中；回调地址只由 `V2_PUBLIC_URL` 得出 |
 | `POST /auth/logout` | Gateway | 吊销会话，`204`；`Origin` 是别的站点时 `403 origin_mismatch` |
+| `POST /auth/desktop/approve`、`POST /auth/desktop/token`、`POST /auth/desktop/logout` | 契约之外 | desktop 登录，见下文「desktop 登录」 |
 | `GET /api/v1/me` | 契约 | 当前用户；无会话 `401 unauthenticated`。契约禁止额外字段，当前用户的角色从 `GET /api/v1/me/tenants` 的 `role` 读取 |
 | `GET /api/v1/me/tenants` | 契约 | 当前用户所在租户，一页返回全部，`nextCursor` 为空 |
 | `GET /api/v1/tenants/{tid}/members` | 契约 | 当前用户所在工作区成员，一页返回全部，按显示名排序；非成员与非法租户 id 都是 `404 not_found` |
@@ -124,6 +125,8 @@ seed 在 [`demo/`](demo/README.md)：`env.go` 是上表和重置、准备本地 
 | `DELETE /api/v1/tenants/{tid}/spaces/{sid}/plugins` | 契约 | owner 移除 Skill 或工作流选择。Skill 删除整条选择行，立即不再出现在设置页和工作流节点的技能候选里；工作流选择保留 `desiredState=removed` 行；工作流及其历史保留为用户数据。预装 Agent 返回 `409 plugin_runtime_managed`；要求版本与幂等键 |
 
 所有带会话 Cookie 的非 GET/HEAD/OPTIONS 请求先核对 `Origin`（规则见 `V2_PUBLIC_URL`），不符返回 `403 origin_mismatch`；没有 `Origin` 的请求不是页面发出的，照常处理。账号被停用或删除后，它的会话在下一个请求就失效（`401 unauthenticated`）。
+
+带 `Authorization` 头的请求只按这个头认人（A6 D6）：必须是 `Bearer <desktop 令牌>`，否则 `401 unauthenticated`，不会退回去看 Cookie，所以浏览器里登录着的人不能替一个缺失或已吊销的令牌顶上。这类请求不核对 `Origin`：浏览器不会自己带上令牌，不存在跨站代发的风险。凡是接受会话的路由（`session` / `tenant` / `owner` 级）都接受 desktop 令牌，判定的账号、团队和权限与网页会话完全相同。
 
 ## 契约之外
 
@@ -152,6 +155,22 @@ seed 在 [`demo/`](demo/README.md)：`env.go` 是上表和重置、准备本地 
 前端：`/invite/<令牌>` 页预览并「加入」（没有会话先登录，登录后回到这一页）；设置 / 小队的「成员与邀请」（只有 owner 看得到）里生成链接、吊销未用的链接、查看已用记录、移出成员（最后一个管理员不能移出）。
 
 升级已有数据库时，启动会软删除旧开发登录建出的 `dev/demo`「演示用户」，并按 `users.json` 的 `retired` 列表一次性软删除旧预置成员。这些账号的成员记录、小队与对话引用保留，但不再出现在成员页，也不能登录。它们在小队里的成员关系会在每次启动时结束；记录留在库里，但小队详情（包括「已退出」历史）不再列出这些账号，也不计入成员、维护者人数。软删除后账号不会恢复：再邀请同一邮箱返回 `409 user_unavailable`，把它重新写回 `users` 也只会更新名字，既不恢复登录，也不补发 starter skill；`retired` 的清理同样只执行一次，手动恢复的账号不会在下次启动时再被删除。
+
+### desktop 登录
+
+Ora desktop 经系统浏览器和本机回环地址登录（A6 D6，RFC 8252），接口由独立候选契约 [`desktop-login.openapi.json`](desktop-login.openapi.json) 描述，A6 写明路径以正式契约为准：
+
+1. desktop 在 `127.0.0.1`（或 `[::1]`）的系统分配端口上监听，生成 `state` 和 PKCE verifier，用系统浏览器打开 `/desktop/authorize?redirect_uri=http://127.0.0.1:<端口>/<路径>&state=…&code_challenge=…&code_challenge_method=S256`。
+2. 这一页要求网页会话（没有就先按 `V2_LOGIN` 登录，登录后回到这一页），显示「允许 Ora desktop 以 <显示名> 的身份登录？」。用户点「允许」才调 `POST /auth/desktop/approve`。
+3. 浏览器被送回回环地址，带上一次性授权码和 `state`；desktop 用授权码、verifier 和同一个回调地址调 `POST /auth/desktop/token` 换到令牌。
+
+| 路由 | 行为 |
+|---|---|
+| `POST /auth/desktop/approve` | 只接受网页会话：带 `Authorization` 头 `403 web_session_required`（desktop 不能用令牌给自己再签令牌），`Origin` 不符 `403 origin_mismatch`。`redirectUri` 只能是 `http://127.0.0.1:<端口>/<路径>` 或 `http://[::1]:<端口>/<路径>`，不带查询串和 fragment，否则 `400 invalid_redirect_uri`（不收 `localhost`：它要经过 DNS 和 hosts 解析）；`codeChallengeMethod` 必须是 `S256`、`codeChallenge` 是 43 个 base64url 字符，否则 `400 invalid_code_challenge`；`state` 必填、不超过 512 字节。返回 `{redirectUrl}`：回调地址加上 `code` 和 `state` |
+| `POST /auth/desktop/token` | 公开，凭授权码：`{code, codeVerifier, redirectUri}`。授权码只在进程内存，2 分钟有效，第一次兑换不论成败都会用掉；verifier 的 S256 与批准时的 challenge 一致、`redirectUri` 与批准时完全相同，才签令牌。授权码不存在、过期、用过，verifier 或回调不符，或账号在批准后被停用，一律 `400 invalid_grant`。成功 `{token, user: {id, displayName}}`，`Cache-Control: no-store` |
+| `POST /auth/desktop/logout` | 吊销本请求 `Bearer` 头里的这一个令牌，`204`；令牌已不存在也是 `204`。没有合法的 `Bearer` 头 `401`。网页会话和其他设备的令牌不受影响 |
+
+令牌是 `ora_dt_` 加 43 个 base64url 字符，库里和网页会话在同一张 `sessions` 表、只存 SHA-256，`kind` 区分两种：网页会话只认 Cookie、登录后固定 7 天到期；desktop 令牌只认 `Authorization` 头，连续 30 天没用才过期（最近使用时间最多一小时刷新一次，刷新后一小时内的使用不记，所以实际在最后一次使用后 30 天减 1 小时到 30 天之间过期），没有绝对上限、不轮换。网页登出不影响 desktop 令牌，desktop 登出也不影响网页会话。授权码只在内存，最多 10000 条，满了挤掉最早的；重启后进行中的授权要重新点「允许」。
 
 ### 用户技能
 
@@ -966,7 +985,7 @@ npm run e2e -- e2e/workflow-runs.spec.ts e2e/workflow-containers.spec.ts e2e/sch
 真实 PostgreSQL 测试覆盖八个并发请求返回同一个触发、不同触发各自存在、编辑后的快照不变、暂停/版本/时刻拒绝、手动重试身份、按时间倒序与同时间戳并列时的复合游标分页隔离，以及关闭数据库连接后重新读取。
 
 - 登录：`email` 只凭邮箱、没有密码，只认 `users.json` 预设或被邀请过的邮箱，仅用于开发和演示；`huawei-idaas` 是机密客户端的授权码流程，不用 PKCE。进行中的登录只存在进程内存里（10 分钟、单次），重启后要重新登录发起；同一个人用两种方式登录是两个账号，不做账号关联。
-- 会话存在同一个库里，只存 token 的 SHA-256；没有 Gateway 现签的内部 JWT。
+- 会话存在同一个库里，只存 token 的 SHA-256；没有 Gateway 现签的内部 JWT。desktop 令牌和网页会话同表，没有轮换、绝对上限、设备列表或远程吊销（A6 D7）；过期的行不清理，只是不再被认出。
 - 对话与插件市场写请求检查 `Idempotency-Key`；插件市场同时保存成功响应以重放同一选择。其余写请求不检查该头，也没有执行代次隔离。定时任务配置与小队更新使用乐观版本检查，对话的创建和发消息把 `Idempotency-Key` 用作执行的 attempt ID。
 - 小队权限把 workspace `owner` 角色当作工作区管理员；把成员移出工作区（`DELETE /api/v2/tenants/{tid}/members/{uid}`）会同时结束他在本工作区小队里的编组。
 - 空间与插件：每个租户固定一个空间（slug `demo`）。演示团队的叫「演示空间」，开发启动预置账号时创建；`admin-invite` 建出的工作区在第一个人加入时创建，叫「协作空间」，不带演示字样。里面登记两个真实安装、不可从设置页移除的 Agent 插件——`official/ora-space.opencode@0.6.11` 和 `official/ora-space.claude@0.4.5`，即 [`scripts/prepare-node.sh`](scripts/prepare-node.sh) 校验 SHA 后准备、离线包打进去、chat、工作流与定时任务真正加载的那两个，所以登记的版本就是已安装的版本，不是演示数据。目录来自配置的 marketplace Git 仓库，不读取仓库内硬编码条目；解析 `orax.toml`、README 和 logo，校验后事务替换 PostgreSQL 快照，同步失败或没有可见条目时保留上一版。MCP 通过租户安装和配置接口管理。Plugins 页对市场 Agent、Hook、合集等其他类型只浏览，不提供安装或移除（服务端拒绝新建这些选择，返回 `plugin_kind_not_installable`）；系统预装的 Agent 也只读展示「运行时预装」。Skill 就是空间选择本身，写入即可用、删除即移除，项目 Node 只按选择接收安装包，不参与状态确认。工作流插件由 v2-server 下载并校验 `.orax`，在安装事务里导入 `assets/workflows/*.json`、发布 `v1` 并记录来源幂等表；租户已有同名工作流时给新导入的定义加「（插件）」或序号，不改动已有定义；移除只清除选择，不删除工作流、快照或运行历史。安装写入口要求 owner、`Idempotency-Key` 和当前 version。
