@@ -414,3 +414,33 @@ func TestOnlyADecidedEndIsEnding(t *testing.T) {
 		}
 	}
 }
+
+// While the end of an execution is decided but not written yet, it is ending for its own session
+// only: another session asking about the same execution ID is told it is not.
+func TestAnUnwrittenEndIsEndingOnlyForItsSession(t *testing.T) {
+	h := newIPCHarness(t, nil)
+	records := recordExecutions(h)
+	f, one := parkHosted(t, h, h.session("one", "workspace"), nil)
+	_, two := parkHosted(t, h, h.session("two", "workspace-2"), f)
+	writing, written := make(chan struct{}, 1), make(chan struct{})
+	end := h.driver.opts.EndHostExecution
+	h.driver.opts.EndHostExecution = func(ctx context.Context, id, reason string) error {
+		signal(writing)
+		<-written // the end stays unwritten until the checks below are done
+		return end(ctx, id, reason)
+	}
+	f.terminalAs(one, "idle_timeout", "")
+	receiveIPC(t, writing)
+	for _, tc := range []struct {
+		session, execution string
+		want               bool
+	}{
+		{"one", one.ExecutionID, true}, {"two", one.ExecutionID, false}, {"two", two.ExecutionID, false},
+	} {
+		if got := h.driver.HostExecutionEnding(tc.session, tc.execution); got != tc.want {
+			t.Errorf("%s in %s while its end is unwritten: ending = %v", tc.execution, tc.session, got)
+		}
+	}
+	close(written)
+	receiveIPC(t, records.ended)
+}

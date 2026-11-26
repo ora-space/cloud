@@ -132,11 +132,12 @@ func (d *Driver) HostExecutionEnds(sid string) map[string]string {
 }
 
 // HostExecutionEnding reports whether why that execution of the session ended was decided, written
-// or not. Its credentials are void from then on.
+// or not. Its credentials are void from then on. An end not written yet counts only for the session
+// the execution belongs to: another session asking about the same execution ID learns nothing.
 func (d *Driver) HostExecutionEnding(sid, executionID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, unwritten := d.unsettled[executionID]; unwritten {
+	if end, unwritten := d.unsettled[executionID]; unwritten && end.session == sid {
 		return true
 	}
 	a := d.sessions[sid]
