@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wanglongan587/cloud/v2-server/internal/completiontool"
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
@@ -29,6 +28,7 @@ type reportingDriver struct {
 	agents  map[string]*fakeAgent
 	answers []string // what the tool answered, per turn
 	tokens  []string
+	runs    int // turns that reached this driver
 }
 
 // execution is the one execution this driver runs a session in.
@@ -36,6 +36,9 @@ func (d *reportingDriver) execution(sid string) string { return fmt.Sprintf("%p-
 
 func (d *reportingDriver) Run(ctx context.Context, _ execution.Scope, s execution.Session, turn execution.Turn, _ func(context.Context, execution.Event) error) (execution.Result, error) {
 	done := execution.Result{Status: execution.StatusCompleted, AnswerComplete: true, Answer: "做完了", StopReason: "end_turn"}
+	d.mu.Lock()
+	d.runs++
+	d.mu.Unlock()
 	if turn.Host == nil {
 		return done, nil
 	}
@@ -51,16 +54,8 @@ func (d *reportingDriver) Run(ctx context.Context, _ execution.Scope, s executio
 	}
 	d.mu.Unlock()
 	instruction := turn.Host.Instruct()
-	// The node is bound to its session right after Start returned, long before a real Agent calls.
-	nodeRun, _, _ := strings.Cut(turn.Caller.AttemptID, "/")
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if live, err := d.db.WorkflowNodeTurnLive(ctx, nodeRun, s.ID, d.execution(s.ID)); err != nil {
-			d.t.Error(err)
-			break
-		} else if live {
-			break
-		}
-	}
+	// The Agent reports as soon as it has the prompt: the first one reaches it only once the node is
+	// bound to its session (execution.StartRequest.Release).
 	answer := agent.report(instruction.Token)
 	d.mu.Lock()
 	d.answers, d.tokens = append(d.answers, answer), append(d.tokens, instruction.Token)

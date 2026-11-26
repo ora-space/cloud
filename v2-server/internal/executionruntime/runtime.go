@@ -252,6 +252,9 @@ func (s *Service) Start(ctx context.Context, scope execution.Scope, req executio
 	if req.Host != nil && req.Lifetime != execution.LifetimeHeld {
 		return execution.Ref{}, execution.ErrInvalidRequest
 	}
+	if req.Release != nil && req.Caller.Kind != execution.CallerWorkflow {
+		return execution.Ref{}, execution.ErrInvalidRequest
+	}
 	if err := req.MCP.Validate(); err != nil {
 		return execution.Ref{}, err
 	}
@@ -264,15 +267,15 @@ func (s *Service) Start(ctx context.Context, scope execution.Scope, req executio
 		}
 	}
 	req.MCP = req.MCP.Clone()
-	return s.start(ctx, scope, req.Caller, req.Prompt, &req.Target, req.ExecutorID, req.AgentID, req.ModelID, req.Skills, req.MCP, req.Lifetime, req.Host)
+	return s.start(ctx, scope, req.Caller, req.Prompt, &req.Target, req.ExecutorID, req.AgentID, req.ModelID, req.Skills, req.MCP, req.Lifetime, req.Host, req.Release)
 }
 
 // StartModel starts an independent model conversation without creating a directory or Node.
 func (s *Service) StartModel(ctx context.Context, scope execution.Scope, req execution.ModelStartRequest) (execution.Ref, error) {
-	return s.start(ctx, scope, req.Caller, req.Prompt, nil, "", "", req.ModelID, nil, nil, execution.LifetimeTurn, nil)
+	return s.start(ctx, scope, req.Caller, req.Prompt, nil, "", "", req.ModelID, nil, nil, execution.LifetimeTurn, nil, nil)
 }
 
-func (s *Service) start(ctx context.Context, scope execution.Scope, caller execution.Caller, prompt execution.Prompt, target *execution.Target, executorID, agentID, modelID string, skills *execution.Skills, mcp *execution.MCPSelection, lifetime execution.Lifetime, host execution.HostTools) (execution.Ref, error) {
+func (s *Service) start(ctx context.Context, scope execution.Scope, caller execution.Caller, prompt execution.Prompt, target *execution.Target, executorID, agentID, modelID string, skills *execution.Skills, mcp *execution.MCPSelection, lifetime execution.Lifetime, host execution.HostTools, release <-chan struct{}) (execution.Ref, error) {
 	if err := validate(caller, prompt); err != nil {
 		return execution.Ref{}, err
 	}
@@ -361,7 +364,7 @@ func (s *Service) start(ctx context.Context, scope execution.Scope, caller execu
 		s.held[session.ID] = true
 	}
 	turn.Host = host
-	s.launch(scope, session, turn, group)
+	s.launch(scope, session, turn, group, release)
 	return turn.Ref, nil
 }
 
@@ -490,7 +493,7 @@ func (s *Service) Append(ctx context.Context, scope execution.Scope, req executi
 			return execution.Ref{}, publicError(err)
 		}
 		turn.Host = req.Host
-		s.launch(scope, session, turn, group)
+		s.launch(scope, session, turn, group, nil)
 		return turn.Ref, nil
 	}
 }
@@ -522,7 +525,7 @@ func (s *Service) HostExecutionEnding(sid, executionID string) bool {
 }
 
 // launch is called under mu; workers use the backend's lifetime, never an HTTP request context.
-func (s *Service) launch(scope execution.Scope, session execution.Session, turn execution.Turn, group string) {
+func (s *Service) launch(scope execution.Scope, session execution.Session, turn execution.Turn, group string, release <-chan struct{}) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	w := &worker{cancel: cancel, done: make(chan struct{}), ref: turn.Ref, scope: scope, group: group}
 	held := s.held[session.ID]
@@ -562,6 +565,10 @@ func (s *Service) launch(scope execution.Scope, session execution.Session, turn 
 		var recovered, nodeLost bool
 		lifecycle := turn.MCPGeneration != nil || session.MCP != nil && len(session.MCP.Bindings) != 0
 		if session.Target != nil {
+			// A first turn the caller holds back (StartRequest.Release) reaches no Agent until it
+			// is let through; the caller abandoning it, an End, a stop or shutdown ends it as never
+			// started.
+			released := awaitRelease(ctx, release)
 			for attempt := 0; ; attempt++ {
 				s.mu.Lock()
 				recovered = s.recovering[session.ID]
@@ -572,6 +579,8 @@ func (s *Service) launch(scope execution.Scope, session execution.Session, turn 
 					session.Recovery, gone, agentErr = s.recovery(ctx, session, turn)
 				}
 				switch {
+				case !released:
+					result = execution.Result{Status: execution.StatusCancelled, StopReason: "cancelled", NotStarted: true}
 				case gone:
 					// The checkout the Agent worked in no longer exists: nothing can continue it.
 					result = failedResult(ctx, agentErr)
@@ -1241,6 +1250,23 @@ func newID() string {
 	b[8] = (b[8] & 63) | 128
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
+
+// awaitRelease waits for the caller's decision on a held-back turn (StartRequest.Release) and
+// reports whether the turn may go on: only a value lets it through, while the channel's closing
+// abandons it. A ctx that ended first, even together with the release, holds it back. A nil
+// release never holds back.
+func awaitRelease(ctx context.Context, release <-chan struct{}) bool {
+	if release == nil {
+		return true
+	}
+	var released bool
+	select {
+	case _, released = <-release:
+	case <-ctx.Done():
+	}
+	return released && ctx.Err() == nil
+}
+
 func failedResult(ctx context.Context, err error) execution.Result {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return execution.Result{Status: execution.StatusCancelled, StopReason: "cancelled"}
