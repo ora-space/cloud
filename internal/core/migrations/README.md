@@ -81,6 +81,8 @@ SQL 通过 `core/store.go` 的 `embed.FS` 编入二进制。`Store.Migrate` 在�
 | [0067_scheduled_empty_artifacts.sql](0067_scheduled_empty_artifacts.sql) | 产物大小下界改为零，允许空文件登记 |
 | [0068_scheduled_manifest_completeness.sql](0068_scheduled_manifest_completeness.sql) | 保存未列明的拒绝数和遍历截断事实 |
 | [0069_workflow_node_attempt.sql](0069_workflow_node_attempt.sql) | 工作流节点工作项、执行与结束请求的尝试序号 |
+| [0071_workflow_run_delivery.sql](0071_workflow_run_delivery.sql) | WorkflowRun 整次成果归属、历史类型、保存屏障与 Node 能力 |
+| [0072_workflow_dispatch_order.sql](0072_workflow_dispatch_order.sql) | 工作流会话的持久派发顺序，不以墙上时钟推断执行顺序 |
 | [0070_d8_missing_delete_operation.sql](0070_d8_missing_delete_operation.sql) | D8 无原删除操作的显式来源标记与互斥约束 |
 | [0071_scheduled_task_model.sql](0071_scheduled_task_model.sql) | 定时任务可选模型选择 |
 | [0072_scheduled_task_conversation_reasons.sql](0072_scheduled_task_conversation_reasons.sql) | 定时任务接纳的任务对话拒绝原因 |

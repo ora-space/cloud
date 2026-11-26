@@ -53,6 +53,7 @@ message NodeRecord {
   // Dedicated personal-model proxy access was advertised by this Node's handshake.
   bool model_proxy = 9;
   ModelAdapterCapabilities model_adapter = 10;
+  bool workflow_history_delivery = 11;
 }
 
 message RegisterNodeRequest {
@@ -66,6 +67,8 @@ message RegisterNodeRequest {
   // False for older Nodes or Nodes without configured model-access mTLS credentials.
   bool model_proxy = 7;
   ModelAdapterCapabilities model_adapter = 8;
+  // Advertised by the live Node handshake; older Nodes must not receive whole-run input.
+  bool workflow_history_delivery = 9;
 }
 
 // Exact host capability advertised after startup validation, independent of plugin metadata.

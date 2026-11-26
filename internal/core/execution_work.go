@@ -89,13 +89,14 @@ func enqueueExecutionWork(t *transaction, runID, kind string, input, target Obje
 func enqueueWorkflowExecutionWork(t *transaction, runID, kind string, input, target Object, graphNode string, graphAttempt int64, availableAt time.Time) Object {
 	require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND deleted_at IS NULL", runID) != nil, 404, "not_found")
 	require(kind == "agent_session", 400, "invalid_dispatch")
+	require(t.one("SELECT id FROM workflow_runs WHERE id=$1 AND status='running' AND cancel_requested_at IS NULL AND delivery_state='pending'", runID) != nil, 409, "dispatch_conflict")
 	require(input.S("kind") == kind, 400, "invalid_dispatch")
 	require(target.S("workspaceId") != "" && target.S("sandboxInstanceId") != "" && target.S("nodeId") != "", 400, "invalid_dispatch")
 	attempt := graphAttempt
 	if attempt < 1 {
 		attempt = 1
 	}
-	if existing := t.one("SELECT * FROM execution_work WHERE workflow_run_id=$1 AND execution_id IS NULL", runID); existing != nil {
+	if existing := t.one("SELECT * FROM execution_work WHERE workflow_run_id=$1 AND kind=$2 AND execution_id IS NULL", runID, kind); existing != nil {
 		require(existing.S("kind") == kind && existing.S("workflowNodeId") == graphNode && existing.N("workflowNodeAttempt") == attempt && jsonText(existing.O("input")) == jsonText(input) && jsonText(existing.O("target")) == jsonText(target), 409, "dispatch_conflict")
 		return existing
 	}

@@ -149,7 +149,9 @@ func workflowRunSummary(run Object) Object {
 		// exactly what the run executes with, not what the space declares today. Raw pass-through:
 		// an unfrozen run (a row from before 0042, or one whose space declared no plugin) has NULL,
 		// and the API reports that absence as JSON null rather than an empty version string.
-		"pluginVersion": run["pluginVersion"],
+		"pluginVersion":    run["pluginVersion"],
+		"delivery":         Object{"state": run.S("deliveryState"), "error": run.S("deliveryError"), "revisionId": run["deliveryRevisionId"], "startedAt": run["deliveryStartedAt"], "settledAt": run["deliverySettledAt"]},
+		"workspaceRelease": Object{"state": run.S("workspaceReleaseState"), "error": run.S("workspaceReleaseError"), "releasedAt": run["workspaceReleasedAt"]},
 	}
 }
 
