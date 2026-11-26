@@ -585,11 +585,14 @@ func TestDriverIPCStopOfARefusedSubmissionKeepsTheSession(t *testing.T) {
 	})
 	h.turnCancel.Store(true)
 	h.driver.mcpRefreshWait = time.Minute
-	h.driver.opts.ReadMCPTarget = func(_ context.Context, _ execution.Scope, _ string, _ *execution.MCPSelection, known int64) (*execution.MCPTarget, error) {
+	h.driver.opts.ReadMCPTarget = func(ctx context.Context, _ execution.Scope, _ string, _ *execution.MCPSelection, known int64) (*execution.MCPTarget, error) {
 		if known == -1 {
 			return &execution.MCPTarget{Configured: *ipcMCP()}, nil
 		}
-		if refuse.Load() {
+		// Only the refused turn's own refresh fails: the session's MCP watcher (followMCP) reads
+		// in the background too, under the project's context, and its read must not pass for
+		// the refresh the stop below waits for.
+		if refuse.Load() && ctx.Value(refusedTurn{}) != nil {
 			signal(failedRead)
 			return nil, execution.ErrUnavailable
 		}
@@ -602,7 +605,11 @@ func TestDriverIPCStopOfARefusedSubmissionKeepsTheSession(t *testing.T) {
 		done := make(chan ipcRunOutcome, 1)
 		go func() {
 			turn := execution.Turn{Ref: execution.Ref{SessionID: session.ID, TurnID: id}, Prompt: execution.TextPrompt(id), MCPGeneration: new(int64)}
-			result, err := h.driver.Run(ctx, h.scope, session, turn, discardIPCEvent)
+			runCtx := ctx
+			if id == "refused" {
+				runCtx = context.WithValue(ctx, refusedTurn{}, true)
+			}
+			result, err := h.driver.Run(runCtx, h.scope, session, turn, discardIPCEvent)
 			done <- ipcRunOutcome{result, err}
 		}()
 		return done
@@ -637,6 +644,9 @@ func TestDriverIPCStopOfARefusedSubmissionKeepsTheSession(t *testing.T) {
 		t.Fatalf("commands after the stop = %v", sent)
 	}
 }
+
+// refusedTurn marks the context of the turn whose submission Node refuses.
+type refusedTurn struct{}
 
 // A submission Node refused and the driver then sent again (the MCP refresh came) is Node's turn
 // again: a stop must reach Node as CancelTurn, never end the turn locally while Node runs it.
