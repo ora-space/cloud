@@ -29,9 +29,9 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
  const editable=editableDraft(draft,task)
  const workflows=data.workflows??[]
  const chosen=workflows.find(w=>w.id===draft.workflowId)
- // The hint must read the graph the trigger will run: the latest publication while following it, otherwise the snapshot the task is pinned to, which a later publication does not change.
- const pinnedSnapshotId=draft.kind==='workflow'&&draft.versionPolicy!=='latest'?draft.snapshotId:undefined
- const workflowHasPersonalSkills=useWorkflowHasPersonalSkills(draft.kind==='workflow'?data.tenantId:undefined,draft.kind==='workflow'?draft.workflowId:undefined,pinnedSnapshotId)
+ // The hint reads the graph a save freezes, the version the field hint names: for a fixed task the snapshot the catalog lists now, whatever the task was pinned to before; while following the latest release, the current publication.
+ const savedSnapshotId=draft.kind==='workflow'&&draft.versionPolicy!=='latest'?chosen?.snapshotId:undefined
+ const workflowHasPersonalSkills=useWorkflowHasPersonalSkills(draft.kind==='workflow'?data.tenantId:undefined,draft.kind==='workflow'?draft.workflowId:undefined,savedSnapshotId)
  // The version a save freezes is the one published now, which may differ from the one frozen before; a snapshot belongs to one workflow, so choosing another drops it.
  const workflowHint=draft.versionPolicy==='latest'?'每次触发时使用最新发布版本；历史运行始终保留当次实际使用的快照。':!chosen?'只列出已发布的工作流。':draft.snapshotId&&draft.snapshotId!==chosen.snapshotId?`当前固定的是旧版本，保存后改为生效版本 ${chosen.version}。`:`保存时固定生效版本 ${chosen.version}；之后发布的新版本要重新保存任务才会使用。`
  function submit(event:FormEvent<HTMLFormElement>){

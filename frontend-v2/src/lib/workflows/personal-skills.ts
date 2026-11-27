@@ -107,9 +107,9 @@ export function graphHasEnabledPersonalSkills(graph: string | undefined | null):
 }
 
 /**
- * Checks whether the graph a launch will run enables any personal Skill: the published graph by
- * default, or the snapshot `snapshotId` names when the caller pins one (a schedule fixed to a
- * version keeps running that snapshot after later publications). Failures fall back to `false` so
+ * Checks whether a graph enables any personal Skill: the published graph by default, or the
+ * snapshot `snapshotId` names when the caller fixes one (the schedule form reads the snapshot its
+ * save will freeze, which a later publication changes). Failures fall back to `false` so
  * non-blocking visibility copy never blocks launching or configuring a workflow.
  */
 export function useWorkflowHasPersonalSkills(
