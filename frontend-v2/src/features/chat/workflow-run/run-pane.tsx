@@ -488,7 +488,7 @@ function RunWorkspace({ tenantId, run, readOnly, hostedWorkspace, leading, refre
         unsupportedNodes={unsupportedNodes}
         analyzing={preflight.analyzing}
         analysisFailed={preflight.failed}
-        hasPersonalSkills={hasEnabledPersonalSkills(run.definitionSnapshot.nodes)}
+        hasPersonalSkills={hasEnabledPersonalSkills(run.definitionSnapshot)}
         busy={busy}
         onOpenChange={setStartOpen}
         onStart={async (prompt, variables) => {

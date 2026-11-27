@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import * as workflowsApi from '@/lib/workflows/api/generated'
 import { isTerminalActionRejection, reasonText, scheduleError } from './runtime'
 import { ScheduleForm } from './schedule-form'
 
-vi.mock('@/lib/workflows/api/generated', () => ({ getWorkflow: vi.fn().mockResolvedValue({ published: null }) }))
+vi.mock('@/lib/workflows/api/generated', () => ({ getWorkflow: vi.fn().mockResolvedValue({ published: null }), getWorkflowSnapshot: vi.fn().mockResolvedValue({ snapshot: null }) }))
 
 it('validates weekly scheduling and accepts unscoped chat', async () => {
   const user = userEvent.setup()
@@ -122,4 +122,36 @@ it('shows the personal Skill team visibility hint when a scheduled workflow refe
   expect(scheduleError(err, 'fallback')).toBe(expected)
   expect(isTerminalActionRejection(err)).toBe(true)
  }
+})
+
+it('reads the snapshot a fixed task is pinned to, not the latest publication, for the personal Skill hint', async () => {
+ const agentWithSkill=(skillId:string,enabled:boolean)=>JSON.stringify({nodes:[{id:'start',type:'workflow',position:{x:0,y:0},data:{kind:'start'}},{id:'a1',type:'workflow',position:{x:0,y:0},data:{kind:'agent',title:'审查',agentConfig:{skills:[{skillId,enabled}]}}}],edges:[{source:'start',target:'a1'}]})
+ // The pinned v1 enabled a personal Skill; v2 (now published) disabled it.
+ vi.mocked(workflowsApi.getWorkflowSnapshot).mockResolvedValueOnce({snapshot:{id:'snap-1',workflowId:'wf',version:'v1',createdAt:0,updatedAt:0,graph:agentWithSkill('my-personal-skill',true)}} as never)
+ vi.mocked(workflowsApi.getWorkflow).mockResolvedValueOnce({published:{id:'snap-2',workflowId:'wf',version:'v2',createdAt:0,updatedAt:0,graph:agentWithSkill('my-personal-skill',false)}} as never)
+ const task={id:'schedule',name:'固定版本',projectId:'p',target:{kind:'workflow' as const,workflowId:'wf',snapshotId:'snap-1',input:'整理'},rule:{kind:'daily' as const,time:'09:00',days:[1],hours:6,timezone:'Asia/Shanghai'},enabled:true,createdAt:'2026-11-01T00:00:00Z',runs:[]}
+ const data={tenantId:'tenant',projects:[{id:'p',name:'Demo',description:''}],workflows:[{id:'wf',name:'带技能流程',version:'v2',snapshotId:'snap-2'}],available:{projects:true,models:true,agents:true,workflows:true}}
+ render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><ScheduleForm task={task} onSave={()=>{}} onCancel={()=>{}} data={data}/></QueryClientProvider>)
+ expect(await screen.findByText('运行时读取发起人同名的个人 Skill，其内容在节点会话中对团队可见。')).toBeInTheDocument()
+ expect(workflowsApi.getWorkflowSnapshot).toHaveBeenCalledWith('tenant','wf','snap-1',undefined,expect.anything())
+ expect(workflowsApi.getWorkflow).not.toHaveBeenCalled()
+})
+
+it('drops the pinned snapshot when another workflow is chosen, so the hint follows the new publication', async () => {
+ const user=userEvent.setup()
+ const agentWithSkill=()=>JSON.stringify({nodes:[{id:'start',type:'workflow',position:{x:0,y:0},data:{kind:'start'}},{id:'a1',type:'workflow',position:{x:0,y:0},data:{kind:'agent',title:'审查',agentConfig:{skills:[{skillId:'my-personal-skill',enabled:true}]}}}],edges:[{source:'start',target:'a1'}]})
+ vi.mocked(workflowsApi.getWorkflowSnapshot).mockReset().mockResolvedValue({snapshot:{id:'snap-1',workflowId:'wf-a',version:'v1',createdAt:0,updatedAt:0,graph:JSON.stringify({nodes:[],edges:[]})}} as never)
+ vi.mocked(workflowsApi.getWorkflow).mockReset().mockResolvedValue({published:{id:'snap-b2',workflowId:'wf-b',version:'v2',createdAt:0,updatedAt:0,graph:agentWithSkill()}} as never)
+ const task={id:'schedule',name:'固定版本',projectId:'p',target:{kind:'workflow' as const,workflowId:'wf-a',snapshotId:'snap-1',input:'整理'},rule:{kind:'daily' as const,time:'09:00',days:[1],hours:6,timezone:'Asia/Shanghai'},enabled:true,createdAt:'2026-11-01T00:00:00Z',runs:[]}
+ const data={tenantId:'tenant',projects:[{id:'p',name:'Demo',description:''}],workflows:[{id:'wf-a',name:'甲',version:'v1',snapshotId:'snap-1'},{id:'wf-b',name:'乙',version:'v2',snapshotId:'snap-b2'}],available:{projects:true,models:true,agents:true,workflows:true}}
+ render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><ScheduleForm task={task} onSave={()=>{}} onCancel={()=>{}} data={data}/></QueryClientProvider>)
+ await waitFor(()=>expect(workflowsApi.getWorkflowSnapshot).toHaveBeenCalledWith('tenant','wf-a','snap-1',undefined,expect.anything()))
+ expect(screen.queryByText('运行时读取发起人同名的个人 Skill，其内容在节点会话中对团队可见。')).not.toBeInTheDocument()
+ await user.selectOptions(screen.getByLabelText('工作流'),'wf-b')
+ expect(await screen.findByText('运行时读取发起人同名的个人 Skill，其内容在节点会话中对团队可见。')).toBeInTheDocument()
+ expect(workflowsApi.getWorkflow).toHaveBeenCalledWith('tenant','wf-b',undefined,expect.anything())
+ expect(workflowsApi.getWorkflowSnapshot).toHaveBeenCalledTimes(1)
+ // The stale snapshot is gone from the draft: a save would freeze wf-b's current publication.
+ expect(screen.getByText(/保存时固定生效版本 v2/)).toBeInTheDocument()
+ expect(screen.queryByText(/当前固定的是旧版本/)).not.toBeInTheDocument()
 })

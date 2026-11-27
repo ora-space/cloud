@@ -29,8 +29,10 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
  const editable=editableDraft(draft,task)
  const workflows=data.workflows??[]
  const chosen=workflows.find(w=>w.id===draft.workflowId)
- const workflowHasPersonalSkills=useWorkflowHasPersonalSkills(draft.kind==='workflow'?data.tenantId:undefined,draft.kind==='workflow'?draft.workflowId:undefined)
- // The version a save freezes is the one published now, which may differ from the one frozen before.
+ // The hint must read the graph the trigger will run: the latest publication while following it, otherwise the snapshot the task is pinned to, which a later publication does not change.
+ const pinnedSnapshotId=draft.kind==='workflow'&&draft.versionPolicy!=='latest'?draft.snapshotId:undefined
+ const workflowHasPersonalSkills=useWorkflowHasPersonalSkills(draft.kind==='workflow'?data.tenantId:undefined,draft.kind==='workflow'?draft.workflowId:undefined,pinnedSnapshotId)
+ // The version a save freezes is the one published now, which may differ from the one frozen before; a snapshot belongs to one workflow, so choosing another drops it.
  const workflowHint=draft.versionPolicy==='latest'?'每次触发时使用最新发布版本；历史运行始终保留当次实际使用的快照。':!chosen?'只列出已发布的工作流。':draft.snapshotId&&draft.snapshotId!==chosen.snapshotId?`当前固定的是旧版本，保存后改为生效版本 ${chosen.version}。`:`保存时固定生效版本 ${chosen.version}；之后发布的新版本要重新保存任务才会使用。`
  function submit(event:FormEvent<HTMLFormElement>){
   event.preventDefault()
@@ -74,7 +76,7 @@ export function ScheduleForm({task,onSave,onCancel,data=catalog,saving=false,blo
        <ScheduleField name="note" label="补充说明" hint="可选。每次执行读取原任务的最新描述。"><Textarea {...control('note')} value={draft.note} onChange={e=>patch({note:e.target.value})}/></ScheduleField>
       </>:editable?<>
       <ScheduleField name="workflowId" label="工作流" error={errors.workflowId} hint={workflowHint}>
-       <NativeSelect className="w-full" disabled={unavailable||!data.available?.workflows} value={draft.workflowId} onChange={e=>patch({workflowId:e.target.value})} {...control('workflowId')}>
+       <NativeSelect className="w-full" disabled={unavailable||!data.available?.workflows} value={draft.workflowId} onChange={e=>patch({workflowId:e.target.value,...(e.target.value!==draft.workflowId?{snapshotId:''}:{})})} {...control('workflowId')}>
         <NativeSelectOption value="">{data.available?.workflows?(workflows.length?'请选择已发布的工作流':'暂无已发布的工作流'):'工作流服务尚未就绪'}</NativeSelectOption>
         {draft.workflowId&&!chosen&&<NativeSelectOption value={draft.workflowId} disabled>原工作流暂不可用</NativeSelectOption>}
         {workflows.map(w=><NativeSelectOption key={w.id} value={w.id}>{w.name}（{w.version}）</NativeSelectOption>)}
