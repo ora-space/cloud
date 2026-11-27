@@ -363,7 +363,7 @@ func runWithListener(addr, dbURL string, cleanup, fixture, testFixtures bool, li
 		return e
 	}
 	defer workflowRuns.Close()
-	taskWorkflows := taskworkflow.New(db, taskWorkflowRunner{workflowRunStarter{workflowRuns}})
+	taskWorkflows := taskworkflow.New(db, taskWorkflowRunner{workflowRuns})
 	defer taskWorkflows.Close()
 	taskRuns := taskrun.New(db, runtime, runtime, nil)
 	defer taskRuns.Close()
@@ -650,6 +650,8 @@ func envOr(key, fallback string) string {
 }
 
 // workflowRunStarter lets task decompositions start workflow runs as a person and watch them end.
+// Start translates the host's refusals into the decomposition's own errors, so the decomposition
+// records the reason in the page's words; the host's error stays in the chain for the HTTP layer.
 type workflowRunStarter struct{ host *workflowhost.Host }
 
 func (s workflowRunStarter) Start(ctx context.Context, tenant, user, runID string) error {
@@ -667,7 +669,11 @@ func (s workflowRunStarter) Start(ctx context.Context, tenant, user, runID strin
 		return errors.Join(taskdecomp.ErrWorkflowSkillNotFound, e)
 	case errors.Is(e, server.ErrWorkflowRoleNotFound):
 		return errors.Join(taskdecomp.ErrWorkflowRoleNotFound, e)
-	case errors.Is(e, server.ErrWorkflowRunNotStartable), errors.Is(e, server.ErrWorkflowCompletionToolUnavailable), errors.As(e, &invalidInput):
+	case errors.As(e, &invalidInput):
+		return errors.Join(&taskdecomp.WorkflowInputInvalid{Variable: invalidInput.Variable, Reason: invalidInput.Reason}, e)
+	case errors.Is(e, server.ErrWorkflowCompletionToolUnavailable):
+		return errors.Join(taskdecomp.ErrWorkflowCompletionToolUnavailable, e)
+	case errors.Is(e, server.ErrWorkflowRunNotStartable):
 		return errors.Join(taskdecomp.ErrWorkflowRunNotStartable, e)
 	}
 	return e
@@ -684,8 +690,24 @@ func (s workflowRunStarter) Subscribe(runID string) (<-chan struct{}, func()) {
 	return s.host.Hub().Subscribe(runID)
 }
 
-// taskWorkflowRunner adapts the existing host without changing workflow execution semantics.
-type taskWorkflowRunner struct{ workflowRunStarter }
+// taskWorkflowRunner adapts the existing host without changing workflow execution semantics. It
+// passes the host's errors through unchanged: the task workflow records the refusal as the host
+// worded it and the HTTP layer maps the host's sentinels, so the decomposition's translation does
+// not apply here.
+type taskWorkflowRunner struct{ host *workflowhost.Host }
+
+func (s taskWorkflowRunner) Start(ctx context.Context, tenant, user, id string) error {
+	_, err := s.host.StartRun(ctx, server.WorkflowRunScope{TenantID: tenant, UserID: user}, id)
+	return err
+}
+
+func (s taskWorkflowRunner) Cancel(ctx context.Context, tenant, user, id string) error {
+	return workflowRunStarter{s.host}.Cancel(ctx, tenant, user, id)
+}
+
+func (s taskWorkflowRunner) Subscribe(runID string) (<-chan struct{}, func()) {
+	return workflowRunStarter{s.host}.Subscribe(runID)
+}
 
 func (s taskWorkflowRunner) Prepare(ctx context.Context, tenant, user, id string, input *string, values map[string]json.RawMessage) error {
 	_, err := s.host.UpdateRunInput(ctx, server.WorkflowRunScope{TenantID: tenant, UserID: user}, id, input, values)

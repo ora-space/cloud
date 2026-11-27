@@ -212,6 +212,78 @@ func TestWorkflowStartRefusalWithdrawsTheRun(t *testing.T) {
 	}
 }
 
+// failRejectedApply is the record store with the `rejected` write failing, as a database that
+// goes away between the bridge's refusal and recording it.
+type failRejectedApply struct {
+	RecordStore
+	err error
+}
+
+func (r *failRejectedApply) ApplyOccurrenceEvidence(ctx context.Context, tenant, user, id string, version int64, proof store.ExecutionEvidence) (store.Occurrence, error) {
+	if proof.Event == "rejected" {
+		return store.Occurrence{}, r.err
+	}
+	return r.RecordStore.ApplyOccurrenceEvidence(ctx, tenant, user, id, version, proof)
+}
+
+// A start refusal is reported as that refusal only once the pending run is withdrawn and the
+// trigger is recorded as skipped: the HTTP layer maps the refusal's sentinel to a 400 the page
+// treats as final, which it must not do while the run is still pending or the trigger still open.
+// A failed withdrawal or write is returned as itself, and the coordinator's Reconcile closes the
+// trigger from the run's state on a later tick.
+func TestWorkflowStartRefusalIsReportedOnlyOncePersisted(t *testing.T) {
+	t.Run("withdrawal fails", func(t *testing.T) {
+		f := newWorkflowFixture(t)
+		ctx := context.Background()
+		f.runs.startErr = ErrWorkflowSkillNotFound
+		f.runs.cancelErr = errors.New("connection lost")
+		err := f.workflow.Dispatch(ctx, f.scope, f.occ)
+		if err == nil || errors.Is(err, ErrWorkflowSkillNotFound) || !errors.Is(err, f.runs.cancelErr) {
+			t.Fatalf("dispatch = %v, want the withdrawal error without the refusal's sentinel", err)
+		}
+		if o := f.read(t); o.Status != "starting" || o.Released {
+			t.Fatalf("occurrence = %+v, want it still open for Reconcile", o)
+		}
+		// The store is back: the next tick withdraws the run that never started and frees the slot.
+		f.runs.cancelErr = nil
+		if err := f.workflow.Reconcile(ctx, f.scope, f.occ); err != nil {
+			t.Fatal(err)
+		}
+		o := f.read(t)
+		if o.Status != "skipped" || o.Reason != "execution_not_started" || !o.Released || f.runs.runs[f.occ.ID].Status != store.WorkflowStatusCancelled {
+			t.Fatalf("reconciled occurrence = %+v run=%+v", o, f.runs.runs[f.occ.ID])
+		}
+	})
+
+	t.Run("recording skipped fails", func(t *testing.T) {
+		f := newWorkflowFixture(t)
+		ctx := context.Background()
+		broken := errors.New("local write failed")
+		adapter, err := NewWorkflowAdapter(&failRejectedApply{RecordStore: f.records, err: broken}, f.runs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.runs.startErr = ErrWorkflowSkillNotFound
+		err = adapter.Dispatch(ctx, f.scope, f.occ)
+		if err == nil || errors.Is(err, ErrWorkflowSkillNotFound) || !errors.Is(err, broken) {
+			t.Fatalf("dispatch = %v, want the write error without the refusal's sentinel", err)
+		}
+		// The withdrawal went through; only the record is still open.
+		if o := f.read(t); o.Status != "starting" || o.Released {
+			t.Fatalf("occurrence = %+v, want it still open for Reconcile", o)
+		}
+		if f.runs.runs[f.occ.ID].Status != store.WorkflowStatusCancelled {
+			t.Fatalf("run = %+v, want it withdrawn before the refusal was recorded", f.runs.runs[f.occ.ID])
+		}
+		if err := f.workflow.Reconcile(ctx, f.scope, f.occ); err != nil {
+			t.Fatal(err)
+		}
+		if o := f.read(t); !o.Released {
+			t.Fatalf("occurrence = %+v, want it released by the reconciler", o)
+		}
+	})
+}
+
 func TestWorkflowTargetGoneIsRefused(t *testing.T) {
 	f := newWorkflowFixture(t)
 	f.runs.createErr = store.ErrWorkflowSnapshotNotFound

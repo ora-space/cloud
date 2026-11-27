@@ -45,6 +45,12 @@ var (
 	ErrWorkflowRoleNotFound = errors.New("workflow role not found")
 	// ErrWorkflowSkillNotFound reports a decomposition workflow whose frozen graph enables an unavailable Skill.
 	ErrWorkflowSkillNotFound = errors.New("workflow skill not found")
+	// ErrWorkflowInputInvalid reports a decomposition workflow whose Start node rejected the
+	// decomposition's input, which is only the task's title and description.
+	ErrWorkflowInputInvalid = errors.New("workflow run input invalid")
+	// ErrWorkflowCompletionToolUnavailable reports a decomposition workflow whose interactive Agent
+	// waits for an Agent completion signal the execution bridge cannot hand out.
+	ErrWorkflowCompletionToolUnavailable = errors.New("workflow completion tool unavailable")
 	// ErrWorkflowRunNotStartable reports a decomposition workflow run the workflow host refused to start.
 	ErrWorkflowRunNotStartable = errors.New("workflow run cannot start")
 )
@@ -61,6 +67,18 @@ func (e *WorkflowSkillNotFound) Error() string {
 }
 
 func (e *WorkflowSkillNotFound) Unwrap() error { return ErrWorkflowSkillNotFound }
+
+// WorkflowInputInvalid names the Start variable the workflow host rejected and why.
+type WorkflowInputInvalid struct {
+	Variable string
+	Reason   string
+}
+
+func (e *WorkflowInputInvalid) Error() string {
+	return fmt.Sprintf("%s: %s: %s", ErrWorkflowInputInvalid, e.Variable, e.Reason)
+}
+
+func (e *WorkflowInputInvalid) Unwrap() error { return ErrWorkflowInputInvalid }
 
 // Limits on what a run's output may become: the task routes' title and description limits, and a
 // bound on how many subtasks one decomposition writes.
@@ -218,13 +236,11 @@ func (h *Host) Start(ctx context.Context, a store.Access, taskID, workflowID, ke
 	if e := h.runs.Start(context.WithoutCancel(ctx), tenant, user, run.ID); e != nil {
 		cancel()
 		h.log.Warn("decomposition run did not start", "task", taskID, "run", run.ID, "error", e)
-		cancelCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer stopCancel()
-		if cancelErr := h.runs.Cancel(cancelCtx, tenant, user, run.ID); cancelErr != nil &&
-			!errors.Is(cancelErr, store.ErrWorkflowRunState) && !errors.Is(cancelErr, store.ErrWorkflowRunNotFound) {
-			h.log.Warn("cancel refused decomposition run", "task", taskID, "run", run.ID, "error", cancelErr)
-		}
+		// The reason is recorded before the run is withdrawn: a page reading the decompositions
+		// in between would otherwise settle this decomposition as 「工作流运行已取消。」 first,
+		// and only the first settlement counts.
 		settled, _, e := h.store.SettleTaskDecomposition(context.WithoutCancel(ctx), d.ID, nil, startFailureMessage(e))
+		h.withdrawRun(ctx, taskID, tenant, user, run.ID)
 		return settled, e
 	}
 	h.workers.Add(1)
@@ -234,6 +250,7 @@ func (h *Host) Start(ctx context.Context, a store.Access, taskID, workflowID, ke
 
 func startFailureMessage(err error) string {
 	var missingSkill *WorkflowSkillNotFound
+	var invalidInput *WorkflowInputInvalid
 	switch {
 	case errors.As(err, &missingSkill):
 		skillID := strings.TrimSpace(missingSkill.SkillID)
@@ -249,11 +266,56 @@ func startFailureMessage(err error) string {
 		return "工作流引用的技能不可用，请先在个人技能页导入同名技能或确认市场技能已下发到项目后再重新拆分。"
 	case errors.Is(err, ErrWorkflowRoleNotFound):
 		return "工作流引用的角色在工作区角色目录里不存在，请先在设置的角色页新建同名角色后再重新拆分。"
+	case errors.As(err, &invalidInput):
+		return fmt.Sprintf("工作流的开始输入「%s」无效：%s。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。", invalidInput.Variable, invalidInput.Reason)
+	case errors.Is(err, ErrWorkflowInputInvalid):
+		return "工作流的开始输入不满足要求。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。"
+	case errors.Is(err, ErrWorkflowCompletionToolUnavailable):
+		return "工作流有节点要等 Agent 上报完成，但当前执行器无法提供完成工具，请把该节点的完成判定改为「回合正常结束即可」后再重新拆分。"
 	case errors.Is(err, ErrWorkflowRunNotStartable):
 		return "工作流图定义不可执行，请检查工作流配置后再重新拆分。"
 	default:
 		return "工作流没有启动，请稍后重试。"
 	}
+}
+
+// withdrawRun cancels a run whose start the bridge refused, retrying while the host lives when the
+// bridge cannot confirm it: nothing was dispatched, so the run only has to leave pending, and
+// nothing else reclaims a decomposition's run once its decomposition has settled. A run that is
+// already past pending or gone was settled some other way and needs no withdrawal.
+func (h *Host) withdrawRun(ctx context.Context, taskID, tenant, user, runID string) {
+	withdraw := func(ctx context.Context) error {
+		ctx, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		err := h.runs.Cancel(ctx, tenant, user, runID)
+		if err != nil && !errors.Is(err, store.ErrWorkflowRunState) && !errors.Is(err, store.ErrWorkflowRunNotFound) {
+			return err
+		}
+		return nil
+	}
+	err := withdraw(context.WithoutCancel(ctx))
+	if err == nil {
+		return
+	}
+	h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
+	h.workers.Add(1)
+	go func() {
+		defer h.workers.Done()
+		tick := time.NewTicker(h.poll)
+		defer tick.Stop()
+		for {
+			select {
+			case <-h.ctx.Done():
+				return
+			case <-tick.C:
+				err := withdraw(h.ctx)
+				if err == nil {
+					return
+				}
+				h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
+			}
+		}
+	}()
 }
 
 // List returns the task's decompositions, newest first, settling any whose run has ended in case
