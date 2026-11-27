@@ -182,10 +182,18 @@ func (a *WorkflowAdapter) Dispatch(ctx context.Context, scope execution.Scope, o
 	if run.Status == store.WorkflowStatusPending {
 		if _, err = a.runs.Start(ctx, scope, run.ID); err != nil {
 			if reason := workflowStartRejected(err); reason != "" {
-				// Nothing started: withdraw the pending run so no list keeps waiting on it.
-				_, cancelErr := a.runs.Cancel(writeCtx, scope, run.ID)
-				_, applyErr := a.apply(writeCtx, scope, o, "rejected", "", reason)
-				return errors.Join(err, cancelErr, applyErr)
+				// Nothing started: withdraw the pending run so no list keeps waiting on it, then record
+				// the trigger as skipped. The refusal is returned as itself only once both are persisted:
+				// the page treats its 400 as final, which it must not be while the run is still pending or
+				// the trigger still open. A failed withdrawal or write is returned as itself instead, and
+				// Reconcile closes the trigger from the run's state on a later tick.
+				if _, cancelErr := a.runs.Cancel(writeCtx, scope, run.ID); cancelErr != nil {
+					return fmt.Errorf("withdraw refused workflow run (%v): %w", err, cancelErr)
+				}
+				if _, applyErr := a.apply(writeCtx, scope, o, "rejected", "", reason); applyErr != nil {
+					return fmt.Errorf("record refused workflow run (%v): %w", err, applyErr)
+				}
+				return err
 			}
 			_, applyErr := a.apply(writeCtx, scope, o, "reconcile", "", "lookup_required")
 			return errors.Join(err, applyErr)
