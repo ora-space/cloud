@@ -353,6 +353,21 @@ func TestDecompositionStartRefusals(t *testing.T) {
 			wantFailure: "工作流引用的角色在工作区角色目录里不存在，请先在设置的角色页新建同名角色后再重新拆分。",
 		},
 		{
+			name:        "input invalid with variable and reason",
+			err:         errors.Join(&taskdecomp.WorkflowInputInvalid{Variable: "input", Reason: "required value is missing"}, errors.New("workflow run input \"input\" is invalid: required value is missing")),
+			wantFailure: "工作流的开始输入「input」无效：required value is missing。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。",
+		},
+		{
+			name:        "input invalid generic",
+			err:         taskdecomp.ErrWorkflowInputInvalid,
+			wantFailure: "工作流的开始输入不满足要求。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。",
+		},
+		{
+			name:        "completion tool unavailable",
+			err:         errors.Join(taskdecomp.ErrWorkflowCompletionToolUnavailable, errors.New("workflow completion tool unavailable: the Node has no completion tool")),
+			wantFailure: "工作流有节点要等 Agent 上报完成，但当前执行器无法提供完成工具，请把该节点的完成判定改为「回合正常结束即可」后再重新拆分。",
+		},
+		{
 			name:        "not startable",
 			err:         taskdecomp.ErrWorkflowRunNotStartable,
 			wantFailure: "工作流图定义不可执行，请检查工作流配置后再重新拆分。",

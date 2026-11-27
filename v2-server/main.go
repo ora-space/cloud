@@ -650,6 +650,8 @@ func envOr(key, fallback string) string {
 }
 
 // workflowRunStarter lets task decompositions start workflow runs as a person and watch them end.
+// Start translates the host's refusals into the decomposition's own errors, so the decomposition
+// records the reason in the page's words; the host's error stays in the chain for the HTTP layer.
 type workflowRunStarter struct{ host *workflowhost.Host }
 
 func (s workflowRunStarter) Start(ctx context.Context, tenant, user, runID string) error {
@@ -667,7 +669,11 @@ func (s workflowRunStarter) Start(ctx context.Context, tenant, user, runID strin
 		return errors.Join(taskdecomp.ErrWorkflowSkillNotFound, e)
 	case errors.Is(e, server.ErrWorkflowRoleNotFound):
 		return errors.Join(taskdecomp.ErrWorkflowRoleNotFound, e)
-	case errors.Is(e, server.ErrWorkflowRunNotStartable), errors.Is(e, server.ErrWorkflowCompletionToolUnavailable), errors.As(e, &invalidInput):
+	case errors.As(e, &invalidInput):
+		return errors.Join(&taskdecomp.WorkflowInputInvalid{Variable: invalidInput.Variable, Reason: invalidInput.Reason}, e)
+	case errors.Is(e, server.ErrWorkflowCompletionToolUnavailable):
+		return errors.Join(taskdecomp.ErrWorkflowCompletionToolUnavailable, e)
+	case errors.Is(e, server.ErrWorkflowRunNotStartable):
 		return errors.Join(taskdecomp.ErrWorkflowRunNotStartable, e)
 	}
 	return e

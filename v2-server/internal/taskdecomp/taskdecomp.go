@@ -45,6 +45,12 @@ var (
 	ErrWorkflowRoleNotFound = errors.New("workflow role not found")
 	// ErrWorkflowSkillNotFound reports a decomposition workflow whose frozen graph enables an unavailable Skill.
 	ErrWorkflowSkillNotFound = errors.New("workflow skill not found")
+	// ErrWorkflowInputInvalid reports a decomposition workflow whose Start node rejected the
+	// decomposition's input, which is only the task's title and description.
+	ErrWorkflowInputInvalid = errors.New("workflow run input invalid")
+	// ErrWorkflowCompletionToolUnavailable reports a decomposition workflow whose interactive Agent
+	// waits for an Agent completion signal the execution bridge cannot hand out.
+	ErrWorkflowCompletionToolUnavailable = errors.New("workflow completion tool unavailable")
 	// ErrWorkflowRunNotStartable reports a decomposition workflow run the workflow host refused to start.
 	ErrWorkflowRunNotStartable = errors.New("workflow run cannot start")
 )
@@ -61,6 +67,18 @@ func (e *WorkflowSkillNotFound) Error() string {
 }
 
 func (e *WorkflowSkillNotFound) Unwrap() error { return ErrWorkflowSkillNotFound }
+
+// WorkflowInputInvalid names the Start variable the workflow host rejected and why.
+type WorkflowInputInvalid struct {
+	Variable string
+	Reason   string
+}
+
+func (e *WorkflowInputInvalid) Error() string {
+	return fmt.Sprintf("%s: %s: %s", ErrWorkflowInputInvalid, e.Variable, e.Reason)
+}
+
+func (e *WorkflowInputInvalid) Unwrap() error { return ErrWorkflowInputInvalid }
 
 // Limits on what a run's output may become: the task routes' title and description limits, and a
 // bound on how many subtasks one decomposition writes.
@@ -234,6 +252,7 @@ func (h *Host) Start(ctx context.Context, a store.Access, taskID, workflowID, ke
 
 func startFailureMessage(err error) string {
 	var missingSkill *WorkflowSkillNotFound
+	var invalidInput *WorkflowInputInvalid
 	switch {
 	case errors.As(err, &missingSkill):
 		skillID := strings.TrimSpace(missingSkill.SkillID)
@@ -249,6 +268,12 @@ func startFailureMessage(err error) string {
 		return "工作流引用的技能不可用，请先在个人技能页导入同名技能或确认市场技能已下发到项目后再重新拆分。"
 	case errors.Is(err, ErrWorkflowRoleNotFound):
 		return "工作流引用的角色在工作区角色目录里不存在，请先在设置的角色页新建同名角色后再重新拆分。"
+	case errors.As(err, &invalidInput):
+		return fmt.Sprintf("工作流的开始输入「%s」无效：%s。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。", invalidInput.Variable, invalidInput.Reason)
+	case errors.Is(err, ErrWorkflowInputInvalid):
+		return "工作流的开始输入不满足要求。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。"
+	case errors.Is(err, ErrWorkflowCompletionToolUnavailable):
+		return "工作流有节点要等 Agent 上报完成，但当前执行器无法提供完成工具，请把该节点的完成判定改为「回合正常结束即可」后再重新拆分。"
 	case errors.Is(err, ErrWorkflowRunNotStartable):
 		return "工作流图定义不可执行，请检查工作流配置后再重新拆分。"
 	default:
