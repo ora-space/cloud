@@ -236,13 +236,11 @@ func (h *Host) Start(ctx context.Context, a store.Access, taskID, workflowID, ke
 	if e := h.runs.Start(context.WithoutCancel(ctx), tenant, user, run.ID); e != nil {
 		cancel()
 		h.log.Warn("decomposition run did not start", "task", taskID, "run", run.ID, "error", e)
-		cancelCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer stopCancel()
-		if cancelErr := h.runs.Cancel(cancelCtx, tenant, user, run.ID); cancelErr != nil &&
-			!errors.Is(cancelErr, store.ErrWorkflowRunState) && !errors.Is(cancelErr, store.ErrWorkflowRunNotFound) {
-			h.log.Warn("cancel refused decomposition run", "task", taskID, "run", run.ID, "error", cancelErr)
-		}
+		// The reason is recorded before the run is withdrawn: a page reading the decompositions
+		// in between would otherwise settle this decomposition as 「工作流运行已取消。」 first,
+		// and only the first settlement counts.
 		settled, _, e := h.store.SettleTaskDecomposition(context.WithoutCancel(ctx), d.ID, nil, startFailureMessage(e))
+		h.withdrawRun(ctx, taskID, tenant, user, run.ID)
 		return settled, e
 	}
 	h.workers.Add(1)
@@ -279,6 +277,45 @@ func startFailureMessage(err error) string {
 	default:
 		return "工作流没有启动，请稍后重试。"
 	}
+}
+
+// withdrawRun cancels a run whose start the bridge refused, retrying while the host lives when the
+// bridge cannot confirm it: nothing was dispatched, so the run only has to leave pending, and
+// nothing else reclaims a decomposition's run once its decomposition has settled. A run that is
+// already past pending or gone was settled some other way and needs no withdrawal.
+func (h *Host) withdrawRun(ctx context.Context, taskID, tenant, user, runID string) {
+	withdraw := func(ctx context.Context) error {
+		ctx, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		err := h.runs.Cancel(ctx, tenant, user, runID)
+		if err != nil && !errors.Is(err, store.ErrWorkflowRunState) && !errors.Is(err, store.ErrWorkflowRunNotFound) {
+			return err
+		}
+		return nil
+	}
+	err := withdraw(context.WithoutCancel(ctx))
+	if err == nil {
+		return
+	}
+	h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
+	h.workers.Add(1)
+	go func() {
+		defer h.workers.Done()
+		tick := time.NewTicker(h.poll)
+		defer tick.Stop()
+		for {
+			select {
+			case <-h.ctx.Done():
+				return
+			case <-tick.C:
+				err := withdraw(h.ctx)
+				if err == nil {
+					return
+				}
+				h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
+			}
+		}
+	}()
 }
 
 // List returns the task's decompositions, newest first, settling any whose run has ended in case

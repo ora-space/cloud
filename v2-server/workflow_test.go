@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -25,6 +26,7 @@ import (
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
 	"github.com/wanglongan587/cloud/v2-server/internal/store/storetest"
 	"github.com/wanglongan587/cloud/v2-server/internal/taskdecomp"
+	"github.com/wanglongan587/cloud/v2-server/internal/taskworkflow"
 	"github.com/wanglongan587/cloud/v2-server/internal/workflowhost"
 )
 
@@ -237,6 +239,83 @@ func TestWorkflowRunStarterMapsPreflightRefusalsForDecomposition(t *testing.T) {
 			t.Fatalf("retried decomposition never settled: %+v", items)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestTaskWorkflowRunnerPassesHostRefusalsThrough wires the real workflowhost behind the task
+// workflow host the way main does: a start the host refuses reaches the task workflow as the
+// host's own error, so the recorded refusal is worded by the host (no decomposition translation,
+// no duplicated sentinel) and the HTTP layer can still map it by the host's sentinel.
+func TestTaskWorkflowRunnerPassesHostRefusalsThrough(t *testing.T) {
+	ctx := context.Background()
+	s, db := storetest.OpenWithConn(t)
+	token := storetest.SignIn(t, s, "task-runner", "Owner", store.RoleOwner)
+	u, err := s.SessionUser(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenants, err := s.Tenants(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid := tenants[0].ID
+	scope := execution.Scope{TenantID: tid, UserID: u.ID}
+	project, err := s.CreateProject(ctx, scope, store.Project{
+		ID:            "33333333-3333-4333-8333-333333333333",
+		Name:          "Demo",
+		RepositoryURL: "https://example.invalid/demo",
+		Commit:        "c",
+		MirrorPath:    "/tmp/demo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &executiontest.Stub{}
+	wfHost, err := workflowhost.NewHost(workflowhost.Config{Store: s, Execution: stub, Catalog: stub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(wfHost.Close)
+	taskWorkflows := taskworkflow.New(s, taskWorkflowRunner{wfHost})
+	t.Cleanup(taskWorkflows.Close)
+
+	graph := `{"nodes":[{"id":"start","data":{"kind":"start"}},{"id":"reviewer","data":{"kind":"agent","title":"审查","agentConfig":{"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"Review","skills":[{"skillId":"handle-checklist","enabled":true}]}}}],"edges":[{"source":"start","target":"reviewer"}]}`
+	wf, _, err := s.CreateWorkflow(ctx, tid, "Needs skill", graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PublishWorkflow(ctx, tid, wf.ID, "v1", nil); err != nil {
+		t.Fatal(err)
+	}
+	task, err := s.CreateTask(ctx, tid, u.ID, store.TaskInput{
+		Title: "审查需求", ProjectID: project.ID, Assignee: &store.TaskAssigneeRef{Type: store.AssigneeHuman, ID: u.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runID, err := taskWorkflows.Start(ctx, store.NewTaskWorkflow{
+		TenantID: tid, TaskID: task.ID, UserID: u.ID, Key: "missing-skill", WorkflowID: wf.ID,
+	}, nil)
+	if err == nil {
+		t.Fatal("a missing Skill started the handling run")
+	}
+	if !errors.Is(err, server.ErrWorkflowSkillNotFound) || errors.Is(err, taskdecomp.ErrWorkflowSkillNotFound) {
+		t.Fatalf("start error = %v, want the host's ErrWorkflowSkillNotFound without the decomposition's translation", err)
+	}
+	var status, failure string
+	if err := db.QueryRow(ctx, `SELECT status, failure FROM v2_task_workflow_runs WHERE tenant_id = $1 AND run_id = $2`, tid, runID).Scan(&status, &failure); err != nil {
+		t.Fatal(err)
+	}
+	var missing *server.WorkflowSkillNotFound
+	if !errors.As(err, &missing) {
+		t.Fatalf("start error = %v, want *server.WorkflowSkillNotFound", err)
+	}
+	if status != "failed" || failure != missing.Error() {
+		t.Fatalf("recorded refusal = %q %q, want failed %q", status, failure, missing.Error())
+	}
+	if strings.Contains(failure, "\n") {
+		t.Fatalf("recorded refusal carries a joined decomposition sentinel: %q", failure)
 	}
 }
 
