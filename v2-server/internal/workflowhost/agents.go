@@ -205,7 +205,12 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch, generation uint6
 		if h.ctx.Err() == nil {
 			h.log.Warn("resolve workflow skills", "run", d.RunID, "node_run", d.NodeRunID, "error", publicReason(err), "error_type", fmt.Sprintf("%T", err))
 		}
-		fail(workflow.Failure{Kind: workflow.FailureSession, Message: "could not resolve selected Skills"})
+		// A storage fault is not a broken Agent session (the run page would point at the Agent
+		// process and the network) and retrying it unchanged cannot help, so it is desktop's
+		// `repository` kind: resumable once the store is back, never auto-retried, and the message
+		// names neither the statement nor the table. Interactive nodes keep the kind because it is
+		// not auto-retryable.
+		fail(workflow.Failure{Kind: workflow.FailureRepository, Message: "could not resolve selected Skills"})
 		return
 	}
 	mcp, err := h.store.ResolveWorkflowMCP(h.ctx, st.scope, d.ProjectID, cfg.MCPs)
@@ -233,7 +238,12 @@ func (h *Host) runAgent(st *runState, d workflow.AgentDispatch, generation uint6
 			fail(workflow.Failure{Kind: workflow.FailureWorkflowRoleNotFound, Message: fmt.Sprintf("role %q is not available in this workspace", cfg.RoleID)})
 			return
 		case err != nil:
-			fail(workflow.Failure{Kind: workflow.FailureMissingAgentConfig, Message: err.Error()})
+			// Same split as for Skills above: the role is there as far as this node knows, the store
+			// is what failed, so the failure is `repository` and the SQL stays in the log.
+			if h.ctx.Err() == nil {
+				h.log.Warn("resolve workflow role", "run", d.RunID, "node_run", d.NodeRunID, "error", publicReason(err), "error_type", fmt.Sprintf("%T", err))
+			}
+			fail(workflow.Failure{Kind: workflow.FailureRepository, Message: "could not resolve the selected role"})
 			return
 		}
 		roleContent = role.Content

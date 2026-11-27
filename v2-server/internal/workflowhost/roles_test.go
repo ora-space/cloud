@@ -165,6 +165,10 @@ func TestRoleReferenceResolvesCaseInsensitivelyAndByID(t *testing.T) {
 	}
 }
 
+// TestInteractiveRoleLookupDatabaseErrorIsNotAutoRetryable checks the Interactive conversion and
+// that an interactive node whose role lookup hits a database error fails once, as `repository`
+// (see TestDependencyLookupDatabaseErrorIsReportedAsRepository for the kind's contract): no
+// session starts, no retry is scheduled and no replacement attempt is written.
 func TestInteractiveRoleLookupDatabaseErrorIsNotAutoRetryable(t *testing.T) {
 	for _, kind := range []workflow.FailureKind{workflow.FailureWorkflowRoleNotFound, workflow.FailureMissingAgentConfig} {
 		interactiveFailure := (workflow.Failure{Kind: kind, Message: "role lookup failed"}).Interactive()
@@ -232,11 +236,11 @@ func TestInteractiveRoleLookupDatabaseErrorIsNotAutoRetryable(t *testing.T) {
 	if err := json.Unmarshal(a.Payload, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.ErrorDetail.Kind != string(workflow.FailureMissingAgentConfig) || !detail.ErrorDetail.Resumable || detail.ErrorDetail.AutoRetryable {
-		t.Fatalf("error_detail = %+v, want missing_agent_config resumable=true auto_retryable=false", detail.ErrorDetail)
+	if detail.ErrorDetail.Kind != string(workflow.FailureRepository) || !detail.ErrorDetail.Resumable || detail.ErrorDetail.AutoRetryable {
+		t.Fatalf("error_detail = %+v, want repository resumable=true auto_retryable=false", detail.ErrorDetail)
 	}
-	if detail.ErrorDetail.Message == "" {
-		t.Fatal("error_detail.message is empty")
+	if detail.ErrorDetail.Message != "could not resolve the selected role" {
+		t.Fatalf("error_detail.message = %q, want the exact generic message", detail.ErrorDetail.Message)
 	}
 	history, err := f.s.WorkflowRunFailedAttempts(ctx, f.scope.TenantID, runID)
 	if err != nil || len(history) != 0 {

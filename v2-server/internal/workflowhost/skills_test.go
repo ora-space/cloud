@@ -225,7 +225,7 @@ func TestSkillDeletedAfterStartFailsTheNodeResumably(t *testing.T) {
 	}
 }
 
-func TestSkillLookupDatabaseErrorIsNotReportedAsMissingSkill(t *testing.T) {
+func TestDependencyLookupDatabaseErrorIsReportedAsRepository(t *testing.T) {
 	t.Run("start preflight preserves database error", func(t *testing.T) {
 		f, admin := newFixtureWithAdmin(t)
 		ctx := context.Background()
@@ -254,109 +254,91 @@ func TestSkillLookupDatabaseErrorIsNotReportedAsMissingSkill(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive node mid-run database error stays non-retryable and hides SQL", func(t *testing.T) {
-		f, admin := newFixtureWithAdmin(t)
-		ctx := context.Background()
-		if _, err := f.s.CreateSkill(ctx, f.scope.TenantID, f.scope.UserID, store.SkillInput{
-			Name: "review-checklist", Description: "审查", Content: "# 审查",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		graph := strings.Replace(
-			interactiveChain,
-			`"prompt":"起草：{{#start.input#}}","interactive":true`,
-			`"prompt":"起草：{{#start.input#}}","interactive":true,"skills":[{"skillId":"review-checklist","enabled":true}],"retry":{"enabled":true,"maxRetries":2,"initialDelaySeconds":0}`,
-			1,
-		)
-		runID := f.run(t, graph, str("交互技能库故障"))
-		entered, release := f.holdDispatchOf(t, "a")
-		if _, err := f.host.StartRun(ctx, f.scope, runID); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("interactive Agent dispatch never started")
-		}
-		if _, err := admin.Exec(ctx, `ALTER TABLE v2_skills RENAME COLUMN content TO broken_content`); err != nil {
-			t.Fatal(err)
-		}
-		release()
+	// A dependency the node reads live (its Skills, its role) that hits a database error mid-run is
+	// neither a missing dependency nor a broken Agent session: it is recorded as desktop's
+	// `repository` kind, resumable but never auto-retried, with a message that names neither the
+	// table nor the statement. Interactive nodes keep the kind because it is not auto-retryable.
+	for _, tc := range []struct {
+		name     string
+		config   string
+		breakSQL string
+		message  string
+	}{
+		{
+			name:     "skills",
+			config:   `"skills":[{"skillId":"review-checklist","enabled":true}]`,
+			breakSQL: `ALTER TABLE v2_skills RENAME COLUMN content TO broken_content`,
+			message:  "could not resolve selected Skills",
+		},
+		{
+			name:     "role",
+			config:   `"roleId":"reviewer"`,
+			breakSQL: `ALTER TABLE v2_roles RENAME COLUMN content TO broken_content`,
+			message:  "could not resolve the selected role",
+		},
+	} {
+		for _, interactive := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s %s node mid-run database error is repository", tc.name, map[bool]string{false: "automatic", true: "interactive"}[interactive]), func(t *testing.T) {
+				f, admin := newFixtureWithAdmin(t)
+				ctx := context.Background()
+				if _, err := f.s.CreateSkill(ctx, f.scope.TenantID, f.scope.UserID, store.SkillInput{
+					Name: "review-checklist", Description: "审查", Content: "# 审查",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var graph string
+				if interactive {
+					graph = strings.Replace(
+						interactiveChain,
+						`"prompt":"起草：{{#start.input#}}","interactive":true`,
+						`"prompt":"起草：{{#start.input#}}","interactive":true,`+tc.config+`,"retry":{"enabled":true,"maxRetries":2,"initialDelaySeconds":0}`,
+						1,
+					)
+				} else {
+					graph = strings.Replace(twoAgents, `"roleId":"reviewer"`, tc.config+`,"retry":{"enabled":false,"maxRetries":1,"initialDelaySeconds":0}`, 1)
+				}
+				runID := f.run(t, graph, str("依赖库故障"))
+				entered, release := f.holdDispatchOf(t, "a")
+				if _, err := f.host.StartRun(ctx, f.scope, runID); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Agent dispatch never started")
+				}
+				if _, err := admin.Exec(ctx, tc.breakSQL); err != nil {
+					t.Fatal(err)
+				}
+				release()
 
-		run, nodes := f.await(t, runID, terminal)
-		if run.Status != store.WorkflowStatusFailed {
-			t.Fatalf("run = %+v, want failed", run)
+				run, nodes := f.await(t, runID, terminal)
+				if run.Status != store.WorkflowStatusFailed {
+					t.Fatalf("run = %+v, want failed", run)
+				}
+				var detail struct {
+					ErrorDetail struct {
+						Kind          string `json:"kind"`
+						Message       string `json:"message"`
+						Resumable     bool   `json:"resumable"`
+						AutoRetryable bool   `json:"auto_retryable"`
+					} `json:"error_detail"`
+				}
+				if err := json.Unmarshal(node(nodes, "a").Payload, &detail); err != nil {
+					t.Fatal(err)
+				}
+				if detail.ErrorDetail.Kind != string(workflow.FailureRepository) || !detail.ErrorDetail.Resumable || detail.ErrorDetail.AutoRetryable {
+					t.Fatalf("error_detail = %+v, want repository resumable=true auto_retryable=false", detail.ErrorDetail)
+				}
+				if detail.ErrorDetail.Message != tc.message {
+					t.Fatalf("error_detail.message = %q, want exact generic message %q", detail.ErrorDetail.Message, tc.message)
+				}
+				if run.Error == nil || strings.Contains(*run.Error, "broken_content") || strings.Contains(*run.Error, "SQLSTATE") {
+					t.Fatalf("run error leaks the database detail: %v", run.Error)
+				}
+			})
 		}
-		var detail struct {
-			ErrorDetail struct {
-				Kind          string `json:"kind"`
-				Message       string `json:"message"`
-				Resumable     bool   `json:"resumable"`
-				AutoRetryable bool   `json:"auto_retryable"`
-			} `json:"error_detail"`
-		}
-		if err := json.Unmarshal(node(nodes, "a").Payload, &detail); err != nil {
-			t.Fatal(err)
-		}
-		if detail.ErrorDetail.Kind != string(workflow.FailureInteractiveSession) || !detail.ErrorDetail.Resumable || detail.ErrorDetail.AutoRetryable {
-			t.Fatalf("error_detail = %+v, want interactive_session resumable=true auto_retryable=false", detail.ErrorDetail)
-		}
-		if detail.ErrorDetail.Message != "could not resolve selected Skills" {
-			t.Fatalf("error_detail.message = %q, want exact generic message %q", detail.ErrorDetail.Message, "could not resolve selected Skills")
-		}
-	})
-
-	t.Run("automatic node mid-run database error stays retryable session failure and hides SQL", func(t *testing.T) {
-		f, admin := newFixtureWithAdmin(t)
-		ctx := context.Background()
-		if _, err := f.s.CreateSkill(ctx, f.scope.TenantID, f.scope.UserID, store.SkillInput{
-			Name: "review-checklist", Description: "审查", Content: "# 审查",
-		}); err != nil {
-			t.Fatal(err)
-		}
-		graph := strings.Replace(
-			twoAgents,
-			`"roleId":"reviewer"`,
-			`"skills":[{"skillId":"review-checklist","enabled":true}],"retry":{"enabled":false,"maxRetries":1,"initialDelaySeconds":0}`,
-			1,
-		)
-		runID := f.run(t, graph, str("自动技能库故障"))
-		entered, release := f.holdDispatchOf(t, "a")
-		if _, err := f.host.StartRun(ctx, f.scope, runID); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("automatic Agent dispatch never started")
-		}
-		if _, err := admin.Exec(ctx, `ALTER TABLE v2_skills RENAME COLUMN content TO broken_content`); err != nil {
-			t.Fatal(err)
-		}
-		release()
-
-		run, nodes := f.await(t, runID, terminal)
-		if run.Status != store.WorkflowStatusFailed {
-			t.Fatalf("run = %+v, want failed", run)
-		}
-		var detail struct {
-			ErrorDetail struct {
-				Kind          string `json:"kind"`
-				Message       string `json:"message"`
-				Resumable     bool   `json:"resumable"`
-				AutoRetryable bool   `json:"auto_retryable"`
-			} `json:"error_detail"`
-		}
-		if err := json.Unmarshal(node(nodes, "a").Payload, &detail); err != nil {
-			t.Fatal(err)
-		}
-		if detail.ErrorDetail.Kind != string(workflow.FailureSession) || !detail.ErrorDetail.Resumable || !detail.ErrorDetail.AutoRetryable {
-			t.Fatalf("error_detail = %+v, want session resumable=true auto_retryable=true", detail.ErrorDetail)
-		}
-		if detail.ErrorDetail.Message != "could not resolve selected Skills" {
-			t.Fatalf("error_detail.message = %q, want exact generic message %q", detail.ErrorDetail.Message, "could not resolve selected Skills")
-		}
-	})
+	}
 }
 
 func TestWorkflowRejectsMissingEnabledMCPAndIgnoresDisabledBindings(t *testing.T) {
