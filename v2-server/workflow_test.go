@@ -242,6 +242,91 @@ func TestWorkflowRunStarterMapsPreflightRefusalsForDecomposition(t *testing.T) {
 	}
 }
 
+// TestWorkflowRunStarterMapsInputAndCompletionRefusalsForDecomposition exercises the two host
+// refusals only the real workflowhost produces: a Start node whose required variable has no
+// default refuses the decomposition's input, and an interactive Agent waiting for the Agent
+// completion signal is refused where no completion tool can be given. Each must reach the
+// decomposition as its own message, with the variable and reason named, never the generic one.
+func TestWorkflowRunStarterMapsInputAndCompletionRefusalsForDecomposition(t *testing.T) {
+	ctx := context.Background()
+	s := storetest.Open(t)
+	token := storetest.SignIn(t, s, "decomp-input", "Owner", store.RoleOwner)
+	u, err := s.SessionUser(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenants, err := s.Tenants(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid := tenants[0].ID
+	scope := execution.Scope{TenantID: tid, UserID: u.ID}
+	project, err := s.CreateProject(ctx, scope, store.Project{
+		ID:            "44444444-4444-4444-8444-444444444444",
+		Name:          "Demo",
+		RepositoryURL: "https://example.invalid/demo",
+		Commit:        "c",
+		MirrorPath:    "/tmp/demo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No CompletionTool: a graph asking for the Agent completion policy is refused at its start.
+	stub := &executiontest.Stub{}
+	wfHost, err := workflowhost.NewHost(workflowhost.Config{Store: s, Execution: stub, Catalog: stub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(wfHost.Close)
+	decompositions := taskdecomp.New(s, workflowRunStarter{wfHost}, nil)
+	t.Cleanup(decompositions.Close)
+	access := store.Access{TenantID: tid, UserID: u.ID, Role: store.RoleOwner}
+
+	for _, tc := range []struct {
+		name, graph, wantFailure string
+	}{
+		{
+			name: "required Start variable without a default",
+			graph: `{"nodes":[
+				{"id":"start","data":{"kind":"start","inputVariables":[{"name":"topic","valueType":"string","required":true},{"name":"tasks","valueType":"array[object]","value":[{"title":"拆出的子任务","description":"说明"}]}]}},
+				{"id":"out","data":{"kind":"output","outputs":[{"name":"tasks","variableSelector":["start","tasks"]}]}}
+			],"edges":[{"source":"start","target":"out"}]}`,
+			wantFailure: "工作流的开始输入「topic」无效：required value is missing。拆分只传入任务的标题和描述，请检查该工作流开始节点的输入设置后再重新拆分。",
+		},
+		{
+			name: "interactive Agent waiting for the completion signal without the tool",
+			graph: `{"nodes":[
+				{"id":"start","data":{"kind":"start","inputVariables":[{"name":"tasks","valueType":"array[object]","value":[{"title":"拆出的子任务","description":"说明"}]}]}},
+				{"id":"a","data":{"kind":"agent","title":"起草","agentConfig":{"schemaVersion":4,"executor":{"agentCli":"official/ora-space.opencode","modelId":"fixture"},"prompt":"起草：{{#start.input#}}","interactive":true,"completionSignal":"agent"}}},
+				{"id":"out","data":{"kind":"output","outputs":[{"name":"tasks","variableSelector":["start","tasks"]}]}}
+			],"edges":[{"source":"start","target":"a"},{"source":"a","target":"out"}]}`,
+			wantFailure: "工作流有节点要等 Agent 上报完成，但当前执行器无法提供完成工具，请把该节点的完成判定改为「回合正常结束即可」后再重新拆分。",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wf, _, err := s.CreateWorkflow(ctx, tid, tc.name, tc.graph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.PublishWorkflow(ctx, tid, wf.ID, "v1", nil); err != nil {
+				t.Fatal(err)
+			}
+			task, err := s.CreateTask(ctx, tid, u.ID, store.TaskInput{Title: "大需求", Description: "登录、注册和找回密码", ProjectID: project.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := decompositions.Start(ctx, access, task.ID, wf.ID, "key")
+			if err != nil || d.Status != store.DecompositionFailed || d.Failure != tc.wantFailure {
+				t.Fatalf("refused decomposition = %+v (err=%v), want failure %q", d, err, tc.wantFailure)
+			}
+			run, err := s.WorkflowRun(ctx, tid, d.WorkflowRunID)
+			if err != nil || run.Status != store.WorkflowStatusCancelled || run.StartedAt != nil {
+				t.Fatalf("refused run = %+v (err=%v), want cancelled and never started", run, err)
+			}
+		})
+	}
+}
+
 // TestTaskWorkflowRunnerPassesHostRefusalsThrough wires the real workflowhost behind the task
 // workflow host the way main does: a start the host refuses reaches the task workflow as the
 // host's own error, so the recorded refusal is worded by the host (no decomposition translation,

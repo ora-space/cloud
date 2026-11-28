@@ -143,6 +143,50 @@ func (s *Store) CreateTaskDecomposition(ctx context.Context, in NewTaskDecomposi
 	return scanDecomposition(s.pool.QueryRow(ctx, `SELECT `+decompositionColumns+` `+decompositionJoins+` WHERE d.id = $1`, id))
 }
 
+// RefuseTaskDecomposition withdraws a decomposition whose run the workflow host refused to start:
+// the never-started run is cancelled and the decomposition failed with the reason in one
+// transaction, as RefuseTaskWorkflow does for a handling run. Either both are persisted or
+// neither, so no page reads a failed decomposition beside a live run, no restart can find a
+// pending run whose decomposition already let go of it, and no later report overwrites the
+// reason: a decomposition already settled is returned as it is with false, its run untouched. A
+// run that already began executing is refused with ErrWorkflowRunState and nothing changes:
+// stopping it is the workflow host's, and its real outcome settles the decomposition.
+func (s *Store) RefuseTaskDecomposition(ctx context.Context, id, failure string) (TaskDecomposition, bool, error) {
+	if failure == "" {
+		return TaskDecomposition{}, false, errors.New("refuse task decomposition: no failure")
+	}
+	var out TaskDecomposition
+	settled := false
+	e := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		d, e := scanDecomposition(tx.QueryRow(ctx, `SELECT `+decompositionColumns+` `+decompositionJoins+`
+			WHERE d.id = $1 FOR UPDATE OF d`, id))
+		if e != nil {
+			return e
+		}
+		out = d
+		if d.Status != DecompositionRunning {
+			return nil
+		}
+		if run, e := cancelWorkflowRun(ctx, tx, d.TenantID, d.WorkflowRunID); e != nil {
+			if !errors.Is(e, ErrWorkflowRunNotFound) {
+				return e
+			}
+			// A deleted run never started either; the decomposition still fails below.
+		} else if run.StartedAt != nil {
+			return ErrWorkflowRunState
+		}
+		if _, e := tx.Exec(ctx, `
+			UPDATE v2_task_decompositions SET status = $2, failure = $3, created_count = 0, finished_at = now()
+			WHERE id = $1`, id, DecompositionFailed, failure); e != nil {
+			return fmt.Errorf("refuse task decomposition: %w", e)
+		}
+		settled = true
+		out, e = scanDecomposition(tx.QueryRow(ctx, `SELECT `+decompositionColumns+` `+decompositionJoins+` WHERE d.id = $1`, id))
+		return e
+	})
+	return out, settled, e
+}
+
 // SettleTaskDecomposition ends a running decomposition: with subtasks it succeeds and writes them
 // under the task, with a failure it fails. Ending it and writing the subtasks share one transaction
 // guarded by the running status, so however often a run's end is reported, only the first report

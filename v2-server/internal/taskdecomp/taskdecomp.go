@@ -6,8 +6,10 @@
 //
 // Writing the subtasks and ending the decomposition share one transaction guarded by the
 // decomposition still running, so a run reported finished twice, by the watcher, a page read and a
-// restart, writes its subtasks once. A decomposition does not outlive the process that started it,
-// with one exception: Recover runs before the workflow host's boot sweep, cancels every
+// restart, writes its subtasks once. A start the workflow host refuses is the same kind of one
+// commit: the never-started run is withdrawn and the decomposition failed with the reason
+// together, so nothing is left to reclaim. A decomposition does not outlive the process that
+// started it, with one exception: Recover runs before the workflow host's boot sweep, cancels every
 // decomposition run the previous process left live and fails its decomposition, so the sweep can
 // never absorb and resume one. The exception is a run whose review form was already submitted:
 // what remains of it is deterministic review work the host's review recovery replays, so Recover
@@ -103,6 +105,7 @@ type Store interface {
 	RecoverableFormRuns(ctx context.Context) ([]string, error)
 	CreateTaskDecomposition(ctx context.Context, in store.NewTaskDecomposition) (store.TaskDecomposition, error)
 	SettleTaskDecomposition(ctx context.Context, id string, subtasks []store.Subtask, failure string) (store.TaskDecomposition, bool, error)
+	RefuseTaskDecomposition(ctx context.Context, id, failure string) (store.TaskDecomposition, bool, error)
 }
 
 // Runs starts and cancels a workflow run as a person and tells when one changes; main wires the
@@ -234,14 +237,23 @@ func (h *Host) Start(ctx context.Context, a store.Access, taskID, workflowID, ke
 	events, cancel := h.runs.Subscribe(run.ID)
 	// The run outlives the request once it starts.
 	if e := h.runs.Start(context.WithoutCancel(ctx), tenant, user, run.ID); e != nil {
-		cancel()
 		h.log.Warn("decomposition run did not start", "task", taskID, "run", run.ID, "error", e)
-		// The reason is recorded before the run is withdrawn: a page reading the decompositions
-		// in between would otherwise settle this decomposition as 「工作流运行已取消。」 first,
-		// and only the first settlement counts.
-		settled, _, e := h.store.SettleTaskDecomposition(context.WithoutCancel(ctx), d.ID, nil, startFailureMessage(e))
-		h.withdrawRun(ctx, taskID, tenant, user, run.ID)
-		return settled, e
+		// The never-started run is withdrawn and the decomposition failed with the reason in one
+		// commit: a page reading the decompositions in between sees neither half alone, and a
+		// restart cannot find a pending run whose decomposition already let go of it.
+		settled, _, err := h.store.RefuseTaskDecomposition(context.WithoutCancel(ctx), d.ID, startFailureMessage(e))
+		if errors.Is(err, store.ErrWorkflowRunState) {
+			// The run began executing despite the error (the engine started it and failed while
+			// scheduling its first wave): it is stopped through the workflow host like any running
+			// run, and the watcher settles the decomposition from its real outcome. The subscription
+			// made before the start already sees its end.
+			h.workers.Add(1)
+			go h.watch(d, events, cancel)
+			h.stopRun(ctx, taskID, tenant, user, run.ID)
+			return d, e
+		}
+		cancel()
+		return settled, err
 	}
 	h.workers.Add(1)
 	go h.watch(d, events, cancel)
@@ -279,43 +291,17 @@ func startFailureMessage(err error) string {
 	}
 }
 
-// withdrawRun cancels a run whose start the bridge refused, retrying while the host lives when the
-// bridge cannot confirm it: nothing was dispatched, so the run only has to leave pending, and
-// nothing else reclaims a decomposition's run once its decomposition has settled. A run that is
-// already past pending or gone was settled some other way and needs no withdrawal.
-func (h *Host) withdrawRun(ctx context.Context, taskID, tenant, user, runID string) {
-	withdraw := func(ctx context.Context) error {
-		ctx, stop := context.WithTimeout(ctx, 5*time.Second)
-		defer stop()
-		err := h.runs.Cancel(ctx, tenant, user, runID)
-		if err != nil && !errors.Is(err, store.ErrWorkflowRunState) && !errors.Is(err, store.ErrWorkflowRunNotFound) {
-			return err
-		}
-		return nil
+// stopRun cancels a run through the workflow host, best effort: it is for a run that began
+// executing under a start that reported an error, whose decomposition a watcher now follows. An
+// unconfirmed stop is not fatal — the host closes the run as cancelled once its turn ends, and the
+// watcher settles from that; a run that keeps going to its own end settles the decomposition from
+// that end instead.
+func (h *Host) stopRun(ctx context.Context, taskID, tenant, user, runID string) {
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := h.runs.Cancel(stopCtx, tenant, user, runID); err != nil && !errors.Is(err, store.ErrWorkflowRunState) && !errors.Is(err, store.ErrWorkflowRunNotFound) {
+		h.log.Warn("cancel a decomposition run that started under a failed start", "task", taskID, "run", runID, "error", err)
 	}
-	err := withdraw(context.WithoutCancel(ctx))
-	if err == nil {
-		return
-	}
-	h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
-	h.workers.Add(1)
-	go func() {
-		defer h.workers.Done()
-		tick := time.NewTicker(h.poll)
-		defer tick.Stop()
-		for {
-			select {
-			case <-h.ctx.Done():
-				return
-			case <-tick.C:
-				err := withdraw(h.ctx)
-				if err == nil {
-					return
-				}
-				h.log.Warn("cancel refused decomposition run", "task", taskID, "run", runID, "error", err)
-			}
-		}
-	}()
 }
 
 // List returns the task's decompositions, newest first, settling any whose run has ended in case

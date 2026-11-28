@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/wanglongan587/cloud/v2-server/internal/execution"
 	"github.com/wanglongan587/cloud/v2-server/internal/store"
@@ -67,7 +68,9 @@ func (f *fakeWorkflowRuns) Start(_ context.Context, _ execution.Scope, runID str
 		return store.WorkflowRun{}, f.startErr
 	}
 	run := f.byID(runID)
+	now := time.Now()
 	run.Status = store.WorkflowStatusRunning
+	run.StartedAt = &now
 	return *run, nil
 }
 
@@ -278,10 +281,86 @@ func TestWorkflowStartRefusalIsReportedOnlyOncePersisted(t *testing.T) {
 		if err := f.workflow.Reconcile(ctx, f.scope, f.occ); err != nil {
 			t.Fatal(err)
 		}
-		if o := f.read(t); !o.Released {
-			t.Fatalf("occurrence = %+v, want it released by the reconciler", o)
+		// The trigger never ran, so it closes as not started: not as a cancellation, and without
+		// linking a run that never began. The specific refusal could not be recorded and is gone.
+		if o := f.read(t); o.Status != "skipped" || o.Reason != "execution_not_started" || !o.Released || o.ExecutionRef != "" {
+			t.Fatalf("reconciled occurrence = %+v, want it skipped as never started with no run linked", o)
 		}
 	})
+}
+
+// A run withdrawn before it began closes its trigger as never started, whichever way the
+// withdrawal was recorded: a refused start whose skip could not be written, or a pending run
+// Reconcile itself withdrew whose record could not be written. Only a run that began executing
+// and was accepted by its occurrence is a cancellation.
+func TestReconcileClosesAWithdrawnUnstartedRunAsNotStarted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+	}{
+		{"withdrawn by the refusal, skip unrecorded", "starting"},
+		{"withdrawn by an earlier Reconcile, record unwritten", "reconciling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWorkflowFixture(t)
+			f.apply(t, "begin", "", "")
+			if tc.status == "reconciling" {
+				f.apply(t, "reconcile", "", "lookup_required")
+			}
+			f.runs.runs[f.occ.ID] = &store.WorkflowRun{ID: "run-1", Status: store.WorkflowStatusCancelled}
+			if err := f.workflow.Reconcile(context.Background(), f.scope, f.occ); err != nil {
+				t.Fatal(err)
+			}
+			if o := f.read(t); o.Status != "skipped" || o.Reason != "execution_not_started" || !o.Released || o.ExecutionRef != "" {
+				t.Fatalf("occurrence = %+v, want it skipped as never started with no run linked", o)
+			}
+			if f.runs.cancels != 0 {
+				t.Fatalf("cancels = %d, want the already-withdrawn run left alone", f.runs.cancels)
+			}
+		})
+	}
+
+	// A run that began executing and was accepted by its occurrence is a cancellation of that run,
+	// whether the bridge's stop was confirmed at once or an attempt closed it later.
+	f := newWorkflowFixture(t)
+	if err := f.workflow.Dispatch(context.Background(), f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	f.runs.runs[f.occ.ID].Status = store.WorkflowStatusCancelled
+	if err := f.workflow.Reconcile(context.Background(), f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.read(t); o.Status != "cancelled" || o.ExecutionRef != `{"workflowRunId":"run-1"}` || !o.Released {
+		t.Fatalf("occurrence of a cancelled running run = %+v, want cancelled with its run linked", o)
+	}
+
+	// Each half of the test matters on its own. A run that began executing but whose cancellation the
+	// occurrence sees before anything accepted it (Dispatch's Start succeeded and its acceptance
+	// record did not, then the run was cancelled from its page) is still a run that ran: its
+	// cancellation is recorded as one, with the run linked, not as never started.
+	f = newWorkflowFixture(t)
+	f.apply(t, "begin", "", "")
+	started := time.Now()
+	f.runs.runs[f.occ.ID] = &store.WorkflowRun{ID: "run-1", Status: store.WorkflowStatusCancelled, StartedAt: &started}
+	if err := f.workflow.Reconcile(context.Background(), f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.read(t); o.Status != "cancelled" || o.ExecutionRef != `{"workflowRunId":"run-1"}` || !o.Released {
+		t.Fatalf("occurrence of a started run cancelled before it was accepted = %+v, want cancelled with its run linked", o)
+	}
+
+	// An occurrence that did accept its run keeps it, even if the row says it never began: the
+	// acceptance, not the row, is what makes the run the occurrence's to close as cancelled.
+	f = newWorkflowFixture(t)
+	f.apply(t, "begin", "", "")
+	f.apply(t, "accepted", `{"workflowRunId":"run-1"}`, "")
+	f.runs.runs[f.occ.ID] = &store.WorkflowRun{ID: "run-1", Status: store.WorkflowStatusCancelled}
+	if err := f.workflow.Reconcile(context.Background(), f.scope, f.occ); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.read(t); o.Status != "cancelled" || o.ExecutionRef != `{"workflowRunId":"run-1"}` || !o.Released {
+		t.Fatalf("occurrence of its own accepted run = %+v, want cancelled with its run linked", o)
+	}
 }
 
 func TestWorkflowTargetGoneIsRefused(t *testing.T) {
