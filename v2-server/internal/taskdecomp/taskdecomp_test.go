@@ -17,55 +17,33 @@ import (
 const startGraph = `{"nodes":[{"id":"start","type":"workflow","data":{"kind":"start"}},{"id":"out","type":"workflow","data":{"kind":"output","outputs":[{"name":"tasks","variableSelector":["start","input"]}]}}],"edges":[{"id":"e","source":"start","target":"out"}]}`
 
 // runs is a workflow host that starts runs in the store and lets the test end them; every change is
-// published like the host's hub does. refuse makes Start refuse; beforeCancel runs inside Cancel
-// before it touches the store (a page read racing the withdrawal); cancelFailures is how many
-// Cancel calls still fail before one succeeds (a store that is down and comes back).
+// published like the host's hub does. refuse makes Start refuse; cancelErr makes Cancel fail, as a
+// bridge that cannot reach the workflow host.
 type runs struct {
-	store          *store.Store
-	refuse         error
-	beforeCancel   func()
-	cancelFailures int
-	cancelCalls    int
-	mu             sync.Mutex
-	started        []string
-	cancelled      []string
-	subs           map[string][]chan struct{}
+	store     *store.Store
+	refuse    error
+	cancelErr error
+	mu        sync.Mutex
+	subs      map[string][]chan struct{}
 }
 
 func (r *runs) Start(ctx context.Context, tenant, _, runID string) error {
 	if r.refuse != nil {
 		return r.refuse
 	}
-	if _, e := r.store.StartWorkflowRun(ctx, tenant, runID); e != nil {
-		return e
-	}
-	r.mu.Lock()
-	r.started = append(r.started, runID)
-	r.mu.Unlock()
-	return nil
+	_, e := r.store.StartWorkflowRun(ctx, tenant, runID)
+	return e
 }
 
 func (r *runs) Cancel(ctx context.Context, tenant, _, runID string) error {
 	r.mu.Lock()
-	before, failures := r.beforeCancel, r.cancelFailures
-	r.cancelCalls++
-	if failures > 0 {
-		r.cancelFailures = failures - 1
-	}
+	err := r.cancelErr
 	r.mu.Unlock()
-	if before != nil {
-		before()
+	if err != nil {
+		return err
 	}
-	if failures > 0 {
-		return errors.New("connection lost")
-	}
-	if _, e := r.store.CancelWorkflowRun(ctx, tenant, runID); e != nil {
-		return e
-	}
-	r.mu.Lock()
-	r.cancelled = append(r.cancelled, runID)
-	r.mu.Unlock()
-	return nil
+	_, e := r.store.CancelWorkflowRun(ctx, tenant, runID)
+	return e
 }
 
 func (r *runs) Subscribe(runID string) (<-chan struct{}, func()) {
@@ -411,67 +389,86 @@ func TestDecompositionStartRefusals(t *testing.T) {
 	}
 }
 
-// A page reading the decompositions while a refused start is being withdrawn must see the
-// refusal's reason, not the generic 「工作流运行已取消。」: the decomposition settles with the reason
-// before the run is cancelled, so a concurrent List finds it already settled.
-func TestRefusedStartRecordsTheReasonBeforeWithdrawingTheRun(t *testing.T) {
+// A refused start withdraws its never-started run in the same commit that fails the decomposition,
+// so a process restart right after finds nothing to reclaim: the run is cancelled and the
+// decomposition carries the reason. The bridge's Cancel is not involved, so a bridge that cannot
+// cancel changes nothing. (Before, the decomposition settled first and the run was withdrawn after
+// through the bridge, retrying in the background; a restart before the retry succeeded left a
+// pending run that Recover, which reads only running decompositions, never withdrew.)
+func TestRefusedStartLeavesNothingToReclaimAfterARestart(t *testing.T) {
 	f := newFixture(t)
-	parent := f.task(t, "并发读取")
-	f.runs.refuse = &taskdecomp.WorkflowSkillNotFound{NodeID: "planner", NodeTitle: "拆分规划", SkillID: "split-checklist"}
-	var during []store.TaskDecomposition
-	f.runs.beforeCancel = func() {
-		items, e := f.host.List(f.ctx, f.tenant, parent.ID)
-		if e != nil {
-			t.Errorf("list during withdrawal: %v", e)
-			return
-		}
-		during = items
-	}
-	want := "节点「拆分规划」需要的技能 split-checklist 不可用，请先在个人技能页导入同名技能或确认市场技能已下发到项目后再重新拆分。"
-	d, e := f.host.Start(f.ctx, storetest.Access(t, f.store, f.tenant, f.owner), parent.ID, f.workflow, "racing")
+	parent := f.task(t, "重启前被拒")
+	taskdecomp.SetPollIntervalForTest(f.host, time.Hour)
+	f.runs.refuse = taskdecomp.ErrWorkflowRoleNotFound
+	f.runs.cancelErr = errors.New("connection lost")
+	want := "工作流引用的角色在工作区角色目录里不存在，请先在设置的角色页新建同名角色后再重新拆分。"
+	d, e := f.host.Start(f.ctx, storetest.Access(t, f.store, f.tenant, f.owner), parent.ID, f.workflow, "restart")
 	if e != nil || d.Status != store.DecompositionFailed || d.Failure != want {
 		t.Fatalf("refused = %+v (err=%v), want failure %q", d, e, want)
 	}
-	if len(during) != 1 || during[0].ID != d.ID || during[0].Status != store.DecompositionFailed || during[0].Failure != want {
-		t.Fatalf("a page reading during the withdrawal saw %+v, want the refusal's reason", during)
+	f.host.Close() // the process ends here
+	next := taskdecomp.New(f.store, f.runs, nil)
+	t.Cleanup(next.Close)
+	if e := next.Recover(f.ctx); e != nil {
+		t.Fatal(e)
 	}
 	if run, e := f.store.WorkflowRun(f.ctx, f.tenant, d.WorkflowRunID); e != nil || run.Status != store.WorkflowStatusCancelled {
-		t.Fatalf("refused decomposition run = %+v (err=%v), want cancelled", run, e)
+		t.Fatalf("run after the restart = %+v (err=%v), want it cancelled with the refusal, not left pending", run, e)
+	}
+	if items, e := f.store.TaskDecompositions(f.ctx, f.tenant, parent.ID); e != nil || len(items) != 1 || items[0].Status != store.DecompositionFailed || items[0].Failure != want {
+		t.Fatalf("decompositions after the restart = %+v %v, want the refusal's reason kept", items, e)
+	}
+	// The task is free for another try once the bridge is back.
+	f.runs.refuse, f.runs.cancelErr = nil, nil
+	if again, e := next.Start(f.ctx, storetest.Access(t, f.store, f.tenant, f.owner), parent.ID, f.workflow, "retry"); e != nil || again.Status != store.DecompositionRunning {
+		t.Fatalf("retry after the restart = %+v %v", again, e)
 	}
 }
 
-// A withdrawal the bridge cannot confirm at once is retried while the host lives: nothing was
-// dispatched, so the run only has to leave pending, and nothing else reclaims a decomposition's
-// run once its decomposition has settled. The caller still gets the settled decomposition.
-func TestRefusedStartWithdrawRetriesUntilTheRunIsCancelled(t *testing.T) {
+// refuseFails is the store with a refusal that cannot be persisted, as a database that goes away
+// between the run's creation and the host's refusal.
+type refuseFails struct {
+	*store.Store
+	err error
+}
+
+func (r refuseFails) RefuseTaskDecomposition(context.Context, string, string) (store.TaskDecomposition, bool, error) {
+	return store.TaskDecomposition{}, false, r.err
+}
+
+// The refusal is one commit: when it cannot be persisted, the decomposition stays running and
+// its run pending, together, and the caller learns the store's error. Nothing is half-done, so
+// the next process's Recover withdraws the run and fails the decomposition; the task is not left
+// with a decomposition nothing will ever end.
+func TestRefusedStartThatCannotBePersistedIsEndedByTheNextRecover(t *testing.T) {
 	f := newFixture(t)
-	parent := f.task(t, "取消失败")
-	taskdecomp.SetPollIntervalForTest(f.host, 10*time.Millisecond)
+	parent := f.task(t, "写不进去")
 	f.runs.refuse = taskdecomp.ErrWorkflowRoleNotFound
-	f.runs.cancelFailures = 3
-	d, e := f.host.Start(f.ctx, storetest.Access(t, f.store, f.tenant, f.owner), parent.ID, f.workflow, "flaky")
-	if e != nil || d.Status != store.DecompositionFailed || d.Failure != "工作流引用的角色在工作区角色目录里不存在，请先在设置的角色页新建同名角色后再重新拆分。" {
-		t.Fatalf("refused = %+v (err=%v)", d, e)
+	broken := errors.New("connection lost")
+	host := taskdecomp.New(refuseFails{Store: f.store, err: broken}, f.runs, nil)
+	d, e := host.Start(f.ctx, storetest.Access(t, f.store, f.tenant, f.owner), parent.ID, f.workflow, "broken")
+	if !errors.Is(e, broken) {
+		t.Fatalf("start = %+v %v, want the store's error", d, e)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		run, e := f.store.WorkflowRun(f.ctx, f.tenant, d.WorkflowRunID)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if run.Status == store.WorkflowStatusCancelled {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("run = %+v, want it cancelled by the retried withdrawal", run)
-		}
-		time.Sleep(10 * time.Millisecond)
+	items, e := f.store.TaskDecompositions(f.ctx, f.tenant, parent.ID)
+	if e != nil || len(items) != 1 || items[0].Status != store.DecompositionRunning {
+		t.Fatalf("decompositions = %+v %v, want the decomposition still running", items, e)
 	}
-	f.runs.mu.Lock()
-	cancelCalls := f.runs.cancelCalls
-	f.runs.mu.Unlock()
-	if cancelCalls != 4 {
-		t.Fatalf("cancel calls = %d, want 3 refused then 1 confirmed", cancelCalls)
+	d = items[0]
+	if run, e := f.store.WorkflowRun(f.ctx, f.tenant, d.WorkflowRunID); e != nil || run.Status != store.WorkflowStatusPending {
+		t.Fatalf("run = %+v (err=%v), want it untouched: a refusal that was not recorded withdraws nothing", run, e)
+	}
+	host.Close()
+	next := taskdecomp.New(f.store, f.runs, nil)
+	t.Cleanup(next.Close)
+	if e := next.Recover(f.ctx); e != nil {
+		t.Fatal(e)
+	}
+	if got := f.await(t, parent.ID); got.Status != store.DecompositionFailed || !strings.Contains(got.Failure, "服务重启") {
+		t.Fatalf("decomposition after the restart = %+v, want it failed by Recover", got)
+	}
+	if run, e := f.store.WorkflowRun(f.ctx, f.tenant, d.WorkflowRunID); e != nil || run.Status != store.WorkflowStatusCancelled {
+		t.Fatalf("run after the restart = %+v (err=%v), want it cancelled", run, e)
 	}
 }
 
