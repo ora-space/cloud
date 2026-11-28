@@ -240,7 +240,7 @@ Ora 实际创建的技能目录和市场技能链接会追加到该工作副本�
 
 **工作流目标** 在配置的 `projectId`（必填）里运行一个工作流。默认或 `versionPolicy: "fixed"` 保存 `{kind: "workflow", workflowId, snapshotId, input}`，校验项目属于当前用户、`snapshotId` 是这个工作流在本租户的非草稿版本；`schedule-resources` 列出已发布工作流及当前生效快照，固定模式保存此快照。`versionPolicy: "latest"` 不带 `snapshotId`，保存时只校验存在生效发布版本，每次触发在创建运行的事务内解析当前发布快照。两种模式的运行都保留实际使用的快照；发布不改写配置或历史。启动变量用快照里的默认值，`input` 作为开始节点的初始输入。进程没有执行桥时（`Options.WorkflowRuns` 为空）不列出工作流，写入返回 `503 schedule_target_unavailable`。旧的、没有这些字段的 workflow 引用照旧只读，按它写入返回 `400 invalid_target`。
 
-执行走页面同一个运行入口：`scheduler.WorkflowAdapter` 用任务创建者的 scope 创建运行（冻结快照、项目、输入，名称取任务名）并经执行桥启动，occurrence 的 `executionRef` 记 `{"workflowRunId"}`。运行的 `trigger_kind = 'schedule'`、`trigger_ref = <occurrence ID>`，唯一索引 `v2_workflow_runs_schedule_trigger` 保证一个触发只对应一个运行，重复派发和恢复都按这个身份找回原运行，不创建替代运行。执行桥拒绝启动时取消那个未开始的运行并记 `skipped`：缺工作区角色记 `workflow_role_not_found`，缺个人 Skill 或项目市场 Skill 记 `workflow_skill_not_found`，图里有还不能执行的节点或输入不满足开始节点记 `workflow_run_not_startable`。协调器每次 Tick 核对未释放的记录：运行结束后成功记 `succeeded`、失败记 `failed / workflow_run_failed`（重启恢复中失败的记 `interrupted`；boot sweep 吸收并恢复的 Iteration 运行仍在执行，记录回到 `running`，可从定时任务取消，之后按它自己的结果记）、取消记 `cancelled`，随即释放占位；运行结束后、结算之前被用户删除的，记 `failed / workflow_run_deleted` 并释放；节点会话由执行桥自己结束，定时侧没有会话要 End。还是 pending 的运行说明启动没有提交（进程重启过），取消它并记 `execution_not_started`。工作流 occurrence 的结果就是它的运行，`…/runs/{oid}/result` 返回 `404 execution_result_not_found`，页面按 `workflowRunId` 读运行详情。
+执行走页面同一个运行入口：`scheduler.WorkflowAdapter` 用任务创建者的 scope 创建运行（冻结快照、项目、输入，名称取任务名）并经执行桥启动，occurrence 的 `executionRef` 记 `{"workflowRunId"}`。运行的 `trigger_kind = 'schedule'`、`trigger_ref = <occurrence ID>`，唯一索引 `v2_workflow_runs_schedule_trigger` 保证一个触发只对应一个运行，重复派发和恢复都按这个身份找回原运行，不创建替代运行。执行桥拒绝启动时取消那个未开始的运行并记 `skipped`：缺工作区角色记 `workflow_role_not_found`，缺个人 Skill 或项目市场 Skill 记 `workflow_skill_not_found`，图里有还不能执行的节点或输入不满足开始节点记 `workflow_run_not_startable`。协调器每次 Tick 核对未释放的记录：运行结束后成功记 `succeeded`、失败记 `failed / workflow_run_failed`（重启恢复中失败的记 `interrupted`；boot sweep 吸收并恢复的 Iteration 运行仍在执行，记录回到 `running`，可从定时任务取消，之后按它自己的结果记）、取消记 `cancelled`，随即释放占位；运行结束后、结算之前被用户删除的，记 `failed / workflow_run_deleted` 并释放；节点会话由执行桥自己结束，定时侧没有会话要 End。还是 pending 的运行说明启动没有提交（进程重启过），取消它并记 `execution_not_started`；已经取消但从未开始（`started_at` 为空）、记录又从未接受过它的运行，同样记 `execution_not_started`——这是拒绝启动后撤回了运行、但 `skipped` 没写进去（或上一次 Reconcile 撤回了运行、记录没写进去）的收口，不会被记成链接了一个从未开始的运行的 `cancelled`，具体的拒绝原因随没写进去的记录一起丢失。工作流 occurrence 的结果就是它的运行，`…/runs/{oid}/result` 返回 `404 execution_result_not_found`，页面按 `workflowRunId` 读运行详情。
 
 之前已保存的引用仍按原 JSON 读取，可暂停/恢复计划；只读候选类型 `ScheduleLegacyTarget` 保留未知字段，不解释、改写或校验其中的提供方参数。没有删除数据库数据或迁移其字段，前端也不提供引用参数编辑/执行入口。
 
@@ -486,8 +486,8 @@ Task ownership and status policy are Cloud v2 owner decisions, since Desktop tas
 - **子任务**：运行成功后，输出的 `tasks` 数组（每项 `title`、可选的 `description`，也接受整段数组的 JSON 字符串）变成任务的子任务：
   `v2_tasks.parent_id` 指向大需求，项目同大需求，创建人是发起人，不指派，状态 `pending`，按输出顺序排在列表里。只有一层，子任务不再拆。
   标题和描述超长的部分截断；一次最多 20 个。
-- **幂等**：结束拆分和写子任务在同一个事务里，以拆分仍是 `running` 为条件，所以同一次运行无论被看到结束几次（后台观察、页面读取、重启恢复），子任务只写一次。
-- **失败可见**：运行失败或被取消、输出里没有 `tasks` 数组、数组为空或某项缺标题、执行桥拒绝启动，拆分都记为 `failed` 并写明原因（`failure`），可以重新拆分。
+- **幂等**：结束拆分和写子任务在同一个事务里，以拆分仍是 `running` 为条件，所以同一次运行无论被看到结束几次（后台观察、页面读取、重启恢复），子任务只写一次。执行桥拒绝启动也是同一个事务：取消那个未开始的运行和把拆分记为失败一起提交（`RefuseTaskDecomposition`，与处理运行的 `RefuseTaskWorkflow` 对称），要么都落库、要么都不，所以重启不会遇到已结算的拆分旁边挂着一个没人回收的 pending 运行；没落库的由下一次 `Recover` 一起收口。
+- **失败可见**：运行失败或被取消、输出里没有 `tasks` 数组、数组为空或某项缺标题、执行桥拒绝启动，拆分都记为 `failed` 并写明原因（`failure`），可以重新拆分。拒绝启动的原因按执行桥的拒绝分类写成人话（缺技能、缺角色、开始输入无效、完成工具不可用、图不可执行），未知错误收敛为通用文案，不泄漏 SQL。
 - **重启**：拆分不跨进程。启动时在工作流执行桥的 boot sweep **之前**结算上一个进程留下的拆分（顺序由 `internal/boot` 统一编排，`main.go` 与测试共用）：运行已结束的照常结算（成功的建子任务），仍未结束的先取消其运行，再把拆分记为失败（「服务重启，拆分已中断，请重新拆分。」）。所以 sweep 不会吸收并恢复一个拆分运行，拆分记录也不会和继续执行的运行不一致；已结算的拆分运行不能续跑，也不能重试任务创建（D32），所以它也不会在拆分结束后重新跑起来。唯一例外是审核表单已提交的拆分运行：它不被取消，由执行桥的表单恢复重放提交后的确定性任务步骤（sweep 不处理表单运行，也就不会吸收它），sweep 之后拆分再按运行的真实结果结算（运行仍未结束的继续观察到结束）。
 
 HTTP 集成测试按此候选 OpenAPI 校验每一次响应，并覆盖创建、编辑、合法与非法状态迁移、三种指派、
