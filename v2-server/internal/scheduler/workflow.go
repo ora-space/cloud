@@ -231,8 +231,9 @@ func workflowTargetUnavailable(err error) string {
 }
 
 // Reconcile follows the occurrence's own run, found by its identity, without creating or starting
-// anything: a run the occurrence never started is withdrawn and the trigger closed as not started,
-// and an accepted run that was deleted fails the occurrence.
+// anything: a run the occurrence never started is withdrawn and the trigger closed as not started
+// (pending, or already cancelled without ever beginning), and an accepted run that was deleted
+// fails the occurrence.
 // The coordinator calls it on every tick for unreleased occurrences, which is how a finished run
 // settles its occurrence and frees the schedule's slot.
 func (a *WorkflowAdapter) Reconcile(ctx context.Context, scope execution.Scope, occurrence store.Occurrence) error {
@@ -292,6 +293,14 @@ func (a *WorkflowAdapter) Reconcile(ctx context.Context, scope execution.Scope, 
 		_, err = a.apply(ctx, scope, o, "not_accepted", "", "execution_not_started")
 		return err
 	case store.WorkflowStatusSucceeded, store.WorkflowStatusFailed, store.WorkflowStatusCancelled:
+		if run.Status == store.WorkflowStatusCancelled && run.StartedAt == nil && o.ExecutionRef == "" {
+			// Withdrawn before it began, as a refused start's run is, and the skip it was withdrawn
+			// for could not be written (Dispatch's or an earlier Reconcile's): the trigger never
+			// ran, so it closes as not started, not as a cancellation of a run it never accepted. The
+			// refusal's own reason was in the unwritten record and is gone; the generic one holds.
+			_, err := a.apply(ctx, scope, o, "not_accepted", "", "execution_not_started")
+			return err
+		}
 		if o.Status == "starting" || (o.Status == "reconciling" && o.ExecutionRef == "") {
 			if o, err = a.apply(ctx, scope, o, "accepted", ref, ""); err != nil {
 				return err
